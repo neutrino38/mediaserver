@@ -347,7 +347,7 @@ int H263Decoder::DecodePacket(BYTE *in,DWORD inLen,int lost,int last)
 	int ret = 1;
 
 	// Check total length
-	if (bufLen+inLen+FF_INPUT_BUFFER_PADDING_SIZE+2>bufSize)
+	if (bufLen+inLen+AV_INPUT_BUFFER_PADDING_SIZE+2>bufSize)
 	{
 		Log("-H263 decode buffer size error, reseting\n");
 
@@ -440,7 +440,7 @@ int H263Decoder::DecodePacket(BYTE *in,DWORD inLen,int lost,int last)
 	if(last)
 	{
 		//Borramos el final
-		memset(buffer+bufLen,0,FF_INPUT_BUFFER_PADDING_SIZE);
+		memset(buffer+bufLen,0,AV_INPUT_BUFFER_PADDING_SIZE);
 
 		//Decode
 		ret = Decode(buffer,bufLen);

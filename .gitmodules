@@ -1,0 +1,4 @@
+[submodule "third_party/fontventa"]
+	path = third_party/fontventa
+	url = https://github.com/InteractiviteVideoEtSystemes/fontventa.git
+	branch = migration/almalinux_9

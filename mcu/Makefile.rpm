@@ -15,6 +15,11 @@ DEBUG           = yes
 BFCPINCLUDE     = /opt/ives/include
 FLASHSTREAMER   = no
 ADDLIBPATH      = ../staticdeps
+MEDKITDIR       = ../third_party/fontventa/libmedikit
+# Mettre a yes pour lier libmedkit.a (sous-module) au lieu des sources locales
+# redondantes. Voir almalinux9_port_plan.md. Necessite davoir retire les .o
+# correspondants de OBJS, sinon double definition au link.
+USEMEDKIT       = no
 VADWEBRTC       = yes
 WEBRTCINCLUDE   = ${HOME}/webrtc/trunk/webrtc/
 WEBRTDIROBJ     = ${HOME}/webrtc/trunk/out/Release/obj.target/webrtc/
@@ -180,9 +185,22 @@ ifeq ($(MOTELI),yes)
     VPATH +=  %.proto src/$(MOTELIDIR)
 endif
 
-INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) -I/usr/include/ImageMagick-6 -I$(BFCPINCLUDE)
+# ImageMagick : Magick++ 7 (AlmaLinux 9) via pkg-config. Fournit le bon -I
+# (ImageMagick-7), les -DMAGICKCORE_* requis et les libs Magick++-7.Q16HDRI.
+MAGICKCFLAGS    := $(shell pkg-config --cflags Magick++)
+MAGICKLIBS      := $(shell pkg-config --libs Magick++)
+
+INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(BFCPINCLUDE) -I/usr/include/ffmpeg
+
+ifeq ($(USEMEDKIT),yes)
+    # libmedikit : en-tetes (medkit/, astmedkit/) et archive pris dans larbre du
+    # sous-module, sans install dans /opt/ives.
+    INCLUDE += -I$(MEDKITDIR)
+    MEDKITLIB = $(MEDKITDIR)/libmedkit.a
+endif
 
 LDFLAGS+= $(BFCPLIBS) -L$(ADDLIBPATH)/lib 
+LDFLAGS+= $(MEDKITLIB)
 
 ifeq ($(MOTELI),yes)
 	LDFLAGS += -lamqpcpp -lrabbitmq -lprotobuf 
@@ -190,14 +208,14 @@ endif
 
 ifeq ($(FEWSTATICDEPS),yes)
     # Use of dynamic libs (on FC20 ...)
-    LDFLAGS += -Wl,-Bstatic -lsrtp -lssl -lcrypto -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 -lgsm -lpthread -lMagick++-6.Q16 -lbz2 -lopencore-amrnb -lopencore-amrwb
+    LDFLAGS += -Wl,-Bstatic -lsrtp -lssl -lcrypto -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 -lgsm -lpthread $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
 	LDXMLFLAGS+= -lxmlrpc_abyss -lxmlrpc_server -lxmlrpc -lxmlrpc_util
 else
     # Usin static libs (CentOS)
 ifeq ($(DISTRO), el5)   
-	LDFLAGS += -Wl,-Bstatic -lmp4v2 -lsrtp -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lmp4v2 -lgsm -lMagick++-6.Q16 -lbz2 -lopencore-amrnb -lopencore-amrwb
+	LDFLAGS += -Wl,-Bstatic -lmp4v2 -lsrtp -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
 else 
-	LDFLAGS += -Wl,-Bstatic -lsrtp -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 -lgsm -lMagick++-6.Q16 -lbz2 -lopencore-amrnb -lopencore-amrwb -ldl -lz
+	LDFLAGS += -Wl,-Bstatic -lsrtp -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb -ldl -lz
 endif
 	LDXMLFLAGS+=  $(ADDLIBPATH)/lib/libssl.a $(ADDLIBPATH)/lib/libcrypto.a $(ADDLIBPATH)/lib/libxmlrpc_abyss.a $(ADDLIBPATH)/lib/libxmlrpc_server.a $(ADDLIBPATH)/lib/libxmlrpc.a $(ADDLIBPATH)/lib/libxmlrpc_xmlparse.a  $(ADDLIBPATH)/lib/libxmlrpc_xmltok.a $(ADDLIBPATH)/lib/libxmlrpc_util.a -lpthread
 endif

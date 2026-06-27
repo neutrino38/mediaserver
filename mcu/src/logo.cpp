@@ -53,7 +53,7 @@ int Logo::Load(const char* fileName)
 {
 	AVFormatContext *fctx = NULL;
 	AVCodecContext *ctx = NULL;
-	AVCodec *codec = NULL;
+	const AVCodec *codec = NULL;
 	AVFrame *logoRGB = NULL;
 	AVFrame* logo = NULL;
 	SwsContext *sws = NULL;
@@ -63,9 +63,6 @@ int Logo::Load(const char* fileName)
 	int numpixels = 0;
 	int size = 0;
 
-	//Init ffmpeg in case it wasn't
-	av_register_all();	
-	
 	//Create context from file
 	if(avformat_open_input(&fctx, fileName, NULL, NULL)<0)
 		return Error("Couldn't open the logo image file [%s]\n",fileName);
@@ -79,8 +76,17 @@ int Logo::Load(const char* fileName)
 		goto end;
 	}
 
-	//Get codec from file fromat
-	if (!(ctx = fctx->streams[0]->codec))
+	//Get decoder for the first stream format
+	if (!(codec = avcodec_find_decoder(fctx->streams[0]->codecpar->codec_id)))
+	{
+		//Set errror
+		res = Error("Couldn't find codec for the logo image file...\n");
+		//Free resources
+		goto end;
+	}
+
+	//Alloc codec context
+	if (!(ctx = avcodec_alloc_context3(codec)))
 	{
 		//Set errror
 		res = Error("Context codec not valid\n");
@@ -88,11 +94,11 @@ int Logo::Load(const char* fileName)
 		goto end;
 	}
 
-	//Get decoder for format
-	if (!(codec = avcodec_find_decoder(ctx->codec_id)))
+	//Copy codec parameters from stream to context
+	if (avcodec_parameters_to_context(ctx, fctx->streams[0]->codecpar)<0)
 	{
 		//Set errror
-		res = Error("Couldn't find codec for the logo image file...\n");
+		res = Error("Couldn't copy codec parameters\n");
 		//Free resources
 		goto end;
 	}
@@ -124,8 +130,8 @@ int Logo::Load(const char* fileName)
 		goto end;
 	}
 	ctx->thread_count = 1;
-	//Decode logo
-	if (avcodec_decode_video2(ctx, logoRGB, &gotLogo, packet)<0)
+	//Send packet to the decoder
+	if (avcodec_send_packet(ctx, packet)<0)
 	{
 		//Set errror
 		res = Error("Couldn't decode logo\n");
@@ -133,6 +139,16 @@ int Logo::Load(const char* fileName)
 		//Free resources
 		goto end;
 	}
+	//Receive the decoded frame
+	if (avcodec_receive_frame(ctx, logoRGB)<0)
+	{
+		//Set errror
+		res = Error("Couldn't decode logo\n");
+		av_packet_unref(packet);
+		//Free resources
+		goto end;
+	}
+	gotLogo = 1;
 	av_packet_unref(packet);
 	//If it we don't have a logo
 	if (!gotLogo)
@@ -222,7 +238,7 @@ end:
 		av_free(logoRGB);
 
 	if (ctx)
-		avcodec_close(ctx);
+		avcodec_free_context(&ctx);
 
 	if (sws)
 		sws_freeContext(sws);

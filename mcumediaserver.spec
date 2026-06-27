@@ -9,8 +9,10 @@ Group:     Applications/Internet
 License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:  x264, ImageMagick-c++ >= 6.7.0
-BuildRequires: ffmpeg-devel, x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 6.7.0, libbfcp >= 5.5.0
+Requires:  x264, ImageMagick-c++ >= 6.7.0, ffmpeg
+BuildRequires: ffmpeg-devel 
+BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 6.7.0, libbfcp >= 5.5.0
+BuildRequires: gsm-devel
 
 %ifos el5
 Requires: fonts-chinese, fonts-japanese

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.8.7"
+VERSION="1.9.0"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
@@ -156,30 +156,6 @@ function compile_webrtc_from_google
 	fi
 }
 
-function compile_webrtc_ives
-{
-	MEDIASERVERPATH=$PWD
-	cd $HOME
-	if [ ! -r  webrtc/trunk/webrtc/common_audio ]
-	then
-		echo downloading webrtc
-		mkdir webrtc
-		cd webrtc
-		svn co http://svn.ives.fr/svn-libs-dev/webrtc/tags/$WEBRTCTAG trunk
-		cd trunk
-	else
-		cd webrtc/trunk
-	fi
-
-	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
-	then
-		make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		make out/Release/obj.target/webrtc/common_audio/libvad.a
-	fi
-
-	cd $MEDIASERVERPATH
-}
-
 function compile_webrtc
 {
 	MEDIASERVERPATH=$PWD
@@ -197,10 +173,11 @@ function compile_webrtc
 	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
 	then
 		echo "Compiling VAD and signal processing from webrtc"
-        make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		git reset --hard
-		make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		make out/Release/obj.target/webrtc/common_audio/libvad.a
+		# Le Makefile genere par gyp ne fonctionne plus (regeneration via
+		# build/gyp_chromium qui exige python2, flags -Werror/gold linker
+		# incompatibles avec GCC recent). On utilise un Makefile autonome
+		# qui compile directement les deux libs C necessaires.
+		make -f Makefile.vad
 	fi
 
 	cd $MEDIASERVERPATH
@@ -248,33 +225,22 @@ function local_compile
 	fi
 
 	rpm -q ffmpeg-devel
-    	if [ $? != 0 ]
+    if [ $? != 0 ]
 	then
-		echo "installer ffmpeg-devel"
+		echo "installer ffmpeg-free-devel depuis RPMFUSION free et non free"
 		exit 20
 	fi
 
+	rpm -q libtool
+    if [ $? != 0 ]
+	then
+		echo "installer libtool"
+		exit 20
+	fi
+
+
 	# compiler openssl en statique
 	BASESRCDIR=$PWD
-	if [ ! -f staticdeps/lib/libssl.a ]
-	then
-		echo "on doit compiler openssl 1.1.1d"
-		if [ ! -r $HOME/openssl ]
-		then
-			cd $HOME
-			rm -f OpenSSL_1_1_1d.tar.gz
-			wget https://github.com/openssl/openssl/archive/OpenSSL_1_1_1d.tar.gz
-
-			tar xzf OpenSSL_1_1_1d.tar.gz
-			mv openssl-OpenSSL_1_1_1d openssl
-			rm -f OpenSSL_1_1_1d.tar.gz
-		fi
-		cd $HOME/openssl
-		./config --prefix=$BASESRCDIR/staticdeps --openssldir=$BASESRCDIR/staticdeps shared zlib
-		make
-		make install
-		cd $BASESRCDIR
-	fi
 
 	# compiler mp4v2 en static 
 	if [ ! -f staticdeps/lib/libmp4v2.a ]
@@ -466,6 +432,38 @@ function compile_rabbitmq
 	cd $MEDIASERVERPATH
 }
 
+function compile_libmedkit
+{
+	# Construit libmedkit.a DANS l'arbre du sous-module (cible 'all', pas
+	# d'install dans /opt/ives). Le mediaserver s'y lie directement via
+	# MEDKITDIR/USEMEDKIT dans mcu/Makefile.rpm. Voir almalinux9_port_plan.md.
+	MEDIASERVERPATH=$PWD
+	MEDKITDIR=$MEDIASERVERPATH/third_party/fontventa/libmedikit
+	if [ ! -d "$MEDKITDIR" ]
+	then
+		echo "Sous-module libmedikit absent. Lancer : git submodule update --init"
+		exit 20
+	fi
+	echo "Compilation libmedkit (in-tree)"
+	# INCLUDE surcharge :
+	#  - ffmpeg : en-tetes dans /usr/include/ffmpeg (override par FFMPEGINC) ;
+	#  - mp4v2 : pas de paquet natif, en-tetes pris dans staticdeps/include
+	#    (build source IVeS), override par MP4V2INC.
+	# OBJS reduit : on exclut les objets couples a Asterisk (transcoder, mp4format,
+	# framebuffer, frameutils, astlog), inutilisables hors module Asterisk et qui
+	# exigeraient asterisk-devel. Le mediaserver n'est pas un module Asterisk.
+	MEDKIT_OBJS="audio.o video.o framescaler.o utf8parser.o avcdescriptor.o \
+red.o textencoder.o log.o media.o audiosilence.o \
+h263packet.o h263codec.o mpeg4codec.o \
+h264encoder.o h264decoder.o h264depacketizer.o \
+g711.o pcmucodec.o pcmacodec.o \
+ffvideocodec.o mp4track.o logo.o picturestreamer.o"
+	make -C "$MEDKITDIR" all \
+		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}" \
+		OBJS="$MEDKIT_OBJS"
+	cd $MEDIASERVERPATH
+}
+
 function compile_protobuf
 {
 	MEDIASERVERPATH=$PWD
@@ -505,14 +503,14 @@ case $1 in
 	"webrtc")
 		compile_webrtc;;
 	
-	"webrtcives")	
-		compile_webrtc_ives;;
-
-        "rabbitmq")
+    "rabbitmq")
 		compile_rabbitmq;;
-		
+
 	"protobuf")
 		compile_protobuf;;
+
+	"libmedkit")
+		compile_libmedkit;;
 
 	"upload")
 		upload_rpm ;;
@@ -525,6 +523,7 @@ case $1 in
 		echo "  localcompile	Compilation du logiciel sans creation de paquet rpm"
 		echo "  webrtc          Compilation des libs webrtc"
 		echo "  rabbitmq        Compilation des libs RABBITMQ (projet moteli)"
+		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"
   		echo "  clean			Nettoie tous les fichiers cree ce script, liens, tar.gz et rpm";;
 esac
