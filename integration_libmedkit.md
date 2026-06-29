@@ -100,19 +100,21 @@ H264-decode fournis par medkit ; audio + VP8 + H264-encode encore par mcu.
 - Vérif : `./install.ksh localcompile` linke `bin/debug/mcu` sans double
   définition (chaque `.o` codec dans **un seul** de {OBJS mcu, libmedkit.a}).
 
-### Palier 2 — Audio ffmpeg via FfAudioEncoder/Decoder
+### Palier 2 — Audio ffmpeg via FfAudioEncoder/Decoder ✅ (côté libmedkit fait)
 Fichiers : compléter `libmedikit/ffaudiocodec.{h,cpp}` ; `libmedikit/audio.cpp` ;
 `mcu/src/audio.cpp` ; `install.ksh` (MEDKIT_OBJS += `ffaudiocodec.o`).
-- `FfAudioEncoder(const Properties&, AVCodecID, AudioCodec::Type)` /
+- ✅ `FfAudioEncoder(const Properties&, AVCodecID, AudioCodec::Type)` /
   `FfAudioDecoder(AVCodecID, AudioCodec::Type)` en API ffmpeg 5/6
   (`avcodec_send_frame`/`receive_packet`, `send_packet`/`receive_frame`),
   `AVChannelLayout` (pas `ctx->channels`), conversion S16↔fltp via `SwrContext`
-  (libswresample), `numFrameSamples`/`frameLength` depuis `ctx->frame_size`.
-- Couvre G722 (`AV_CODEC_ID_ADPCM_G722`), AAC (`AV_CODEC_ID_AAC`),
-  Nelly (`AV_CODEC_ID_NELLYMOSER`).
-- Supprimer du build medkit les `g722codec.cpp`/`aacencoder.cpp` dépréciés.
-- `mcu/src/audio.cpp` : factory délègue G722/AAC/Nelly à medkit ; retirer leurs
-  `.o` des OBJS. Ajouter `-lswresample` au link si absent.
+  (libswresample), `numFrameSamples` depuis `ctx->frame_size`.
+- ✅ G722 (`AV_CODEC_ID_ADPCM_G722`) et AAC (`AV_CODEC_ID_AAC`) **réécrits** pour
+  dériver de `FfAudioEncoder`/`FfAudioDecoder` (et non supprimés : `g722codec.*`
+  et `aacencoder.*` ne contiennent plus que constructeur + spécificités, ex.
+  `GetClockRate()=8000` pour G722). Validés par roundtrip.
+- ⏳ Nelly (`AV_CODEC_ID_NELLYMOSER`) : reste à porter sur la même base.
+- ⏳ `mcu/src/audio.cpp` : factory à faire déléguer G722/AAC/Nelly à medkit ;
+  retirer leurs `.o` des OBJS. `-lswresample` est déjà dans le `LDFLAGS` mcu.
 
 ### Palier 3 — Déplacer les codecs natifs (un sous-palier compilable par famille)
 Pour chaque famille : déplacer `mcu/src/<codec>/*` → `libmedikit/<codec>/`,
@@ -151,6 +153,13 @@ qui sont nativement supportés par ffmpeg. On supprime les flags de link -lgsm, 
 - Objets medkit couplés Asterisk (`transcoder.o`, `mp4format.o`, `framebuffer.o`,
   `frameutils.o`, `astlog.o`) restent **exclus** du build (déjà fait dans
   `compile_libmedkit`).
+- **`VideoFrame::PacketizeH263()` non définie** : `libmedikit/video.cpp`
+  l'appelle (`AudioFrame`/`VideoFrame::Packetize` → `PacketizeH263(mtu)`) mais
+  seule `PacketizeH264` est implémentée → symbole non résolu au **lien final du
+  `mcu`**. À implémenter dans `libmedikit/video.cpp` (porter depuis la
+  packetisation H263 de `mcu/src`) avant le palier 1. Sans impact sur la
+  construction de `libmedkit.a` (archive), bloquant seulement à l'édition de
+  liens du binaire.
 
 ## Vérification
 - Après chaque palier : `./install.ksh localcompile` doit produire
@@ -167,6 +176,48 @@ qui sont nativement supportés par ffmpeg. On supprime les flags de link -lgsm, 
 - `third_party/fontventa/libmedikit/{video,audio}.cpp` (factories), `Makefile`
 - `mcu/src/{video,audio}.cpp` (factories), `mcu/include/{video,audio,codecs,media}.h`
 - `mcu/Makefile.rpm`, `install.ksh` (fonction `compile_libmedkit`)
+
+## Avancement réalisé dans libmedkit (paliers 0/2 + ffvideocodec)
+
+Travaux effectués et validés contre ffmpeg 5.1 (libavcodec 59, libswresample,
+sans libavresample) :
+
+**Audio (palier 2) — `libmedikit/ffaudiocodec.{h,cpp}` créés :**
+- `FfAudioEncoder` : API send/receive, `AVChannelLayout` mono, resampler
+  S16→format natif via `SwrContext`, `EnsureFrame()` (allocation paresseuse du
+  tampon d'entrée gérant les codecs à `frame_size` variable + restauration de la
+  capacité entre appels). `ctx`/`codec` `protected` pour la config des dérivés.
+- `FfAudioDecoder` : `send_packet`/`receive_frame`, conversion vers S16 mono
+  (resampler créé à la volée si le décodeur sort en planar/float), fifo +
+  restitution par tranches de `numFrameSamples`.
+- `g722/g722codec.*` et `aac/aacencoder.*` réécrits pour dériver de ces bases.
+- `libmedikit/audio.cpp` : factory — cas G722 (enc+dec) et AAC (enc) actifs.
+
+**Vidéo — `libmedikit/ffvideocodec.{h,cpp}` : bugs ffmpeg 5 corrigés** (l'API
+send/receive exige ce que l'ancienne tolérait) :
+1. encodeur : recopie de `pkt->data` dans la `VideoFrame` (`SetMedia`) — la
+   packetisation RTP ne fait que référencer des offsets, le tampon doit être
+   rempli (le `pkt->data = frame->GetData()` initial était du code mort) ;
+2. encodeur : `picture->width/height/format` renseignés avant `send_frame` ;
+3. encodeur : `EAGAIN` après réception = fin de drain → retourner la trame, pas
+   `NULL` (sinon la trame encodée était jetée) ;
+4. décodeur : si `av_parser_init` renvoie NULL (cas H263+), pousser l'entrée
+   comme trame complète (sinon segfault sur parser NULL) ;
+5. décodeur : `EAGAIN`/`EOF` = fin normale (plus `goto error`), `Decode`
+   retourne le succès ;
+6. divers : `if(frame);` parasite, `Error` sans `return` (deref NULL),
+   `avcodec_close` retiré, `av_parser_close` ajouté.
+- Validé : roundtrip H263 encode→decode (176×144), G722 et AAC OK.
+- `libmedikit/logo.cpp` également porté ffmpeg 5 (codecpar, send/receive).
+
+**Build libmedkit :**
+- `Makefile` : switch **`ASTERISK=no`** (exclut transcoder/mp4format/framebuffer/
+  frameutils/astlog), `-I../../../staticdeps/include` (mp4v2), modules
+  `ffaudiocodec.o`/`g722codec.o`/`aacencoder.o` ajoutés à `OBJS`, `-lswresample`
+  dans `LDFLAGS`. `make ASTERISK=no` reconstruit `libmedkit.a` proprement.
+
+**Reste à faire (palier 2/3) :** Nelly ; délégation côté `mcu/src/audio.cpp` ;
+implémenter `VideoFrame::PacketizeH263()` (cf. pièges) ; décodeur AAC si besoin.
 
 ## État d'avancement des corrections déjà faites (hors périmètre libmedkit)
 
