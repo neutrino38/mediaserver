@@ -101,7 +101,7 @@ H264-decode fournis par medkit ; audio + VP8 + H264-encode encore par mcu.
   définition (chaque `.o` codec dans **un seul** de {OBJS mcu, libmedkit.a}).
 
 ### Palier 2 — Audio ffmpeg via FfAudioEncoder/Decoder ✅ (côté libmedkit fait)
-Fichiers : compléter `libmedikit/ffaudiocodec.{h,cpp}` ; `libmedikit/audio.cpp` ;
+Fichiers : déjà faits `libmedikit/ffaudiocodec.{h,cpp}` ; `libmedikit/audio.cpp` ;
 `mcu/src/audio.cpp` ; `install.ksh` (MEDKIT_OBJS += `ffaudiocodec.o`).
 - ✅ `FfAudioEncoder(const Properties&, AVCodecID, AudioCodec::Type)` /
   `FfAudioDecoder(AVCodecID, AudioCodec::Type)` en API ffmpeg 5/6
@@ -240,3 +240,34 @@ fois la migration vers libmedkit réalisée (les sources concernées quittent
 
 > Note : libmedkit est un sous-module git ; ses modifications seront committées
 > séparément sur la branche `migration/almalinux_9` du dépôt fontventa.
+
+## ÉTAT (2026-06-30) — Paliers 0, 1 et 2 atteints : binaire `bin/debug/mcu` produit ✅
+
+**Palier 0 (medkit = sur-ensemble ABI) — fait :**
+- `medkit/config.h` : `WGA`/`DCIF` (+ `GetWidth`/`GetHeight`), `ALIGNEDTO32`/`ZEROALIGNEDTO32`.
+- `medkit/media.h` : `RoleToString`, enum `MediaProtocol` + `ProtocolToString`, struct `MediaStatistics`.
+- `medkit/codecs.h` : `TELEPHONE_EVENT`, et **`AMRWB=120`** ajouté (+ `GetNameFor`/`GetCodecFor` AMR/AMR-WB).
+- `medkit/video.h` : `DecodePacket` pur virtuel (même position vtable que mcu).
+- `ffvideocodec.{h,cpp}` : `FfVideoDecoder::DecodePacket` (dispatch H264 STAP-A/FU-A via `h264_append_nals` porté de mcu ; dépaquetisation RFC 2429 H263+ ; accumulation brute MPEG4/VP6/FLV1).
+
+**Palier 1+2 fusionnés (build vert) — fait :** (le « build vert » vidéo seul était impossible car `nelly`/`g722codec` mcu n'compilent pas en ffmpeg 5 → audio traité en même temps)
+- `mcu/Makefile.rpm` : `USEMEDKIT=yes` ; `-I$(MEDKITDIR)` avant `-Iinclude/` ; `OBJS`/`OBJS2` purgés des `.o` repris par medkit (H263/MPEG4/H263-1996, h264decoder, vp6, flv1codec, g722codec, NellyCodec) ; gardés mcu : `h264encoder.o`, `h264depacketizer.o` (utilisé par `rtp.cpp`), `g7221codec.o`, VP8, gsm, speex, opus.
+- `mcu/include/{media,codecs}.h` rendus **identiques** à medkit ; `video.h`/`audio.h` : `VideoFrame`/`AudioFrame` alignés (useStartCode/naluSizeLen, packetization, ctor `owns`, `Packetize` virtuel) en gardant les classes Input/Output propres à mcu.
+- `AddRtpPacket` : passage **4→5 args** (`mark`) ; 8 appelants compilés convertis (audioencoder, FLVEncoder, vp8encoder, rtp, h264encoder, h264depacketizer ×3).
+- `mcu/src/video.cpp` : factory délègue à `FfVideoDecoder`/`FfVideoEncoder` (H263/H263-1996/MPEG4/H264-dec/VP6/SORENSON) ; garde VP8 + H264-encode mcu. Définit `VideoFrame::Packetize`/`PacketizeH264`/`PacketizeH263`/NALU (sinon medkit `video.o` tiré → double `VideoCodecFactory`).
+- `mcu/src/audio.cpp` : factory délègue G722 et **AMR/AMR-WB** à medkit (inclus via chevrons `<g722/...>`/`<amr/...>` pour viser le sous-module et non l'homonyme `mcu/src`) ; définit `AudioFrame::Packetize`. Nelly retiré (cases supprimées).
+- `mcu/src/main.cpp` : suppression du gestionnaire de verrous ffmpeg (`av_lockmgr_register`/`lock_ffmpeg`, supprimé en ffmpeg 5).
+
+**AMR-NB / AMR-WB migrés vers libmedkit (FfAudio) :** nouveau module `libmedikit/amr/amrcodec.{h,cpp}` (`AMRNBEncoder`/`AMRNBDecoder` via `AV_CODEC_ID_AMR_NB` ; `AMRWBEncoder`/`AMRWBDecoder` via `AV_CODEC_ID_AMR_WB`, bitrate de mode valide réglé avant `Open()`), câblé dans les deux factories, ajouté à `Makefile` medkit + `MEDKIT_OBJS` (install.ksh). Les `-lopencore-amrnb -lopencore-amrwb` retirés du link mcu (fournis par `libavcodec.so` : `libopencore_amrnb`/`libvo_amrwbenc`).
+
+**Dépendances passées en dynamique système (AlmaLinux 9) dans `mcu/Makefile.rpm` (LDXMLFLAGS) :**
+- OpenSSL : `-lssl -lcrypto` au lieu de `staticdeps/lib/libssl.a`/`libcrypto.a` (absents).
+- XML : `-lxml2` au lieu de `libxmlrpc_xmlparse.a`/`libxmlrpc_xmltok.a` (xmlrpc-c bâti avec **backend libxml2** : `xmlParseChunk` vient de libxml2).
+
+**Vérif :** `./install.ksh libmedkit` puis `cd mcu && make -f Makefile.rpm mcu` → `bin/debug/mcu` (ELF 34 Mo) ; le binaire démarre (init RTMP/WebSocket/RTP OK).
+
+**Reste à faire :**
+- Nelly (NellyMoser) : non porté ffmpeg 5 (ni mcu ni medkit) — actuellement retiré du build. À porter en `FfAudioEncoder`/`Decoder` (`AV_CODEC_ID_NELLYMOSER`) ou abandonner officiellement.
+- Validation fonctionnelle (pas de suite auto) : conférence (mixage audio + mosaïque vidéo), MP4 record/play, SRTP/DTLS, BFCP, RTMP/WebSocket.
+- Palier 3 : déplacer les codecs natifs restants (gsm/speex/opus/g7221/vp8/h264-encode) dans libmedkit.
+- Palier 4 : bascule des `#include` mcu vers `medkit/…`, suppression des en-têtes homonymes et du mode sans-medkit.

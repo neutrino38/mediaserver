@@ -30,12 +30,21 @@ public:
 class AudioFrame : public MediaFrame
 {
 public:
-	AudioFrame(AudioCodec::Type codec,DWORD rate) : MediaFrame(MediaFrame::Audio,2048)
+	AudioFrame(AudioCodec::Type codec,DWORD rate, bool owns = true) : MediaFrame(MediaFrame::Audio,2048, owns)
 	{
 		//Store codec
 		this->codec = codec;
 		//Set default rate
 		this->rate = rate;
+
+		switch(codec)
+		{
+			case AudioCodec::PCMA:
+			case AudioCodec::PCMU:
+			default:
+				packetization = 160;
+				break;
+		}
 	}
 
 	virtual MediaFrame* Clone()
@@ -48,17 +57,22 @@ public:
 		frame->SetDuration(duration);
 		//Set timestamp
 		frame->SetTimestamp(GetTimeStamp());
+
+		frame->packetization = this->packetization;
 		//Return it
 		return (MediaFrame*)frame;
 	}
 
-	AudioCodec::Type GetCodec()			{ return codec;		}
+	AudioCodec::Type GetCodec() const			{ return codec;		}
 	void	SetCodec(AudioCodec::Type codec)	{ this->codec = codec;	}
-	DWORD	GetRate()				{ return rate;		}
+	DWORD	GetRate() const				{ return rate;		}
+
+	virtual bool Packetize(unsigned int mtu);
 
 private:
 	AudioCodec::Type codec;
 	DWORD		 rate;
+	unsigned int packetization;
 };
 
 class AudioInput

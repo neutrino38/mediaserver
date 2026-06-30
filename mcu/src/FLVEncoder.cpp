@@ -464,7 +464,7 @@ int FLVEncoder::EncodeAudio()
 			//Clear rtp
 			frame.ClearRTPPacketizationInfo();
 			//Add rtp packet
-			frame.AddRtpPacket(0,len,NULL,0);
+			frame.AddRtpPacket(0,len,NULL,0,false);
 			//For each listere
 			//For each listener
 			for(MediaFrameListeners::iterator it = mediaListeners.begin(); it!=mediaListeners.end(); ++it)

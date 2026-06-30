@@ -60,40 +60,8 @@ void log_ffmpeg(void* ptr, int level, const char* fmt, va_list vl)
 	Log(line);
 }
 
-int lock_ffmpeg(void **param, enum AVLockOp op)
-{
-	//Get mutex pointer
-	pthread_mutex_t* mutex = (pthread_mutex_t*)(*param);
-	//Depending on the operation
-	switch(op)
-	 {
-		case AV_LOCK_CREATE:
-			//Create mutex
-			mutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
-			//Init it
-			pthread_mutex_init(mutex,NULL);
-			//Store it
-			*param = mutex;
-			break;
-		case AV_LOCK_OBTAIN:
-			//Lock
-			pthread_mutex_lock(mutex);
-			break;
-		case AV_LOCK_RELEASE:
-			//Unlock
-			pthread_mutex_unlock(mutex);
-			break;
-		case AV_LOCK_DESTROY:
-			//Destroy mutex
-			pthread_mutex_destroy(mutex);
-			//Free memory
-			free(mutex);
-			//Clean
-			*param = NULL;
-			break;
-	}
-	return 0;
-}
+// ffmpeg >= 4 est nativement thread-safe : le gestionnaire de verrous
+// (av_lockmgr_register / lock_ffmpeg) a ete supprime en ffmpeg 5.
 
 static XmlRpcServer * gserver = NULL;
 static XmlStreamingHandler * geventHandlers[4] = { NULL, NULL, NULL, NULL };
@@ -331,9 +299,6 @@ int main(int argc,char **argv)
 	rlimit l = {RLIM_INFINITY,RLIM_INFINITY};
 	//Set new limit
         setrlimit(RLIMIT_CORE, &l);
-
-	//Register mutext for ffmpeg
-	av_lockmgr_register(lock_ffmpeg);
 
 	//Set log level
 	av_log_set_callback(log_ffmpeg);

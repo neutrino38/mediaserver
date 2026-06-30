@@ -227,7 +227,7 @@ int AudioEncoderWorker::Encode()
 			frame.ClearRTPPacketizationInfo();
 			
 			//Add rtp packet
-			frame.AddRtpPacket(0,len,NULL,0);
+			frame.AddRtpPacket(0,len,NULL,0,false);
 		 
 			//Lock
 			pthread_mutex_lock(&mutex);

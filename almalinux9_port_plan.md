@@ -53,7 +53,7 @@ libsrtp (fork patché), g722_1, WebRTC VAD, et `libbfcp` (interne). Tout le rest
 passe en dynamique natif.
 
 Dépôts à activer sur le build : **AppStream + CRB (CodeReady Builder) + EPEL 9**.
-ffmpeg via **EPEL `ffmpeg-free`** (décision §6). RPM Fusion `x264-devel` reste
+ffmpeg via **RPMFUSION `ffmpeg`** (décision §6). RPM Fusion `x264-devel` reste
 nécessaire tant que le code lie `-lx264` en direct (cf. §4, point H.264).
 
 ---

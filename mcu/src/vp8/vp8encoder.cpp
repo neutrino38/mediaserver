@@ -350,7 +350,7 @@ VideoFrame* VP8Encoder::EncodeFrame(BYTE *buffer,DWORD bufferSize)
 					//Reduce
 					len = pkt->data.frame.sz-cur;
 				//Append hint
-				frame->AddRtpPacket(pos+cur,len,aux,auxLen);
+				frame->AddRtpPacket(pos+cur,len,aux,auxLen,false);
 				//Increase current
 				cur+=len;
 				//Not first in partition

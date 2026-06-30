@@ -17,7 +17,7 @@ public:
 	class RtpPacketization
 	{
 	public:
-		RtpPacketization(DWORD pos,DWORD size,BYTE* prefix,DWORD prefixLen)
+		RtpPacketization(DWORD pos,DWORD size,const BYTE* prefix,DWORD prefixLen, bool mark)
 		{
 			//Store values
 			this->pos = pos;
@@ -27,27 +27,30 @@ public:
 			if (prefixLen)
 				//Copy
 				memcpy(this->prefix,prefix,prefixLen);
-
+			this->mark = mark;
 		}
 
-		DWORD GetPos()		{ return pos;	}
-		DWORD GetSize()		{ return size;	}
-		BYTE* GetPrefixData()	{ return prefix;	}
+		DWORD GetPos() const		{ return pos;	}
+		DWORD GetSize()	const	{ return size;	}
+		const BYTE* GetPrefixData() const { return prefix;	}
 		DWORD GetPrefixLen()	{ return prefixLen;	}
 		DWORD GetTotalLength()	{ return size+prefixLen;}
-		
+		bool IsMark() { return mark; }
+
+
 	private:
 		DWORD	pos;
 		DWORD	size;
 		BYTE	prefix[16];
 		DWORD	prefixLen;
+		bool mark;
 	};
 
 	typedef std::vector<RtpPacketization*> RtpPacketizationInfo;
 public:
 	enum Type {Audio=0,Video=1,Text=2,Application=3};
 	enum MediaRole {VIDEO_MAIN=0,VIDEO_SLIDES=1 };
-	
+
 	static const char * TypeToString(Type type)
 	{
 		switch(type)
@@ -64,7 +67,7 @@ public:
 				return "Unknown";
 		}
 	}
-	
+
 	static const char * RoleToString(MediaRole role)
 	{
 		switch(role)
@@ -108,8 +111,8 @@ public:
 				return "http";
 		}
 	}
-	
-	MediaFrame(Type type,DWORD size)
+
+	MediaFrame(Type type,DWORD size, bool owns = true)
 	{
 		//Set media type
 		this->type = type;
@@ -120,9 +123,27 @@ public:
 		//Set buffer size
 		bufferSize = size;
 		//Allocate memory
-		buffer = (BYTE*) malloc(bufferSize);
+
 		//NO length
 		length = 0;
+		if ( owns )
+		{
+		    if ( size > 0 )
+		    {
+			buffer = (BYTE*) malloc(bufferSize);
+		    }
+		    else
+		    {
+			buffer = NULL;
+		    }
+		    ownsbuffer = true;
+		}
+		else
+		{
+		    buffer = NULL;
+		    bufferSize = 0;
+		    ownsbuffer = false;
+		}
 	}
 
 	virtual ~MediaFrame()
@@ -130,7 +151,7 @@ public:
 		//Clear
 		ClearRTPPacketizationInfo();
 		//Clear memory
-		free(buffer);
+		if (ownsbuffer) free(buffer);
 	}
 
 	void	ClearRTPPacketizationInfo()
@@ -144,26 +165,26 @@ public:
 			rtpInfo.pop_back();
 		}
 	}
-	
-	void	AddRtpPacket(DWORD pos,DWORD size,BYTE* prefix,DWORD prefixLen)		
-	{
-		rtpInfo.push_back(new RtpPacketization(pos,size,prefix,prefixLen));
-	}
-	
-	Type	GetType()		{ return type;	}
-	DWORD	GetTimeStamp()		{ return ts;	}
-	DWORD	SetTimestamp(DWORD ts)	{ this->ts = ts; }
 
-	bool	HasRtpPacketizationInfo()		{ return !rtpInfo.empty();	}
+	void	AddRtpPacket(DWORD pos,DWORD size,const BYTE* prefix,DWORD prefixLen, bool mark)
+	{
+		rtpInfo.push_back(new RtpPacketization(pos,size,prefix,prefixLen, mark));
+	}
+
+	Type	GetType() const		{ return type;	}
+	DWORD	GetTimeStamp()	const	{ return ts;	}
+	DWORD	SetTimestamp(DWORD ts)	{ this->ts = ts; return ts; }
+
+	bool	HasRtpPacketizationInfo() const		{ return !rtpInfo.empty();	}
 	RtpPacketizationInfo& GetRtpPacketizationInfo()	{ return rtpInfo;		}
 	virtual MediaFrame* Clone() = 0;
 
-	DWORD GetDuration()			{ return duration;		}
+	DWORD GetDuration()	const 		{ return duration;		}
 	void SetDuration(DWORD duration)	{ this->duration = duration;	}
 
-	BYTE* GetData()			{ return buffer;		}
-	DWORD GetLength()		{ return length;		}
-	DWORD GetMaxMediaLength()	{ return bufferSize;		}
+	BYTE* GetData()	const		{ return buffer;	}
+	DWORD GetLength() const		{ return length;		}
+	DWORD GetMaxMediaLength() const	{ return bufferSize;		}
 
 	void SetLength(DWORD length)	{ this->length = length;	}
 
@@ -172,13 +193,40 @@ public:
 		//Calculate new size
 		bufferSize = size;
 		//Realloc
-		buffer = (BYTE*) realloc(buffer,bufferSize);
-		
-		return (buffer != NULL);
+		if ( ownsbuffer )
+		{
+		    buffer = (BYTE*) realloc(buffer,bufferSize);
+			if (buffer == NULL) {
+				return false;
+			}
+		    if (length > bufferSize) length = bufferSize;
+		}
+		else
+		{
+			BYTE * nbuffer = (BYTE*) malloc(bufferSize);
+			if (nbuffer == NULL) {
+				return false;
+			}
+
+			ownsbuffer = true;
+			if (length <= bufferSize && buffer != NULL)
+			{
+				memcpy(nbuffer, buffer, length);
+			}
+			else
+			{
+				length = 0;
+			}
+			buffer = nbuffer;
+		}
+
+		return true;
 	}
 
-	bool SetMedia(BYTE* data,DWORD size)
+	bool SetMedia(const BYTE* data,DWORD size)
 	{
+	    if ( ownsbuffer )
+	    {
 		//Check size
 		if (size>bufferSize)
 			//Allocate new size
@@ -187,11 +235,20 @@ public:
 		memcpy(buffer,data,size);
 		//Increase length
 		length=size;
+	    }
+	    else
+	    {
+	        buffer = (BYTE*) data;
+		length = size;
+	    }
+	    return true;
 	}
 
-	DWORD AppendMedia(BYTE* data,DWORD size)
+	DWORD AppendMedia(const BYTE* data,DWORD size)
 	{
 		DWORD pos = length;
+
+		if ( !ownsbuffer ) return 0;
 		//Check size
 		if (size+length>bufferSize)
 			//Allocate new size
@@ -203,7 +260,17 @@ public:
 		//Return previous pos
 		return pos;
 	}
-	
+
+	bool PrependWithFrame(MediaFrame * f);
+
+	/*
+	 * Create packetization info by parsing media
+	 */
+	virtual bool Packetize(unsigned int mtu)
+	{
+		return false;
+	}
+
 protected:
 	Type type;
 	DWORD ts;
@@ -213,6 +280,7 @@ protected:
 	DWORD	bufferSize;
 	DWORD	duration;
 	DWORD	clockRate;
+	bool	ownsbuffer;
 };
 
 struct MediaStatistics
@@ -229,5 +297,6 @@ struct MediaStatistics
         DWORD           bwOut;
         DWORD           bwIn;
 };
+
 #endif	/* MEDIA_H */
 

@@ -443,7 +443,7 @@ VideoFrame* H264Encoder::EncodeFrame(BYTE *buffer,DWORD bufferSize)
 			set3(nalData,1,profileLevel);
 		}
 		//Add rtp packet
-		frame->AddRtpPacket(pos,nalSize,NULL,0);
+		frame->AddRtpPacket(pos,nalSize,NULL,0,false);
 	}
 
 	//Set first nal

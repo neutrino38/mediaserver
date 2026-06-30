@@ -8,7 +8,7 @@
 class AudioCodec
 {
 public:
-	enum Type {PCMA=8,PCMU=0,GSM=3,G722=9,SPEEX16=117,AMR=118,G7221=99,TELEPHONE_EVENT=100,NELLY8=130,NELLY11=131,OPUS=111,AAC=97};
+	enum Type {PCMA=8,PCMU=0,GSM=3,G722=9,SPEEX16=117,AMR=118,G7221=119,TELEPHONE_EVENT=100,NELLY8=130,NELLY11=131,OPUS=98,AAC=97,SLIN=99,AMRWB=120};
 	static const char* GetNameFor(Type codec)
 	{
 		switch (codec)
@@ -23,9 +23,55 @@ public:
 			case G722:	return "G722";
 			case G7221:	return "G722.1";
 			case AAC:	return "AAC";
+			case AMR:	return "AMR";
+			case AMRWB:	return "AMR-WB";
 			case TELEPHONE_EVENT: return "TELEPHONE_EVENT";
 			default:	return "unknown";
 		}
+	}
+
+	static bool GetCodecFor(const char * name, Type & c)
+	{
+	    if (name == NULL) return false;
+
+	    if ( strcmp(name, "PCMA") == 0 || strcmp(name, "alaw") == 0)
+	    {
+		c = PCMA;
+		return true;
+	    }
+
+	    if ( strcmp(name, "PCMU") == 0 || strcmp(name, "ulaw") == 0)
+	    {
+		c = PCMU;
+		return true;
+	    }
+
+	    if ( strcmp(name, "AAC") == 0)
+	    {
+		c = AAC;
+		return true;
+	    }
+
+	    if ( strcmp(name, "OPUS") == 0)
+	    {
+		c = OPUS;
+		return true;
+	    }
+
+
+	    if ( strcmp(name, "AMR") == 0)
+	    {
+		c = AMR;
+		return true;
+	    }
+
+	    if ( strcmp(name, "AMR-WB") == 0 || strcmp(name, "AMRWB") == 0)
+	    {
+		c = AMRWB;
+		return true;
+	    }
+
+	    return false;
 	}
 	typedef std::map<int,Type> RTPMap;
 };
@@ -48,6 +94,48 @@ public:
 			default:	return "unknown";
 		}
 	}
+
+	static bool GetCodecFor(const char * name, Type & c)
+	{
+	    if (name == NULL) return false;
+
+	    if ( strcmp(name, "H264") == 0)
+	    {
+		c = H264;
+		return true;
+	    }
+
+	    if ( strcmp(name, "H263_1996") == 0
+	         ||
+		 strcmp(name, "H263") == 0
+		 ||
+		 strcmp(name, "H263-1996") == 0)
+	    {
+		c = H263_1996;
+		return true;
+	    }
+
+	    if ( strcmp(name, "H263_1998") == 0
+	         ||
+		 strcmp(name, "H263P") == 0
+		 ||
+		 strcmp(name, "H263-1998") == 0
+		 ||
+		 strcmp(name, "H263-2000") == 0)
+	    {
+		c = H263_1998;
+		return true;
+	    }
+
+	    if ( strcmp(name, "VP8") == 0)
+	    {
+		c = VP8;
+		return true;
+	    }
+
+	    return false;
+	}
+
 	typedef std::map<int,Type> RTPMap;
 };
 
@@ -55,7 +143,7 @@ public:
 class TextCodec
 {
 public:
-	enum Type {T140=98,T140RED=96};
+	enum Type {T140=106,T140RED=105};
 	static const char* GetNameFor(Type type)
 	{
 		switch (type)

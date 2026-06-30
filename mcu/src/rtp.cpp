@@ -130,7 +130,7 @@ public:
 		//And data
 		frame.AppendMedia(payload, payload_len);
 		//Add RTP packet
-		frame.AddRtpPacket(pos,payload_len,NULL,0);
+		frame.AddRtpPacket(pos,payload_len,NULL,0,false);
 		//Return it
 		return &frame;
 	}

@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make all *)",
+      "Bash(sed -n '/avcodec_receive_packet/,/int avcodec_receive_packet/p' /usr/include/ffmpeg/libavcodec/avcodec.h | head -40)",
+      "Bash(awk '/Read encoded data from the encoder/{f=1} f{print} /int avcodec_receive_packet/{if\\(f\\)exit}' /usr/include/ffmpeg/libavcodec/avcodec.h)",
+      "Bash(make ffaudiocodec.o)",
+      "Bash(ar t *)",
+      "Bash(nm ffaudiocodec.o)",
+      "Bash(git rm *)",
+      "Bash(awk '/::DecodePacket/,/^}/' h264/h264decoder.cpp)",
+      "Bash(awk '/::DecodePacket/,/^}/' h263/h263codec.cpp)",
+      "Bash(awk '/::DecodePacket/,/^}/' h263/mpeg4codec.cpp)",
+      "Bash(ldd bin/debug/mcu)",
+      "Bash(nm bin/debug/mcu)",
+      "Bash(awk '{print $1}')"
+    ],
+    "additionalDirectories": [
+      "/usr/include/ffmpeg/libavcodec"
+    ]
+  }
+}

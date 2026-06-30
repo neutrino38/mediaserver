@@ -7,7 +7,7 @@
 class VideoFrame : public MediaFrame
 {
 public:
-	VideoFrame(VideoCodec::Type codec,DWORD size) : MediaFrame(MediaFrame::Video,size)
+	VideoFrame(VideoCodec::Type codec,DWORD size, bool own = true) : MediaFrame(MediaFrame::Video,size, own)
 	{
 		//Store codec
 		this->codec = codec;
@@ -15,6 +15,7 @@ public:
 		isIntra = 0;
 		width = 0;
 		height = 0;
+		SetH264NalSizeLength(0);
 	}
 
 	virtual MediaFrame* Clone()
@@ -40,12 +41,12 @@ public:
 			//Gete info
 			MediaFrame::RtpPacketization *rtp = (*it);
 			//Add it
-			frame->AddRtpPacket(rtp->GetPos(),rtp->GetSize(),rtp->GetPrefixData(),rtp->GetPrefixLen());
+			frame->AddRtpPacket(rtp->GetPos(),rtp->GetSize(),rtp->GetPrefixData(),rtp->GetPrefixLen(), rtp->IsMark());
 		}
 		//Return it
 		return (MediaFrame*)frame;
 	}
-	
+
 	VideoCodec::Type GetCodec()	{ return codec;			}
 	bool  IsIntra()			{ return isIntra;		}
 	DWORD GetWidth()		{ return width;			}
@@ -55,13 +56,54 @@ public:
 	void SetWidth(DWORD width)		{ this->width = width;		}
 	void SetHeight(DWORD height)		{ this->height = height;	}
 	void SetIntra(bool isIntra)		{ this->isIntra = isIntra;	}
-	
+
+	virtual bool Packetize(unsigned int mtu);
+
+	/**
+	 * Select how the NALU are to be parsed
+	 * @param sz: how many bytes used to store NALU sizein the bitstream. 0 = use start code
+	 **/
+	void SetH264NalSizeLength(DWORD sz)
+	{
+		if (sz == 0)
+		{
+			useStartCode = true;
+			naluSizeLen = 0;
+		}
+		else if (sz <= 4)
+		{
+			useStartCode = false;
+			naluSizeLen = sz;
+		}
+		else
+		{
+			useStartCode = false;
+			naluSizeLen = 4;
+		}
+	}
+
 private:
 	VideoCodec::Type codec;
 	bool	isIntra;
 	DWORD	width;
 	DWORD	height;
 
+	bool PacketizeH264(unsigned int mtu);
+	bool PacketizeH263(unsigned int mtu);
+
+
+	// H.264 specific
+	bool useStartCode;
+	DWORD naluSizeLen;
+
+	// If NALU size is stored in data (MP4 file)
+	DWORD ReadNaluSize(BYTE * data);
+
+	//If butstream contains H.264 sync codes
+	DWORD DetectNaluBoundary(BYTE * p, DWORD sz);
+
+	// Handle fragmentation
+	void PacketizeH264Nalu(unsigned int mtu, DWORD offset, DWORD naluSz, bool last);
 };
 
 class VideoInput

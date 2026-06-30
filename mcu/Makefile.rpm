@@ -19,7 +19,7 @@ MEDKITDIR       = ../third_party/fontventa/libmedikit
 # Mettre a yes pour lier libmedkit.a (sous-module) au lieu des sources locales
 # redondantes. Voir almalinux9_port_plan.md. Necessite davoir retire les .o
 # correspondants de OBJS, sinon double definition au link.
-USEMEDKIT       = no
+USEMEDKIT       = yes
 VADWEBRTC       = yes
 WEBRTCINCLUDE   = ${HOME}/webrtc/trunk/webrtc/
 WEBRTDIROBJ     = ${HOME}/webrtc/trunk/out/Release/obj.target/webrtc/
@@ -67,7 +67,8 @@ G711DIR=g711
 G711OBJ=g711.o pcmucodec.o pcmacodec.o
 
 H263DIR=h263
-H263OBJ=h263.o h263codec.o mpeg4codec.o h263-1996codec.o
+# H263/H263+/MPEG4 decode+encode fournis par libmedkit (FfVideoDecoder/Encoder).
+H263OBJ=
 
 JSR309DIR=jsr309
 JSR309OBJ=JSR309Event.o WSEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSession.o \
@@ -78,20 +79,24 @@ JSR309OBJ=JSR309Event.o WSEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSes
 
 ifeq ($(FLV1PARSER),yes)
 	FLV1DIR=flv1
-	FLV1OBJ=flv1codec.o flv1Parser.o
+	# flv1codec (Sorenson) fourni par libmedkit (FfVideoDecoder AV_CODEC_ID_FLV1).
+	FLV1OBJ=flv1Parser.o
 	OPTS+= -DFLV1PARSER
 else
 	FLV1DIR=flv1
-	FLV1OBJ=flv1codec.o
+	FLV1OBJ=
 endif
 
 
 
 H264DIR=h264
-H264OBJ=h264encoder.o h264decoder.o h264depacketizer.o
+# H264 decode fourni par libmedkit (FfVideoDecoder). On garde l'encodeur mcu
+# (libx264) et le depacketiseur (utilise par rtp.cpp).
+H264OBJ=h264encoder.o h264depacketizer.o
 
 VP6DIR=vp6
-VP6OBJ=vp6decoder.o
+# VP6 decode fourni par libmedkit (FfVideoDecoder AV_CODEC_ID_VP6F).
+VP6OBJ=
 
 VP8DIR=vp8
 VP8OBJ=vp8encoder.o vp8decoder.o
@@ -103,10 +108,12 @@ SPEEXDIR=speex
 SPEEXOBJ=speexcodec.o
 
 NELLYDIR=nelly
-NELLYOBJ=NellyCodec.o
+# NELLY : pas encore porte ffmpeg 5 (ni mcu ni libmedkit). Retire du build.
+NELLYOBJ=
 
 G722DIR=g722
-G722OBJ=g722codec.o g7221codec.o
+# g722codec fourni par libmedkit (FfAudioEncoder/Decoder). g7221 reste mcu.
+G722OBJ=g7221codec.o
 
 OPUSDIR=opus
 OPUSOBJ=opusencoder.o opusdecoder.o
@@ -194,8 +201,10 @@ INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(B
 
 ifeq ($(USEMEDKIT),yes)
     # libmedikit : en-tetes (medkit/, astmedkit/) et archive pris dans larbre du
-    # sous-module, sans install dans /opt/ives.
-    INCLUDE += -I$(MEDKITDIR)
+    # sous-module, sans install dans /opt/ives. -I$(MEDKITDIR) place AVANT
+    # -Iinclude/ pour que les en-tetes du sous-module priment (et que les
+    # inclusions <g722/...> visent le codec medkit, pas l'homonyme mcu/src).
+    INCLUDE := -I$(MEDKITDIR) $(INCLUDE)
     MEDKITLIB = $(MEDKITDIR)/libmedkit.a
 endif
 
@@ -215,9 +224,16 @@ else
 ifeq ($(DISTRO), el5)   
 	LDFLAGS += -Wl,-Bstatic -lmp4v2 -lsrtp -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
 else 
-	LDFLAGS += -Wl,-Bstatic -lsrtp -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb -ldl -lz
+	# AMR-NB/WB : fournis par libmedkit via libavcodec (encodeurs libopencore_amrnb
+	# / libvo_amrwbenc lies dynamiquement dans libavcodec.so). Plus de -lopencore-amr*.
+	LDFLAGS += -Wl,-Bstatic -lsrtp -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -ldl -lz
 endif
-	LDXMLFLAGS+=  $(ADDLIBPATH)/lib/libssl.a $(ADDLIBPATH)/lib/libcrypto.a $(ADDLIBPATH)/lib/libxmlrpc_abyss.a $(ADDLIBPATH)/lib/libxmlrpc_server.a $(ADDLIBPATH)/lib/libxmlrpc.a $(ADDLIBPATH)/lib/libxmlrpc_xmlparse.a  $(ADDLIBPATH)/lib/libxmlrpc_xmltok.a $(ADDLIBPATH)/lib/libxmlrpc_util.a -lpthread
+	# OpenSSL : libs dynamiques du systeme (AlmaLinux 9) au lieu des .a statiques
+	# (plus de build openssl dans staticdeps).
+	# XML : xmlrpc-c est bati avec le backend libxml2 ; xmlParseChunk vient donc de
+	# la libxml2 systeme (-lxml2), pas des archives expat libxmlrpc_xmlparse/xmltok
+	# (non produites dans ce mode).
+	LDXMLFLAGS+=  $(ADDLIBPATH)/lib/libxmlrpc_abyss.a $(ADDLIBPATH)/lib/libxmlrpc_server.a $(ADDLIBPATH)/lib/libxmlrpc.a $(ADDLIBPATH)/lib/libxmlrpc_util.a -lxml2 -lssl -lcrypto -lpthread
 endif
     
 

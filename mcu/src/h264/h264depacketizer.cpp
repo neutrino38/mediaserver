@@ -113,7 +113,7 @@ MediaFrame* H264Depacketizer::AddPayload(BYTE* payload, DWORD payload_len)
 					 single-time aggregation units
 			*/
 			//Everything goes to the payload
-			frame.AddRtpPacket(0,0,payload,payload_len);
+			frame.AddRtpPacket(0,0,payload,payload_len,false);
 
 			/* Skip STAP-A NAL HDR */
 			payload++;
@@ -205,7 +205,7 @@ MediaFrame* H264Depacketizer::AddPayload(BYTE* payload, DWORD payload_len)
 			//Append data
 			frame.AppendMedia(payload+2,nalu_size);
 			//Add rtp payload
-			frame.AddRtpPacket(pos,nalu_size,payload,2);
+			frame.AddRtpPacket(pos,nalu_size,payload,2,false);
 
 			if (E)
 			{
@@ -233,7 +233,7 @@ MediaFrame* H264Depacketizer::AddPayload(BYTE* payload, DWORD payload_len)
 			//And data
 			frame.AppendMedia(payload, nalu_size);
 			//Add RTP packet
-			frame.AddRtpPacket(pos,nalu_size,NULL,0);
+			frame.AddRtpPacket(pos,nalu_size,NULL,0,false);
 			//Done
 			break;
 	}
