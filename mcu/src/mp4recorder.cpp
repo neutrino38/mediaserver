@@ -4,7 +4,7 @@
 #include <string.h>
 #include "log.h"
 #include "mp4recorder.h"
-#include "h264/h264.h"
+#include <h264/h264.h>
 #include "aacconfig.h"
 
 

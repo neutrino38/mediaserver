@@ -2,7 +2,7 @@
 #include "log.h"
 #include "rtp.h"
 #include "audio.h"
-#include "h264/h264depacketizer.h"
+#include <h264/h264depacketizer.h>
 
 void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 {
@@ -98,6 +98,27 @@ static void SetRTCPHeaderLength(rtcp_common_t* header,DWORD size)
 	header->length = htons(size/4-1);
 }
 
+// Adaptateur : enveloppe la H264Depacketizer de libmedkit (interface standalone)
+// dans le framework RTPDepacketizer du mcu. AddPacket transmet le mark bit RTP
+// à AddPayload, ce que la version medkit exploite pour détecter la fin de trame.
+class H264RTPDepacketizer : public RTPDepacketizer
+{
+public:
+	H264RTPDepacketizer() : RTPDepacketizer(MediaFrame::Video, VideoCodec::H264) {}
+	virtual ~H264RTPDepacketizer() {}
+	virtual void SetTimestamp(DWORD ts)           { impl.SetTimestamp(ts); }
+	virtual MediaFrame* AddPacket(RTPPacket* pkt) {
+		impl.SetTimestamp(pkt->GetTimestamp());
+		return impl.AddPayload(pkt->GetMediaData(), pkt->GetMediaLength(), pkt->GetMark());
+	}
+	virtual MediaFrame* AddPayload(BYTE* data, DWORD len) {
+		return impl.AddPayload(data, len, false);
+	}
+	virtual void ResetFrame()                     { impl.ResetFrame(); }
+private:
+	H264Depacketizer impl;
+};
+
 class DummyAudioDepacketizer : public RTPDepacketizer
 {
 public:
@@ -156,7 +177,7 @@ RTPDepacketizer* RTPDepacketizer::Create(MediaFrame::Type mediaType,DWORD codec)
 			 switch((VideoCodec::Type)codec)
 			 {
 				 case VideoCodec::H264:
-					 return new H264Depacketizer();
+					 return new H264RTPDepacketizer();
 			 }
 			 break;
 		 case MediaFrame::Audio:

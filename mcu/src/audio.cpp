@@ -1,7 +1,7 @@
 #include "log.h"
 #include "audio.h"
 #include <g711/g711codec.h>
-#include "speex/speexcodec.h"
+#include <speex/speexcodec.h>
 // G.722 fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg 5). Chevrons pour
 // viser l'en-tete du sous-module ($(MEDKITDIR)/g722/g722codec.h) et non le
 // fichier homonyme mcu/src/g722/g722codec.h (resolu en premier par les guillemets).
@@ -15,7 +15,7 @@
 #include <gsm/gsmcodec.h>
 // OPUS fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg AV_CODEC_ID_OPUS).
 #include <opus/opuscodec.h>
-#include "g722/g7221codec.h"
+#include <g722/g7221codec.h>
 
 AudioEncoder* AudioCodecFactory::CreateEncoder(AudioCodec::Type codec)
 {

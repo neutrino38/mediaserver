@@ -11,7 +11,7 @@
 #include <vp8/vp8decoder.h>
 #include <vp8/vp8encoder.h>
 // Encodeur H264 reste côté mcu (libx264).
-#include "h264/h264encoder.h"
+#include <h264/h264encoder.h>
 
 VideoDecoder* VideoCodecFactory::CreateDecoder(VideoCodec::Type codec)
 {
