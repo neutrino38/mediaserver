@@ -16,10 +16,9 @@ BFCPINCLUDE     = /opt/ives/include
 FLASHSTREAMER   = no
 ADDLIBPATH      = ../staticdeps
 MEDKITDIR       = ../third_party/fontventa/libmedikit
-# Mettre a yes pour lier libmedkit.a (sous-module) au lieu des sources locales
-# redondantes. Voir almalinux9_port_plan.md. Necessite davoir retire les .o
-# correspondants de OBJS, sinon double definition au link.
-USEMEDKIT       = yes
+# libmedkit (sous-module) est desormais la source unique des codecs : liaison
+# inconditionnelle de libmedkit.a. Le mode sans-medkit a ete supprime (les .o de
+# codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
 VADWEBRTC       = yes
 WEBRTCINCLUDE   = ${HOME}/webrtc/trunk/webrtc/
 WEBRTDIROBJ     = ${HOME}/webrtc/trunk/out/Release/obj.target/webrtc/
@@ -99,7 +98,9 @@ VP6DIR=vp6
 VP6OBJ=
 
 VP8DIR=vp8
-VP8OBJ=vp8encoder.o vp8decoder.o
+# VP8 entierement fourni par libmedkit : decodeur natif ffmpeg + encodeur via le
+# wrapper libvpx de ffmpeg (avcodec). Plus de code vpx direct cote mcu.
+VP8OBJ=
 
 GSMDIR=gsm
 GSMOBJ=gsmcodec.o
@@ -199,14 +200,13 @@ MAGICKLIBS      := $(shell pkg-config --libs Magick++)
 
 INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(BFCPINCLUDE) -I/usr/include/ffmpeg
 
-ifeq ($(USEMEDKIT),yes)
-    # libmedikit : en-tetes (medkit/, astmedkit/) et archive pris dans larbre du
-    # sous-module, sans install dans /opt/ives. -I$(MEDKITDIR) place AVANT
-    # -Iinclude/ pour que les en-tetes du sous-module priment (et que les
-    # inclusions <g722/...> visent le codec medkit, pas l'homonyme mcu/src).
-    INCLUDE := -I$(MEDKITDIR) $(INCLUDE)
-    MEDKITLIB = $(MEDKITDIR)/libmedkit.a
-endif
+# libmedikit est desormais OBLIGATOIRE (plus de mode sans-medkit) : les codecs
+# proviennent du sous-module. En-tetes (medkit/, astmedkit/) et archive pris
+# dans l'arbre du sous-module, sans install dans /opt/ives. -I$(MEDKITDIR) place
+# AVANT -Iinclude/ pour que les en-tetes du sous-module priment (et que les
+# inclusions <g722/...>/<amr/...> visent le codec medkit, pas l'homonyme mcu/src).
+INCLUDE := -I$(MEDKITDIR) $(INCLUDE)
+MEDKITLIB = $(MEDKITDIR)/libmedkit.a
 
 LDFLAGS+= $(BFCPLIBS) -L$(ADDLIBPATH)/lib 
 LDFLAGS+= $(MEDKITLIB)
@@ -226,7 +226,7 @@ ifeq ($(DISTRO), el5)
 else 
 	# AMR-NB/WB : fournis par libmedkit via libavcodec (encodeurs libopencore_amrnb
 	# / libvo_amrwbenc lies dynamiquement dans libavcodec.so). Plus de -lopencore-amr*.
-	LDFLAGS += -Wl,-Bstatic -lsrtp -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -ldl -lz
+	LDFLAGS += -Wl,-Bstatic -lsrtp -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 -lgsm $(MAGICKLIBS) -lbz2 -ldl -lz
 endif
 	# OpenSSL : libs dynamiques du systeme (AlmaLinux 9) au lieu des .a statiques
 	# (plus de build openssl dans staticdeps).

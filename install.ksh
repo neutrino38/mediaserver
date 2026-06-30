@@ -458,6 +458,7 @@ h263packet.o h263codec.o mpeg4codec.o \
 h264encoder.o h264decoder.o h264depacketizer.o \
 g711.o pcmucodec.o pcmacodec.o \
 ffvideocodec.o ffaudiocodec.o g722codec.o aacencoder.o amrcodec.o \
+vp8decoder.o vp8encoder.o \
 mp4track.o logo.o picturestreamer.o"
 	make -C "$MEDKITDIR" all \
 		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}" \

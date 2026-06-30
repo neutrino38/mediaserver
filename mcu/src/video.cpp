@@ -4,10 +4,14 @@
 // via les gardes d'include partagées (_VIDEO_H_/_CODECS_H_/_MEDIA_H_ déjà
 // définies par "video.h" ci-dessus), se lie aux types mcu — ABI-identiques.
 #include "ffvideocodec.h"
-// Codecs restés côté mcu pour ce palier : encodeur H264 et VP8 (enc/dec).
+// Décodeurs medkit portant leur propre dépaquetisation RTP (chevrons : on vise
+// le sous-module $(MEDKITDIR)/..., pas les homonymes mcu/src).
+#include <h264/h264decoder.h>
+#include <h263/h263codec.h>
+#include <vp8/vp8decoder.h>
+#include <vp8/vp8encoder.h>
+// Encodeur H264 reste côté mcu (libx264).
 #include "h264/h264encoder.h"
-#include "vp8/vp8decoder.h"
-#include "vp8/vp8encoder.h"
 
 VideoDecoder* VideoCodecFactory::CreateDecoder(VideoCodec::Type codec)
 {
@@ -19,16 +23,18 @@ VideoDecoder* VideoCodecFactory::CreateDecoder(VideoCodec::Type codec)
 		case VideoCodec::SORENSON:
 			return new FfVideoDecoder(AV_CODEC_ID_FLV1, VideoCodec::SORENSON);
 		case VideoCodec::H263_1998:
-			return new FfVideoDecoder(AV_CODEC_ID_H263P, VideoCodec::H263_1998);
+			return new H263Decoder();
 		case VideoCodec::H263_1996:
+			// H263-1996 : pas de dépaquetiseur dédié -> défaut FfVideoDecoder.
 			return new FfVideoDecoder(AV_CODEC_ID_H263, VideoCodec::H263_1996);
 		case VideoCodec::MPEG4:
 			return new FfVideoDecoder(AV_CODEC_ID_MPEG4, VideoCodec::MPEG4);
 		case VideoCodec::H264:
-			return new FfVideoDecoder(AV_CODEC_ID_H264, VideoCodec::H264);
+			return new H264Decoder();
 		case VideoCodec::VP6:
 			return new FfVideoDecoder(AV_CODEC_ID_VP6F, VideoCodec::VP6);
 		case VideoCodec::VP8:
+			// Décodeur VP8 natif ffmpeg (pas libvpx) avec sa dépaquetisation propre.
 			return new VP8Decoder();
 		default:
 			Error("Video decoder not found [%d]\n",codec);
@@ -64,6 +70,7 @@ VideoEncoder* VideoCodecFactory::CreateEncoder(VideoCodec::Type codec,const Prop
 		case VideoCodec::H264:
 			return new H264Encoder(properties);
 		case VideoCodec::VP8:
+			// Encodeur VP8 via le wrapper libvpx de ffmpeg (libmedkit).
 			return new VP8Encoder(properties);
 		default:
 			Error("Video Encoder not found\n");

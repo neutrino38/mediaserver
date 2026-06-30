@@ -13,7 +13,15 @@
       "Bash(awk '/::DecodePacket/,/^}/' h263/mpeg4codec.cpp)",
       "Bash(ldd bin/debug/mcu)",
       "Bash(nm bin/debug/mcu)",
-      "Bash(awk '{print $1}')"
+      "Bash(awk '{print $1}')",
+      "Bash(echo \"EXIT=$?\")",
+      "Read(//home/ebuu/bin/debug/**)",
+      "Bash(make -j4)",
+      "Bash(make -j4 ASTERISK=no)",
+      "Bash(BUILD)",
+      "Bash(grep -n \"^$\\(BUILD\\)\\\\|mkdir.*BUILD\\\\|media/build\" /home/ebuu/mediaserver/mcu/Makefile.rpm)",
+      "Bash(grep -n \"\\\\.o.*:.*\\\\.cpp\\\\|%.o.*:.*%.cpp\\\\|$\\(BUILD\\)\" /home/ebuu/mediaserver/mcu/Makefile.rpm)",
+      "Bash(nm /home/ebuu/mediaserver/bin/debug/mcu)"
     ],
     "additionalDirectories": [
       "/usr/include/ffmpeg/libavcodec"

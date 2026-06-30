@@ -266,8 +266,76 @@ fois la migration vers libmedkit réalisée (les sources concernées quittent
 
 **Vérif :** `./install.ksh libmedkit` puis `cd mcu && make -f Makefile.rpm mcu` → `bin/debug/mcu` (ELF 34 Mo) ; le binaire démarre (init RTMP/WebSocket/RTP OK).
 
+**Palier 3b — VP8 décode migré vers le décodeur NATIF ffmpeg (2026-06-30) :**
+- `VideoCodec::VP8` décodé par le décodeur natif `vp8` de ffmpeg (**pas** libvpx :
+  `avcodec_find_decoder` renvoie le natif par défaut).
+- **VP8 encode via le wrapper `libvpx` de ffmpeg** : nouvelle classe `VP8Encoder`
+  (`vp8/vp8encoder.{h,cpp}`, dérive de `FfVideoEncoder`, `AV_CODEC_ID_VP8` →
+  `avcodec_find_encoder` renvoie le wrapper `libvpx`). Le code vpx natif de mcu
+  (`vp8encoder.o`/`vp8decoder.o`) est **retiré du build**, et `-lvpx` retiré du
+  link mcu : `libvpx.so` n'est plus tiré que **via `libavcodec.so`**. `Makefile.rpm`
+  `VP8OBJ=` (vide).
+
+**Packetisation RTP par encodeur (symétrique aux décodeurs, 2026-06-30) :**
+`FfVideoEncoder::EncodeFrame` délègue désormais la packetisation RTP à une méthode
+virtuelle **`PacketizeFrame()`** :
+- défaut (`FfVideoEncoder::PacketizeFrame`) = schéma historique H263/MPEG4 (saut du
+  start code 2 octets + préfixe RFC 2429) — comportement inchangé pour H263/MPEG4/SORENSON ;
+- **`VP8Encoder::PacketizeFrame`** (override) = VP8 payload descriptor RFC 7741
+  (préfixe 1 octet, S=1 sur le 1er fragment puis 0, marker RTP sur le dernier).
+Membres de `FfVideoEncoder` passés en `protected`. → l'encodeur VP8 est désormais
+**correct de bout en bout** (bitstream + RTP).
+
+**Refactor DecodePacket — un dépaquetiseur par décodeur (2026-06-30) :**
+Chaque décodeur porte SA dépaquetisation RTP (méthode virtuelle `DecodePacket`),
+`FfVideoDecoder::DecodePacket` ne garde que le **cas par défaut** (accumulation
+brute + `Decode` sur `last`, pour MPEG4/VP6/FLV1/SORENSON/H263-1996).
+- `ffvideocodec.h` : membres de `FfVideoDecoder` passés en **`protected`**
+  (`buffer`/`bufLen`/`bufSize`/`Decode`… accessibles aux dérivés).
+- `ffvideocodec.cpp` : `DecodePacket` réduit au défaut ; `h264_append_nals` et
+  `vp8_descriptor_len` retirés d'ici (déplacés dans les classes concernées).
+- `h264/h264decoder.{h,cpp}` : `H264Decoder::DecodePacket` (STAP-A/FU-A,
+  `h264_append_nals` local).
+- `h263/h263codec.{h,cpp}` : `H263Decoder::DecodePacket` (RFC 2429).
+- **nouvelle classe `vp8/vp8decoder.{h,cpp}`** : `VP8Decoder` (dérive de
+  `FfVideoDecoder`, ctor `AV_CODEC_ID_VP8`) + `DecodePacket` (strip descriptor
+  RFC 7741, `vp8_descriptor_len` local). Ajoutée au `Makefile` medkit + `MEDKIT_OBJS`.
+- Factories (`mcu/src/video.cpp`, `libmedikit/video.cpp`) : instancient les classes
+  spécifiques `H264Decoder`/`H263Decoder`/`VP8Decoder` (mcu les inclut en chevrons
+  `<h264/...>`/`<h263/...>`/`<vp8/...>`) ; MPEG4/VP6/SORENSON/H263-1996 via
+  `FfVideoDecoder` (défaut).
+- Vérifié : build vert, symboles `{FfVideoDecoder,H264Decoder,H263Decoder,VP8Decoder}::DecodePacket` tous présents.
+
+**Palier 4 — partiel (2026-06-30) :**
+- ✅ **A.1 — mode sans-medkit supprimé** : `mcu/Makefile.rpm` lie `libmedkit.a` et
+  `-I$(MEDKITDIR)` **inconditionnellement** (bloc `ifeq ($(USEMEDKIT),yes)` retiré,
+  variable `USEMEDKIT` supprimée). Build vérifié vert.
+- ⛔ **A.2 — bascule des `#include` vers `medkit/` + suppression des homonymes :
+  NON RECOMMANDÉE en l'état.** Mesures à l'appui (diff réel, CRLF/espaces ignorés) :
+  - en-têtes codec-ABI déjà alignés : `codecs.h`/`media.h` identiques, `config.h`
+    sur-ensemble (gardes `__cplusplus` + `CIF` en `default`), `video.h`/`audio.h`
+    ne diffèrent que par les classes `VideoInput/Output`/`AudioInput/Output`
+    (absentes de medkit, 14-18 fichiers mcu les utilisent) ;
+  - **utilitaires réellement divergents** : `log.h` (207), `mp4recorder.h` (179),
+    `mp4player.h` (95), `tools.h` (89), `red.h` (74), `textencoder.h` (60),
+    `text.h` (49) — mcu utilise ses versions propres ; il ne faut PAS les basculer.
+  - **piège transitif bloquant** : `medkit/config.h` fait `#include "version.h"`
+    ; via les gardes partagées (`_VERSION_H_`, `_CONFIG_H_`…), basculer vers les
+    en-têtes medkit ferait prendre à mcu **`medkit/version.h`** (mauvaise version
+    produit). 135 fichiers / 199 sites concernés.
+  - Le risque double-ABI visé par le palier 4 est **déjà neutralisé** (en-têtes
+    codec maintenus ABI-identiques). Recommandation : garder l'arrangement actuel
+    (en-têtes mcu alignés sur medkit) plutôt qu'une bascule de masse risquée. Si
+    unification voulue un jour : d'abord déplacer Input/Output dans medkit, retirer
+    `#include "version.h"` de `medkit/config.h`, et ne basculer QUE les 4 en-têtes
+    codec (pas les utilitaires).
+
 **Reste à faire :**
-- Nelly (NellyMoser) : non porté ffmpeg 5 (ni mcu ni medkit) — actuellement retiré du build. À porter en `FfAudioEncoder`/`Decoder` (`AV_CODEC_ID_NELLYMOSER`) ou abandonner officiellement.
+- Nelly (NellyMoser) : non porté ffmpeg 5 (ni mcu ni medkit) — actuellement retiré du build. ffmpeg a un décodeur `nellymoser` mais **pas d'encodeur** → encode impossible via ffmpeg. À traiter à part ou abandonner officiellement.
+- Audio gsm/speex/opus → ffmpeg (Palier 3b audio) : **bloqué** par la limite de
+  `FfAudioEncoder` (rééchantillonnage de fréquence non implémenté, cf. mémoire
+  projet) ; nécessiterait d'abord d'ajouter une FIFO de rééchantillonnage. Ces
+  codecs restent natifs côté mcu pour l'instant (ils compilent en ffmpeg 5).
 - Validation fonctionnelle (pas de suite auto) : conférence (mixage audio + mosaïque vidéo), MP4 record/play, SRTP/DTLS, BFCP, RTMP/WebSocket.
 - Palier 3 : déplacer les codecs natifs restants (gsm/speex/opus/g7221/vp8/h264-encode) dans libmedkit.
 - Palier 4 : bascule des `#include` mcu vers `medkit/…`, suppression des en-têtes homonymes et du mode sans-medkit.

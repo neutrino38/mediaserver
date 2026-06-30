@@ -14,6 +14,8 @@
 // AMR-NB / AMR-WB fournis par libmedkit (FfAudioEncoder/Decoder, ffmpeg). Chevrons
 // pour viser le sous-module ($(MEDKITDIR)/amr/amrcodec.h).
 #include <amr/amrcodec.h>
+// NellyMoser 8 kHz / 11,025 kHz fourni par libmedkit (ffmpeg AV_CODEC_ID_NELLYMOSER).
+#include <nelly/nellycodec.h>
 #include "g722/g7221codec.h"
 
 AudioEncoder* AudioCodecFactory::CreateEncoder(AudioCodec::Type codec)
@@ -53,7 +55,10 @@ AudioEncoder* AudioCodecFactory::CreateEncoder(AudioCodec::Type codec, const Pro
 			return new AMRNBEncoder(properties);
 		case AudioCodec::AMRWB:
 			return new AMRWBEncoder(properties);
-		// NELLY : non encore porte ffmpeg 5 dans libmedkit (cf. integration_libmedkit.md).
+		case AudioCodec::NELLY8:
+			return new NellyEncoder(properties);
+		case AudioCodec::NELLY11:
+			return new NellyEncoder11Khz(properties);
 		default:
 			Error("Codec not found [%d]\n",codec);
 	}
@@ -86,7 +91,10 @@ AudioDecoder* AudioCodecFactory::CreateDecoder(AudioCodec::Type codec)
 			return new AMRNBDecoder();
 		case AudioCodec::AMRWB:
 			return new AMRWBDecoder();
-		// NELLY : non encore porte ffmpeg 5 dans libmedkit.
+		case AudioCodec::NELLY8:
+			return new NellyDecoder();
+		case AudioCodec::NELLY11:
+			return new NellyDecoder11Khz();
 		default:
 			Error("Codec not found [%d]\n",codec);
 	}
