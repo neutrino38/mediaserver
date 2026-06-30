@@ -21,7 +21,18 @@
       "Bash(BUILD)",
       "Bash(grep -n \"^$\\(BUILD\\)\\\\|mkdir.*BUILD\\\\|media/build\" /home/ebuu/mediaserver/mcu/Makefile.rpm)",
       "Bash(grep -n \"\\\\.o.*:.*\\\\.cpp\\\\|%.o.*:.*%.cpp\\\\|$\\(BUILD\\)\" /home/ebuu/mediaserver/mcu/Makefile.rpm)",
-      "Bash(nm /home/ebuu/mediaserver/bin/debug/mcu)"
+      "Bash(nm /home/ebuu/mediaserver/bin/debug/mcu)",
+      "Bash(ldd /usr/lib64/libavcodec.so.59)",
+      "Bash(nm -D /usr/lib64/libavcodec.so.59)",
+      "Bash(sed -i 's/^GSMOBJ=gsmcodec\\\\.o$/# GSM fourni par libmedkit \\(FfAudioEncoder\\\\/Decoder, ffmpeg AV_CODEC_ID_GSM\\).\\\\nGSMOBJ=/' /home/ebuu/mediaserver/mcu/Makefile.rpm)",
+      "Bash(sed -i 's/^OPUSOBJ=opusencoder\\\\.o opusdecoder\\\\.o$/# OPUS fourni par libmedkit \\(FfAudioEncoder\\\\/Decoder, ffmpeg AV_CODEC_ID_OPUS\\). Plus de -lopus.\\\\nOPUSOBJ=/' /home/ebuu/mediaserver/mcu/Makefile.rpm)",
+      "Bash(python3)",
+      "Bash(bash install.ksh libmedkit)",
+      "Bash(bash install.ksh libmedkit-clean)",
+      "Bash(make ASTERISK=no clean)",
+      "Bash(avcodec_find_encoder)",
+      "Bash(python3 -c ' *)",
+      "Bash(make ASTERISK=no)"
     ],
     "additionalDirectories": [
       "/usr/include/ffmpeg/libavcodec"

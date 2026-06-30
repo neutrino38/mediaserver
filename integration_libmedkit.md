@@ -330,12 +330,60 @@ brute + `Decode` sur `last`, pour MPEG4/VP6/FLV1/SORENSON/H263-1996).
     `#include "version.h"` de `medkit/config.h`, et ne basculer QUE les 4 en-têtes
     codec (pas les utilitaires).
 
+**GSM et OPUS migrés vers libmedkit (Palier 3b audio, 2026-06-30) :**
+- **GSM-FR** : nouveau module `libmedikit/gsm/gsmcodec.{h,cpp}` (`GSMEncoder`/`GSMDecoder`
+  via `AV_CODEC_ID_GSM`). L'encodeur utilise le wrapper `libgsm` de ffmpeg (lié
+  dynamiquement dans `libavcodec.so`) ; le décodeur est natif ffmpeg. Plus de
+  `-lgsm` dans les `LDFLAGS` mcu (tiré transitivement via `libavcodec.so`).
+  `gsmcodec.o` mcu retiré du build ; `gsmcodec.o` medkit ajouté à `MEDKIT_OBJS`.
+- **OPUS** : nouveau module `libmedikit/opus/opuscodec.{h,cpp}` (`OPUSEncoder`/`OPUSDecoder`
+  via `AV_CODEC_ID_OPUS`). L'encodeur force `ctx->sample_rate = 48000` (horloge RTP
+  fixe RFC 7587) et surcharge `TrySetRate()` pour toujours retourner 48000 ; le MCU
+  adapte sa cadence d'entrée. `GetClockRate()` surchargé = 48000.
+  Le décodeur surcharge `GetRate()`/`TrySetRate()` = 48000 statiquement.
+  La garde `#ifdef OPUS_SUPPORT` est supprimée de `mcu/src/audio.cpp` : OPUS est
+  désormais toujours disponible (sans `-DVADWEBRTC`). `opusencoder.o`/`opusdecoder.o`
+  mcu retirés du build ; `opuscodec.o` medkit ajouté à `MEDKIT_OBJS`.
+- `mcu/src/audio.cpp` : inclusions en chevrons `<gsm/gsmcodec.h>` et `<opus/opuscodec.h>`.
+- Factories mcu et medkit câblées pour les deux codecs.
+- Vérif : build vert `bin/debug/mcu` (32 Mo) ; symboles `GSMEncoder`, `GSMDecoder`,
+  `OPUSEncoder`, `OPUSDecoder` présents dans le binaire.
+
 **Reste à faire :**
-- Nelly (NellyMoser) : non porté ffmpeg 5 (ni mcu ni medkit) — actuellement retiré du build. ffmpeg a un décodeur `nellymoser` mais **pas d'encodeur** → encode impossible via ffmpeg. À traiter à part ou abandonner officiellement.
-- Audio gsm/speex/opus → ffmpeg (Palier 3b audio) : **bloqué** par la limite de
-  `FfAudioEncoder` (rééchantillonnage de fréquence non implémenté, cf. mémoire
-  projet) ; nécessiterait d'abord d'ajouter une FIFO de rééchantillonnage. Ces
-  codecs restent natifs côté mcu pour l'instant (ils compilent en ffmpeg 5).
+- Nelly (NellyMoser) : ✅ **opérationnel dans libmedkit** — `libmedikit/nelly/nellycodec.{h,cpp}` implémente `NellyEncoder`/`NellyEncoder11Khz` et `NellyDecoder`/`NellyDecoder11Khz` via `AV_CODEC_ID_NELLYMOSER` (ffmpeg dispose bien d'un encodeur `nellymoser` ET d'un décodeur). Factory `audio.cpp` câblée, `NELLYOBJ=nellycodec.o` dans le Makefile medkit. Aucune action requise.
 - Validation fonctionnelle (pas de suite auto) : conférence (mixage audio + mosaïque vidéo), MP4 record/play, SRTP/DTLS, BFCP, RTMP/WebSocket.
-- Palier 3 : déplacer les codecs natifs restants (gsm/speex/opus/g7221/vp8/h264-encode) dans libmedkit.
-- Palier 4 : bascule des `#include` mcu vers `medkit/…`, suppression des en-têtes homonymes et du mode sans-medkit.
+- Palier 4 partiel (optionnel) : bascule des `#include "audio.h"/"video.h"/"codecs.h"` mcu vers `medkit/…` et suppression des en-têtes homonymes — bloquée par les classes `VideoInput/Output`/`AudioInput/Output` absentes de medkit (14-18 fichiers) et par `log.h`/`mp4*.h`/`tools.h`/`red.h` divergents (cf. analyse A.2).
+
+**Nettoyage arbre source mcu/src — codecs migrés supprimés (2026-06-30) :**
+
+Tous les répertoires et fichiers codec dont la fonctionnalité a été reprise par
+`libmedikit` ont été supprimés de `mcu/src/`. Build vérifié vert après nettoyage.
+
+**Répertoires entièrement supprimés de mcu/src :**
+- `gsm/` — migré (GSM-FR via FfAudioEncoder/Decoder)
+- `opus/` — migré (OPUS via FfAudioEncoder/Decoder)
+- `vp8/` — migré (VP8 decode natif ffmpeg + encode libvpx via FfVideoEncoder)
+- `vp6/` — migré (VP6 decode via FfVideoDecoder AV_CODEC_ID_VP6F)
+- `h263/` — migré (H263/H263+/MPEG4 via FfVideoDecoder/FfVideoEncoder + H263Decoder medkit)
+- `nelly/` — supprimé (NellyMoser : décodeur disponible dans medkit, encodeur absent de ffmpeg)
+- `flv1/` — migré (Sorenson FLV1 via FfVideoDecoder AV_CODEC_ID_FLV1)
+- `aac/` — code mort (jamais compilé)
+- `g711/` — migré (PCMUEncoder/PCMAEncoder dans libmedkit via table G711)
+- `h264/` — migré entièrement (encodeur libx264 + décodeur FfVideoDecoder + dépaquetiseur H264Depacketizer, tous dans libmedkit ; adaptateur `H264RTPDepacketizer` dans `rtp.cpp`)
+- `g722/` — migré entièrement (G722 via FfAudioEncoder/Decoder ; G.722.1 via libg722_1 dans libmedkit)
+- `speex/` — migré (Speex 16 kHz via FfAudioEncoder/Decoder, AV_CODEC_ID_SPEEX)
+
+**mcu/src/audio.cpp et video.cpp supprimés — factories libmedkit utilisées directement :**
+- `libmedikit/audio.cpp` : `AudioCodecFactory::CreateEncoder/Decoder` + `AudioFrame::Packetize` — tous les codecs audio câblés (G711, G722, G7221, AMR/AMR-WB, Nelly, GSM, Speex, OPUS)
+- `libmedikit/video.cpp` : `VideoCodecFactory::CreateEncoder/Decoder` + `VideoFrame::Packetize/PacketizeH264/PacketizeH263/NALU` — tous les codecs vidéo câblés (SORENSON, H263_1998/1996, MPEG4, H264, VP6, VP8)
+- `audio.o`/`video.o` retirés de `OBJS`/`OBJS2` dans `mcu/Makefile.rpm`
+
+**mcu/include/media.h → forwarder libmedkit :**
+- Réduit à `#include "medkit/media.h"` ; l'implémentation (`media.o`) provient de `libmedkit.a` depuis le début
+
+**Makefile.rpm — état final :**
+- Toutes les variables `*DIR`/`*OBJ` codec retirées (`G711`, `H263`, `VP6`, `VP8`, `GSM`, `NELLY`, `OPUS`, `H264`, `G722`, `SPEEX`)
+- `OBJS+=` ne contient plus que `$(DOCSHARINGOBJ) $(JSR309OBJ)`
+- `VPATH` : entrées codec toutes retirées
+- `-lspeexdsp` maintenu pour `audiotransrater.cpp` (rééchantillonneur audio, distinct du codec)
+- `-lg722_1` maintenu (libg722_1 statique, utilisé par `g7221codec.o` dans libmedkit)
