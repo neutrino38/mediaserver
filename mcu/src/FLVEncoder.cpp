@@ -8,7 +8,6 @@
 #include "log.h"
 #include "FLVEncoder.h"
 #include "flv.h"
-#include "flv1/flv1codec.h"
 #include "audioencoder.h"
 #include "aacconfig.h"
 

@@ -18,9 +18,6 @@
 #include "codecs.h"
 #include "rtpsession.h"
 #include "video.h"
-#include "h263/h263codec.h"
-#include "flv1/flv1codec.h"
-#include "vp6/vp6decoder.h"
 #include "avcdescriptor.h"
 #include "fifo.h"
 #include <wchar.h>

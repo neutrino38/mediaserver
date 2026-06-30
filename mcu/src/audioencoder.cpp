@@ -10,8 +10,6 @@
 #include "log.h"
 #include "tools.h"
 #include "audio.h"
-#include "g711/g711codec.h"
-#include "gsm/gsmcodec.h"
 #include "audioencoder.h"
 
 

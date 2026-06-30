@@ -8,10 +8,7 @@
 #include <signal.h>
 #include <math.h>
 #include "videostream.h"
-#include "h263/h263codec.h"
-#include "h263/mpeg4codec.h"
 #include "h264/h264encoder.h"
-#include "h264/h264decoder.h"
 #include "log.h"
 #include "tools.h"
 #include "acumulator.h"

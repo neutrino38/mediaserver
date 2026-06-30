@@ -1,9 +1,6 @@
 #include "mp4player.h"
 #include "log.h"
 #include "codecs.h"
-#include "g711/g711codec.h"
-#include "h263/h263codec.h"
-#include "h264/h264decoder.h"
 
 MP4Player::MP4Player() : streamer(this)
 {

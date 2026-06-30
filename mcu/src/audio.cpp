@@ -1,12 +1,7 @@
 #include "log.h"
 #include "audio.h"
-#include "g711/g711codec.h"
-#include "gsm/gsmcodec.h"
+#include <g711/g711codec.h>
 #include "speex/speexcodec.h"
-#ifdef OPUS_SUPPORT
-#include "opus/opusencoder.h"
-#include "opus/opusdecoder.h"
-#endif
 // G.722 fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg 5). Chevrons pour
 // viser l'en-tete du sous-module ($(MEDKITDIR)/g722/g722codec.h) et non le
 // fichier homonyme mcu/src/g722/g722codec.h (resolu en premier par les guillemets).
@@ -16,6 +11,10 @@
 #include <amr/amrcodec.h>
 // NellyMoser 8 kHz / 11,025 kHz fourni par libmedkit (ffmpeg AV_CODEC_ID_NELLYMOSER).
 #include <nelly/nellycodec.h>
+// GSM-FR fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg AV_CODEC_ID_GSM).
+#include <gsm/gsmcodec.h>
+// OPUS fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg AV_CODEC_ID_OPUS).
+#include <opus/opuscodec.h>
 #include "g722/g7221codec.h"
 
 AudioEncoder* AudioCodecFactory::CreateEncoder(AudioCodec::Type codec)
@@ -42,10 +41,8 @@ AudioEncoder* AudioCodecFactory::CreateEncoder(AudioCodec::Type codec, const Pro
 			return new PCMUEncoder(properties);
 		case AudioCodec::SPEEX16:
 			return new SpeexEncoder(properties);
-#ifdef OPUS_SUPPORT
 		case AudioCodec::OPUS:
-			return new OpusEncoder(properties);
-#endif
+			return new OPUSEncoder(properties);
 		case AudioCodec::G722:
 			return new G722Encoder(properties);
 
@@ -81,10 +78,8 @@ AudioDecoder* AudioCodecFactory::CreateDecoder(AudioCodec::Type codec)
 			return new PCMUDecoder();
 		case AudioCodec::SPEEX16:
 			return new SpeexDecoder();
-#ifdef OPUS_SUPPORT
 		case AudioCodec::OPUS:
-			return new OpusDecoder();
-#endif
+			return new OPUSDecoder();
 		case AudioCodec::G722:
 			return new G722Decoder();
 		case AudioCodec::AMR:
