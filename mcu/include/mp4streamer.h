@@ -1,7 +1,10 @@
 #ifndef _MP4STREAMER_H_
 #define _MP4STREAMER_H_
 
-#include <mp4v2/mp4v2.h>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 #include "media.h"
 #include "rtp.h"
 #include "text.h"
@@ -10,124 +13,25 @@
 #include "codecs.h"
 #include "avcdescriptor.h"
 
-struct MP4RtpTrack
-{
-	class Listener : public MediaFrame::Listener
-	{
-	public:
-		virtual void onRTPPacket(RTPPacket &packet) = 0;
-	};
-
-	MP4FileHandle mp4;
-	MP4TrackId hint;
-	MP4TrackId track;
-	unsigned int timeScale;
-	unsigned int sampleId;
-	unsigned short numHintSamples;
-	unsigned short packetIndex;
-	unsigned int frameSamples;
-	int frameSize;
-	int frameTime;
-	int frameType;
-	MediaFrame::Type media;
-	MediaFrame *frame;
-	int codec;
-	int type;
-	RTPPacket rtp;
-
-	MP4RtpTrack(MediaFrame::Type media,int codec,int type) : rtp(media,codec,type)
-	{
-		//Store values
-		this->media = media;
-		this->codec = codec;
-		this->type = type;
-		//Empty the rest
-		mp4		= NULL;
-		hint		= -1;
-		track		= -1;
-		timeScale	= 0;
-		sampleId	= -1;
-		numHintSamples	= 0;
-		packetIndex	= -1;
-		frame		= NULL;
-		frameSamples	= 0;
-		frameSize	= 0;
-		frameType	= 0;
-		frameTime	= 0;
-		//Check media type
-		switch (media)
-		{
-			case MediaFrame::Video:
-				//Create video frame
-				frame = new VideoFrame((VideoCodec::Type)codec,262143);
-				break;
-			case MediaFrame::Audio:
-				//Create audio frame with 8Khz rate
-				frame = new AudioFrame((AudioCodec::Type)codec,8000);
-				break;
-		}
-	}
-	~MP4RtpTrack()
-	{
-		//If media
-		if (frame)
-			//Delete it
-			delete(frame);
-	}
-	int Reset();
-	QWORD Read(Listener *listener);
-	QWORD SeekNearestSyncFrame(QWORD time);
-	QWORD SearchNearestSyncFrame(QWORD time);
-	QWORD Seek(QWORD time);
-	int SendH263SEI(Listener *listener);
-	QWORD GetNextFrameTime();
-};
-
-struct MP4TextTrack
-{
-	class Listener
-	{
-	public:
-		virtual void onTextFrame(TextFrame &text) = 0;
-	};
-
-	MP4FileHandle mp4;
-	MP4TrackId track;
-	unsigned int timeScale;
-	unsigned int sampleId;
-	unsigned int frameSamples;
-	int frameSize;
-	int frameTime;
-	int frameType;
-	TextFrame frame;
-
-	MP4TextTrack()
-	{
-		//Empty the rest
-		mp4		= NULL;
-		track		= -1;
-		timeScale	= 0;
-		sampleId	= -1;
-		frameSamples	= 0;
-		frameSize	= 0;
-		frameType	= 0;
-		frameTime	= 0;
-	}
-	int Reset();
-	QWORD Read(Listener *listener);
-	QWORD ReadPrevious(QWORD time,Listener *listener);
-	QWORD Seek(QWORD time);
-	QWORD GetNextFrameTime();
-};
+// Lecteur/ordonnanceur MP4 du mcu, désormais bâti sur le lecteur de libmedkit
+// (classe mp4reader). Toute la mécanique bas niveau (énumération des pistes,
+// lecture des trames, ordonnancement temporel) est déléguée à mp4reader ;
+// MP4Streamer n'en reste que le pilote : un thread de lecture (std::thread) qui
+// récupère les trames et les publie via le Listener.
+//
+// mp4reader est déclarée en avant pour ne pas imposer <medkit/mp4reader.h>
+// (et donc <mp4v2/...>) à tous les consommateurs de cet en-tête.
+class mp4reader;
 
 class MP4Streamer
 {
 public:
-	class Listener : 
-		public MP4RtpTrack::Listener,
-		public MP4TextTrack::Listener
+	class Listener
 	{
 	public:
+		virtual void onRTPPacket(RTPPacket &packet) = 0;
+		virtual void onTextFrame(TextFrame &text) = 0;
+		virtual void onMediaFrame(MediaFrame &frame) = 0;
 		virtual void onEnd() = 0;
 	};
 public:
@@ -135,11 +39,11 @@ public:
 	~MP4Streamer();
 
 	int Open(const char* filename);
-	bool HasAudioTrack()	{ return audio!=NULL;	}
-	bool HasVideoTrack()	{ return video!=NULL;	}
-	bool HasTextTrack()	{ return text!=NULL;	}
-	DWORD GetAudioCodec()	{ return audio->codec;	}
-	DWORD GetVideoCodec()	{ return video->codec;	}
+	bool HasAudioTrack();
+	bool HasVideoTrack();
+	bool HasTextTrack();
+	DWORD GetAudioCodec()	{ return audioCodec;	}
+	DWORD GetVideoCodec()	{ return videoCodec;	}
 	double GetDuration();
 	DWORD GetVideoWidth();
 	DWORD GetVideoHeight();
@@ -149,30 +53,40 @@ public:
 	int Play();
 	QWORD PreSeek(QWORD time);
 	int Seek(QWORD time);
-	QWORD Tell()		{ return t+seeked;	}
+	QWORD Tell();
 	int Stop();
 	int Close();
-	
-protected:
-	int PlayLoop();
 
 private:
-	static void* play(void *par);
+	void PlayLoop();
+	void Dispatch(MediaFrame *frame);
+	void DispatchRtp(MediaFrame *frame);
+	// Arrête le thread de lecture. À appeler avec lifecycleMutex verrouillé.
+	void StopWorkerLocked();
 
 private:
 	Listener *listener;
+	mp4reader *reader;
+	void *mp4;			// MP4FileHandle (opaque, voir mp4v2.h dans le .cpp)
 	bool opened;
-	bool playing;
-	pthread_t 	thread;
-	pthread_cond_t  cond;
-	pthread_mutex_t mutex;
-	QWORD		seeked;
-	QWORD		t;
 
-	MP4FileHandle mp4;
-	MP4RtpTrack *audio;
-	MP4RtpTrack *video;
-	MP4TextTrack *text;
+	DWORD audioCodec;
+	DWORD videoCodec;
+
+	// Paquets RTP réutilisés pour reconstruire les paquets depuis les
+	// MediaFrame produits par mp4reader (évite une allocation par paquet).
+	RTPPacket *audioPacket;
+	RTPPacket *videoPacket;
+
+	// std::atomic pour que la boucle de lecture teste l'état de lecture sans
+	// verrou à chaque itération (le mutex n'est pris que pour l'attente
+	// interruptible entre deux trames).
+	std::atomic<bool>	playing;
+	QWORD			startPos;	// (QWORD)-1 => depuis le début, sinon cible de seek
+	std::thread		worker;
+	std::mutex		lifecycleMutex;	// sérialise Open/Play/Seek/Stop/Close
+	std::mutex		waitMutex;	// protège l'attente sur waitCv
+	std::condition_variable	waitCv;
 };
 
 #endif
