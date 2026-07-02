@@ -32,7 +32,9 @@
       "Bash(make ASTERISK=no clean)",
       "Bash(avcodec_find_encoder)",
       "Bash(python3 -c ' *)",
-      "Bash(make ASTERISK=no)"
+      "Bash(make ASTERISK=no)",
+      "Bash(grep -E \"\\\\.h$\")",
+      "Bash(awk '{print $NF}')"
     ],
     "additionalDirectories": [
       "/usr/include/ffmpeg/libavcodec"
