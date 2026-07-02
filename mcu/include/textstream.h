@@ -7,6 +7,7 @@
 #include "rtpsession.h"
 #include "text.h"
 #include "redcodec.h"
+#include "task.h"
 #include <deque>
 
 class TextStream

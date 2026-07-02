@@ -8,6 +8,7 @@
 #include "rtpsession.h"
 #include "audio.h"
 #include "dtmfmessage.h"
+#include "task.h"
 
 #define MAX_DTMF_BUFFER 64
 

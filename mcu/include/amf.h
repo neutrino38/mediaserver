@@ -4,6 +4,15 @@
 #include <vector>
 #include <string>
 #include "config.h"
+// tools.h du mcu inclus AVANT text.h : medkit/text.h tire "tools.h", et comme
+// mcu/tools.h et medkit/tools.h partagent la garde _TOOLS_H_, il faut que la
+// version mcu (seule a declarer BitPrint/PC, requis par log.h) soit posee en
+// premier. Meme precaution que mp4streamer.cpp ("en-tetes mcu d'abord").
+#include "tools.h"
+// UTF8Parser provient desormais de libmedkit (medkit/text.h) : la definition
+// locale a ete supprimee pour eviter la double definition avec utf8parser.o.
+// text.h est le shim mcu qui redirige vers medkit/text.h.
+#include "text.h"
 
 class U16Parser
 {
@@ -49,34 +58,6 @@ private:
 	DWORD value;
 	WORD len;
 	bool last;
-};
-
-class UTF8Parser
-{
-public:
-	UTF8Parser();
-	UTF8Parser(const std::wstring& str);
-	void Reset();
-	DWORD Parse(const BYTE *data,DWORD size);
-	bool IsParsed();
-	void SetSize(DWORD size);
-	DWORD GetUTF8Size();
-	DWORD GetLength();
-	std::wstring GetWString();
-	const wchar_t* GetWChar();
-	void SetWString(const std::wstring& str);
-	void SetWChar(const wchar_t* buffer,DWORD bufferLen);
-	DWORD SetString(const char* str);
-	DWORD Serialize(BYTE *data,DWORD size);
-	DWORD Serialize(std::string & str);
-	DWORD Truncate(DWORD size);
-
-private:
-	std::wstring value;
-	DWORD utf8size;
-	DWORD bytes;
-	DWORD len;
-	wchar_t w;
 };
 
 class AMFData

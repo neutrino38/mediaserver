@@ -8,6 +8,7 @@
 #include "RTPSmoother.h"
 #include "video.h"
 #include "logo.h"
+#include "task.h"
 
 class VideoStream 
 {
