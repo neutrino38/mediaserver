@@ -13,7 +13,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
-#include <srtp/srtp.h>
+#include <srtp2/srtp.h>
 #include <time.h>
 #include "log.h"
 #include "tools.h"
@@ -30,7 +30,8 @@ BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 class SRTPLib
 {
 public:
-	SRTPLib()	{ srtp_init();	}
+	SRTPLib()	{ srtp_init();		}
+	~SRTPLib()	{ srtp_shutdown();	}
 };
 SRTPLib srtp;
 
@@ -247,7 +248,7 @@ void RTPSession::SetSendingRTPMap(RTPMap &map)
 
 int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWORD len)
 {
-	err_status_t err;
+	srtp_err_status_t err;
 	srtp_policy_t policy;
 
 	Log("-Set local RTP SDES [key:%s,suite:%s]\n",key,suite);
@@ -259,26 +260,26 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	if (strcmp(suite,"AES_CM_128_HMAC_SHA1_80")==0)
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: AES_CM_128_HMAC_SHA1_80\n");
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	}
 	else if (strcmp(suite,"AES_CM_128_HMAC_SHA1_32")==0) 
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: AES_CM_128_HMAC_SHA1_32\n");
-		crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	} 
 	else if (strcmp(suite,"AES_CM_128_NULL_AUTH")==0)
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: AES_CM_128_NULL_AUTH\n");
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
 	}
 	else if (strcmp(suite,"NULL_CIPHER_HMAC_SHA1_80")==0) 
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: NULL_CIPHER_HMAC_SHA1_80\n");
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
 	}
 	else {
 		return Error("Unknown cipher suite");
@@ -292,13 +293,13 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	//Set polciy values
 	policy.ssrc.type	= ssrc_any_outbound;
 	policy.ssrc.value	= 0;
-	//policy.allow_repeat_tx  = 1; <--- Not all srtp libs containts it
+	policy.allow_repeat_tx  = 1; // supporte par libsrtp2 (necessaire pour le RTX)
     policy.key		= (BYTE*)key;
 	policy.next		= NULL;
 	srtp_t session;
 	err = srtp_create(&session,&policy);	
 	//Check error
-	if (err!=err_status_ok)
+	if (err!=srtp_err_status_ok)
 		//Error
 		return Error("Failed to create srtp session (%d)\n", err);
 
@@ -475,7 +476,7 @@ int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const cha
 
 int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank)
 {
-	err_status_t err;
+	srtp_err_status_t err;
 	srtp_policy_t policy;
 
 	Log("-Set remote RTP SDES [suite:%s keyRank=%i]\n",suite,keyRank);
@@ -485,17 +486,17 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 
 	if (strcmp(suite,"AES_CM_128_HMAC_SHA1_80")==0)
 	{
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	} else if (strcmp(suite,"AES_CM_128_HMAC_SHA1_32")==0) {
-		crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	} else if (strcmp(suite,"AES_CM_128_NULL_AUTH")==0) {
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
 	} else if (strcmp(suite,"NULL_CIPHER_HMAC_SHA1_80")==0) {
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
 	} else {
 		return Error("Unknown cipher suite");
 	}
@@ -519,7 +520,7 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 		err = srtp_create(&recvSRTPSession_secondary,&policy);
 		
 	//Check error
-	if (err!=err_status_ok)
+	if (err!=srtp_err_status_ok)
 		//Error
 		return Error("Failed set remote SDES  (%d)\n", err);
 
@@ -530,7 +531,7 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 		err = srtp_create(&recvSRTPSessionRTX_secondary,&policy);
 
 	//Check error
-	if (err!=err_status_ok)
+	if (err!=srtp_err_status_ok)
 		//Error
 		Error("------------------------------------Failed set remote RTX SDES  (%d)\n", err);
 
@@ -868,9 +869,9 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 		if (!sendSRTPSession)
 			return Error("-no sendSRTPSession\n");
 		//Protect
-		err_status_t err = srtp_protect_rtcp(sendSRTPSession,data,&len);
+		srtp_err_status_t err = srtp_protect_rtcp(sendSRTPSession,data,&len);
 		//Check error
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 			//Nothing
 			return Error("Error protecting RTCP packet [%d]\n",err);
 	}
@@ -1053,12 +1054,12 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			Debug("-RTPSession: encryption is not yet setup.\n");
 			return 0;
 		}
-		err_status_t err;
+		srtp_err_status_t err;
 		
 		//Encript
 		err = srtp_protect(sendSRTPSession,sendPacket,&len);
 		//Check error
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 		{
 			//Nothing
 			Error("Error protecting RTP packet for %s with recSSRC=%x  and for session=%p : [%d]\n",MediaFrame::TypeToString(media),packet.GetSSRC(),this, err);
@@ -1213,9 +1214,9 @@ int RTPSession::ReadRTCP()
 		if (!recvSRTPSession)
 			return Error("-No recvSRTPSession yet (RTCP)\n");
 		//unprotect
-		err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
+		srtp_err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
 		//Check error
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 			return Error("Error unprotecting rtcp packet [%d]\n",err);
 	}
 	//RTCP mux disabled
@@ -1427,9 +1428,9 @@ int RTPSession::ReadRTP()
 			if (!recvSRTPSession)
 				return Error("-No recvSRTPSession yet (RTCP)\n");
 			//unprotect
-			err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
+			srtp_err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
 			//Check error
-			if (err!=err_status_ok)
+			if (err!=srtp_err_status_ok)
 				return Error("Error unprotecting rtcp packet [%d]\n",err);
 		}
 		//RTCP mux enabled
@@ -1512,7 +1513,7 @@ int RTPSession::ReadRTP()
 	//Check if it is encripted
 	if (decript )
 	{
-		err_status_t err;
+		srtp_err_status_t err;
 		//Check if it is a retransmited packet
 	
 		//Check session
@@ -1543,7 +1544,7 @@ int RTPSession::ReadRTP()
 		}
 		
 		//Check status
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 			//Error
 			return Error("Error unprotecting rtp packet [%d] for RTPSession=%p, ssrc=%x defaultSSRC=%x\n",err,this, RTPPacket::GetSSRC(buffer),defaultSSRC);
 	}
@@ -2235,9 +2236,9 @@ void RTPSession::ReSendPacket(int seq)
 				return;
 			}
                         //Encript
-                        err_status_t err = srtp_protect(sendSRTPSession,data,&len);
+                        srtp_err_status_t err = srtp_protect(sendSRTPSession,data,&len);
                         //Check error
-                        if (err!=err_status_ok)
+                        if (err!=srtp_err_status_ok)
                         {
                                 //Check if got listener
                                 if (listener)

@@ -125,6 +125,13 @@ function local_compile
 		exit 20
 	fi
 
+	rpm -q libsrtp2-devel
+    if [ $? != 0 ]
+	then
+		echo "installer libsrtp2-devel"
+		exit 20
+	fi
+
 
 	# compiler openssl en statique
 	BASESRCDIR=$PWD
@@ -201,41 +208,6 @@ function local_compile
 		fi
 		cd xmlrpc-c
 		./configure --disable-abyss-openssl --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
-
-	if [ ! -f staticdeps/lib/libsrtp.a ]
-	then
-		echo "compilation SRTP"
-		cd $HOME
-		if [ ! -f srtp ]
-		then
-			 git clone https://github.com/InteractiviteVideoEtSystemes/patchedLibSRTP.git srtp
-		fi
-		cd srtp
-		chmod 755 configure
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make uninstall
-		make install
-		cd $BASESRCDIR
-	fi
-		
-	if [ ! -f staticdeps/lib/libopus.a ]
-	then
-		echo "compilation OPUS"
-		cd $HOME
-		
-		if [ ! -f opus-1.1 ]
-		then
-			wget http://downloads.xiph.org/releases/opus/opus-1.1.tar.gz
-			tar xzf opus-1.1.tar.gz
-			rm -f  opus-1.1.tar.gz  opus-1.1.tar
-		fi
-		cd opus-1.1
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
 		make
 		make install
 		cd $BASESRCDIR
@@ -395,7 +367,7 @@ case $1 in
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel ;;
+		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp2-devel ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"

@@ -167,16 +167,16 @@ endif
 
 ifeq ($(FEWSTATICDEPS),yes)
     # Use of dynamic libs (on FC20 ...)
-    LDFLAGS += -Wl,-Bstatic -lsrtp -lssl -lcrypto -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 -lpthread $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
+    LDFLAGS += -Wl,-Bstatic -lssl -lcrypto -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lsrtp2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 -lpthread $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
 	LDXMLFLAGS+= -lxmlrpc_abyss -lxmlrpc_server -lxmlrpc -lxmlrpc_util
 else
     # Usin static libs (CentOS)
 ifeq ($(DISTRO), el5)   
-	LDFLAGS += -Wl,-Bstatic -lmp4v2 -lsrtp -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lmp4v2 $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
+	LDFLAGS += -Wl,-Bstatic -lmp4v2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -lspeexdsp -Wl,-Bdynamic -lsrtp2 -lmp4v2 $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
 else 
 	# AMR-NB/WB : fournis par libmedkit via libavcodec (encodeurs libopencore_amrnb
 	# / libvo_amrwbenc lies dynamiquement dans libavcodec.so). Plus de -lopencore-amr*.
-	LDFLAGS += -Wl,-Bstatic -lsrtp -lg722_1 -Wl,-Bdynamic  -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz -lspeexdsp
+	LDFLAGS += -Wl,-Bstatic -lg722_1 -Wl,-Bdynamic  -lsrtp2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lx264 -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz -lspeexdsp
 endif
 	# OpenSSL : libs dynamiques du systeme (AlmaLinux 9) au lieu des .a statiques
 	# (plus de build openssl dans staticdeps).
