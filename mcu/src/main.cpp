@@ -78,53 +78,10 @@ void signing_handler(int sig)
 }
 
 
-static pthread_mutex_t *lockarray;
-
-
-static void lock_callback(int mode, int type, char *file, int line)
-{
-  (void)file;
-  (void)line;
-  if (mode & CRYPTO_LOCK) {
-    pthread_mutex_lock(&(lockarray[type]));
-  }
-  else {
-    pthread_mutex_unlock(&(lockarray[type]));
-  }
-}
-
-static unsigned long thread_id(void)
-{
-  unsigned long ret;
-
-  ret=(unsigned long)pthread_self();
-  return(ret);
-}
-
-static void init_locks(void)
-{
-  int i;
-
-  lockarray=(pthread_mutex_t *)OPENSSL_malloc(CRYPTO_num_locks() *
-                                        sizeof(pthread_mutex_t));
-  for (i=0; i<CRYPTO_num_locks(); i++) {
-    pthread_mutex_init(&(lockarray[i]),NULL);
-  }
-
-  CRYPTO_set_id_callback((unsigned long (*)())thread_id);
-  CRYPTO_set_locking_callback((void (*)(int, int, const char*, int))lock_callback);
-}
-
-static void kill_locks(void)
-{
-  int i;
-
-  CRYPTO_set_locking_callback(NULL);
-  for (i=0; i<CRYPTO_num_locks(); i++)
-    pthread_mutex_destroy(&(lockarray[i]));
-
-  OPENSSL_free(lockarray);
-}
+// OpenSSL >= 1.1.0 gere son verrouillage en interne : les callbacks
+// CRYPTO_set_locking_callback / CRYPTO_set_id_callback ont ete supprimes
+// (macros no-op sous OpenSSL 3.x). L'ancien gestionnaire de verrous
+// (init_locks / kill_locks) n'est donc plus necessaire.
 
 int main(int argc,char **argv)
 {
@@ -133,7 +90,6 @@ int main(int argc,char **argv)
 
 	//Init open ssl lib
         OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
-	init_locks();
 
 	//Set default values
 	bool forking = false;
@@ -448,6 +404,5 @@ server_init_failed:
 	mediaGateway.End();
 	//End the jsr309
 	jsr309Manager.End();
-kill_locks();
 }
 

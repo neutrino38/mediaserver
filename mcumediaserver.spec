@@ -10,10 +10,12 @@ License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 Requires:  x264, ImageMagick-c++ >= 6.7.0, ffmpeg, webrtc-audio-processing
+Requires:  openssl-libs >= 3.0
 BuildRequires: ffmpeg-devel
 BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 6.7.0, libbfcp >= 5.5.0
 BuildRequires: gsm-devel
 BuildRequires: webrtc-audio-processing-devel
+BuildRequires: openssl-devel >= 3.0
 
 %ifos el5
 Requires: fonts-chinese, fonts-japanese

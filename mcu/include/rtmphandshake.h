@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <string.h>
 #include <openssl/sha.h>
-#include <openssl/hmac.h>
+#include <openssl/evp.h>
 #include "log.h"
 
 /*#define HMAC_setup(ctx, key, len)	HMAC_CTX_init(&ctx); HMAC_Init_ex(&ctx, key, len, EVP_sha256(), 0)
@@ -56,20 +56,13 @@ static unsigned int GetDigestOffset1(uint8_t *handshake, unsigned int len)
 
 static void HMACsha256(const uint8_t *message, size_t messageLen, const uint8_t *key, size_t keylen, uint8_t *digest)
 {
-	unsigned int digestLen;
+	size_t digestLen = 0;
 
-	HMAC_CTX *ctx = HMAC_CTX_new();
-	HMAC_Init_ex(ctx, key, keylen, EVP_sha256(), 0);
-	HMAC_Update(ctx, message, messageLen);
-	HMAC_Final(ctx, digest, &digestLen);
-	HMAC_CTX_free(ctx);
-
-/*	HMAC_CTX ctx;
-
-	HMAC_setup(ctx, key, keylen);
-	HMAC_crunch(ctx, message, messageLen);
-	HMAC_finish(ctx, digest, digestLen);
-*/
+	// API EVP_MAC one-shot (remplace HMAC_CTX_* deprecie en OpenSSL 3.0)
+	EVP_Q_mac(NULL, "HMAC", NULL, "SHA256", NULL,
+		  key, keylen,
+		  message, messageLen,
+		  digest, SHA256_DIGEST_LENGTH, &digestLen);
 }
 
 static void CalculateDigest(unsigned int digestPos, uint8_t *handshakeMessage, const uint8_t *key, size_t keyLen, uint8_t *digest)

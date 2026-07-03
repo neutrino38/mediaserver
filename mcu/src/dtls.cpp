@@ -10,7 +10,9 @@
 /* Initialize static data. */
 std::string DTLSConnection::certfile("mcu.crt");
 std::string DTLSConnection::pvtfile("mcy.key");
-std::string DTLSConnection::cipher("ALL:NULL:eNULL:aNULL");
+// Liste de ciphers durcie : uniquement des suites fortes, on exclut
+// explicitement les suites nulles/anonymes/export/faibles et les algos obsoletes.
+std::string DTLSConnection::cipher("HIGH:!aNULL:!eNULL:!NULL:!EXPORT:!LOW:!MD5:!RC4:!3DES:!DES:!SEED:!IDEA:!PSK:!SRP");
 SSL_CTX* DTLSConnection::ssl_ctx = NULL;
 DTLSConnection::Suite DTLSConnection::suite = AES_CM_128_HMAC_SHA1_80;
 DTLSConnection::LocalFingerPrints DTLSConnection::localFingerPrints;
@@ -50,8 +52,6 @@ int DTLSConnection::ClassInit()
 #ifdef HEADER_D1_SRTP_H
 	Log("-DTLSConnection::ClassInit()\n");
 
-	EC_KEY* ecdh = NULL;
-
 	/* Create a single SSL context. */
 	DTLSConnection::ssl_ctx = SSL_CTX_new(DTLS_method());
 	if (! ssl_ctx) {
@@ -59,6 +59,11 @@ int DTLSConnection::ClassInit()
 		ERR_print_errors_fp(stderr);
 		return Error("-DTLSConnection::ClassInit() | No SSL context\n");
 	}
+
+	// N'autoriser que DTLS 1.2 et superieur (DTLS 1.2 <=> TLS 1.2 ; il n'existe
+	// pas de DTLS 1.1, DTLS 1.0 correspond a TLS 1.1). On interdit donc DTLS 1.0.
+	if (! SSL_CTX_set_min_proto_version(ssl_ctx, DTLS1_2_VERSION))
+		return Error("-DTLSConnection::ClassInit() | Could not set minimum DTLS version to 1.2\n");
 	// Set certificate.
 	if (! SSL_CTX_use_certificate_file(ssl_ctx, certfile.c_str(), SSL_FILETYPE_PEM))
 		return Error("-DTLSConnection::ClassInit() | Specified certificate file '%s' could not be used\n", certfile.c_str());
@@ -69,23 +74,9 @@ int DTLSConnection::ClassInit()
 	if (! SSL_CTX_set_cipher_list(ssl_ctx, cipher.c_str()))
 		return Error("-DTLSConnection::ClassInit() | Invalid cipher specified in cipher list '%s' for DTLS-SRTP\n",cipher.c_str());
 
-	// Enable ECDH ciphers.
-	// DOC: http://en.wikibooks.org/wiki/OpenSSL/Diffie-Hellman_parameters
-	// NOTE: https://code.google.com/p/chromium/issues/detail?id=406458
-	// For OpenSSL >= 1.0.2:
-	#if (OPENSSL_VERSION_NUMBER >= 0x10002000L)
-		SSL_CTX_set_ecdh_auto(ssl_ctx, 1);
-	#else
-		ecdh = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
-		if (! ecdh) {
-			return Error("-DTLSConnection::ClassInit() | EC_KEY_new_by_curve_name() failed\n");
-		}
-		if (SSL_CTX_set_tmp_ecdh(ssl_ctx, ecdh) != 1) {
-			return Error("-DTLSConnection::ClassInit() | SSL_CTX_set_tmp_ecdh() failed\n");
-		}
-		EC_KEY_free(ecdh);
-		ecdh = NULL;
-	#endif
+	// La selection de la courbe ECDH est automatique depuis OpenSSL 1.1.0
+	// (plus besoin de EC_KEY_new_by_curve_name / SSL_CTX_set_tmp_ecdh, deprecies
+	// en 3.0). Rien a faire ici.
 
 	// Don't use session cache.
 	SSL_CTX_set_session_cache_mode(ssl_ctx, SSL_SESS_CACHE_OFF);

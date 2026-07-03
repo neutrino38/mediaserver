@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <string>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 #include "http.h"
 #include <signal.h>
 #include <errno.h>
@@ -692,7 +693,11 @@ void WebSocketConnection::Accept(WebSocket::Listener *wsl)
 	BYTE secWebSocketAccept[SHA_DIGEST_LENGTH];
 	char secWebSocketAccept64[SHA_DIGEST_LENGTH*2];
 	//SHA1 response
-	SHA1((unsigned char*)secWebSocketKey.c_str(),secWebSocketKey.length(), secWebSocketAccept);
+	//API EVP one-shot (remplace SHA1() deprecie en OpenSSL 3.0)
+	size_t secWebSocketAcceptLen = 0;
+	EVP_Q_digest(NULL, "SHA1", NULL,
+		     (unsigned char*)secWebSocketKey.c_str(), secWebSocketKey.length(),
+		     secWebSocketAccept, &secWebSocketAcceptLen);
 	//Calculate base 64
 	av_base64_encode(secWebSocketAccept64,SHA_DIGEST_LENGTH*2,secWebSocketAccept,SHA_DIGEST_LENGTH);
 
