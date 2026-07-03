@@ -11,35 +11,17 @@
 #include "media.h"
 #include "recordercontrol.h"
 
-class mp4track
-{
-public:
-	mp4track(MP4FileHandle mp4);
-	int CreateAudioTrack(AudioCodec::Type codec,DWORD rate);
-	int CreateVideoTrack(VideoCodec::Type codec,int width, int height);
-	int CreateTextTrack();
-	int WriteFrame(AudioFrame &audioFrame);
-	int WriteFrame(VideoFrame &videoFrame);
-	int WriteFrame(TextFrame &textFrame);
-	int Close();
-private:
-	int FlushAudioFrame(AudioFrame* frame,DWORD duration);
-	int FlushVideoFrame(VideoFrame* frame,DWORD duration);
-	int FlushTextFrame(TextFrame* frame,DWORD duration);
-private:
-	MP4FileHandle mp4;
-	MP4TrackId track;
-	MP4TrackId hint;
-	bool first;
-	bool intra;
-	int length;
-	int sampleId;
-	MediaFrame *frame;
-	bool hasSPS;
-	bool hasPPS;
-};
+// Moteur d'ecriture MP4 de libmedkit. Declaration en avant pour ne pas imposer
+// <medkit/mp4writer.h> (ni <mp4v2/...> au-dela de ce qui precede) a tous les
+// consommateurs de cet en-tete, exactement comme mp4streamer.h le fait pour
+// mp4reader.
+class mp4writer;
 
-
+// MP4Recorder est desormais une fine coquille : elle implemente les interfaces
+// mcu (RecorderControl + MediaFrame::Listener) et delegue toute l'ecriture (
+// creation des pistes, timing, attente d'I-frame, hint tracks, sous-titres,
+// tags) au moteur mp4writer de libmedkit. Le mcu possede le MP4FileHandle
+// (ouvert/ferme ici), comme MP4Streamer possede le sien.
 class MP4Recorder :
 	public RecorderControl,
 	public MediaFrame::Listener
@@ -60,12 +42,9 @@ public:
 private:
 
 	MP4FileHandle	mp4;
-	mp4track*	audioTrack;
-	mp4track*	videoTrack;
-	mp4track*	textTrack;
+	mp4writer*	writer;		// moteur d'ecriture libmedkit
 	bool		recording;
-	int		waitVideo;
-	pthread_mutex_t mutex;
-	timeval		first;
+	bool		videoTrackAdded;	// piste video creee (non auto-creee par mp4writer)
+	pthread_mutex_t mutex;		// serialise onMediaFrame vs Close
 };
 #endif
