@@ -212,21 +212,6 @@ function local_compile
 		cd $BASESRCDIR
 	fi
 	
-	if [ ! -r staticdeps/lib/libvpx.a ]
-	then
-    		echo "Compiling VP8 codec"
-		#cd $HOME/webrtc/trunk/third_party/libvpx/source/libvpx
-		cd $HOME
-		rm -rf libvpx
-		git clone https://chromium.googlesource.com/webm/libvpx
-		cd libvpx
-		git checkout v1.7.0
-		chmod 750 configure
-		./configure --disable-shared --enable-static --prefix=$BASESRCDIR/staticdeps  --enable-vp8 --enable-error-concealment  --disable-multithread 
-		make
-		make install
-		cd $BASESRCDIR
-	fi	
 	cd $BASESRCDIR
 	
 	mkdir -p bin/debug
