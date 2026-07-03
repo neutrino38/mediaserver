@@ -4,7 +4,10 @@
 #include <fifo.h>
 #include <audio.h>
 #include "vad.h"
-#include "audiotransrater.h"
+
+// Rééchantillonnage via libswresample (remplace l'ancien AudioTransrater/speexdsp).
+// Pointeur opaque : l'en-tête ffmpeg n'est inclus que dans le .cpp.
+struct SwrContext;
 
 class PipeAudioOutput :
 	public AudioOutput
@@ -34,7 +37,7 @@ private:
 	VAD			vad;
 	DWORD			acu;
 	bool			calcVAD;
-	AudioTransrater 	transrater;
+	SwrContext		*swr;
 
 	DWORD	playRate;
 	DWORD	nativeRate;

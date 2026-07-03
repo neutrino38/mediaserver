@@ -1,6 +1,40 @@
 #include "log.h"
 #include "pipeaudioinput.h"
 
+extern "C" {
+#include <libswresample/swresample.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
+}
+
+// Crée un rééchantillonneur mono S16 inputRate -> outputRate via libswresample
+// (remplace l'ancien AudioTransrater/speexdsp). Retourne NULL si aucun
+// rééchantillonnage n'est nécessaire (taux identiques) ou en cas d'erreur.
+static SwrContext* OpenResampler(DWORD inputRate, DWORD outputRate)
+{
+	if (!inputRate || !outputRate || inputRate==outputRate)
+		return NULL;
+
+	SwrContext *swr = NULL;
+	AVChannelLayout mono;
+	av_channel_layout_default(&mono, 1);
+
+	int err = swr_alloc_set_opts2(&swr,
+		&mono, AV_SAMPLE_FMT_S16, (int)outputRate,	// sortie
+		&mono, AV_SAMPLE_FMT_S16, (int)inputRate,	// entrée
+		0, NULL);
+
+	av_channel_layout_uninit(&mono);
+
+	if (err < 0 || swr_init(swr) < 0)
+	{
+		Error("-PipeAudioInput: échec configuration resampler %u Hz -> %u Hz\n", inputRate, outputRate);
+		if (swr) swr_free(&swr);
+		return NULL;
+	}
+	return swr;
+}
+
 PipeAudioInput::PipeAudioInput()
 {
 	//Creamos el mutex
@@ -13,6 +47,7 @@ PipeAudioInput::PipeAudioInput()
 	inited = false;
 	recording = false;
 	canceled = false;
+	swr = NULL;
 }
 
 PipeAudioInput::~PipeAudioInput()
@@ -22,6 +57,9 @@ PipeAudioInput::~PipeAudioInput()
 
  	//Y la condicion
 	pthread_cond_destroy(&cond);
+
+	//Libère le resampler éventuel
+	if (swr) swr_free(&swr);
 }
 
 int PipeAudioInput::RecBuffer(SWORD *buffer,DWORD size)
@@ -66,16 +104,16 @@ int PipeAudioInput::StartRecording(DWORD rate)
 	//Bloqueamos
 	pthread_mutex_lock(&mutex);
 
-        if (transrater.IsOpen())
+        if (swr)
         {
-            transrater.Close();
+            swr_free(&swr);
             fifoBuffer.clear();
         }
 
 	//Store recording rate
 	recordRate = rate;
-	//Open transrater
-	transrater.Open( nativeRate, recordRate );
+	//Open resampler (NULL si aucun rééchantillonnage nécessaire)
+	swr = OpenResampler( nativeRate, recordRate );
 	//Estamos grabando
 	recording = true;
 	//Desbloqueamos
@@ -106,18 +144,20 @@ int PipeAudioInput::StopRecording()
 int PipeAudioInput::PutSamples(SWORD *buffer,DWORD size)
 {
 	SWORD resampled[4096];
-	DWORD resampledSize = 4096;
 
 	//If we need to transrate
-	if (transrater.IsOpen())
+	if (swr)
 	{
-		//Transrate
-		if (!transrater.ProcessBuffer(buffer, size, resampled, &resampledSize))
+		//Resample (mono S16) via libswresample
+		uint8_t *outp = (uint8_t*)resampled;
+		const uint8_t *inp = (const uint8_t*)buffer;
+		int produced = swr_convert(swr, &outp, 4096, &inp, (int)size);
+		if (produced < 0)
 			//Error
 			return Error("-PipeAudioInput could not transrate\n");
 		//Swith input parameters to resample ones
 		buffer = resampled;
-		size = resampledSize;
+		size = (DWORD)produced;
 	}
 
 	//Block
@@ -181,8 +221,8 @@ int PipeAudioInput::End()
 	//Desprotegemos
 	pthread_mutex_unlock(&mutex);
 
-	transrater.Close();
-	
+	if (swr) swr_free(&swr);
+
 	//Salimos
 	return true;
 }

@@ -175,26 +175,8 @@ function local_compile
 		cd $BASESRCDIR
 	fi
 
-	if [ ! -f staticdeps/lib/libspeexdsp.a ]
-	then
-		echo "on doit compiler SPEEXDSP 1.2rc1"
-		if [ ! -r $HOME/speexdsp-src ]
-		then
-			#svn export http://svn.ives.fr/svn-libs-dev/asterisk/libsmedia/speex/tags/1.2rc1 $HOME/speex-src
-			cd $HOME
-			rm -f speexdsp-1.2rc3.tar.gz
-			wget http://downloads.xiph.org/releases/speex/speexdsp-1.2rc3.tar.gz
-			tar xzf speexdsp-1.2rc3.tar.gz
-			mv speexdsp-1.2rc3 speexdsp-src
-			cd $HOME/speexdsp-src
-		fi
-		cd $HOME/speexdsp-src
-			./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
-
+	# libspeexdsp : plus utilisee. Le reechantillonnage audio (ex-AudioTransrater)
+	# passe desormais par libswresample (ffmpeg), deja lie via -lswresample.
 
 	# http://xmlrpc-c.svn.sourceforge.net/viewvc/xmlrpc-c/super_stable?view=tar
 	if [ ! -f staticdeps/lib/libxmlrpc_abyss.a ]

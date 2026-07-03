@@ -3,7 +3,10 @@
 #include <pthread.h>
 #include <audio.h>
 #include <fifo.h>
-#include "audiotransrater.h"
+
+// Rééchantillonnage via libswresample (remplace l'ancien AudioTransrater/speexdsp).
+// Pointeur opaque : l'en-tête ffmpeg n'est inclus que dans le .cpp.
+struct SwrContext;
 
 
 class PipeAudioInput : 
@@ -36,7 +39,7 @@ private:
 	int		canceled;
 	
 	
-	AudioTransrater		transrater;
+	SwrContext		*swr;
 	DWORD			recordRate;
 	DWORD			nativeRate;
 };
