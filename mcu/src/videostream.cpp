@@ -981,6 +981,7 @@ int VideoStream::SetMediaListener(MediaFrame::Listener *listener)
 {
 	//Set it
 	this->mediaListener = listener;
+	return 0;
 }
 
 int VideoStream::SendFPU()

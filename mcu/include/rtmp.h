@@ -212,6 +212,7 @@ public:
 			case 3:
 				return data[1] + ((DWORD)(data[2]))*256 + 64;
 		}
+	return 0;
 	}
 	void	SetStreamId(DWORD csid)
 	{

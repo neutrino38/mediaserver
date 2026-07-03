@@ -130,7 +130,7 @@ void * FLVEncoder::startEncodingVideo(void *par)
 DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)
 {
 	//Call parent
-	RTMPMediaStream::AddMediaListener(listener);
+	DWORD num = RTMPMediaStream::AddMediaListener(listener);
 	//Init
 	listener->onStreamBegin(RTMPMediaStream::id);
 
@@ -148,6 +148,8 @@ DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)
 		listener->onMediaFrame(RTMPMediaStream::id,aacSpecificConfig);
 	//Send FPU
 	sendFPU = true;
+	//Return number of listeners
+	return num;
 }
 
 DWORD FLVEncoder::AddMediaFrameListener(MediaFrame::Listener* listener)

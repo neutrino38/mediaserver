@@ -22,7 +22,7 @@ public :
 	virtual ~WSEndpoint();
 
 	// Port interface
-	virtual int Init() {};
+	virtual int Init() { return 0; };
 	virtual int End();
 
 	//Joinable interface

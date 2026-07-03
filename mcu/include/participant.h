@@ -93,9 +93,9 @@ public:
 	virtual int Init() = 0;
 	virtual int End() = 0;
 	
-	virtual int AcceptDocSharingRequest(int confId,int partId) 	{};
-	virtual int RefuseDocSharingRequest(int confId,int partId)	{};
-	virtual int StopDocSharing(int confId,int partId)			{};
+	virtual int AcceptDocSharingRequest(int confId,int partId) 	{ return 0; };
+	virtual int RefuseDocSharingRequest(int confId,int partId)	{ return 0; };
+	virtual int StopDocSharing(int confId,int partId)			{ return 0; };
 	
 	static bool DestroyParticipant(Participant* part)
 	{

@@ -138,11 +138,13 @@ int AudioTranscoder::Attach(Joinable *join)
 		decoder.Start();
 		join->AddListener(this);
 	}
+	return 0;
 }
 
 int AudioTranscoder::Dettach()
 {
 	decoder.Dettach();
+	return 0;
 }
 
 int AudioTranscoder::SetCodec(int codec)

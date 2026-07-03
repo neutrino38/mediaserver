@@ -268,6 +268,7 @@ bool RTMPFLVStream::Close()
 
 	//We are not playing or recording
 	fd = -1;
+	return true;
 }
 
 int RTMPFLVStream::PlayFLV()

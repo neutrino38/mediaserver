@@ -23,6 +23,7 @@ int MP4Player::Init(AudioOutput *audioOutput,VideoOutput *videoOutput,TextOutput
 	this->audioOutput = audioOutput;
 	this->videoOutput = videoOutput;
 	this->textOutput = textOutput;
+	return 0;
 }
 
 int MP4Player::Play(const char* filename,bool loop)
@@ -72,6 +73,7 @@ int MP4Player::Stop()
 
 int MP4Player::End()
 {
+	return 0;
 }
 
 void MP4Player::onTextFrame(TextFrame &text)

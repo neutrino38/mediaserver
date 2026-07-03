@@ -104,9 +104,11 @@ void VideoTranscoder::onEndStream()
 int VideoTranscoder::Attach(Joinable *join)
 {
 	decoder.Attach(join);
+	return 0;
 }
 
 int VideoTranscoder::Dettach()
 {
 	decoder.Dettach();
+	return 0;
 }

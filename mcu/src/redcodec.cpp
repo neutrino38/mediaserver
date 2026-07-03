@@ -63,6 +63,7 @@ bool RedundentCodec::Decode(RTPRedundantPacket * red, TextOutput * textOutput)
     // Now process the primary data
     TextFrame pframe(timeStamp ,red->GetPrimaryPayloadData(),red->GetPrimaryPayloadSize());
     textOutput->SendFrame(pframe);
+	return true;
 }
 
 RTPRedundantPacket * RedundentCodec::Encode(MediaFrame * frame, BYTE ptype)

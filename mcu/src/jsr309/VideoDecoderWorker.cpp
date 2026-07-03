@@ -28,6 +28,7 @@ int VideoDecoderJoinableWorker::Init(VideoOutput *output)
 {
 	//Store it
 	this->output = output;
+	return 0;
 }
 
 int VideoDecoderJoinableWorker::End()
@@ -42,6 +43,7 @@ int VideoDecoderJoinableWorker::End()
 
 	//Set null
 	output = NULL;
+	return 0;
 }
 
 int VideoDecoderJoinableWorker::Start()
@@ -377,4 +379,5 @@ int VideoDecoderJoinableWorker::Dettach()
 
 	//Not joined anymore
 	joined = NULL;
+	return 0;
 }

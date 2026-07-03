@@ -36,10 +36,10 @@ public:
 	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{  video[role]->SetVideoInput(input); return 1;	}
 	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) {  video[role]->SetVideoOutput(output); return 1;	}
 	virtual VideoOutput* GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return video[role]->GetVideoOutput();	}
-	virtual int SetAudioInput(AudioInput* input)	{ audioInput	= input;	}
-	virtual int SetAudioOutput(AudioOutput *output)	{ audioOutput	= output;	}
-	virtual int SetTextInput(TextInput* input)	{ textInput	= input;	}
-	virtual int SetTextOutput(TextOutput* output)	{ textOutput	= output;	}
+	virtual int SetAudioInput(AudioInput* input)	{ audioInput	= input;	return 0; }
+	virtual int SetAudioOutput(AudioOutput *output)	{ audioOutput	= output;	return 0; }
+	virtual int SetTextInput(TextInput* input)	{ textInput	= input;	return 0; }
+	virtual int SetTextOutput(TextOutput* output)	{ textOutput	= output;	return 0; }
 
 	virtual int SetMute(MediaFrame::Type media, bool isMuted ,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 

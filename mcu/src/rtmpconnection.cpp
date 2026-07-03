@@ -304,6 +304,7 @@ int RTMPConnection::Run()
 	if (listener)
 		//launch event
 		listener->onDisconnect(this);
+	return 0;
 }
 
 void RTMPConnection::SignalWriteNeeded()

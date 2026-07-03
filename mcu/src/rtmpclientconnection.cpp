@@ -317,6 +317,7 @@ int RTMPClientConnection::Run()
 
 	Log("<Run RTMP connection\n");
 
+	return 0;
 }
 
 void RTMPClientConnection::SignalWriteNeeded()
@@ -1120,6 +1121,7 @@ bool RTMPClientConnection::NetStream::Close()
 	conn->SendCommand(id,L"close",NULL,NULL);
 	//Remove all list
 	RemoveAllMediaListeners();
+	return true;
 }
 bool RTMPClientConnection::NetStream::Publish(std::wstring& url)
 {

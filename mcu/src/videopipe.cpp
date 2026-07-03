@@ -203,6 +203,7 @@ int VideoPipe::SetVideoSize(int width, int height)
 		inputHeight = height;
                 sizeChanged = true;
 	}
+	return 0;
 }
 
 int VideoPipe::NextFrame(BYTE * buffer)

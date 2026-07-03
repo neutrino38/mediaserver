@@ -582,6 +582,7 @@ int AudioStream::SendDTMF(DTMFMessage* dtmf)
 	 pthread_mutex_lock(&mutex);
 	 dtmfBuffer.push_back(dtmf);
 	 pthread_mutex_unlock(&mutex);
+	return 0;
 }
 
 int AudioStream::SetMute(bool isMuted)

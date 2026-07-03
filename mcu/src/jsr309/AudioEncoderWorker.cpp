@@ -108,6 +108,7 @@ int AudioEncoderMultiplexerWorker::End()
 
 	//Set null
 	input = NULL;
+	return 0;
 }
 
 
@@ -190,6 +191,7 @@ int AudioEncoderMultiplexerWorker::Encode()
 
 	//Salimos
         Log("<SendAudio\n");
+	return 0;
 }
 
 void AudioEncoderMultiplexerWorker::AddListener(Listener *listener)

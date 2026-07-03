@@ -263,6 +263,7 @@ private:
 			memcpy(this->data+length,data,size);
 			//Set length
 			length += size;
+	return true;
 		}
 
 		~Frame()

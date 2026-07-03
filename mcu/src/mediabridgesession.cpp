@@ -1076,6 +1076,7 @@ int MediaBridgeSession::SendFrame(TextFrame &frame)
 {
     SendTextToHtmlClient(frame.GetWString());
     SendTextToFlashClient(frame.GetWString());
+	return 0;
 }
 
 int MediaBridgeSession::SetSendingVideoCodec(VideoCodec::Type codec)

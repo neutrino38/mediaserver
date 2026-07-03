@@ -69,6 +69,7 @@ int RTPEndpoint::Init()
 	
 	//Init time
 	getUpdDifTime(&prev);
+	return 0;
 }
 
 int RTPEndpoint::End()
@@ -91,6 +92,7 @@ int RTPEndpoint::End()
 	if (receiving)
 		//Stop it
 		StopReceiving();
+	return 0;
 }
 
 int RTPEndpoint::StartReceiving()
@@ -334,6 +336,7 @@ int RTPEndpoint::Detach()
 		joined->RemoveListener(this);
 	//Not joined anymore
 	joined = NULL;
+	return 0;
 }
 
 void RTPEndpoint::onFPURequested(RTPSession *session)
@@ -388,6 +391,7 @@ int RTPEndpoint::RequestUpdate()
 {
 	//Request FIR
 	RequestFPU();
+	return 0;
 }
 
  xmlrpc_value* ExternalFIRRequestedEvent::GetXmlValue(xmlrpc_env *env)

@@ -599,6 +599,7 @@ int RTPSession::SetLocalPort(int recvPort)
 {
 	//Override
 	simPort = recvPort;
+	return 0;
 }
 
 int RTPSession::GetLocalPort()
@@ -1797,6 +1798,7 @@ int RTPSession::Run()
 	}
 
 	Log("<RTPSession run\n");
+	return 0;
 }
 
 RTPPacket* RTPSession::GetPacket()
@@ -2101,6 +2103,7 @@ int RTPSession::RequestFPU(DWORD & ssrc)
 		//Wait for TMBN response to no overflow
 		requestFPU = true;
 	}*/
+	return 0;
 }
 
 void RTPSession::SetRTT(DWORD rtt)
@@ -2723,6 +2726,7 @@ bool RTPSession::RTPStream::Add(RTPTimedPacket *packet, DWORD size)
 		//Send it
 		s->SendSenderReport();
 
+	return true;
 }
 
 RTCPReport* RTPSession::RTPStream::CreateReceiverReport()

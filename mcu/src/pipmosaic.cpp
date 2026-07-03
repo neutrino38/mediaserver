@@ -310,6 +310,7 @@ int PIPMosaic::Update(int pos, BYTE *image, int imgWidth, int imgHeight)
 *****************************/
 int PIPMosaic::Clean(int pos)
 {
+	return 0;
 }
 
 

@@ -143,6 +143,7 @@ int TextMixerWorker::RemoveWritter(DWORD id)
 	delete(it->second);
 	//And remove
 	writters.erase(it);
+	return 0;
 }
 
 int TextMixerWorker::AddReader(DWORD id,PipeTextInput *input)
@@ -178,6 +179,7 @@ int TextMixerWorker::RemoveReader(DWORD id)
 	
 	//And remove
 	readers.erase(it);
+	return 0;
 }
 
 int TextMixerWorker::ProcessText()

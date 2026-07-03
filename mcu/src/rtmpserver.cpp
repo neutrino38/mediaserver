@@ -328,6 +328,7 @@ int RTMPServer::End()
 	DeleteAllConnections();
 
 	Log("<End RTMP Server\n");
+	return 0;
 }
 
 /**********************************

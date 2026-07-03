@@ -81,6 +81,7 @@ int RTMPParticipant::SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int b
   Log("RTMPParticipant SetVideoCodec codec[%d] mode[%d] fps[%d] bitrate[%d] Intra[%d]\n",codec,mode,fps,bitrate,intraPeriod);
 	//Y los fps
 	videoFPS=fps;
+	return 0;
 }
 
 int RTMPParticipant::SetAudioCodec(AudioCodec::Type codec,const Properties &properties)
@@ -89,6 +90,7 @@ int RTMPParticipant::SetAudioCodec(AudioCodec::Type codec,const Properties &prop
 	audioCodec = codec;
 	//Set properties
 	audioProperties = properties;
+	return 0;
 }
 
 int RTMPParticipant::SetTextCodec(TextCodec::Type codec)
@@ -265,6 +267,7 @@ int  RTMPParticipant::StopSendingVideo()
 	}
 
 	Log("<StopSendingVideo\n");
+	return 0;
 }
 
 int  RTMPParticipant::StartReceivingVideo()

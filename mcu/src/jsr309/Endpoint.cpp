@@ -77,6 +77,7 @@ int Endpoint::Init()
 		}
 	    }
 	}
+	return 0;
 }
 
 int Endpoint::End()
@@ -97,6 +98,7 @@ int Endpoint::End()
 	}
 
 	Log("<End endpoint\n");
+	return 0;
 }
 
 RTPEndpoint* Endpoint::GetRTPEndpoint(MediaFrame::Type media, MediaFrame::MediaRole role)
@@ -627,6 +629,7 @@ int Endpoint::Port::SwitchJoin(Port *oldPort)
 		oldPort->Detach();
 		Attach(oldJoined);
 	}
+	return 0;
 }
 
 
@@ -641,6 +644,7 @@ int Endpoint::SetEventContextId( MediaFrame::Type media, MediaFrame::MediaRole r
 	 Port * p = GetPort(media, role);
 	if (p != NULL)
 		p->SetEventContextId(ctxId);
+	return 0;
 }
 
  int  Endpoint::SetEventHandler( MediaFrame::Type media, MediaFrame::MediaRole role, int sessionId,	JSR309Manager* jsrManager)
@@ -648,6 +652,7 @@ int Endpoint::SetEventContextId( MediaFrame::Type media, MediaFrame::MediaRole r
 	Port * p = GetPort(media, role);
 	if (p != NULL)
 		p->SetEventHandler(sessionId,jsrManager);
+	return 0;
  }
 
 

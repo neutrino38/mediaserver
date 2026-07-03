@@ -170,6 +170,7 @@ int XmlStreamingHandler::DestroyAllQueues()
 	queues.clear();
 	//Unlock
 	listUse.Unlock();
+	return 0;
 }
 
 /**************************************

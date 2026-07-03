@@ -27,7 +27,7 @@ public:
 	virtual BYTE*	GetMediaData()			{ return buffer;		}
 	virtual DWORD	GetMediaSize()			{ return mediaSize;		}
 	virtual DWORD	GetMaxMediaSize()		{ return bufferSize;		}
-	virtual bool	SetMediaSize(DWORD mediaSize)	{ this->mediaSize = mediaSize;	}
+	virtual bool	SetMediaSize(DWORD mediaSize)	{ this->mediaSize = mediaSize;	return true; }
 
 	virtual void	Dump();
 

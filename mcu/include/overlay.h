@@ -20,7 +20,7 @@ public:
 	int LoadImage(const char*);
 	int RenderSVG(const char*);
 	int RenderText(const char*,int scriptCode);
-	int Clear() { contentType = NONE; }
+	int Clear() { contentType = NONE; return 0; }
 	bool HasContent() { return contentType != NONE; }
 	
 	/**

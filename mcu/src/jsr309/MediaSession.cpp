@@ -1533,6 +1533,7 @@ int MediaSession::ConfigureMediaConnection( int endpointId, MediaFrame::Type med
 		      token, endpointId, MediaFrame::TypeToString(media),  MediaFrame::ProtocolToString(proto) );
 	    }
 	}
+	return 0;
 }
 				      
 

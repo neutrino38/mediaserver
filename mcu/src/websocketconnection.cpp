@@ -290,6 +290,7 @@ int WebSocketConnection::Run()
 
 	//Don't send more events
 	listener = NULL;
+	return 0;
 }
 
 void WebSocketConnection::SignalWriteNeeded()
@@ -658,6 +659,7 @@ int WebSocketConnection::on_message_complete (HTTPParser*)
 	if (listener)
 		//Send event
 		listener->onUpgradeRequest(this);
+	return 0;
 }
 
 void WebSocketConnection::Accept(WebSocket::Listener *wsl)

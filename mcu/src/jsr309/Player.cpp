@@ -35,6 +35,7 @@ Joinable* Player::GetJoinable(MediaFrame::Type media)
 			//Return multiplexer
 			return &text;
 	}
+	return NULL;
 }
 	
 void Player::onRTPPacket(RTPPacket &packet)
@@ -87,6 +88,7 @@ int Player::SetEventContextId( MediaFrame::Type media,  int ctxId )
 	Joinable* j = GetJoinable(media);
 	if (j != NULL)
 		j->SetEventContextId(ctxId);
+	return 0;
 }
 
 
@@ -96,5 +98,6 @@ int Player::SetEventHandler( MediaFrame::Type media, int sessionId,	JSR309Manage
 	if (j != NULL)
 		j->SetEventHandler(sessionId,jsrManager);
 
+	return 0;
 }
 

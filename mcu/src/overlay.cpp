@@ -111,6 +111,7 @@ Overlay & Overlay::operator =(const Overlay& o)
     content = o.content;
     Resize(width, height);
     this->scriptCode=o.scriptCode;
+    return *this;
 }
 
 Overlay::Overlay()
@@ -172,6 +173,7 @@ bool Overlay::Resize(DWORD width,DWORD height)
     //Get aligned buffer
     image = ALIGNTO32(imageBuffer);
     display = false;
+	return true;
 }
 
 Overlay::~Overlay()

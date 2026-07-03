@@ -17,6 +17,7 @@ int AudioDecoderWorker::Init(AudioOutput *output)
 {
 	//Store it
 	this->output = output;
+	return 0;
 }
 
 int AudioDecoderWorker::End()
@@ -25,6 +26,7 @@ int AudioDecoderWorker::End()
 	if (decoding)
 		//Stop
 		Stop();
+	return 0;
 }
 
 int AudioDecoderWorker::Start()

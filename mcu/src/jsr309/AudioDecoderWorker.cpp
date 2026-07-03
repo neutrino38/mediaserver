@@ -72,6 +72,7 @@ int AudioDecoderJoinableWorker::End()
 
 	//Set null
 	output = NULL;
+	return 0;
 }
 
 int AudioDecoderJoinableWorker::Start()
@@ -235,6 +236,7 @@ int AudioDecoderJoinableWorker::Decode()
 	if (codec!=NULL) delete codec;		
 	
 	Log("<DecodeAudio\n");
+	return 0;
 }
 
 void AudioDecoderJoinableWorker::onRTPPacket(RTPPacket &packet)
@@ -294,4 +296,5 @@ int AudioDecoderJoinableWorker::Dettach()
 	
 	//Not joined anymore
 	joined = NULL;
+	return 0;
 }

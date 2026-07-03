@@ -472,6 +472,7 @@ int VideoMixer::MixVideo()
 	}
 
 	Log("<MixVideo\n");
+	return 0;
 }
 /*******************************
  * CreateMosaic
@@ -1210,6 +1211,7 @@ int VideoMixer::UpdateMosaic(Mosaic* mosaic)
 	}
 
 	Log("<Updated mosaic\n");
+	return 0;
 }
 
 /************************
