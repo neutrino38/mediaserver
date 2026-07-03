@@ -93,126 +93,6 @@ function clean
 	cd -
 }
 
-function compile_webrtc_from_google
-{
-	MEDIASERVERPATH=$PWD
-	echo "compiling some Webrtc libs used in the mcu"
-	cd $HOME
-	if [ -x /urr/local/bin/python ]
-	then
-		hash python /usr/local/bin/python
-		echo "using specific python installlation"
-	fi
-
-	python -V 2> version
-	if [ $? -ne 0 ]
-	then
-		echo "python doit etre installe en version 2.6 ou superieure"
-		return
-	fi
-	
-	echo "now checking installed version"
-	egrep "( 2.6| 2.7)" version
-	if [ $? -ne 0 ]
-	then
-		echo "version incorrecte de python :"
-		python -V
-		rm -r version
-		echo " il faut installer une version 2.6 ou 2.7 "
-		return
-	fi
-
-	rm -f version	
-	if [ ! -r depot_tools ]
-	then
-		echo getting chromium depot tools
-		svn co http://src.chromium.org/chrome/trunk/tools/depot_tools
-	fi
-
-	export PATH=$PATH:$HOME/depot_tools
-	if [ ! -r  webrtc/trunk/webrtc/common_audio ]
-	then
-		echo downloading webrtc
-		mkdir webrtc
-		cd webrtc
-		gclient config http://webrtc.googlecode.com/svn/trunk
-		gclient sync --force
-		gclient runhooks --force
-		echo building webrtc
-		cd trunk
-		#sed -e 's/BUILDTYPE ?= Debug/BUILDTYPE ?= Release/g' Makefile > Makefike.new
-		mv Makefile Makefile.sav
-		#mv Makefike.new Makefile
-		cp $MEDIASERVERPATH/media/Makefile.webrtc Makefile
-	else
-		cd webrtc/trunk
-		cp $MEDIASERVERPATH/media/Makefile.webrtc Makefile
-	fi
-
-	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
-	then
-		make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		make out/Release/obj.target/webrtc/common_audio/libvad.a
-	fi
-}
-
-function compile_webrtc
-{
-	MEDIASERVERPATH=$PWD
-	cd $HOME
-	if [ ! -r  webrtc/trunk/webrtc/common_audio ]
-	then
-		echo downloading webrtc
-		git clone https://github.com/neutrino38/webrtc_stack.git
-		mv webrtc_stack webrtc
-		cd webrtc/trunk
-	else
-		cd webrtc/trunk
-	fi
-
-	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
-	then
-		echo "Compiling VAD and signal processing from webrtc"
-		# Le Makefile genere par gyp ne fonctionne plus (regeneration via
-		# build/gyp_chromium qui exige python2, flags -Werror/gold linker
-		# incompatibles avec GCC recent). On utilise un Makefile autonome
-		# qui compile directement les deux libs C necessaires.
-		make -f Makefile.vad
-	fi
-
-	cd $MEDIASERVERPATH
-}
-
-function archive_webrtc
-{
-	MEDIASERVERPATH=$PWD
-	if [ "`uname -m`" == "x86_64" ]
-	then
-		if [ ! -r lib/linux-64bits/libvad.a ]
-		then
-			echo "archiving 64 bit lib"
-			mkdir -p lib/linux-64bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libvad.a lib/linux-64bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libsignal_processing.a lib/linux-64bits
-		else
-			echo "libvad was not compiled !!!"
-		fi
-	else
-		if [ ! -r lib/linux-64bits/libvad.a ]
-		then
-			echo "archiving 32 bits lib"
-			mkdir -p lib/linux-32bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libvad.a lib/linux-32bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libsignal_processing.a lib/linux-32bits
-		else
-			echo "libvad was not compiled !!!"
-		fi
-		
-	fi
-	echo "archving headers"
-	# TODO archive headers
-}
-
 function local_compile
 {
 	# compiler localement
@@ -235,6 +115,13 @@ function local_compile
     if [ $? != 0 ]
 	then
 		echo "installer libtool"
+		exit 20
+	fi
+
+	rpm -q webrtc-audio-processing-devel
+    if [ $? != 0 ]
+	then
+		echo "installer webrtc-audio-processing-devel"
 		exit 20
 	fi
 
@@ -386,7 +273,6 @@ function local_compile
 		make install
 		cd $BASESRCDIR
 	fi	
-	compile_webrtc;
 	cd $BASESRCDIR
 	
 	mkdir -p bin/debug
@@ -497,9 +383,6 @@ case $1 in
 	"localcompile")
 		local_compile;;
 
-	"webrtc")
-		compile_webrtc;;
-	
     "rabbitmq")
 		compile_rabbitmq;;
 
@@ -512,13 +395,12 @@ case $1 in
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel ;;
+		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"
   		echo "  rpm				Generation d'un package rpm"
 		echo "  localcompile	Compilation du logiciel sans creation de paquet rpm"
-		echo "  webrtc          Compilation des libs webrtc"
 		echo "  rabbitmq        Compilation des libs RABBITMQ (projet moteli)"
 		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"

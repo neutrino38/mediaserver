@@ -20,8 +20,6 @@ MEDKITDIR       = ../third_party/fontventa/libmedikit
 # inconditionnelle de libmedkit.a. Le mode sans-medkit a ete supprime (les .o de
 # codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
 VADWEBRTC       = yes
-WEBRTCINCLUDE   = ${HOME}/webrtc/trunk/webrtc/
-WEBRTDIROBJ     = ${HOME}/webrtc/trunk/out/Release/obj.target/webrtc/
 PROTOC		= ../staticdeps/bin/protoc
 DISTRO          = $(shell head -1 /etc/redhat-release | awk \
                       '{if ($$0 ~ /Fedora/) {print "fc"} else if ($$0 ~ /CentOS release 5/) {print "el5"} else if ($$0 ~ /CentOS release 6/) {print "el6"}}' )
@@ -30,7 +28,7 @@ DISTRO          = $(shell head -1 /etc/redhat-release | awk \
 OPTS=-std=gnu++0x
 
 ifeq ($(FEWSTATICDEPS),yes)
-    OPTS+= -DFEWSTATICDEPS -I/usr/include/ffmpeg -I/usr/include/webrtc
+    OPTS+= -DFEWSTATICDEPS -I/usr/include/ffmpeg
 endif
 
 ifeq ($(GPROF),yes)
@@ -107,9 +105,10 @@ ifeq ($(FLASHSTREAMER),yes)
 endif
 
 ifeq ($(VADWEBRTC),yes)
-        VADINCLUDE = -I$(WEBRTCINCLUDE)
-        VADLD = -L $(WEBRTDIROBJ)/common_audio -lvad -lsignal_processing -lopus
-        OPTS+= -DVADWEBRTC -DOPUS_SUPPORT
+        # VAD via le paquet systeme webrtc-audio-processing (module APM).
+        VADINCLUDE = $(shell pkg-config --cflags webrtc-audio-processing)
+        VADLD = $(shell pkg-config --libs webrtc-audio-processing)
+        OPTS+= -DVADWEBRTC
 else
         VADINCLUDE =
         VADLD =
