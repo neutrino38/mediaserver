@@ -82,12 +82,40 @@ function create_rpm
 
 function clean
 {
+	BASESRCDIR=$PWD
+	MEDKITDIR=$BASESRCDIR/third_party/fontventa/libmedikit
+	BFCPDIR=$BASESRCDIR/third_party/libbfcp
+
   	# On efface les liens ainsi que le package precedemment cr.
   	echo Effacement des fichiers et liens gnupg rpmbuild ${PROJET}.rpm ${TEMPDIR}/${PROJET}
   	rm -rf gnupg rpmbuild ${TEMPDIR}/${PROJET}
-	cd mcu 
+
+	# Nettoyage du binaire et des objets du mediaserver.
+	cd mcu
 	make -f Makefile.rpm clean
-	cd -
+	cd "$BASESRCDIR"
+
+	# Nettoyage des objets et archives des sous-modules (libmedkit + libbfcp),
+	# pour qu'un "clean" reparte reellement d'un arbre vierge. On garde les memes
+	# options que la construction (compile_libmedkit / compile_libbfcp).
+	if [ -f "$MEDKITDIR/Makefile" ]
+	then
+		echo "Nettoyage libmedkit (in-tree) : objets + libmedkit.a"
+		make -C "$MEDKITDIR" clean ASTERISK=no
+		# Balayage defensif : la cible clean ne retire que les .o de la liste OBJS
+		# courante ; on supprime aussi les .o residuels d'anciennes listes/builds
+		# (aucun .o n'est suivi par git dans le sous-module).
+		find "$MEDKITDIR" -name '*.o' -delete
+		rm -f "$MEDKITDIR/libmedkit.a"
+	fi
+	if [ -f "$BFCPDIR/Makefile" ]
+	then
+		echo "Nettoyage libbfcp (in-tree) : objets + libbfcp{dbg,rel}.a"
+		make -C "$BFCPDIR" clean DEBUG=yes
+		make -C "$BFCPDIR" clean DEBUG=no
+		find "$BFCPDIR" -name '*.o' -delete
+		rm -f "$BFCPDIR"/lib/libbfcp*.a "$BFCPDIR"/lib/libbfcp*.so
+	fi
 }
 
 function local_compile
@@ -379,5 +407,5 @@ case $1 in
 		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
 		echo "  libbfcp         Compilation de libbfcp (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"
-  		echo "  clean			Nettoie tous les fichiers cree ce script, liens, tar.gz et rpm";;
+  		echo "  clean			Nettoie les fichiers crees par ce script (liens, rpm) + les objets/archives de mcu et des sous-modules (libmedkit, libbfcp)";;
 esac
