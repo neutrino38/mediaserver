@@ -9,17 +9,14 @@ Group:     Applications/Internet
 License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:  x264, ImageMagick-c++ >= 6.7.0, ffmpeg, webrtc-audio-processing
+Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, webrtc-audio-processing, libsrtp2
 Requires:  openssl-libs >= 3.0
+BuildRequires: git, subversion, wget, libtool
 BuildRequires: ffmpeg-devel
-BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 6.7.0, libbfcp >= 5.5.0
+BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: gsm-devel
-BuildRequires: webrtc-audio-processing-devel
+BuildRequires: webrtc-audio-processing-devel, libsrtp2-devel
 BuildRequires: openssl-devel >= 3.0
-
-%ifos el5
-Requires: fonts-chinese, fonts-japanese
-%endif
 
 %description
 Mediaserver controlled by sailfin applications
@@ -34,12 +31,14 @@ make -f Makefile.rpm clean
 %prep
 cd %_topdir
 cd ..
-./install.ksh webrtc
+# libmedikit (codecs) vit dans un sous-module git : l'initialiser avant le build.
+git submodule update --init --recursive
 
 %build
 echo "Build"
 cd %_topdir
 cd ..
+# localcompile construit libmedkit.a (sous-module) puis le binaire mcu.
 ./install.ksh localcompile
 
 %install
@@ -61,12 +60,12 @@ cp type-asian.xml $RPM_BUILD_ROOT/etc/mediaserver
 /etc/mediaserver/type-asian.xml
 
 %post
-if [ ! -r /etc/ImageMagick-6/type.xml ]
+if [ ! -r /etc/ImageMagick-7/type.xml ]
 then
     echo "ImageMagick font are not configured. Participant name may not be displayed correctly"
 else
-    cp /etc/mediaserver/type-asian.xml /etc/ImageMagick-6/
-    grep "type-asian.xml" > /dev/null
+    cp /etc/mediaserver/type-asian.xml /etc/ImageMagick-7/
+    grep "type-asian.xml" /etc/ImageMagick-7/type.xml > /dev/null
     if [ $? -ne 0 ]
     then
        echo "You need to change font configuration of ImageMagick for asian font support."
@@ -79,6 +78,12 @@ echo "Now restarting mediaserver"
 /etc/init.d/mediaserver restart
 
 %changelog
+* Thu Jul 03 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- portage AlmaLinux 9 : liens dynamiques (ffmpeg 5, OpenSSL 3, libsrtp2, x264,
+  Magick++ 7, webrtc-audio-processing), codecs via le sous-module libmedikit.
+- suppression de la compatibilite CentOS 6 / el5 (fonts asiatiques el5, ImageMagick 6).
+- %prep initialise le sous-module libmedikit (ancienne cible install.ksh webrtc supprimee).
+- version 1.9.0
 * Fri Mar 26 2021 Emmanuel BUU
 - updated remote bitrate estimation.
 - corrected JSR 309 Endpoint to use remote bitrate regulation properly

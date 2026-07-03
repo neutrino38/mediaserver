@@ -213,7 +213,20 @@ function local_compile
 	fi
 	
 	cd $BASESRCDIR
-	
+
+	# Sous-modules (libmedkit = codecs, libbfcp = BFCP) : on les initialise au
+	# besoin puis on construit leurs archives in-tree, pour qu'un seul
+	# "install.ksh localcompile" suffise a produire le binaire.
+	if [ ! -f third_party/fontventa/libmedikit/medkit/media.h ] || [ ! -f third_party/libbfcp/Makefile ]
+	then
+		echo "initialisation des sous-modules (libmedikit, libbfcp)"
+		git submodule update --init --recursive
+	fi
+	compile_libmedkit
+	compile_libbfcp
+
+	cd $BASESRCDIR
+
 	mkdir -p bin/debug
 	cd mcu
 	make -f Makefile.rpm mcu
@@ -286,6 +299,32 @@ function compile_libmedkit
 	cd $MEDIASERVERPATH
 }
 
+function compile_libbfcp
+{
+	# Construit libbfcp DANS l'arbre du sous-module (cible 'all', pas d'install
+	# dans /opt/ives). Le mediaserver s'y lie directement via BFCPDIR dans
+	# mcu/Makefile.rpm. On produit les deux variantes (dbg + rel) pour couvrir
+	# les deux valeurs de DEBUG du build mcu.
+	MEDIASERVERPATH=$PWD
+	BFCPDIR=$MEDIASERVERPATH/third_party/libbfcp
+	if [ ! -f "$BFCPDIR/Makefile" ]
+	then
+		echo "Sous-module libbfcp absent. Lancer : git submodule update --init"
+		exit 20
+	fi
+	if [ ! -f "$BFCPDIR/lib/libbfcpdbg.a" ]
+	then
+		echo "Compilation libbfcp (in-tree, debug)"
+		make -C "$BFCPDIR" all DEBUG=yes
+	fi
+	if [ ! -f "$BFCPDIR/lib/libbfcprel.a" ]
+	then
+		echo "Compilation libbfcp (in-tree, release)"
+		make -C "$BFCPDIR" all DEBUG=no
+	fi
+	cd $MEDIASERVERPATH
+}
+
 function compile_protobuf
 {
 	MEDIASERVERPATH=$PWD
@@ -331,6 +370,9 @@ case $1 in
 	"libmedkit")
 		compile_libmedkit;;
 
+	"libbfcp")
+		compile_libbfcp;;
+
 	"upload")
 		upload_rpm ;;
 	"prereq")
@@ -342,6 +384,7 @@ case $1 in
 		echo "  localcompile	Compilation du logiciel sans creation de paquet rpm"
 		echo "  rabbitmq        Compilation des libs RABBITMQ (projet moteli)"
 		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
+		echo "  libbfcp         Compilation de libbfcp (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"
   		echo "  clean			Nettoie tous les fichiers cree ce script, liens, tar.gz et rpm";;
 esac

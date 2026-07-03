@@ -12,10 +12,13 @@ endif
 
 LOG             = yes
 DEBUG           = yes
-BFCPINCLUDE     = /opt/ives/include
 FLASHSTREAMER   = no
 ADDLIBPATH      = ../staticdeps
 MEDKITDIR       = ../third_party/fontventa/libmedikit
+# libbfcp est desormais un sous-module bati in-tree (comme libmedkit) : en-tetes
+# et archive pris dans l'arbre du sous-module, plus de dependance a /opt/ives.
+BFCPDIR         = ../third_party/libbfcp
+BFCPINCLUDE     = $(BFCPDIR)/include
 # libmedkit (sous-module) est desormais la source unique des codecs : liaison
 # inconditionnelle de libmedkit.a. Le mode sans-medkit a ete supprime (les .o de
 # codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
@@ -39,11 +42,11 @@ endif
 ifeq ($(DEBUG),yes)
 	TAG=debug
 	OPTS+= -g -O0
-	BFCPLIBS=/opt/ives/$(libdir)/libbfcpdbg.a 
+	BFCPLIBS=$(BFCPDIR)/lib/libbfcpdbg.a
 else
 	OPTS+= -O3
 	TAG=release
-	BFCPLIBS=/opt/ives/$(libdir)/libbfcprel.a 
+	BFCPLIBS=$(BFCPDIR)/lib/libbfcprel.a
 endif
 
 #LOG

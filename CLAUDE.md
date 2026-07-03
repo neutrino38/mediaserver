@@ -10,18 +10,24 @@ The codebase is mostly C++ (in `mcu/`) plus three Java companion projects.
 
 ## Build & run
 
-Builds target **CentOS/RHEL with a custom `/opt/ives` toolchain** and many statically-linked dependencies. There is no quick local build without that environment.
+The build is being ported to **AlmaLinux 9 / GCC 11** on branch `feat/alma_linux9` (the current branch) — see `almalinux9_port_plan.md` for status. Most dependencies are now **linked dynamically against system packages** (ffmpeg 5, OpenSSL 3, libsrtp2, x264, Magick++ 7, webrtc-audio-processing). Only a few libs are still built from source into `./staticdeps` (mp4v2, g722_1, xmlrpc-c). The bulk of the codec/media code now comes from the **`libmedikit` submodule** (`third_party/fontventa/libmedikit`), which itself carries the ffmpeg-5 port.
 
 ```sh
-# Full local compile: builds all static deps (openssl, mp4v2, speex, opus,
-# srtp, vpx, g722_1, webrtc VAD, xmlrpc-c...) into ./staticdeps, then the mcu.
-./install.ksh localcompile
+# 1. Install system build deps:
+./install.ksh prereq       # dnf/yum: gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp2-devel
+
+# 2. One-shot build: inits submodules (libmedikit + libbfcp), builds them
+#    in-tree, builds source deps into ./staticdeps, then the mcu:
+./install.ksh localcompile   # output: bin/debug/mcu
+
+# (individual in-tree submodule builds, if needed:)
+./install.ksh libmedkit    # libmedkit.a (codecs), cible 'all', ASTERISK=no
+./install.ksh libbfcp      # libbfcp{dbg,rel}.a (BFCP), cible 'all'
 
 # Recompile just the C++ binary after deps already exist:
 make -f mcu/Makefile.rpm mcu      # output: bin/debug/mcu
 
 # Build the RPM (what Jenkins runs):
-./install.ksh prereq              # yum install gsm-devel ffmpeg-devel
 ./install.ksh rpm nosign          # omit "nosign" to GPG-sign
 
 # Clean:
@@ -29,8 +35,12 @@ make -f mcu/Makefile.rpm mcu      # output: bin/debug/mcu
 ```
 
 - The top-level `Makefile` and `config.mk` are **stale/unused** (they reference a non-existent `media/` dir). The real build is `mcu/Makefile.rpm`, driven by `install.ksh`.
-- Key build switches in `mcu/Makefile.rpm`: `DEBUG=yes` (default — `-g -O0`, builds into `media/build/debug`, links `libbfcpdbg.a`), `LOG=yes` (`-DLOG_`), `MOTELI=yes` (enables the RabbitMQ/protobuf moteli backend), `VADWEBRTC=yes` (WebRTC voice-activity detection). C++ standard is `gnu++0x`.
+- **Two in-tree submodules are mandatory**: `mcu/Makefile.rpm` links `$(MEDKITDIR)/libmedkit.a` (codecs, `-I$(MEDKITDIR)` before `-Iinclude/`; the codec `.o` files it provides were removed from `OBJS`) and `$(BFCPDIR)/lib/libbfcp{dbg,rel}.a` (BFCP C lib, `-I$(BFCPDIR)/include`), both by full path. No `/opt/ives` dependency remains.
+- Key build switches in `mcu/Makefile.rpm`: `DEBUG=yes` (default — `-g -O0`, builds into `media/build/debug`, links `libbfcpdbg.a`), `LOG=yes` (`-DLOG_`), `MOTELI=yes` (enables the RabbitMQ/protobuf moteli backend — still source-built, not yet ported to el9), `VADWEBRTC=yes` (VAD via the system `webrtc-audio-processing` APM, `pkg-config`). C++ standard is `gnu++17` (with `-Werror=return-type`).
+- `DISTRO` in `Makefile.rpm` only detects `fc`/`el5`/`el6`; the **default (`else`) branch is the AlmaLinux 9 dynamic-link mode** (there is no explicit `el9` yet).
 - `mcu.proto` is compiled by `staticdeps/bin/protoc` only when `MOTELI=yes`.
+
+- The RPM spec (`mcumediaserver.spec`) is AlmaLinux 9-only (CentOS 6/el5 compat removed): `%prep` inits the git submodules and `%build` runs `install.ksh localcompile`. It still installs a SysV `mediaserver.init` (systemd migration pending — see `almalinux9_port_plan.md` §B).
 
 ### Running (IVèS deployment convention)
 
@@ -64,10 +74,11 @@ Core conference model:
 
 Media plumbing:
 - `rtpsession`, `rtp`, `RTPSmoother`, `dtls` (SRTP keying), `stunmessage`, `fecdecoder`, `red`/`redcodec` for the transport layer.
-- Codecs live in per-codec subdirs under `mcu/src/`: `g711`, `g722`, `gsm`, `speex`, `opus`, `nelly` (audio); `h263`, `h264`, `vp6`, `vp8`, `flv1` (video). Each wraps an external lib (ffmpeg/x264/libvpx/...) behind a common codec interface in `include/codecs.h`.
-- MP4 record/play (`mp4recorder`, `mp4player`, `mp4streamer`) via libmp4v2; FLV/RTMP recording and streaming (`FLVEncoder`, `flvrecorder`, `rtmpflvstream`).
+- Codecs now come from the **`libmedikit` submodule**, not `mcu/src`: the per-codec subdirs (`g711`, `g722`, `gsm`, `speex`, `opus`, `h263`, `h264`, `aac`, `amr`, `vp8`…) were removed and the classes are provided by `medkit/*` (`FfAudioEncoder`/`FfVideoEncoder`, `PCMUEncoder`, etc.) wrapping ffmpeg/x264 behind the interface in `include/codecs.h`. Only `mcu/src`-local media bits that libmedikit doesn't cover remain (e.g. `nelly`, `vp6`, `flv1` where still referenced). Audio resampling goes through **libswresample** (ffmpeg); the old speexdsp `AudioTransrater` is gone.
+- MP4 record/play: `mp4recorder`/`mp4player`/`mp4streamer` are thin shells over libmedikit's **`mp4writer`/`mp4reader`** (libmp4v2 underneath). FLV/RTMP recording and streaming (`FLVEncoder`, `flvrecorder`, `rtmpflvstream`) stay in `mcu`.
+- VAD uses the system **`webrtc-audio-processing`** APM (`VoiceDetection`); the old vendored WebRTC trunk was removed.
 - `mediagateway`/`mediabridgesession` bridge between transports (the `mediagw` target).
-- `src/bfcp/` implements BFCP floor control (binary-floor-control for document/screen sharing), linked against the external `libbfcp`.
+- `src/bfcp/` implements the C++ object BFCP API (floor control for document/screen sharing) on top of the C-level `libbfcp`, now built in-tree from the **`third_party/libbfcp` submodule** (headers `-I$(BFCPDIR)/include`, archive `libbfcp{dbg,rel}.a` linked by full path — no more `/opt/ives`).
 
 Headers are in `mcu/include/`, sources in `mcu/src/`. The object list and link flags in `mcu/Makefile.rpm` are the source of truth for what actually gets compiled.
 
@@ -81,8 +92,8 @@ Build these with `ant` in each directory (not part of the RPM build).
 
 ## Conventions & gotchas
 
-- The codebase is old C++ (mixed `.c`/`.cpp`, `gnu++0x`) with heavy use of raw threads, `std::wstring` for names/tags, and manual memory management. Match the surrounding style.
+- The codebase is old C++ (mixed `.c`/`.cpp`, now built as `gnu++17`) with heavy use of raw threads, `std::wstring` for names/tags, and manual memory management. Match the surrounding style. Migration to `std::thread`/`std::atomic` and `std::mutex` locks is ongoing.
 - Comments and commit messages are predominantly in **French**.
-- Many "dependencies" are vendored as static builds produced by `install.ksh` into `staticdeps/`; don't expect system packages to satisfy them.
-- CI is Jenkins (`Jenkinsfile`): a CentOS6 matrix that runs `install.ksh prereq` then `install.ksh rpm nosign`, archiving the `.rpm` on tag builds and notifying via Office365 webhook.
+- Most media/codec code now lives in the **`libmedikit` submodule** (`third_party/fontventa/libmedikit`), not `mcu/src` — check there before assuming a codec is local. A few source deps (mp4v2, g722_1, xmlrpc-c) are still vendored as static builds in `staticdeps/`; everything else is a dynamic system package.
+- No CI pipeline is checked in (the old Jenkins `Jenkinsfile`, a CentOS6 matrix, has been removed). Builds are driven manually via `install.ksh` (see Build & run).
 - Version string lives in `install.ksh` (`VERSION=`), `mcu/include/version.h`, and `mcumediaserver.spec` — keep them in sync when bumping.
