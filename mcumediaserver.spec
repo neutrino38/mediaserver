@@ -10,13 +10,13 @@ License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, webrtc-audio-processing, libsrtp2
-Requires:  openssl-libs >= 3.0
-BuildRequires: git, subversion, wget, libtool
+Requires:  openssl-libs >= 3.0, xmlrpc-c
+BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
 BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: gsm-devel
-BuildRequires: webrtc-audio-processing-devel, libsrtp2-devel
-BuildRequires: openssl-devel >= 3.0
+BuildRequires: webrtc-audio-processing-devel, libsrtp-devel
+BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel
 
 %description
 Mediaserver controlled by sailfin applications
@@ -86,7 +86,7 @@ echo "Now restarting mediaserver"
 /etc/init.d/mediaserver restart
 
 %changelog
-* Thu Jul 03 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+* Fri Jul 03 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - certcommunication.sh installe dans /etc/mediaserver et appele en %post :
   genere un certificat DTLS/OpenSSL ECDSA P-256 (signe SHA-256, valide 10 ans)
   au lieu de RSA 1024 refuse par OpenSSL 3 et les navigateurs WebRTC.

@@ -186,7 +186,9 @@ endif
 	# XML : xmlrpc-c est bati avec le backend libxml2 ; xmlParseChunk vient donc de
 	# la libxml2 systeme (-lxml2), pas des archives expat libxmlrpc_xmlparse/xmltok
 	# (non produites dans ce mode).
-	LDXMLFLAGS+=  $(ADDLIBPATH)/lib/libxmlrpc_abyss.a $(ADDLIBPATH)/lib/libxmlrpc_server.a $(ADDLIBPATH)/lib/libxmlrpc.a $(ADDLIBPATH)/lib/libxmlrpc_util.a -lxml2 -lssl -lcrypto -lpthread
+	# xmlrpc-c : paquet systeme (xmlrpc-c-devel, depot crb) lie dynamiquement,
+	# plus de build source dans staticdeps. Backend libxml2 (idem qu'avant).
+	LDXMLFLAGS+=  -lxmlrpc_abyss -lxmlrpc_server -lxmlrpc -lxmlrpc_util -lxml2 -lssl -lcrypto -lpthread
 endif
     
 

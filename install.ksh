@@ -58,9 +58,6 @@ function create_rpm
     cd ./rpmbuild/SPECS/
     cp ../../mcumediaserver.spec .
     cd ../../
-    rm -rf $HOME/xmlrpc-c
-    rm -f staticdeps/lib/libxmlrpc*.a
-	
     if [[ -z $2 || $2 -ne nosign ]]
 	then
 		rpmbuild -bb --sign $PWD/rpmbuild/SPECS/mcumediaserver.spec
@@ -125,10 +122,19 @@ function local_compile
 		exit 20
 	fi
 
-	rpm -q libsrtp2-devel
+	# libsrtp2 (l'ABI utilisee) est fournie par le paquet libsrtp-devel, pas libsrtp2-devel.
+	rpm -q libsrtp-devel
     if [ $? != 0 ]
 	then
-		echo "installer libsrtp2-devel"
+		echo "installer libsrtp-devel"
+		exit 20
+	fi
+
+	# xmlrpc-c : plus construit depuis les sources, on utilise le paquet systeme.
+	rpm -q xmlrpc-c-devel
+    if [ $? != 0 ]
+	then
+		echo "installer xmlrpc-c-devel (depot crb)"
 		exit 20
 	fi
 
@@ -178,22 +184,9 @@ function local_compile
 	# libspeexdsp : plus utilisee. Le reechantillonnage audio (ex-AudioTransrater)
 	# passe desormais par libswresample (ffmpeg), deja lie via -lswresample.
 
-	# http://xmlrpc-c.svn.sourceforge.net/viewvc/xmlrpc-c/super_stable?view=tar
-	if [ ! -f staticdeps/lib/libxmlrpc_abyss.a ]
-	then
-		echo "compilation XMLRPC-C"
-		cd $HOME
-		if [ ! -f xmlrpc-c ]
-		then
-			#svn export svn://svn.code.sf.net/p/xmlrpc-c/code/release_number/01.39.06 xmlrpc-c
-			svn export svn://svn.code.sf.net/p/xmlrpc-c/code/stable xmlrpc-c
-		fi
-		cd xmlrpc-c
-		./configure --disable-abyss-openssl --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
+	# xmlrpc-c : plus construit depuis les sources. On s'appuie desormais sur le
+	# paquet systeme xmlrpc-c-devel (AlmaLinux 9, depot crb) : memes en-tetes,
+	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile.rpm LDXMLFLAGS).
 
 	if [ ! -f staticdeps/lib/libg722_1.a ]
 	then
@@ -376,7 +369,7 @@ case $1 in
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp2-devel ;;
+		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"

@@ -1,30 +1,34 @@
 # Mendooze media server fork
 
-This software is a fork of the mendooze media server originaly written by Sergio Murillo Garcia. It has been used as
+This software is a fork of the mendooze media server originaly written by Sergio Murillo Garcia (itself derived from the Medooze / Fontventa projects). It is a multipoint conferencing unit (MCU) / media server maintained by IVèS that mixes and bridges audio, video, text and document-sharing media between Asterisk and SIP/WebRTC endpoints. It has been used as
 
 - MCU
 - Mediagateway / webrtc gateway.
 - Media server
 
-and can be used to provide these functions. It supports:
+and can be used to provide these functions. It is controlled remotely over XML-RPC and also speaks RTMP, WebSocket, RTP/SRTP, BFCP and (optionally) RabbitMQ. It supports:
 
 - Bitstream : RTP, SRTP, SRTP-DTLS (Webrtc); NACK, REMB, TMMBR, Text over Websocket
 - RTMP (flash related protocol) support
 - Audio Codecs : GSM, G.711, G.722, OPUS some others
 - Video Codecs : H.263, H.263+, H.264, VP8
 - Realtime text as RFC 4103 with RED support
+- BFCP floor control for document / screen sharing
 
 Main functions:
 
 - Media playing and recording using local MP4 files.
-- Audiomixer, videomixer
+- Audiomixer, videomixer, textmixer
+- Video layout composition through mosaics, sidebars and picture-in-picture
 - Logo and overlay
+
+The codebase is mostly C++ (in `mcu/`) around a shared conference engine (`MCU` → `MultiConf` → participants / mixers), plus three Java companion projects (`jsr309impl/`, `XmlRpcMcuClient/`, `sdp/`). Most of the codec / media plumbing now lives in the **libmedkit** submodule (ffmpeg 5, OpenSSL 3, x264, libsrtp2, webrtc-audio-processing).
 
 ## XML-RPC interfaces
 
 The mediaserver exposes three XML-RPC interfaces
 
-- a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources
+- a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [xmlrpc_jsr309_api.md](xmlrpc_jsr309_api.md).
 
 - A spcialized MCU API
 
