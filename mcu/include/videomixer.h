@@ -7,7 +7,7 @@
 #include "pipevideooutput.h"
 #include "eventstreaminghandler.h"
 #include "mosaic.h"
-#include "logo.h"
+#include "medkit/logo.h"
 #include <map>
 #include <list>
 

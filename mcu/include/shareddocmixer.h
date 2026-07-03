@@ -11,7 +11,7 @@
 #include "config.h"
 #include "media.h"
 #include "video.h"
-#include "logo.h"
+#include "medkit/logo.h"
 #include "participant.h"
 #include "bfcp_server.h"
 

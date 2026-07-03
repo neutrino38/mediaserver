@@ -12,7 +12,7 @@
 #include "audio.h"
 #include "text.h"
 #include "rtpsession.h"
-#include "logo.h"
+#include "medkit/logo.h"
 #include "dtmfmessage.h"
 
 class Participant
