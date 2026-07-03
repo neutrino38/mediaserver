@@ -52,12 +52,17 @@ cp bin/debug/mcu $RPM_BUILD_ROOT/opt/ives/bin/mediaserver
 chmod 750 $RPM_BUILD_ROOT/opt/ives/bin/mediaserver
 cp mediaserver.init $RPM_BUILD_ROOT/etc/init.d/mediaserver
 cp type-asian.xml $RPM_BUILD_ROOT/etc/mediaserver
+cp certcommunication.sh $RPM_BUILD_ROOT/etc/mediaserver
+chmod 750 $RPM_BUILD_ROOT/etc/mediaserver/certcommunication.sh
+cp mcu.csr_conf $RPM_BUILD_ROOT/etc/mediaserver
 
 %files
 %defattr(-,root,root,-)
 /opt/ives/bin
 %attr(0755,root,root) /etc/init.d/mediaserver
 /etc/mediaserver/type-asian.xml
+%attr(0750,root,root) /etc/mediaserver/certcommunication.sh
+%config(noreplace) /etc/mediaserver/mcu.csr_conf
 
 %post
 if [ ! -r /etc/ImageMagick-7/type.xml ]
@@ -74,11 +79,17 @@ else
        echo "Asian font support has been correctly enabled"
     fi
 fi
+echo "Generating DTLS/OpenSSL certificate (ECDSA P-256) if needed"
+/etc/mediaserver/certcommunication.sh
+
 echo "Now restarting mediaserver"
 /etc/init.d/mediaserver restart
 
 %changelog
 * Thu Jul 03 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- certcommunication.sh installe dans /etc/mediaserver et appele en %post :
+  genere un certificat DTLS/OpenSSL ECDSA P-256 (signe SHA-256, valide 10 ans)
+  au lieu de RSA 1024 refuse par OpenSSL 3 et les navigateurs WebRTC.
 - portage AlmaLinux 9 : liens dynamiques (ffmpeg 5, OpenSSL 3, libsrtp2, x264,
   Magick++ 7, webrtc-audio-processing), codecs via le sous-module libmedikit.
 - suppression de la compatibilite CentOS 6 / el5 (fonts asiatiques el5, ImageMagick 6).
