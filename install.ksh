@@ -11,7 +11,7 @@ then
 else
 	DESTDIR_LIB=/usr/lib
 fi
-WEBRTCTAG=0.0.1
+
 #RPepertoire d'installation des fichiers so
 DESTDIR_MOD=$DESTDIR_LIB/asterisk/modules
 #Repertoire d'installation du fichier mp4tool
