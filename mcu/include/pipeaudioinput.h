@@ -1,6 +1,7 @@
 #ifndef _PIPEAUDIOINPUT_H_
 #define _PIPEAUDIOINPUT_H_
-#include <pthread.h>
+#include <mutex>
+#include <condition_variable>
 #include <audio.h>
 #include <fifo.h>
 
@@ -29,8 +30,8 @@ public:
 
 private:
 	//Los mutex y condiciones
-	pthread_mutex_t mutex;
-	pthread_cond_t  cond; 
+	std::mutex		mutex;
+	std::condition_variable	cond;
 
 	//Members
 	fifo<SWORD,4096>	fifoBuffer;

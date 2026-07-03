@@ -46,15 +46,11 @@ PipeAudioOutput::PipeAudioOutput(bool calcVAD)
 	playRate = 0;
 	//No resampler yet
 	swr = NULL;
-	//Creamos el mutex
-	pthread_mutex_init(&mutex,NULL);
+	//(le mutex est construit par la std lib)
 }
 
 PipeAudioOutput::~PipeAudioOutput()
 {
-	//Lo destruimos
-	pthread_mutex_destroy(&mutex);
-
 	//Libère le resampler éventuel
 	if (swr) swr_free(&swr);
 }
@@ -91,7 +87,7 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 	}
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get left space
 	int left = fifoBuffer.size()-fifoBuffer.length();
@@ -119,9 +115,6 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 	//Metemos en la fifo
 	fifoBuffer.push(buffer,size);
 
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
-
 	return (size <= left) ? size : -2;
 }
 
@@ -130,7 +123,7 @@ int PipeAudioOutput::StartPlaying(DWORD rate)
 	Log("-PipeAudioOutput start playing [rate:%d Hz]\n",rate);
 
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Store play rate
 	playRate = rate;
@@ -142,10 +135,7 @@ int PipeAudioOutput::StartPlaying(DWORD rate)
 
 	//if rates are different (OpenResampler retourne NULL si égaux)
 	swr = OpenResampler(playRate,nativeRate);
-	
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
+
 	//Exit
 	return true;
 }
@@ -155,12 +145,10 @@ int PipeAudioOutput::StopPlaying()
 	Log("-PipeAudioOutput stop playing\n");
 
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 	//Close resampler
 	if (swr) swr_free(&swr);
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
+
 	//Exit
 	return true;
 }
@@ -168,7 +156,7 @@ int PipeAudioOutput::StopPlaying()
 int PipeAudioOutput::GetSamples(SWORD *buffer,DWORD num,bool min_len)
 {
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Obtenemos la longitud
 	int len = fifoBuffer.length();
@@ -177,17 +165,11 @@ int PipeAudioOutput::GetSamples(SWORD *buffer,DWORD num,bool min_len)
 	if (len > num)
 		len = num;
 	else if (len < num && !min_len)
-	{
-		//Desbloqueamos
-		pthread_mutex_unlock(&mutex);
+		//Le lock est relâché par le RAII
 		return 0;
-	}
 
 	//OBtenemos las muestras
 	fifoBuffer.pop(buffer,len);
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	//Salimos
 	return len;
@@ -197,33 +179,28 @@ int PipeAudioOutput::Init(DWORD rate)
 	Log("-PipeAudioOutput init [rate:%d Hz]\n",rate);
 
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Store play rate
-	nativeRate = rate;
+		//Store play rate
+		nativeRate = rate;
 
-	//Iniciamos
-	inited = true;
-
-	//Protegemos
-	pthread_mutex_unlock(&mutex);
+		//Iniciamos
+		inited = true;
+	}
 
 	return true;
-} 
+}
 
 int PipeAudioOutput::End()
 {
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Terminamos
-	inited = false;
-
-	//Se�alizamos la condicion
-	//pthread_cond_signal(&newPicCond);
-
-	//Protegemos
-	pthread_mutex_unlock(&mutex);
+		//Terminamos
+		inited = false;
+	}
 
 	return true;
 }
@@ -231,7 +208,7 @@ int PipeAudioOutput::End()
 DWORD PipeAudioOutput::GetVAD(DWORD numSamples)
 {
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 	//Get vad value
 	DWORD r = acu;
 	//Check
@@ -241,9 +218,7 @@ DWORD PipeAudioOutput::GetVAD(DWORD numSamples)
 	else
 		//Remove cumulative value
 		acu -= numSamples;
-	//Protegemos
-	pthread_mutex_unlock(&mutex);
-	
+
 	//Return
 	return r;
 }

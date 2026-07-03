@@ -37,13 +37,7 @@ static SwrContext* OpenResampler(DWORD inputRate, DWORD outputRate)
 
 PipeAudioInput::PipeAudioInput()
 {
-	//Creamos el mutex
-	pthread_mutex_init(&mutex,0);
-
- 	//Y la condicion
-	pthread_cond_init(&cond,0);
-
-	//Init
+	//Init (le mutex et la condition sont construits par la std lib)
 	inited = false;
 	recording = false;
 	canceled = false;
@@ -52,12 +46,6 @@ PipeAudioInput::PipeAudioInput()
 
 PipeAudioInput::~PipeAudioInput()
 {
-	//Creamos el mutex
-	pthread_mutex_destroy(&mutex);
-
- 	//Y la condicion
-	pthread_cond_destroy(&cond);
-
 	//Libère le resampler éventuel
 	if (swr) swr_free(&swr);
 }
@@ -67,13 +55,13 @@ int PipeAudioInput::RecBuffer(SWORD *buffer,DWORD size)
 	int len = 0;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Mientras no tengamos suficientes muestras
 	while(recording && (fifoBuffer.length()<size))
 	{
 		//Esperamos la condicion
-		pthread_cond_wait(&cond,&mutex);
+		cond.wait(lock);
 
 		//If we have been canceled
 		if (canceled)
@@ -82,17 +70,13 @@ int PipeAudioInput::RecBuffer(SWORD *buffer,DWORD size)
 			canceled = false;
 			//Exit
 			Log("PipeAudioInput: RecBuffer cancelled.\n");
-			//End
-			goto end;
+			//End (le lock est relâché par le RAII)
+			return len;
 		}
 	}
 
 	//Get samples from queue
 	len = fifoBuffer.pop(buffer,size);
-
-end:
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	return len;
 }
@@ -102,7 +86,7 @@ int PipeAudioInput::StartRecording(DWORD rate)
 	Log("-PipeAudioInput start recording [rate:%d Hz]\n",rate);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
         if (swr)
         {
@@ -116,8 +100,6 @@ int PipeAudioInput::StartRecording(DWORD rate)
 	swr = OpenResampler( nativeRate, recordRate );
 	//Estamos grabando
 	recording = true;
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	return true;
 }
@@ -127,16 +109,13 @@ int PipeAudioInput::StopRecording()
 	Log("-PipeAudioInput stop recording\n");
 	
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Estamos grabando
 	recording = false;
 
-	//Se�alamos
-	pthread_cond_signal(&cond);
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	//Señalamos
+	cond.notify_one();
 
 	return true;
 }
@@ -161,7 +140,7 @@ int PipeAudioInput::PutSamples(SWORD *buffer,DWORD size)
 	}
 
 	//Block
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Si estamos reproduciendo
 	if (recording)
@@ -174,12 +153,9 @@ int PipeAudioInput::PutSamples(SWORD *buffer,DWORD size)
 		//Encolamos
 		fifoBuffer.push(buffer,size);
 
-		//Se�alamos
-		pthread_cond_signal(&cond);
+		//Señalamos
+		cond.notify_one();
 	}
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	//Salimos
 	return true;
@@ -191,16 +167,15 @@ int PipeAudioInput::Init(DWORD rate)
 	Log("-PipeAudioInput init [rate:%d]\n",rate);
 	
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Iniciamos
-	inited = true;
+		//Iniciamos
+		inited = true;
 
-	//Store native sample rate
-	nativeRate = rate;
-	
-	//Desprotegemos
-	pthread_mutex_unlock(&mutex);
+		//Store native sample rate
+		nativeRate = rate;
+	}
 
 	return true;
 }
@@ -208,18 +183,17 @@ int PipeAudioInput::Init(DWORD rate)
 int PipeAudioInput::End()
 {
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//No estamos iniciados
-	inited = false;
-	recording = false;
-	fifoBuffer.clear();
-	
-	//Terminamos
-	pthread_cond_signal(&cond);
+		//No estamos iniciados
+		inited = false;
+		recording = false;
+		fifoBuffer.clear();
 
-	//Desprotegemos
-	pthread_mutex_unlock(&mutex);
+		//Terminamos
+		cond.notify_one();
+	}
 
 	if (swr) swr_free(&swr);
 
@@ -230,14 +204,11 @@ int PipeAudioInput::End()
 void  PipeAudioInput::CancelRecBuffer()
 {
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Cancel
 	canceled = true;
 
-	//Se�alamos
-	pthread_cond_signal(&cond);
-
-	//Unloco mutex
-	pthread_mutex_unlock(&mutex);
+	//Señalamos
+	cond.notify_one();
 }

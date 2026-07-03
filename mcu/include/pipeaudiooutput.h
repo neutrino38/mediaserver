@@ -1,6 +1,6 @@
 #ifndef _AUDIOOUTPUT_H_
 #define _AUDIOOUTPUT_H_
-#include <pthread.h>
+#include <mutex>
 #include <fifo.h>
 #include <audio.h>
 #include "vad.h"
@@ -29,7 +29,7 @@ public:
 	int End();
 private:
 	//Mutex
-	pthread_mutex_t mutex;
+	std::mutex	mutex;
 
 	//Members
 	fifo<SWORD,8192>	fifoBuffer;
