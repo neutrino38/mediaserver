@@ -449,20 +449,15 @@ function compile_libmedkit
 	#  - ffmpeg : en-tetes dans /usr/include/ffmpeg (override par FFMPEGINC) ;
 	#  - mp4v2 : pas de paquet natif, en-tetes pris dans staticdeps/include
 	#    (build source IVeS), override par MP4V2INC.
-	# OBJS reduit : on exclut les objets couples a Asterisk (transcoder, mp4format,
+	# ASTERISK=no : on exclut les objets couples a Asterisk (transcoder, mp4format,
 	# framebuffer, frameutils, astlog), inutilisables hors module Asterisk et qui
 	# exigeraient asterisk-devel. Le mediaserver n'est pas un module Asterisk.
-	MEDKIT_OBJS="audio.o video.o framescaler.o utf8parser.o avcdescriptor.o \
-red.o textencoder.o log.o media.o audiosilence.o \
-h263packet.o h263codec.o mpeg4codec.o \
-h264encoder.o h264decoder.o h264depacketizer.o \
-g711.o pcmucodec.o pcmacodec.o \
-ffvideocodec.o ffaudiocodec.o g722codec.o aacencoder.o amrcodec.o nellycodec.o gsmcodec.o opuscodec.o \
-vp8decoder.o vp8encoder.o \
-mp4track.o logo.o picturestreamer.o"
+	# On laisse le Makefile choisir la liste OBJS (source unique de verite : elle
+	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
+	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
 	make -C "$MEDKITDIR" all \
-		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}" \
-		OBJS="$MEDKIT_OBJS"
+		ASTERISK=no \
+		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}"
 	cd $MEDIASERVERPATH
 }
 
