@@ -816,6 +816,22 @@ int MediaSession::EndpointStartSending(int endpointId,MediaFrame::Type media,cha
 	return endpoint->StartSending(media,sendVideoIp, sendVideoPort, rtpMap);
 }
 
+int MediaSession::EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate)
+{
+        //Get endpoint
+        Endpoints::iterator it = endpoints.find(endpointId);
+
+        //If not found
+        if (it==endpoints.end())
+                //Exit
+                return Error("Endpoint not found\n");
+        //Get it
+        Endpoint* endpoint = it->second;
+
+	//Délègue au endpoint (trickle ICE Niveau 1)
+	return endpoint->AddICECandidate(media,candidate);
+}
+
 int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
 {
         //Get Player

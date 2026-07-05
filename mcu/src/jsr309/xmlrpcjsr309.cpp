@@ -23,9 +23,14 @@ xmlrpc_value* EventQueueCreate(xmlrpc_env *env, xmlrpc_value *param_array, void 
 	//Si error
 	if (!queueId>0)
 		return xmlerror(env,"Could not create event queue");
-		
-	//Devolvemos el resultado
-	return xmlok(env,xmlrpc_build_value(env,"(i)",queueId));
+
+	//Construit le chemin source (long-poll/SSE) de la file : "/events/jsr309/<queueId>".
+	//Évite au client (elixip) de coder ce chemin en dur — gap 6.
+	char sourceName[256];
+	snprintf(sourceName,sizeof(sourceName),"%s/%d",JSR309_EVENTS_PREFIX,queueId);
+
+	//Devolvemos el resultado : {queueId, sourceName}
+	return xmlok(env,xmlrpc_build_value(env,"(is)",queueId,sourceName));
 }
 
 xmlrpc_value* EventQueueDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
@@ -1071,6 +1076,40 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 
 	//Start sending video
 	res = session->EndpointStartSending(endpointId,(MediaFrame::Type)media,sendIp,sendPort,map);
+
+	//Liberamos la referencia
+	jsr->ReleaseMediaSessionRef(sessionId);
+
+	//Salimos
+	if(!res)
+		return xmlerror(env,"Error\n");
+
+	//Devolvemos el resultado
+	return xmlok(env);
+}
+
+xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	MediaSession *session = NULL;
+
+	 //Parseamos : {sessionId, endpointId, media, candidate}
+	int sessionId;
+	int endpointId;
+	int media;
+	char *candidate;
+	xmlrpc_parse_value(env, param_array, "(iiis)", &sessionId,&endpointId,&media,&candidate);
+
+	//Comprobamos si ha habido error
+	if(env->fault_occurred)
+		return 0;
+
+	//Obtenemos la referencia
+	if(!jsr->GetMediaSessionRef(sessionId,&session))
+		return xmlerror(env,"The media Session does not exist");
+
+	//Ajoute le candidat (trickle ICE Niveau 1)
+	int res = session->EndpointAddICECandidate(endpointId,(MediaFrame::Type)media,candidate);
 
 	//Liberamos la referencia
 	jsr->ReleaseMediaSessionRef(sessionId);
@@ -2867,6 +2906,7 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"EndpointSetRemoteCryptoDTLS",		EndpointSetRemoteCryptoDTLS},
 	{"EndpointSetRTPProperties",		EndpointSetRTPProperties},
 	{"EndpointStartSending",		EndpointStartSending},
+	{"EndpointAddICECandidate",		EndpointAddICECandidate},
 	{"EndpointStopSending",			EndpointStopSending},
 	{"EndpointStartReceiving",		EndpointStartReceiving},
 	{"EndpointStopReceiving",		EndpointStopReceiving},

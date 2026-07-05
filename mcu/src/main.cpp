@@ -353,7 +353,7 @@ int main(int argc,char **argv)
 	server.AddHandler("/broadcaster",&xmlrpcbroadcaster);
 	server.AddHandler("/mediagateway",&xmlrpcmediagateway);
 	server.AddHandler("/jsr309",&xmlrpcjsr309);
-	server.AddHandler("/events/jsr309",&xmleventjsr309);
+	server.AddHandler(JSR309_EVENTS_PREFIX,&xmleventjsr309);
 	server.AddHandler("/events/mcu",&xmleventmcu);
 	server.AddHandler("/events/mediagateway",&xmleventmediaGateway);
 

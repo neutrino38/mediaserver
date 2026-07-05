@@ -44,6 +44,15 @@ public class MediaServer extends XmlRPCJSR309Client {
     public MediaServerEventQueue getEventQueue(int id) {
         return new MediaServerEventQueue(url+"/events/jsr309/"+Integer.toString(id));
     }
+
+    //Variante gap 6 : utilise le chemin source renvoyé par le serveur (relatif,
+    //ex. "/events/jsr309/<id>") au lieu de le coder en dur. Retombe sur l'ancien
+    //chemin si le serveur ne le fournit pas (compat).
+    public MediaServerEventQueue getEventQueue(int id, String sourceName) {
+        if (sourceName != null && !sourceName.isEmpty())
+            return new MediaServerEventQueue(url+sourceName);
+        return getEventQueue(id);
+    }
     
     public String getName() {
         return name;

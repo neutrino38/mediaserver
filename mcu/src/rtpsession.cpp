@@ -128,6 +128,10 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//statistics
 	totalSendBytes = 0;
 	numSendPackets = 0;
+	//Watchdog d'inactivité RTP désactivé par défaut (gap 5)
+	setZeroTime(&lastRecv);
+	rtpTimeout = 0;
+	rtpTimedOut = false;
 	//No reports
 	setZeroTime(&lastSR);
 	setZeroTime(&lastReceivedSR);
@@ -147,6 +151,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	iceLocalPwd = NULL;
 	iceRemoteUsername = NULL;
 	iceRemotePwd = NULL;
+	//Aucun candidat ICE distant retenu (gap 1)
+	iceRemotePriority = 0;
 	//NO FEC
 	useFEC = false;
 	useNACK = false;
@@ -389,7 +395,14 @@ int RTPSession::SetProperties(const Properties& properties)
 		else if (it->first.compare("useRtcpFIR")==0) {
 			//Set use of RTCP FIR
 			useRtcpFIR = atoi(it->second.c_str());
-			
+
+		}
+		else if (it->first.compare("rtpTimeout")==0) {
+			//Seuil d'inactivité RTP en ms (0 = watchdog désactivé) - gap 5.
+			//Réarme le drapeau anti-rebond à chaque (re)configuration.
+			rtpTimeout = (DWORD)atoi(it->second.c_str());
+			rtpTimedOut = false;
+			Log("Set rtpTimeout=%u ms on %s stream %p\n",rtpTimeout,MediaFrame::TypeToString(media),this);
 		}
 		else if (it->first.compare(0, 5, "codec")==0) {
 			// Ignore codec props
@@ -681,6 +694,73 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
 
 	//Y abrimos los sockets	
+	return 1;
+}
+
+int RTPSession::AddICECandidate(const char* candidate)
+{
+	//Trickle ICE Niveau 1 pragmatique (gap 1) : on parse la ligne SDP "candidate:"
+	//et, pour un candidat host/srflx dont la priorité dépasse la meilleure connue,
+	//on bascule la cible d'envoi RTP/RTCP. Combiné à l'apprentissage d'adresse par
+	//STUN entrant déjà présent, cela couvre le cas « un candidat gagnant arrive
+	//après le SDP initial » sans agent ICE complet (Niveau 2 hors périmètre).
+	if (!candidate)
+		return Error("-AddICECandidate: candidat nul\n");
+
+	//Saute le préfixe optionnel "candidate:"
+	const char* p = candidate;
+	if (strncmp(p,"candidate:",10)==0)
+		p += 10;
+
+	//candidate:<fnd> <cmp> <transport> <prio> <addr> <port> typ <type> ...
+	char foundation[64], transport[16], address[128], typ[8], candType[32];
+	unsigned int priority = 0;
+	int component = 0, port = 0;
+	int n = sscanf(p,"%63s %d %15s %u %127s %d %7s %31s",
+		foundation,&component,transport,&priority,address,&port,typ,candType);
+	if (n < 8)
+		return Error("-AddICECandidate: format non reconnu [%s]\n",candidate);
+
+	//On ne pilote la cible d'envoi que sur la composante RTP (1) en UDP
+	if (component != 1 || strcasecmp(transport,"UDP")!=0)
+	{
+		Log("-AddICECandidate: ignoré (component=%d transport=%s)\n",component,transport);
+		return 1;
+	}
+
+	//Niveau 1 : seuls les candidats host/srflx sont considérés
+	if (strcasecmp(candType,"host")!=0 && strcasecmp(candType,"srflx")!=0)
+	{
+		Log("-AddICECandidate: type [%s] ignoré (Niveau 1)\n",candType);
+		return 1;
+	}
+
+	//Ne reconfigure que si la priorité dépasse la meilleure déjà retenue
+	if (iceRemotePriority != 0 && priority <= iceRemotePriority)
+	{
+		Log("-AddICECandidate: priorité %u <= courante %u, ignoré\n",priority,iceRemotePriority);
+		return 1;
+	}
+
+	//Résout l'adresse
+	DWORD ipAddr = inet_addr(address);
+	if (ipAddr == INADDR_NONE)
+		return Error("-AddICECandidate: adresse invalide [%s]\n",address);
+
+	Log("-AddICECandidate: bascule cible d'envoi vers [%s:%d] typ %s prio %u\n",address,port,candType,priority);
+
+	//Reconfigure la cible d'envoi RTP/RTCP
+	mutex.lock();
+	sendAddr.sin_addr.s_addr     = ipAddr;
+	sendRtcpAddr.sin_addr.s_addr = ipAddr;
+	sendAddr.sin_port            = htons(port);
+	sendRtcpAddr.sin_port        = htons(muxRTCP ? port : port+1);
+	iceRemotePriority            = priority;
+	mutex.unlock();
+
+	//Amorce le chemin (ouverture NAT ; le STUN entrant confirmera la connectivité)
+	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+
 	return 1;
 }
 
@@ -1773,20 +1853,47 @@ int RTPSession::Run()
 	//Catch all IO errors
 	signal(SIGIO,EmptyCatch);
 
+	//Amorce l'horodatage d'activité (on ne déclenche pas de timeout tant qu'aucun
+	//paquet n'a jamais été reçu : voir la garde recvActive plus bas).
+	setZeroTime(&lastRecv);
+
+	//Si le watchdog est actif, on borne l'attente pour pouvoir vérifier
+	//périodiquement l'inactivité ; sinon on garde l'attente infinie d'origine.
+	const int pollTimeout = 1000; //ms
+
 	//Run until ended
 	while(running)
 	{
-		//Wait for events
-		if(poll(ufds,2,-1)<0)
+		//Wait for events (attente bornée si watchdog actif, sinon infinie)
+		if(poll(ufds,2,(rtpTimeout>0)?pollTimeout:-1)<0)
 			//Check again
 			continue;
 
 		if (ufds[0].revents & POLLIN)
+		{
+			//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
+			//on mémorise l'instant et on réarme le watchdog.
+			gettimeofday(&lastRecv,NULL);
+			rtpTimedOut = false;
 			//Read rtp data
 			ReadRTP();
+		}
 		if (ufds[1].revents & POLLIN)
 			//Read rtcp data
 			ReadRTCP();
+
+		//Watchdog d'inactivité (gap 5) : si aucun paquet reçu depuis > rtpTimeout,
+		//émettre UNE seule fois onRTPTimeout (anti-rebond via rtpTimedOut).
+		if (rtpTimeout>0 && !rtpTimedOut && !isZeroTime(&lastRecv)
+				&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
+		{
+			//Marque la transition actif -> inactif
+			rtpTimedOut = true;
+			Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
+			//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
+			if (listener)
+				listener->onRTPTimeout(this);
+		}
 
 		if ((ufds[0].revents & POLLHUP) || (ufds[0].revents & POLLERR) || (ufds[1].revents & POLLHUP) || (ufds[0].revents & POLLERR))
 		{

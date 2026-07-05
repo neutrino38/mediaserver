@@ -130,7 +130,26 @@ public class XmlRPCJSR309Client {
         return new MediaCandidate[] { c };
     }
 
+    //Résultat de EventQueueCreateEx : identifiant de file + chemin source
+    //(long-poll/SSE) fourni par le serveur (gap 6), évitant de le coder en dur.
+    public static class EventQueueInfo
+    {
+        public final int    queueId;
+        public final String sourceName;
+        public EventQueueInfo(int queueId, String sourceName)
+        {
+            this.queueId    = queueId;
+            this.sourceName = sourceName;
+        }
+    }
+
     public int EventQueueCreate() throws XmlRpcException
+    {
+        //Rétro-compatibilité : ne renvoie que l'identifiant de file.
+        return EventQueueCreateEx().queueId;
+    }
+
+    public EventQueueInfo EventQueueCreateEx() throws XmlRpcException
     {
         //Create request
         Object[] request = new Object[]{};
@@ -138,8 +157,11 @@ public class XmlRPCJSR309Client {
         HashMap response = (HashMap) client.execute("EventQueueCreate", request);
         //Get result
         Object[] returnVal = (Object[]) response.get("returnVal");
-        //Return part id
-        return (Integer)returnVal[0];
+        //Le serveur renvoie désormais (is) = {queueId, sourceName} (gap 6). Si un
+        //ancien serveur ne renvoie que queueId, sourceName reste null.
+        int queueId = (Integer)returnVal[0];
+        String sourceName = (returnVal.length > 1) ? (String) returnVal[1] : null;
+        return new EventQueueInfo(queueId, sourceName);
     }
 
     public boolean EventQueueDelete(int queueId) throws XmlRpcException
@@ -451,6 +473,16 @@ public class XmlRPCJSR309Client {
         return (((Integer)response.get("returnCode"))==1);
     }
     
+    public boolean EndpointAddICECandidate(int sessId,int endpointId,Codecs.MediaType media,String candidate) throws XmlRpcException
+    {
+        //Create request (trickle ICE Niveau 1) : {sessId, endpointId, media, candidate}
+        Object[] request = new Object[]{sessId,endpointId,media.valueOf(),candidate};
+        //Execute
+        HashMap response = (HashMap) client.execute("EndpointAddICECandidate", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
     public boolean EndpointStopSending(int sessId,int endpointId,Codecs.MediaType media) throws XmlRpcException
     {
        //Create request

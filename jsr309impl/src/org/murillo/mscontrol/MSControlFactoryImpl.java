@@ -159,12 +159,47 @@ public class MSControlFactoryImpl implements MsControlFactory, MediaServerEventQ
         }
     }
 
+    @Override
+    public void onPlayerStarted(URI sessUri, URI playerUri) {
+        //PlayerStartedEvent (type=3). Journalisation ; le mapping fin vers un
+        //événement JSR-309 PlayerEvent STARTED reste à câbler (cf. plan Phase 5).
+        Logger.getLogger(MSControlFactoryImpl.class.getName()).log(Level.INFO,
+                "Player started [session={0}, player={1}]", new Object[]{sessUri, playerUri});
+    }
+
+    @Override
+    public void onRecorderStarted(URI sessUri, URI recorderUri) {
+        //RecorderStartedEvent (type=4). Journalisation ; mapping JSR-309 RecorderEvent
+        //STARTED à câbler (Phase 5).
+        Logger.getLogger(MSControlFactoryImpl.class.getName()).log(Level.INFO,
+                "Recorder started [session={0}, recorder={1}]", new Object[]{sessUri, recorderUri});
+    }
+
+    @Override
+    public void onRecorderStopped(URI sessUri, URI recorderUri, int reason) {
+        //RecorderStoppedEvent (type=5). reason : 0=explicite, 1=durée max, 2=silence,
+        //3=DTMF. Mapping JSR-309 RecorderEvent + cause à câbler (Phase 5).
+        Logger.getLogger(MSControlFactoryImpl.class.getName()).log(Level.INFO,
+                "Recorder stopped [session={0}, recorder={1}, reason={2}]",
+                new Object[]{sessUri, recorderUri, reason});
+    }
+
+    @Override
+    public void onEndpointDisconnected(URI sessUri, int endpointId, int media, int role) {
+        //EndpointDisconnectedEvent (type=6, timeout RTP). Mapping vers un événement
+        //NetworkConnection/allocation JSR-309 à câbler (Phase 5).
+        Logger.getLogger(MSControlFactoryImpl.class.getName()).log(Level.INFO,
+                "Endpoint disconnected [session={0}, endpoint={1}, media={2}, role={3}]",
+                new Object[]{sessUri, endpointId, media, role});
+    }
+
     void startEventListening() throws MsControlException {
         try {
-            //Create event queue
-            queueId = mediaServer.EventQueueCreate();
-            //Attach
-            eventQueue = mediaServer.getEventQueue(queueId);
+            //Create event queue (récupère aussi le chemin source - gap 6)
+            org.murillo.MediaServer.XmlRPCJSR309Client.EventQueueInfo info = mediaServer.EventQueueCreateEx();
+            queueId = info.queueId;
+            //Attach en utilisant le chemin source fourni par le serveur
+            eventQueue = mediaServer.getEventQueue(queueId, info.sourceName);
             //Set listener
             eventQueue.setListener(this);
             //Start listening for events

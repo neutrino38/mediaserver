@@ -144,6 +144,19 @@ int Endpoint::StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPM
 	return p->StartSending();
 }
 
+int Endpoint::AddICECandidate(MediaFrame::Type media,const char* candidate, MediaFrame::MediaRole role)
+{
+	//Récupère le flux RTP concerné (audio/vidéo/texte)
+	RTPEndpoint* rtp = GetRTPEndpoint(media, role);
+
+	//Check
+	if (!rtp)
+		return Error("No media supported for ICE candidate\n");
+
+	//Délègue au flux RTP (parse + éventuelle reconfiguration de la cible d'envoi)
+	return rtp->AddICECandidate(candidate);
+}
+
 int Endpoint::StopSending(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
 	//Get rtp enpoint for media

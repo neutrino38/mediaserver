@@ -37,6 +37,10 @@ public:
 		virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate) = 0;
 		virtual void onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD bitrate,DWORD overhead) = 0;
 		virtual void onNewStream( RTPSession *session, DWORD newSsrc, bool receiving ) ;
+		//Watchdog d'inactivité RTP : appelé UNE seule fois lorsqu'aucun paquet n'a
+		//été reçu depuis plus de rtpTimeout ms (gap 5 - EndpointDisconnectedEvent).
+		//Non pur pour ne pas casser les Listener existants.
+		virtual void onRTPTimeout( RTPSession *session ) {}
 	};
 	
 public:
@@ -60,6 +64,13 @@ public:
 	int GetLocalPort();
 	int SetRemotePort(char *ip,int sendPort);
 	int 					GetRemotePort();
+	//Seuil d'inactivité RTP en ms (0 = watchdog désactivé). Au-delà de ce délai
+	//sans réception, RTPSession::Run appelle une fois listener->onRTPTimeout (gap 5).
+	void SetRTPTimeout(DWORD timeout) { rtpTimeout = timeout; }
+	//Trickle ICE Niveau 1 (gap 1) : parse une ligne SDP "candidate:..." et, pour un
+	//candidat host/srflx de priorité supérieure au candidat courant, reconfigure la
+	//cible d'envoi RTP/RTCP. Retourne 1 si accepté/ignoré proprement, 0 sur erreur.
+	int AddICECandidate(const char* candidate);
 	
 	
 	RemoteRateEstimator* 	GetRemoteRateEstimator() 	{	return remoteRateEstimator; };
@@ -283,6 +294,13 @@ private:
 	bool	inited;
 	bool	running;
 
+	//Watchdog d'inactivité (gap 5) : horodatage du dernier paquet reçu, seuil
+	//d'inactivité en ms (0 = désactivé) et drapeau anti-rebond (transition unique
+	//actif -> inactif).
+	timeval	lastRecv;
+	DWORD	rtpTimeout;
+	bool	rtpTimedOut;
+
 	DTLSConnection dtls;
 	bool	encript;
 	bool	decript;
@@ -299,6 +317,8 @@ private:
 	char*	iceRemotePwd;
 	char*	iceLocalUsername;
 	char*	iceLocalPwd;
+	//Meilleure priorité de candidat distant retenue (trickle ICE Niveau 1, gap 1)
+	DWORD	iceRemotePriority;
 	pthread_t thread;
 	std::mutex mutex;	
 

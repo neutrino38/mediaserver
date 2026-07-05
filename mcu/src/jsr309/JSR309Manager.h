@@ -14,6 +14,11 @@
 #include "xmlstreaminghandler.h"
 #include "websocketserver.h"
 
+//Préfixe HTTP (long-poll/SSE) de la file d'événements JSR309. Source unique
+//partagée entre main.cpp (enregistrement du handler) et EventQueueCreate (qui
+//renvoie le chemin complet "/events/jsr309/<queueId>" au client — gap 6).
+#define JSR309_EVENTS_PREFIX "/events/jsr309"
+
 class JSR309Manager : 
 	public MediaSession::Listener,
 	public WebSocketServer::Handler

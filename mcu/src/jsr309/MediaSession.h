@@ -121,6 +121,8 @@ public:
 	int EndpointSetRTPProperties(int id,MediaFrame::Type media,const Properties& properties);
 	//Endpoint Video functionality
 	int EndpointStartSending(int endpointId,MediaFrame::Type media,char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap);
+	//Trickle ICE Niveau 1 (gap 1) : ajoute un candidat distant à un flux d'endpoint.
+	int EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate);
 	int EndpointStopSending(int endpointId,MediaFrame::Type media);
 	int EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap);
 	int EndpointStopReceiving(int endpointId,MediaFrame::Type media);

@@ -93,6 +93,8 @@ public:
 	
 	//Endpoint  functionality
 	int StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//Trickle ICE Niveau 1 (gap 1) : transmet un candidat SDP au flux RTP concerné.
+	int AddICECandidate(MediaFrame::Type media,const char* candidate, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(MediaFrame::Type media, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
 	int StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
 	int StopReceiving(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);

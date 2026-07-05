@@ -364,6 +364,14 @@ void RTPEndpoint::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD e
                joined->SetREMB(estimation);
 }
 
+void RTPEndpoint::onRTPTimeout(RTPSession *session)
+{
+	//Inactivité RTP prolongée détectée par le watchdog de RTPSession (appelé une
+	//seule fois grâce à l'anti-rebond côté RTPSession). On notifie le contrôleur.
+	Log("-RTPEndpoint::onRTPTimeout : publication EndpointDisconnectedEvent [%p]\n",this);
+	PostEvent(new ::EndpointDisconnectedEvent());
+}
+
 void RTPEndpoint::Update()
 {
 	//Update	
@@ -401,5 +409,15 @@ int RTPEndpoint::RequestUpdate()
 	DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
 	sessTag[sessLen] = 0;
     return xmlrpc_build_value(env,"(isiii)",(int)JSR309Event::ExternalFIRRequestedEvent,sessTag,this->joinableId,(int)this->media,(int)this->role);
+
+}
+
+ xmlrpc_value* EndpointDisconnectedEvent::GetXmlValue(xmlrpc_env *env)
+{
+	BYTE sessTag[1024];
+	UTF8Parser sessTagParser(sessionTag);
+	DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
+	sessTag[sessLen] = 0;
+    return xmlrpc_build_value(env,"(isiii)",(int)JSR309Event::EndpointDisconnectedEvent,sessTag,this->joinableId,(int)this->media,(int)this->role);
 
 }
