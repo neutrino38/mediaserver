@@ -9,3 +9,5 @@ mcu/media/
 /sdp/build/
 /sdp/dist/
 /sdp/nbproject/private/
+mcu.key
+mcu.csr_conf
