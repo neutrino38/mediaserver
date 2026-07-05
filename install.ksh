@@ -187,27 +187,9 @@ function local_compile
 		cd $BASESRCDIR
 	fi
 	
-	# compiler speex en statique
-	BASESRCDIR=$PWD
-	if [ ! -f staticdeps/lib/libspeex.a ]
-	then
-		echo "on doit compiler SPEEX 1.2rc1"
-		if [ ! -r $HOME/speex-src ]
-		then
-			#svn export http://svn.ives.fr/svn-libs-dev/asterisk/libsmedia/speex/tags/1.2rc1 $HOME/speex-src
-			cd $HOME
-			rm -f speex-1.2rc2.tar.gz speex-1.2rc2.tar
-			wget http://downloads.xiph.org/releases/speex/speex-1.2rc2.tar.gz
-			tar xzf speex-1.2rc2.tar.gz
-			mv speex-1.2rc2 speex-src
-			cd $HOME/speex-src
-		fi
-		cd $HOME/speex-src
-			./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
+	# speex : plus de build statique. Le codec Speex est fourni par libmedikit
+	# au-dessus de ffmpeg (AV_CODEC_ID_SPEEX, cf. libmedikit/speex/speexcodec.cpp)
+	# et la ligne de lien el9 par defaut ne reference plus -lspeex.
 
 	# libspeexdsp : plus utilisee. Le reechantillonnage audio (ex-AudioTransrater)
 	# passe desormais par libswresample (ffmpeg), deja lie via -lswresample.

@@ -28,7 +28,7 @@ DISTRO          = $(shell head -1 /etc/redhat-release | awk \
                       '{if ($$0 ~ /Fedora/) {print "fc"} else if ($$0 ~ /CentOS release 5/) {print "el5"} else if ($$0 ~ /CentOS release 6/) {print "el6"}}' )
 #DEBUG
 #OPTS=-msse -msse2 -msse3 -D__SSE2__  
-OPTS=-std=gnu++17 -Werror=return-type -Werror=delete-non-virtual-dtor
+OPTS=-std=gnu++17 -Werror=return-type -Werror=delete-non-virtual-dtor -Werror=int-to-pointer-cast
 
 ifeq ($(FEWSTATICDEPS),yes)
     OPTS+= -DFEWSTATICDEPS -I/usr/include/ffmpeg

@@ -409,7 +409,7 @@ void* RTMPParticipant::startSendingText(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendText());
+	pthread_exit( (void *)(intptr_t)sess->SendText());
 }
 
 int  RTMPParticipant::StartSendingText()
@@ -455,7 +455,7 @@ void* RTMPParticipant::startReceivingVideo(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->RecVideo());
+	pthread_exit( (void *)(intptr_t)sess->RecVideo());
 }
 
 /**************************************
@@ -473,7 +473,7 @@ void* RTMPParticipant::startSendingVideo(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendVideo());
+	pthread_exit( (void *)(intptr_t)sess->SendVideo());
 }
 
 /**************************************
@@ -491,7 +491,7 @@ void* RTMPParticipant::startReceivingAudio(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->RecAudio());
+	pthread_exit( (void *)(intptr_t)sess->RecAudio());
 }
 
 
@@ -510,7 +510,7 @@ void* RTMPParticipant::startSendingAudio(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendAudio());
+	pthread_exit( (void *)(intptr_t)sess->SendAudio());
 }
 
 int RTMPParticipant::SendVideo()

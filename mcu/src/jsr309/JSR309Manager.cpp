@@ -140,6 +140,10 @@ int JSR309Manager::CreateMediaSession(std::wstring tag,int queueId)
 	//Creamos la multi
 	MediaSession * sess = new MediaSession(tag);
 
+	//Donne à la session sa back-reference vers le manager et son id, pour qu'elle
+	//puisse publier directement des événements (players, recorders, endpoints).
+	sess->SetEventHandler(sessId, this);
+
 	//Creamos la entrada
 	MediaSessionEntry* entry = new MediaSessionEntry();
 

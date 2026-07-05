@@ -558,7 +558,7 @@ void* MediaBridgeSession::startReceivingVideo(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->RecVideo());
+	pthread_exit( (void *)(intptr_t)sess->RecVideo());
 }
 
 /**************************************
@@ -576,7 +576,7 @@ void* MediaBridgeSession::startReceivingAudio(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->RecAudio());
+	pthread_exit( (void *)(intptr_t)sess->RecAudio());
 }
 
 /**************************************
@@ -594,7 +594,7 @@ void* MediaBridgeSession::startSendingVideo(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendVideo());
+	pthread_exit( (void *)(intptr_t)sess->SendVideo());
 }
 
 /**************************************
@@ -612,7 +612,7 @@ void* MediaBridgeSession::startSendingAudio(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendAudio());
+	pthread_exit( (void *)(intptr_t)sess->SendAudio());
 }
 
 /****************************************

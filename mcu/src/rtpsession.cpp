@@ -1744,7 +1744,7 @@ void * RTPSession::run(void *par)
         RTPSession *sess = (RTPSession *)par;
 
         //Ejecutamos
-        pthread_exit((void *)sess->Run());
+        pthread_exit((void *)(intptr_t)sess->Run());
 }
 
 /***************************

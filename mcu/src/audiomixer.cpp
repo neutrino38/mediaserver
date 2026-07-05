@@ -49,7 +49,7 @@ void *AudioMixer::startMixingAudio(void *par)
 	blocksignals();
 	
 	//Ejecutamos
-	pthread_exit((void *)am->MixAudio());
+	pthread_exit((void *)(intptr_t)am->MixAudio());
 }
 
 /***********************************

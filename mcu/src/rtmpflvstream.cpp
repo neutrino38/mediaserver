@@ -405,7 +405,7 @@ void* RTMPFLVStream::play(void *par)
 	blocksignals();
 
 	//Ejecutamos
-	pthread_exit((void *)flv->PlayFLV());
+	pthread_exit((void *)(intptr_t)flv->PlayFLV());
 }
 
 bool RTMPFLVStream::Seek(DWORD time)

@@ -1,5 +1,92 @@
 #include "log.h"
 #include "MediaSession.h"
+#include "JSR309Manager.h"
+#include <errno.h>
+#include <time.h>
+
+/*****************************************************************************
+ * RecorderTimer : minuterie de durée max d'un enregistrement (reason=1)
+ *****************************************************************************/
+RecorderTimer::RecorderTimer(MediaSession* session,int recorderId,DWORD maxDurationMs)
+{
+	this->session       = session;
+	this->recorderId    = recorderId;
+	this->maxDurationMs  = maxDurationMs;
+	wakeup      = false;
+	stopClaimed = false;
+	started     = false;
+	pthread_mutex_init(&mutex,NULL);
+	pthread_cond_init(&cond,NULL);
+}
+
+RecorderTimer::~RecorderTimer()
+{
+	//Réveille le thread (annulation) et attend sa fin
+	pthread_mutex_lock(&mutex);
+	wakeup = true;
+	pthread_cond_signal(&cond);
+	bool joinable = started;
+	pthread_mutex_unlock(&mutex);
+
+	if (joinable)
+		pthread_join(thread,NULL);
+
+	pthread_cond_destroy(&cond);
+	pthread_mutex_destroy(&mutex);
+}
+
+void RecorderTimer::Start()
+{
+	pthread_mutex_lock(&mutex);
+	started = true;
+	pthread_mutex_unlock(&mutex);
+	pthread_create(&thread,NULL,run,this);
+}
+
+bool RecorderTimer::ClaimStop()
+{
+	bool claimed = false;
+	pthread_mutex_lock(&mutex);
+	if (!stopClaimed)
+	{
+		stopClaimed = true;
+		claimed = true;
+	}
+	pthread_mutex_unlock(&mutex);
+	return claimed;
+}
+
+void* RecorderTimer::run(void* arg)
+{
+	((RecorderTimer*)arg)->Run();
+	return NULL;
+}
+
+void RecorderTimer::Run()
+{
+	//Calcule l'échéance absolue (CLOCK_REALTIME, comme attend pthread_cond_timedwait)
+	struct timespec deadline;
+	clock_gettime(CLOCK_REALTIME,&deadline);
+	deadline.tv_sec  += maxDurationMs/1000;
+	deadline.tv_nsec += (long)(maxDurationMs%1000)*1000000L;
+	if (deadline.tv_nsec >= 1000000000L)
+	{
+		deadline.tv_sec  += 1;
+		deadline.tv_nsec -= 1000000000L;
+	}
+
+	//Attend l'échéance ou une annulation
+	pthread_mutex_lock(&mutex);
+	int rc = 0;
+	while (!wakeup && rc != ETIMEDOUT)
+		rc = pthread_cond_timedwait(&cond,&mutex,&deadline);
+	bool timedOut = (!wakeup && rc == ETIMEDOUT);
+	pthread_mutex_unlock(&mutex);
+
+	//Échéance atteinte sans annulation : on tente de prendre l'arrêt
+	if (timedOut && ClaimStop())
+		session->onRecorderMaxDuration(recorderId);
+}
 
 MediaSession::MediaSession(std::wstring tag)
 {
@@ -11,8 +98,31 @@ MediaSession::MediaSession(std::wstring tag)
 	maxVideoMixerId = 1;
 	maxVideoTranscoderId = 1;
 	maxEventContextId = 1;
+	//No hay manager de eventos todavia
+	eventMngr = NULL;
+	sessionId = 0;
 	//Store it
 	this->tag = tag;
+}
+
+void MediaSession::SetEventHandler(int sessionId, JSR309Manager* mngr)
+{
+	//Store back-reference vers le manager pour pouvoir publier des événements
+	this->sessionId = sessionId;
+	this->eventMngr  = mngr;
+}
+
+int MediaSession::PostEvent(int eventContextId, JSR309Event* ev)
+{
+	//Sans manager câblé, on ne peut rien publier : on libère l'événement pour
+	//éviter une fuite mémoire.
+	if (!eventMngr || sessionId <= 0)
+	{
+		delete ev;
+		return 0;
+	}
+	//Le manager (et in fine la file d'événements) prend possession de l'événement.
+	return eventMngr->PostEvent(sessionId, eventContextId, ev);
 }
 
 MediaSession::~MediaSession()
@@ -38,6 +148,12 @@ int MediaSession::Init()
 int MediaSession::End()
 {
 	Log(">End media session\n");
+
+	//Annule toutes les minuteries de recorder (annule + join des threads) AVANT de
+	//libérer les recorders, pour qu'aucun thread de minuterie n'y accède encore.
+	for (RecorderTimers::iterator it=recorderTimers.begin(); it!=recorderTimers.end(); ++it)
+		delete(it->second);
+	recorderTimers.clear();
 
 	//Delete all recorders
 	for (Recorders::iterator it=recorders.begin(); it!=recorders.end(); ++it)
@@ -89,14 +205,16 @@ int MediaSession::PlayerCreate(std::wstring tag)
 	//Create player
 	Player* player = new Player(tag);
 	//Set event listener
-	player->SetListener(this,(void*)playerId);
+	player->SetListener(this,(void*)(intptr_t)playerId);
 	//Append the player
 	players[playerId] = player;
 
 	int eventContextId = maxEventContextId++;
 	eventContexts[eventContextId]= new JSR309EventContext( playerId, MediaFrame::Video, MediaFrame::VIDEO_MAIN);
 	player->SetEventContextId(MediaFrame::Video,eventContextId);
-	
+	//Mémorise le contexte pour publier les événements de cycle de vie du player
+	playerEventCtx[playerId] = eventContextId;
+
 	//Return it
 	return playerId;
 	
@@ -129,7 +247,18 @@ int MediaSession::PlayerPlay(int playerId)
         //Get it
         Player* player = it->second;
 
-        return player->Play();
+        //Start playback
+        int res = player->Play();
+
+        //Publie PlayerStartedEvent si le démarrage a réussi
+        if (res)
+        {
+                EventCtxMap::iterator ctx = playerEventCtx.find(playerId);
+                if (ctx != playerEventCtx.end())
+                        PostEvent(ctx->second, new PlayerStartedEvent(player->GetTag()));
+        }
+
+        return res;
 }
 
 int MediaSession::PlayerSeek(int playerId,QWORD time)
@@ -206,11 +335,17 @@ int MediaSession::RecorderCreate(std::wstring tag)
 	Recorder* recorder = new Recorder(tag);
 	//Append the recorder
         recorders[recorderId] = recorder;
+
+	//Contexte d'événement du recorder, symétrique à celui des players
+	int eventContextId = maxEventContextId++;
+	eventContexts[eventContextId] = new JSR309EventContext( recorderId, MediaFrame::Video, MediaFrame::VIDEO_MAIN);
+	recorderEventCtx[recorderId] = eventContextId;
+
         //Return it
         return recorderId;
 }
 
-int MediaSession::RecorderRecord(int recorderId,const char* filename)
+int MediaSession::RecorderRecord(int recorderId,const char* filename,DWORD maxDuration)
 {
         //Get recorder
         Recorders::iterator it = recorders.find(recorderId);
@@ -225,7 +360,32 @@ int MediaSession::RecorderRecord(int recorderId,const char* filename)
 		//Error
 		return Error("-Could not create file");
 	//Start recording
-	return recorder->Record();
+	int res = recorder->Record();
+
+	//Sur succès : publie RecorderStartedEvent et arme la minuterie de durée max
+	if (res)
+	{
+		EventCtxMap::iterator ctx = recorderEventCtx.find(recorderId);
+		if (ctx != recorderEventCtx.end())
+			PostEvent(ctx->second, new RecorderStartedEvent(recorder->GetTag()));
+
+		//Durée max demandée : (ré)arme la minuterie d'arrêt automatique
+		if (maxDuration > 0)
+		{
+			//Supprime une éventuelle minuterie précédente
+			RecorderTimers::iterator t = recorderTimers.find(recorderId);
+			if (t != recorderTimers.end())
+			{
+				delete t->second;
+				recorderTimers.erase(t);
+			}
+			//Arme la nouvelle minuterie
+			RecorderTimer* timer = new RecorderTimer(this,recorderId,maxDuration);
+			recorderTimers[recorderId] = timer;
+			timer->Start();
+		}
+	}
+	return res;
 }
 
 int MediaSession::RecorderStop(int recorderId)
@@ -238,8 +398,37 @@ int MediaSession::RecorderStop(int recorderId)
                 return Error("Recorder not found\n");
         //Get it
         Recorder* recorder = it->second;
-	//Stop recording
-        return recorder->Close();
+
+	//Récupère et détache l'éventuelle minuterie de durée max
+	RecorderTimer* timer = NULL;
+	RecorderTimers::iterator t = recorderTimers.find(recorderId);
+	if (t != recorderTimers.end())
+	{
+		timer = t->second;
+		recorderTimers.erase(t);
+	}
+
+	//Détermine qui pilote l'arrêt : si la minuterie a déjà déclenché (reason=1),
+	//elle a déjà fermé le fichier et publié l'événement.
+	bool claimed = timer ? timer->ClaimStop() : true;
+
+	//Détruit la minuterie (annule + join du thread)
+	if (timer)
+		delete timer;
+
+	//La durée max a déjà arrêté l'enregistrement : plus rien à faire
+	if (!claimed)
+		return 1;
+
+	//Arrêt explicite
+        int res = recorder->Close();
+
+	//Publie RecorderStoppedEvent (reason=0, explicite)
+	EventCtxMap::iterator ctx = recorderEventCtx.find(recorderId);
+	if (ctx != recorderEventCtx.end())
+		PostEvent(ctx->second, new RecorderStoppedEvent(recorder->GetTag(), RecorderStoppedEvent::Explicit));
+
+	return res;
 }
 
 int MediaSession::RecorderDelete(int recorderId)
@@ -254,6 +443,15 @@ int MediaSession::RecorderDelete(int recorderId)
         //Get it
         Recorder* recorder = it->second;
 
+	//Annule et détruit l'éventuelle minuterie AVANT de libérer le recorder
+	//(le join garantit que le thread de minuterie n'utilise plus le recorder).
+	RecorderTimers::iterator t = recorderTimers.find(recorderId);
+	if (t != recorderTimers.end())
+	{
+		delete t->second;
+		recorderTimers.erase(t);
+	}
+
         //Remove from list
         recorders.erase(it);
 
@@ -261,6 +459,24 @@ int MediaSession::RecorderDelete(int recorderId)
         delete(recorder);
 
         return 1;
+}
+
+void MediaSession::onRecorderMaxDuration(int recorderId)
+{
+	//Appelé depuis le thread RecorderTimer à l'expiration de la durée max.
+	//NB : ne touche PAS la map recorderTimers (nettoyée par RecorderStop/Delete).
+	Recorders::iterator it = recorders.find(recorderId);
+	if (it == recorders.end())
+		return;
+	Recorder* recorder = it->second;
+
+	//Arrêt automatique de l'enregistrement
+	recorder->Close();
+
+	//Publie RecorderStoppedEvent (reason=1, durée max atteinte)
+	EventCtxMap::iterator ctx = recorderEventCtx.find(recorderId);
+	if (ctx != recorderEventCtx.end())
+		PostEvent(ctx->second, new RecorderStoppedEvent(recorder->GetTag(), RecorderStoppedEvent::MaxDuration));
 }
 
 int MediaSession::RecorderAttachToAudioMixerPort(int recorderId,int mixerId,int portId)
@@ -846,15 +1062,19 @@ int MediaSession::EndpointDettach(int endpointId,MediaFrame::Type media)
 
 void MediaSession::onEndOfFile(Player *player,void* playerId)
 {
-	//Check for listener
-	if (listener)
+	//Récupère l'id du player transmis à SetListener
+	int id = (int)(intptr_t)playerId;
+
+	//Récupère le contexte d'événement associé au player
+	EventCtxMap::iterator it = playerEventCtx.find(id);
+	if (it == playerEventCtx.end())
 	{
-		//Send
-		//listener->onPlayerEndOfFile(this,player,(intptr_t)playerId,param);
-		
-		//Send
-		
+		Error("onEndOfFile: no event context for player [%d]\n", id);
+		return;
 	}
+
+	//Publie l'événement de fin de lecture (PlayerEndOfFileEvent = 1)
+	PostEvent(it->second, new PlayerEndOfFileEvent(player->GetTag()));
 }
 
 int MediaSession::AudioMixerCreate(std::wstring tag)

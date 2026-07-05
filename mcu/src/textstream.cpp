@@ -116,7 +116,7 @@ void * TextStream::startSendingText(void *par)
 	TextStream *conf = (TextStream *)par;
 	blocksignals();
 	Log("SendTextThread [%d]\n",getpid());
-	pthread_exit((void *)conf->SendText());
+	pthread_exit((void *)(intptr_t)conf->SendText());
 }
 
 /***************************************
@@ -128,7 +128,7 @@ void * TextStream::startReceivingText(void *par)
 	TextStream *conf = (TextStream *)par;
 	blocksignals();
 	Log("RecvTextThread [%d]\n",getpid());
-	pthread_exit((void *)conf->RecText());
+	pthread_exit((void *)(intptr_t)conf->RecText());
 }
 
 /***************************************

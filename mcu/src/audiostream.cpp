@@ -138,7 +138,7 @@ void * AudioStream::startSendingAudio(void *par)
 	AudioStream *conf = (AudioStream *)par;
 	blocksignals();
 	Log("SendAudioThread [%d]\n",getpid());
-	pthread_exit((void *)conf->SendAudio());
+	pthread_exit((void *)(intptr_t)conf->SendAudio());
 }
 
 /***************************************
@@ -150,7 +150,7 @@ void * AudioStream::startReceivingAudio(void *par)
 	AudioStream *conf = (AudioStream *)par;
 	blocksignals();
 	Log("RecvAudioThread [%d]\n",getpid());
-	pthread_exit((void *)conf->RecAudio());
+	pthread_exit((void *)(intptr_t)conf->RecAudio());
 }
 
 /***************************************

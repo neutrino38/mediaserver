@@ -10,11 +10,11 @@ The codebase is mostly C++ (in `mcu/`) plus three Java companion projects.
 
 ## Build & run
 
-The build is being ported to **AlmaLinux 9 / GCC 11** on branch `feat/alma_linux9` (the current branch) — see `almalinux9_port_plan.md` for status. Most dependencies are now **linked dynamically against system packages** (ffmpeg 5, OpenSSL 3, libsrtp2, x264, Magick++ 7, webrtc-audio-processing). Only a few libs are still built from source into `./staticdeps` (mp4v2, g722_1, xmlrpc-c). The bulk of the codec/media code now comes from the **`libmedikit` submodule** (`third_party/fontventa/libmedikit`), which itself carries the ffmpeg-5 port.
+The build is being ported to **AlmaLinux 9 / GCC 11** on branch `feat/alma_linux9` (the current branch) — see `almalinux9_port_plan.md` for status. Most dependencies are now **linked dynamically against system packages** (ffmpeg 5, OpenSSL 3, libsrtp2, x264, Magick++ 7, webrtc-audio-processing). Only two libs are still built from source into `./staticdeps` (mp4v2, g722_1); xmlrpc-c is the dynamic system package (CRB repo) and speex is no longer built (the Speex codec goes through ffmpeg via libmedikit). The bulk of the codec/media code now comes from the **`libmedikit` submodule** (`third_party/fontventa/libmedikit`), which itself carries the ffmpeg-5 port.
 
 ```sh
 # 1. Install system build deps:
-./install.ksh prereq       # dnf/yum: gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp2-devel
+./install.ksh prereq       # dnf/yum: gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel
 
 # 2. One-shot build: inits submodules (libmedikit + libbfcp), builds them
 #    in-tree, builds source deps into ./staticdeps, then the mcu:
@@ -94,6 +94,6 @@ Build these with `ant` in each directory (not part of the RPM build).
 
 - The codebase is old C++ (mixed `.c`/`.cpp`, now built as `gnu++17`) with heavy use of raw threads, `std::wstring` for names/tags, and manual memory management. Match the surrounding style. Migration to `std::thread`/`std::atomic` and `std::mutex` locks is ongoing.
 - Comments and commit messages are predominantly in **French**.
-- Most media/codec code now lives in the **`libmedikit` submodule** (`third_party/fontventa/libmedikit`), not `mcu/src` — check there before assuming a codec is local. A few source deps (mp4v2, g722_1, xmlrpc-c) are still vendored as static builds in `staticdeps/`; everything else is a dynamic system package.
+- Most media/codec code now lives in the **`libmedikit` submodule** (`third_party/fontventa/libmedikit`), not `mcu/src` — check there before assuming a codec is local. Two source deps (mp4v2, g722_1) are still vendored as static builds in `staticdeps/`; everything else is a dynamic system package.
 - No CI pipeline is checked in (the old Jenkins `Jenkinsfile`, a CentOS6 matrix, has been removed). Builds are driven manually via `install.ksh` (see Build & run).
 - Version string lives in `install.ksh` (`VERSION=`), `mcu/include/version.h`, and `mcumediaserver.spec` — keep them in sync when bumping.

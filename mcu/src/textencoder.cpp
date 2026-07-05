@@ -68,7 +68,7 @@ void * TextEncoder::startEncoding(void *par)
 	TextEncoder *conf = (TextEncoder *)par;
 	blocksignals();
 	Log("Encoding text [%d]\n",getpid());
-	pthread_exit((void *)conf->Encode());
+	pthread_exit((void *)(intptr_t)conf->Encode());
 }
 
 

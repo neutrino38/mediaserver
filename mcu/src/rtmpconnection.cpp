@@ -192,7 +192,7 @@ void * RTMPConnection::run(void *par)
         RTMPConnection *con = (RTMPConnection *)par;
 
         //Ejecutamos
-        pthread_exit((void *)con->Run());
+        pthread_exit((void *)(intptr_t)con->Run());
 }
 
 void * RTMPConnection::runw(void *par)
@@ -206,7 +206,7 @@ void * RTMPConnection::runw(void *par)
         RTMPConnection *con = (RTMPConnection *)par;
 
         //Ejecutamos
-        pthread_exit((void *)con->WriteData());
+        pthread_exit((void *)(intptr_t)con->WriteData());
 }
 
 

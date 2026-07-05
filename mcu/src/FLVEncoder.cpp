@@ -112,7 +112,7 @@ void * FLVEncoder::startEncodingAudio(void *par)
 	FLVEncoder *enc = (FLVEncoder *)par;
 	blocksignals();
 	Log("Encoding FLV audio [%d]\n",getpid());
-	pthread_exit((void *)enc->EncodeAudio());
+	pthread_exit((void *)(intptr_t)enc->EncodeAudio());
 }
 
 /***************************************
@@ -124,7 +124,7 @@ void * FLVEncoder::startEncodingVideo(void *par)
 	FLVEncoder *enc = (FLVEncoder *)par;
 	blocksignals();
 	Log("Encoding FLV video [%d]\n",getpid());
-	pthread_exit((void *)enc->EncodeVideo());
+	pthread_exit((void *)(intptr_t)enc->EncodeVideo());
 }
 
 DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)

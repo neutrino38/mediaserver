@@ -19,11 +19,9 @@ class JSR309Manager :
 	public WebSocketServer::Handler
 {
 public:
-	enum Events
-	{
-		PlayerEndOfFileEvent = 1,
-		SipInfoFIRRequestedEvent =2
-	};
+	// NB : l'énumération des types d'événements est définie de façon unique dans
+	// JSR309Event::Events (JSR309Event.h). Ne pas la dupliquer ici (contrat de fil
+	// partagé avec elixip).
 public:
 	JSR309Manager();
 	virtual ~JSR309Manager();

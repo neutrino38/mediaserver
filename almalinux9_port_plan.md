@@ -2,8 +2,8 @@
 
 Branche `feat/alma_linux9`. Ce document a été **révisé** : la majeure partie du
 portage (compilateur, ffmpeg, OpenSSL, srtp, VAD, dédoublonnage média via
-libmedikit) est **réalisée et le build est vert**. Il ne reste que le packaging,
-le service systemd, la CI et quelques nettoyages.
+libmedikit, chaîne RPM/`install.ksh` autosuffisante) est **réalisée et le build
+est vert**. Il ne reste que le service systemd, la CI et quelques nettoyages.
 
 ---
 
@@ -52,43 +52,52 @@ le service systemd, la CI et quelques nettoyages.
   `audiotransrater-swresample-migration.md`.
 
 ### Restent en build source (`staticdeps/`, pas de paquet natif satisfaisant)
-- **mp4v2** (fork IVèS), **g722_1/SIREN** (fork IVèS), **xmlrpc-c** (lié en `.a`,
-  backend libxml2 → `-lxml2`). `install.ksh prereq` installe désormais :
-  `gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp2-devel`.
+- **mp4v2** (fork IVèS), **g722_1/SIREN** (fork IVèS). **xmlrpc-c est passé en
+  paquet système** (`xmlrpc-c-devel`, dépôt crb, backend libxml2 → `-lxml2`,
+  lien dynamique — plus de build source). `install.ksh prereq` installe :
+  `gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel
+  xmlrpc-c-devel` (l'ABI srtp2 est fournie par `libsrtp-devel`, pas
+  `libsrtp2-devel`).
+
+### `install.ksh localcompile` autosuffisant — **fait**
+- `local_compile` vérifie les paquets système (gsm, ffmpeg, libtool,
+  webrtc-audio-processing, libsrtp, xmlrpc-c), bâtit les staticdeps restantes,
+  **initialise les sous-modules au besoin** (`git submodule update --init
+  --recursive`) puis enchaîne **`compile_libmedkit` + `compile_libbfcp`** avant
+  le `make mcu`. Un seul `./install.ksh localcompile` produit le binaire.
+- L'ancienne cible `install.ksh webrtc` (build WebRTC VAD) a disparu — la VAD
+  est sur le paquet système webrtc-audio-processing (simple contrôle `rpm -q`).
+- Les cibles séparées `install.ksh libmedkit` / `libbfcp` restent disponibles
+  pour un rebuild individuel ; `install.ksh clean` nettoie aussi les objets/
+  archives des deux sous-modules.
+
+### Chaîne RPM (`mcumediaserver.spec`) — **fait** (ex-§A)
+- `%prep` : `git submodule update --init --recursive` (plus d'appel à la cible
+  `webrtc` supprimée) ; `%build` : `./install.ksh localcompile` qui construit
+  désormais tout (sous-modules compris, cf. ci-dessus).
+- `Requires`/`BuildRequires` à jour : `libsrtp2`/`libsrtp-devel`,
+  `ImageMagick-c++ >= 7`, `xmlrpc-c`/`xmlrpc-c-devel`, `openssl >= 3.0`,
+  webrtc-audio-processing.
+- Reste au `.spec` : la migration systemd (§B) et une validation de bout en
+  bout de `install.ksh rpm` en environnement propre.
 
 ---
 
 ## 2. Reste à faire
-
-### A. Chaîne RPM cohérente avec le sous-module — **prioritaire, cassé**
-`mcumediaserver.spec` n'a pas été mis à jour pour libmedikit ni pour la nouvelle
-`install.ksh` :
-- `%prep` appelle **`./install.ksh webrtc`** → **cible inexistante** (l'ancienne
-  compilation WebRTC VAD a disparu). À remplacer par l'init du sous-module et le
-  build medkit.
-- `%build` → `install.ksh localcompile`, mais **`local_compile` ne construit pas
-  `libmedkit.a`** (c'est une cible séparée `install.ksh libmedkit`). Le build RPM
-  échouera au link faute d'archive medkit.
-- Ajouter dans le flux RPM : `git submodule update --init --recursive` puis
-  `./install.ksh libmedkit` avant `localcompile`.
-- `BuildRequires`/`Requires` à compléter : **`libsrtp2` / `libsrtp2-devel`**
-  manquants ; `ImageMagick-c++ >= 6.7.0` incohérent avec Magick++ 7 (viser
-  `ImageMagick-c++ >= 7`).
 
 ### B. Service systemd — **non fait**
 - Toujours `mediaserver.init` (SysV) copié dans `/etc/init.d/` par le `.spec`.
 - Créer `mediaserver.service`, l'installer sous `%{_unitdir}`, ajouter les
   scriptlets `%post/%preun/%postun` (`systemctl`), retirer l'init SysV.
 
-### C. `install.ksh local_compile` — nettoyage
-- N'initialise pas le sous-module ni n'appelle `compile_libmedkit` : documenter/
-  enchaîner l'ordre (`git submodule update --init` → `libmedkit` → `localcompile`)
-  ou l'automatiser.
-- **speex source probablement mort** : la ligne de lien el9 par défaut ne
-  référence plus `-lspeex` (seul `FEWSTATICDEPS`/`el5` le gardent). Confirmer puis
-  retirer le build speex de `local_compile`.
-- `xmlrpc-c` reste en `.a` staticdeps (l'option paquet dynamique CRB/EPEL n'a pas
-  été retenue) : à garder tel quel, sauf décision contraire.
+### C. `install.ksh local_compile` — **fait** (build speex mort retiré)
+- Le bloc `staticdeps` speex a été supprimé de `local_compile` : le codec Speex
+  est fourni par libmedikit **au-dessus de ffmpeg** (`AV_CODEC_ID_SPEEX`,
+  `speex/speexcodec.cpp` — aucun usage direct de l'API libspeex) et la ligne de
+  lien el9 par défaut ne référence plus `-lspeex`. Vérifié : relink vert, pas de
+  `NEEDED libspeex` dans le binaire (seule reste la dépendance *transitive* de
+  `libavcodec` système, normale). Seules les branches legacy `FEWSTATICDEPS`/
+  `el5` du `Makefile.rpm` mentionnent encore `-lspeex` (nettoyage §D).
 
 ### D. Détection de distribution
 - `DISTRO` (`Makefile.rpm`) ne reconnaît que `fc`/`el5`/`el6`. Le **mode par
@@ -99,8 +108,8 @@ le service systemd, la CI et quelques nettoyages.
 ### E. CI — **à recréer**
 - L'ancien `Jenkinsfile` (matrice CentOS6) a été **supprimé**. Aucune CI n'est
   versionnée. Recréer une CI ciblant AlmaLinux 9 : dépôts (AppStream/CRB/EPEL,
-  RPMFusion pour ffmpeg/x264), init du sous-module, `install.ksh prereq` puis le
-  build RPM une fois le `.spec` corrigé (§A).
+  RPMFusion pour ffmpeg/x264), `install.ksh prereq` puis `install.ksh rpm nosign`
+  (le `.spec` et `localcompile` gèrent désormais les sous-modules — §1).
 
 ### F. libbfcp — **fait**
 - Converti en **sous-module** (`third_party/libbfcp`, même schéma que libmedikit),
@@ -114,9 +123,10 @@ le service systemd, la CI et quelques nettoyages.
   statique (`compile_rabbitmq`, `compile_protobuf`). À porter (protobuf 3 /
   `librabbitmq` EPEL) **seulement si** on réactive MOTELI.
 
-### H. Documentation
-- Mettre à jour la section « Build & run » de `CLAUDE.md` (elle décrit encore
-  `install.ksh localcompile` bâtissant openssl/vpx/opus/srtp/vad en statique).
+### H. Documentation — **fait**
+- `CLAUDE.md` décrit le flux `localcompile` autosuffisant et la liste des
+  staticdeps est corrigée : **mp4v2 + g722_1 seulement** (xmlrpc-c est un paquet
+  système, speex n'est plus bâti).
 
 ---
 
@@ -138,16 +148,18 @@ le service systemd, la CI et quelques nettoyages.
 
 ## 4. Récapitulatif des fichiers à toucher (reste à faire)
 
-- `mcumediaserver.spec` — corriger `%prep`/`%build` (submodule + `libmedkit`),
-  `Requires`/`BuildRequires` (srtp2, Magick++ 7), passage systemd.
-- `mediaserver.service` (à créer) + scriptlets `.spec`, retrait de
-  `mediaserver.init`.
-- `install.ksh` — enchaînement submodule→libmedkit→localcompile, retrait du build
-  speex mort.
-- `mcu/Makefile.rpm` — détection/nommage `el9` explicite (cosmétique).
-- CI (à recréer) — cible + dépôts AlmaLinux 9 (l'ancien `Jenkinsfile` a été supprimé).
-- `CLAUDE.md` — section build.
-- (optionnel MOTELI) `install.ksh` — protobuf 3 / librabbitmq EPEL.
+- `mediaserver.service` (à créer) + scriptlets `.spec` (`%post/%preun/%postun`),
+  retrait de `mediaserver.init` (§B).
+- `mcu/Makefile.rpm` — détection/nommage `el9` explicite + purge des branches
+  legacy `FEWSTATICDEPS`/`el5` (`-lspeex`, `-lvpx`, `-lfdk-aac`…) (cosmétique, §D).
+- CI (à recréer) — cible + dépôts AlmaLinux 9 (l'ancien `Jenkinsfile` a été
+  supprimé) (§E).
+- (optionnel MOTELI) `install.ksh` — protobuf 3 / librabbitmq EPEL (§G).
+
+> Fait depuis la dernière révision : `mcumediaserver.spec` (`%prep` submodules,
+> `%build` localcompile, Requires srtp2/Magick++ 7/xmlrpc-c),
+> `install.ksh localcompile` autosuffisant (submodules + libmedkit + libbfcp),
+> retrait du build speex mort (§C) et mise à jour `CLAUDE.md` (§H).
 
 > Note : libbfcp est désormais un sous-module bâti in-tree (§F fait), au même
 > titre que libmedikit — plus de dépendance `/opt/ives` pour BFCP.

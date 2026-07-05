@@ -22,6 +22,43 @@
 #include <string.h>
 #include "JSR309Event.h"
 
+class JSR309Manager;
+class MediaSession;
+
+/**
+ * Minuterie de durée maximale d'un enregistrement.
+ * À l'expiration du délai (maxDurationMs), déclenche l'arrêt automatique du
+ * recorder et la publication de RecorderStoppedEvent(reason=1) via la session.
+ * L'attente est annulable (pthread_cond_timedwait), et l'arrêt est protégé par
+ * un « verrou d'arrêt » (ClaimStop) pour éviter le double arrêt / double
+ * événement en cas de course avec un RecorderStop explicite. Style pthread
+ * conforme au reste du code.
+ */
+class RecorderTimer
+{
+public:
+	RecorderTimer(MediaSession* session,int recorderId,DWORD maxDurationMs);
+	~RecorderTimer();
+
+	void Start();
+	//Réserve le droit d'arrêter l'enregistrement ; ne renvoie true qu'au 1er appelant.
+	bool ClaimStop();
+
+private:
+	static void* run(void* arg);
+	void Run();
+
+	MediaSession*   session;
+	int             recorderId;
+	DWORD           maxDurationMs;
+	pthread_t       thread;
+	pthread_mutex_t mutex;
+	pthread_cond_t  cond;
+	bool            wakeup;       //réveil anticipé (annulation)
+	bool            stopClaimed;  //l'arrêt a déjà été pris
+	bool            started;
+};
+
 class MediaSession : public Player::Listener
 {
 public:
@@ -58,8 +95,13 @@ public:
 	int RecorderCreate(std::wstring tag);
 	int RecorderDelete(int recorderId);
 	//Recorder functionality
-	int RecorderRecord(int recorderId,const char* filename);
+	//maxDuration : durée max d'enregistrement en ms (0 = illimité). À expiration,
+	//arrêt auto + RecorderStoppedEvent(reason=1).
+	int RecorderRecord(int recorderId,const char* filename,DWORD maxDuration=0);
 	int RecorderStop(int recorderId);
+
+	//Callback interne appelé par RecorderTimer à l'expiration de la durée max.
+	void onRecorderMaxDuration(int recorderId);
 
 	//Join other objects
 	int RecorderAttachToEndpoint(int recorderId,int endpointId,MediaFrame::Type media);
@@ -144,6 +186,12 @@ public:
 	//Events
 	virtual void onEndOfFile(Player *player,void* param);
 
+	//Publication d'événements : la session connaît son propre id et le manager,
+	//ce qui permet à toute ressource (player, recorder, endpoint) de publier sans
+	//dépendre du câblage Joinable.
+	void SetEventHandler(int sessionId, JSR309Manager* mngr);
+	int  PostEvent(int eventContextId, JSR309Event* ev);
+
 	//Getters
 	std::wstring& GetTag() { return tag;	}
 	
@@ -203,6 +251,7 @@ private:
 	typedef std::map<int,VideoTranscoder*> VideoTranscoders;
 	typedef std::map<std::string, MediaCnxToken> Tokens;
 	typedef std::map<int, JSR309EventContext*> EventContexts;
+	typedef std::map<int, int> EventCtxMap;
 private:
 	std::wstring tag;
 	
@@ -232,36 +281,134 @@ private:
 	
 	EventContexts eventContexts;
 	int maxEventContextId;
- 
+
+	//Correspondance playerId/recorderId -> id de contexte d'événement, pour publier
+	//les événements de cycle de vie (fin de lecture, démarrage/arrêt d'enregistrement).
+	EventCtxMap playerEventCtx;
+	EventCtxMap recorderEventCtx;
+
+	//Minuteries de durée max par recorder (reason=1)
+	typedef std::map<int, RecorderTimer*> RecorderTimers;
+	RecorderTimers recorderTimers;
+
+	//Publication d'événements
+	JSR309Manager* eventMngr;
+	int            sessionId;
+
 };
 
-class PlayerEndOfFileEvent: public JSR309Event
+/**
+ * Base commune des événements de cycle de vie d'un Player.
+ * Sérialisation XML-RPC : (iss) = {type, sessionTag, playerTag}.
+ * Le type effectif est passé au constructeur pour éviter la duplication de code
+ * entre PlayerEndOfFileEvent et PlayerStartedEvent.
+ */
+class PlayerEvent: public JSR309Event
 {
 public:
-	PlayerEndOfFileEvent(std::wstring &playerTag)
+	PlayerEvent(int type,std::wstring &playerTag) : type(type)
 	{
-		//Get session tag
+		//Serialize player tag
 		UTF8Parser playerTagParser(playerTag);
-
-		//Serialize
 		DWORD playerLen  = playerTagParser.Serialize(this->playerTag,1024);
-
-		//Set end
 		this->playerTag[playerLen] = 0;
 	}
-	
+
 	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env)
 	{
 		BYTE sessTag[1024];
 		UTF8Parser sessTagParser(sessionTag);
 		DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
 		sessTag[sessLen] = 0;
-		
-		return xmlrpc_build_value(env,"(iss)",(int)JSR309Event::PlayerEndOfFileEvent,sessTag,playerTag);
+
+		return xmlrpc_build_value(env,"(iss)",type,sessTag,playerTag);
+	}
+protected:
+	int  type;
+	BYTE playerTag[1024];
+};
+
+class PlayerEndOfFileEvent: public PlayerEvent
+{
+public:
+	PlayerEndOfFileEvent(std::wstring &playerTag)
+		: PlayerEvent(JSR309Event::PlayerEndOfFileEvent,playerTag) {}
+};
+
+class PlayerStartedEvent: public PlayerEvent
+{
+public:
+	PlayerStartedEvent(std::wstring &playerTag)
+		: PlayerEvent(JSR309Event::PlayerStartedEvent,playerTag) {}
+};
+
+/**
+ * Base commune des événements de cycle de vie d'un Recorder.
+ * Sérialisation XML-RPC : (iss) = {type, sessionTag, recorderTag}.
+ */
+class RecorderEvent: public JSR309Event
+{
+public:
+	RecorderEvent(int type,std::wstring &recorderTag) : type(type)
+	{
+		//Serialize recorder tag
+		UTF8Parser recorderTagParser(recorderTag);
+		DWORD recorderLen  = recorderTagParser.Serialize(this->recorderTag,1024);
+		this->recorderTag[recorderLen] = 0;
+	}
+
+	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env)
+	{
+		BYTE sessTag[1024];
+		UTF8Parser sessTagParser(sessionTag);
+		DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
+		sessTag[sessLen] = 0;
+
+		return xmlrpc_build_value(env,"(iss)",type,sessTag,recorderTag);
+	}
+protected:
+	int  type;
+	BYTE recorderTag[1024];
+};
+
+class RecorderStartedEvent: public RecorderEvent
+{
+public:
+	RecorderStartedEvent(std::wstring &recorderTag)
+		: RecorderEvent(JSR309Event::RecorderStartedEvent,recorderTag) {}
+};
+
+/**
+ * Arrêt d'un enregistrement. Sérialisation XML-RPC :
+ * (issi) = {type, sessionTag, recorderTag, reason}.
+ * Motifs (alignés sur elixip) : 0=explicite/appelant, 1=durée max,
+ * 2=silence (Phase 5), 3=DTMF (Phase 5).
+ */
+class RecorderStoppedEvent: public RecorderEvent
+{
+public:
+	enum Reason
+	{
+		Explicit	= 0,
+		MaxDuration	= 1,
+		Silence		= 2,
+		DTMF		= 3
+	};
+
+	RecorderStoppedEvent(std::wstring &recorderTag,int reason)
+		: RecorderEvent(JSR309Event::RecorderStoppedEvent,recorderTag), reason(reason) {}
+
+	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env)
+	{
+		BYTE sessTag[1024];
+		UTF8Parser sessTagParser(sessionTag);
+		DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
+		sessTag[sessLen] = 0;
+
+		return xmlrpc_build_value(env,"(issi)",type,sessTag,recorderTag,reason);
 	}
 private:
-	
-	BYTE playerTag[1024];
+	int reason;
 };
 
 

@@ -30,6 +30,8 @@ public:
 	//Attach
 	int Attach(MediaFrame::Type media, Joinable *join);
 	int Dettach(MediaFrame::Type media);
+
+	std::wstring& GetTag() { return tag; }
 private:
 	typedef std::map<MediaFrame::Type,Joinable*> JoinedMap;
 private:

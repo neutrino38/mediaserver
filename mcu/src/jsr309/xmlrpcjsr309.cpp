@@ -407,7 +407,14 @@ xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	int sessionId;
 	int recorderId;
 	char *filename;
-	xmlrpc_parse_value(env, param_array, "(iis)", &sessionId, &recorderId, &filename);
+	int maxDuration = 0;
+
+	//maxDuration (ms) est un 4e argument optionnel (rétrocompatibilité : les anciens
+	//clients n'envoient que 3 arguments).
+	if (xmlrpc_array_size(env, param_array) >= 4)
+		xmlrpc_parse_value(env, param_array, "(iisi)", &sessionId, &recorderId, &filename, &maxDuration);
+	else
+		xmlrpc_parse_value(env, param_array, "(iis)", &sessionId, &recorderId, &filename);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -418,7 +425,7 @@ xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
-	bool res = session->RecorderRecord(recorderId,filename);
+	bool res = session->RecorderRecord(recorderId,filename,(DWORD)(maxDuration>0?maxDuration:0));
 
 	//Release ref
 	jsr->ReleaseMediaSessionRef(sessionId);
@@ -633,11 +640,11 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	{
 		if (audioSupported)
 		{
-			ep->SetEventHandler(MediaFrame::Video, MediaFrame::VIDEO_MAIN,sessionId,jsr);
+			ep->SetEventHandler(MediaFrame::Audio, MediaFrame::VIDEO_MAIN,sessionId,jsr);
 		}
 		if (videoSupported)
 		{
-			ep->SetEventHandler(MediaFrame::Audio, MediaFrame::VIDEO_MAIN,sessionId,jsr);
+			ep->SetEventHandler(MediaFrame::Video, MediaFrame::VIDEO_MAIN,sessionId,jsr);
 		}
 		if(textSupported)
 		{

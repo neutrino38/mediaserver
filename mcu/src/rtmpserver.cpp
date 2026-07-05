@@ -292,7 +292,7 @@ void * RTMPServer::run(void *par)
         blocksignals();
 
         //Ejecutamos
-        pthread_exit((void *)ses->Run());
+        pthread_exit((void *)(intptr_t)ses->Run());
 }
 
 

@@ -26,10 +26,16 @@ public:
 class JSR309Event : public XmlEvent, protected JSR309EventContext
 {
 public:
+	// ⚠️ Contrat de fil partagé avec elixip et les clients Java : ces valeurs
+	// numériques ne doivent JAMAIS être réutilisées ni réordonnées.
 	enum Events
 	{
-		PlayerEndOfFileEvent = 1,
-		ExternalFIRRequestedEvent =2
+		PlayerEndOfFileEvent		= 1,
+		ExternalFIRRequestedEvent	= 2,
+		PlayerStartedEvent			= 3,
+		RecorderStartedEvent		= 4,
+		RecorderStoppedEvent		= 5,
+		EndpointDisconnectedEvent	= 6	// réservé (Phase 3 - timeout RTP)
 	};
 public:
 	JSR309Event();

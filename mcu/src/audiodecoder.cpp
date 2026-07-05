@@ -59,7 +59,7 @@ void * AudioDecoderWorker::startDecoding(void *par)
 	//Block all signals
 	blocksignals();
 	//Run
-	pthread_exit((void *)worker->Decode());
+	pthread_exit((void *)(intptr_t)worker->Decode());
 }
 
 int  AudioDecoderWorker::Stop()

@@ -115,7 +115,7 @@ void * VideoMixer::startMixingVideo(void *par)
 	blocksignals();
 
 	//Ejecutamos
-	pthread_exit((void *)vm->MixVideo());
+	pthread_exit((void *)(intptr_t)vm->MixVideo());
 }
 
 /************************
