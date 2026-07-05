@@ -157,6 +157,20 @@ int Endpoint::AddICECandidate(MediaFrame::Type media,const char* candidate, Medi
 	return rtp->AddICECandidate(candidate);
 }
 
+int Endpoint::ArmRTPTimeout(MediaFrame::Type media,DWORD timeoutMs, MediaFrame::MediaRole role)
+{
+	//Récupère le flux RTP concerné (audio/vidéo/texte)
+	RTPEndpoint* rtp = GetRTPEndpoint(media, role);
+
+	//Check
+	if (!rtp)
+		return Error("No media supported for RTP timeout arming\n");
+
+	//Arme/désarme le watchdog d'inactivité (gap 5)
+	rtp->ArmRTPTimeout(timeoutMs);
+	return 1;
+}
+
 int Endpoint::StopSending(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
 	//Get rtp enpoint for media

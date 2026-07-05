@@ -832,6 +832,22 @@ int MediaSession::EndpointAddICECandidate(int endpointId,MediaFrame::Type media,
 	return endpoint->AddICECandidate(media,candidate);
 }
 
+int MediaSession::EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs)
+{
+        //Get endpoint
+        Endpoints::iterator it = endpoints.find(endpointId);
+
+        //If not found
+        if (it==endpoints.end())
+                //Exit
+                return Error("Endpoint not found\n");
+        //Get it
+        Endpoint* endpoint = it->second;
+
+	//Délègue au endpoint (watchdog d'inactivité RTP - gap 5)
+	return endpoint->ArmRTPTimeout(media,timeoutMs);
+}
+
 int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
 {
         //Get Player

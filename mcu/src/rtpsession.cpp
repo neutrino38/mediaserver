@@ -128,9 +128,10 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//statistics
 	totalSendBytes = 0;
 	numSendPackets = 0;
-	//Watchdog d'inactivité RTP désactivé par défaut (gap 5)
+	//Watchdog d'inactivité RTP désactivé par défaut (gap 5) : ni configuré ni armé
 	setZeroTime(&lastRecv);
 	rtpTimeout = 0;
+	rtpTimeoutArmed = false;
 	rtpTimedOut = false;
 	//No reports
 	setZeroTime(&lastSR);
@@ -398,11 +399,12 @@ int RTPSession::SetProperties(const Properties& properties)
 
 		}
 		else if (it->first.compare("rtpTimeout")==0) {
-			//Seuil d'inactivité RTP en ms (0 = watchdog désactivé) - gap 5.
-			//Réarme le drapeau anti-rebond à chaque (re)configuration.
+			//Pré-configure UNIQUEMENT le seuil d'inactivité RTP en ms (gap 5).
+			//N'arme PAS le watchdog : le chrono ne démarre qu'à l'armement explicite
+			//(ArmRTPTimeout, appelé au SDP answer). Cela évite qu'un réglage posé au
+			//setup ne déclenche des timeouts pendant la sonnerie.
 			rtpTimeout = (DWORD)atoi(it->second.c_str());
-			rtpTimedOut = false;
-			Log("Set rtpTimeout=%u ms on %s stream %p\n",rtpTimeout,MediaFrame::TypeToString(media),this);
+			Log("Set rtpTimeout=%u ms (config, non armé) on %s stream %p\n",rtpTimeout,MediaFrame::TypeToString(media),this);
 		}
 		else if (it->first.compare(0, 5, "codec")==0) {
 			// Ignore codec props
@@ -695,6 +697,37 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 
 	//Y abrimos los sockets	
 	return 1;
+}
+
+void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
+{
+	//Armement du watchdog d'inactivité RTP (gap 5), piloté par le contrôleur au
+	//moment du SDP answer. Le chrono part de MAINTENANT : la sonnerie (avant answer)
+	//n'est jamais surveillée, et « répondu mais aucun média reçu » est détecté après
+	//timeoutMs sans paquet.
+	if (timeoutMs > 0)
+	{
+		mutex.lock();
+		rtpTimeout      = timeoutMs;
+		rtpTimeoutArmed = true;
+		rtpTimedOut     = false;
+		gettimeofday(&lastRecv,NULL);   //démarre le chrono
+		mutex.unlock();
+		Log("-ArmRTPTimeout: watchdog armé à %u ms [%p]\n",timeoutMs,this);
+
+		//Si le thread dort dans poll(-1) (watchdog jusqu'ici désarmé), on le réveille
+		//(SIGIO -> EINTR) pour qu'il reprenne l'attente bornée sans attendre un paquet.
+		if (thread)
+			pthread_kill(thread,SIGIO);
+	}
+	else
+	{
+		//timeoutMs == 0 : désarme (p.ex. mise en attente / sendonly légitime)
+		mutex.lock();
+		rtpTimeoutArmed = false;
+		mutex.unlock();
+		Log("-ArmRTPTimeout: watchdog désarmé [%p]\n",this);
+	}
 }
 
 int RTPSession::AddICECandidate(const char* candidate)
@@ -1853,26 +1886,26 @@ int RTPSession::Run()
 	//Catch all IO errors
 	signal(SIGIO,EmptyCatch);
 
-	//Amorce l'horodatage d'activité (on ne déclenche pas de timeout tant qu'aucun
-	//paquet n'a jamais été reçu : voir la garde recvActive plus bas).
-	setZeroTime(&lastRecv);
+	//Le chrono d'inactivité ne court que lorsqu'il est armé (ArmRTPTimeout, au SDP
+	//answer) : rien à amorcer ici.
 
-	//Si le watchdog est actif, on borne l'attente pour pouvoir vérifier
-	//périodiquement l'inactivité ; sinon on garde l'attente infinie d'origine.
+	//Attente bornée seulement lorsque le watchdog est armé, pour vérifier
+	//périodiquement l'inactivité ; sinon on conserve l'attente infinie d'origine
+	//(aucun réveil superflu pour les sessions n'utilisant pas le watchdog).
 	const int pollTimeout = 1000; //ms
 
 	//Run until ended
 	while(running)
 	{
-		//Wait for events (attente bornée si watchdog actif, sinon infinie)
-		if(poll(ufds,2,(rtpTimeout>0)?pollTimeout:-1)<0)
+		//Wait for events (attente bornée si watchdog armé, sinon infinie)
+		if(poll(ufds,2,rtpTimeoutArmed?pollTimeout:-1)<0)
 			//Check again
 			continue;
 
 		if (ufds[0].revents & POLLIN)
 		{
 			//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
-			//on mémorise l'instant et on réarme le watchdog.
+			//on mémorise l'instant et on réarme l'anti-rebond.
 			gettimeofday(&lastRecv,NULL);
 			rtpTimedOut = false;
 			//Read rtp data
@@ -1882,9 +1915,10 @@ int RTPSession::Run()
 			//Read rtcp data
 			ReadRTCP();
 
-		//Watchdog d'inactivité (gap 5) : si aucun paquet reçu depuis > rtpTimeout,
-		//émettre UNE seule fois onRTPTimeout (anti-rebond via rtpTimedOut).
-		if (rtpTimeout>0 && !rtpTimedOut && !isZeroTime(&lastRecv)
+		//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
+		//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
+		//onRTPTimeout (anti-rebond via rtpTimedOut).
+		if (rtpTimeoutArmed && rtpTimeout>0 && !rtpTimedOut
 				&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
 		{
 			//Marque la transition actif -> inactif

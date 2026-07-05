@@ -1122,6 +1122,40 @@ xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array
 	return xmlok(env);
 }
 
+xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	MediaSession *session = NULL;
+
+	 //Parseamos : {sessionId, endpointId, media, timeoutMs} (gap 5)
+	int sessionId;
+	int endpointId;
+	int media;
+	int timeoutMs;
+	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endpointId,&media,&timeoutMs);
+
+	//Comprobamos si ha habido error
+	if(env->fault_occurred)
+		return 0;
+
+	//Obtenemos la referencia
+	if(!jsr->GetMediaSessionRef(sessionId,&session))
+		return xmlerror(env,"The media Session does not exist");
+
+	//Arme/désarme le watchdog d'inactivité RTP (armé au SDP answer)
+	int res = session->EndpointStartRTPTimeout(endpointId,(MediaFrame::Type)media,(DWORD)(timeoutMs>0?timeoutMs:0));
+
+	//Liberamos la referencia
+	jsr->ReleaseMediaSessionRef(sessionId);
+
+	//Salimos
+	if(!res)
+		return xmlerror(env,"Error\n");
+
+	//Devolvemos el resultado
+	return xmlok(env);
+}
+
 xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
@@ -2907,6 +2941,7 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"EndpointSetRTPProperties",		EndpointSetRTPProperties},
 	{"EndpointStartSending",		EndpointStartSending},
 	{"EndpointAddICECandidate",		EndpointAddICECandidate},
+	{"EndpointStartRTPTimeout",		EndpointStartRTPTimeout},
 	{"EndpointStopSending",			EndpointStopSending},
 	{"EndpointStartReceiving",		EndpointStartReceiving},
 	{"EndpointStopReceiving",		EndpointStopReceiving},

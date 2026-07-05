@@ -483,6 +483,17 @@ public class XmlRPCJSR309Client {
         return (((Integer)response.get("returnCode"))==1);
     }
 
+    public boolean EndpointStartRTPTimeout(int sessId,int endpointId,Codecs.MediaType media,int timeoutMs) throws XmlRpcException
+    {
+        //Arme (timeoutMs>0) ou désarme (0) le watchdog d'inactivité RTP (gap 5).
+        //À appeler juste après l'envoi du SDP answer : le chrono part de cet instant.
+        Object[] request = new Object[]{sessId,endpointId,media.valueOf(),timeoutMs};
+        //Execute
+        HashMap response = (HashMap) client.execute("EndpointStartRTPTimeout", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
     public boolean EndpointStopSending(int sessId,int endpointId,Codecs.MediaType media) throws XmlRpcException
     {
        //Create request

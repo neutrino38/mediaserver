@@ -123,6 +123,8 @@ public:
 	int EndpointStartSending(int endpointId,MediaFrame::Type media,char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap);
 	//Trickle ICE Niveau 1 (gap 1) : ajoute un candidat distant à un flux d'endpoint.
 	int EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate);
+	//Watchdog d'inactivité RTP (gap 5) : arme/désarme le flux d'un endpoint.
+	int EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs);
 	int EndpointStopSending(int endpointId,MediaFrame::Type media);
 	int EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap);
 	int EndpointStopReceiving(int endpointId,MediaFrame::Type media);

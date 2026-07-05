@@ -64,9 +64,15 @@ public:
 	int GetLocalPort();
 	int SetRemotePort(char *ip,int sendPort);
 	int 					GetRemotePort();
-	//Seuil d'inactivité RTP en ms (0 = watchdog désactivé). Au-delà de ce délai
-	//sans réception, RTPSession::Run appelle une fois listener->onRTPTimeout (gap 5).
+	//Configure UNIQUEMENT le seuil d'inactivité RTP en ms (n'arme pas le watchdog).
+	//Le chrono ne démarre qu'à l'armement explicite (ArmRTPTimeout), tenu par le
+	//contrôleur au moment du SDP answer (gap 5).
 	void SetRTPTimeout(DWORD timeout) { rtpTimeout = timeout; }
+	//Arme/désarme le watchdog d'inactivité RTP. À appeler par le contrôleur (elixip)
+	//juste après l'envoi du SDP answer : le chrono part de cet instant, ce qui évite
+	//les timeouts intempestifs pendant la sonnerie ET détecte « répondu mais aucun
+	//média reçu ». timeoutMs>0 : (re)configure le seuil + arme ; timeoutMs==0 : désarme.
+	void ArmRTPTimeout(DWORD timeoutMs);
 	//Trickle ICE Niveau 1 (gap 1) : parse une ligne SDP "candidate:..." et, pour un
 	//candidat host/srflx de priorité supérieure au candidat courant, reconfigure la
 	//cible d'envoi RTP/RTCP. Retourne 1 si accepté/ignoré proprement, 0 sur erreur.
@@ -294,11 +300,13 @@ private:
 	bool	inited;
 	bool	running;
 
-	//Watchdog d'inactivité (gap 5) : horodatage du dernier paquet reçu, seuil
-	//d'inactivité en ms (0 = désactivé) et drapeau anti-rebond (transition unique
-	//actif -> inactif).
+	//Watchdog d'inactivité (gap 5) : horodatage de la dernière activité (paquet reçu
+	//OU instant d'armement), seuil d'inactivité en ms (0 = désactivé), drapeau
+	//d'armement (le chrono ne court que lorsqu'il est armé — armé au SDP answer) et
+	//drapeau anti-rebond (transition unique actif -> inactif).
 	timeval	lastRecv;
 	DWORD	rtpTimeout;
+	bool	rtpTimeoutArmed;
 	bool	rtpTimedOut;
 
 	DTLSConnection dtls;
