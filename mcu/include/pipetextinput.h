@@ -9,7 +9,7 @@ class PipeTextInput :
 {
 public:
 	PipeTextInput();
-	~PipeTextInput();
+	virtual ~PipeTextInput();
 	virtual TextFrame* GetFrame(DWORD timeout);
 	virtual void Cancel();
 	int Init();

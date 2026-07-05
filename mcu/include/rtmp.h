@@ -8,6 +8,7 @@
 class RTMPObject
 {
 public:
+	virtual ~RTMPObject() {}
 	virtual DWORD Parse(BYTE *buffer,DWORD bufferSize) = 0;
 	virtual bool IsParsed() = 0;
 	virtual DWORD GetSize() = 0;

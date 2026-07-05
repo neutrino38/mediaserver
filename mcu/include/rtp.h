@@ -288,6 +288,8 @@ public:
         return true;
     }
 
+    virtual ~RTPPacket() {}
+
     virtual void Dump()
     {
         Log( "[RTPPacket %s codec=%d size=%d payload=%d]\n", MediaFrame::TypeToString( GetMedia() ), GetCodec(), GetSize(), GetMediaLength() );
@@ -1109,6 +1111,7 @@ public:
 public:
     struct Field
     {
+        virtual ~Field() {};
         virtual DWORD GetSize() = 0;
         virtual DWORD Parse( BYTE *data, DWORD size ) = 0;
         virtual DWORD Serialize( BYTE *data, DWORD size ) = 0;

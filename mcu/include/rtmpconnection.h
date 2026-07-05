@@ -27,7 +27,7 @@ public:
 	};
 public:
 	RTMPConnection(Listener* listener);
-	~RTMPConnection();
+	virtual ~RTMPConnection();
 
 	int Init(int fd);
 	int End();

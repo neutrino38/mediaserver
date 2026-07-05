@@ -14,6 +14,7 @@ class RecorderControl
 public:
 	enum Type {FLV, MP4};
 public:
+	virtual ~RecorderControl() {}
 	virtual bool Create(const char *filename) = 0;
 	virtual bool Record() = 0;
 	virtual bool Stop() = 0;

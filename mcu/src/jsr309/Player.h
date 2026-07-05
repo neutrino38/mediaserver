@@ -28,6 +28,7 @@ public:
 	};
 public:
 	Player(std::wstring tag);
+	virtual ~Player() {}
 	void SetListener(Player::Listener *listener,void* param);
 	Joinable* GetJoinable(MediaFrame::Type media);
 

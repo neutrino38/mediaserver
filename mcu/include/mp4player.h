@@ -13,7 +13,7 @@ class MP4Player : public MP4Streamer::Listener
 {
 public:
 	MP4Player();
-	~MP4Player();
+	virtual ~MP4Player();
 
 	int Init(AudioOutput *audioOutput,VideoOutput *videoOutput,TextOutput *textOutput);
 	int Play(const char* filename, bool loop);

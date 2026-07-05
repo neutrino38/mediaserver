@@ -8,7 +8,7 @@ class PipeVideoOutput :
 {
 public:
 	PipeVideoOutput(pthread_mutex_t* mutex, pthread_cond_t* cond);
-	~PipeVideoOutput();
+	virtual ~PipeVideoOutput();
 
 	virtual int NextFrame(BYTE *pic);
 	virtual int SetVideoSize(int width,int height);

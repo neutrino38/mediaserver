@@ -10,7 +10,7 @@ class PipeVideoInput
 {
 public:
 	PipeVideoInput();
-	~PipeVideoInput();
+	virtual ~PipeVideoInput();
 
 	virtual int   StartVideoCapture(int width,int height,int fps);
 	virtual BYTE* GrabFrame(DWORD timeout);

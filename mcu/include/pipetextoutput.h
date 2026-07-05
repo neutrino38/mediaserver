@@ -10,7 +10,7 @@ class PipeTextOutput :
 {
 public:
 	PipeTextOutput();
-	~PipeTextOutput();
+	virtual ~PipeTextOutput();
 	virtual int SendFrame(TextFrame &frame);
 	
 	int Init();
