@@ -114,9 +114,9 @@ JSR309Manager
   **attache** (`Attach…`) entre eux par type de média. Un même flux peut être
   routé d'un endpoint vers un mixer, un player, un autre endpoint, etc.
 
-### Cycle de vie type d'un appel entrant
+### Cycle de vie type d'un appel (résumé)
 
-1. `EventQueueCreate` → `queueId`
+1. `EventQueueCreate` → `queueId, sourceName`
 2. `MediaSessionCreate(tag, queueId)` → `sessionId`
 3. `EndpointCreate(sessionId, name, audio, video, text)` → `endpointId`
 4. Sécurité : `EndpointSetLocalCryptoSDES` / `EndpointSetRemoteCryptoSDES` ou
@@ -125,9 +125,16 @@ JSR309Manager
    d'écoute (à publier dans le SDP local).
 6. `EndpointStartSending(sessionId, endpointId, media, ip, port, rtpMap)` (à
    partir du SDP distant).
-7. Attaches média (vers un mixer, un player, un transcoder…).
-8. Fermeture : `EndpointStopSending` / `EndpointStopReceiving` /
+7. Attaches média (vers un autre endpoint, un mixer, un player, un transcoder…).
+8. `EndpointStartRTPTimeout(…, timeoutMs)` **après émission du SDP answer** pour
+   armer la surveillance d'inactivité.
+9. Fermeture : `EndpointStopSending` / `EndpointStopReceiving` /
    `EndpointDelete`, puis `MediaSessionDelete`, puis `EventQueueDelete`.
+
+> 📎 Le déroulé **détaillé** entrant / sortant, avec la correspondance
+> SDP offer/answer ↔ RPC (ordre exact, crypto, ICE, armement du watchdog,
+> re-INVITE, terminaison), est en **§9**. C'est la référence à suivre pour
+> implémenter le contrôleur elixip.
 
 ---
 
@@ -235,10 +242,11 @@ un GET HTTP long-poll / *chunked*.
 
 ### Mise en place
 
-1. `EventQueueCreate` → `queueId`.
+1. `EventQueueCreate` → `queueId` **et** `sourceName` (chemin de la file).
 2. Passer ce `queueId` à `MediaSessionCreate` : les événements de la session y
    seront routés.
-3. Ouvrir en parallèle `GET http://<host>:8080/events/jsr309/<queueId>`.
+3. Ouvrir en parallèle `GET http://<host>:8080<sourceName>` (soit
+   `…/events/jsr309/<queueId>`).
 
 ### Flux d'événements
 
@@ -255,20 +263,38 @@ Chaque événement est un tuple dont le **premier entier est le type d'événeme
 
 ### Types d'événements
 
+> ⚠️ **Contrat de fil** : ces codes numériques sont partagés avec elixip et les
+> clients Java (`JSR309Event::Events`). Ils ne doivent jamais être réordonnés ni
+> réutilisés. Source unique : `mcu/src/jsr309/JSR309Event.h`.
+
 | Type | Nom | Tuple |
 |------|-----|-------|
 | 1 | PlayerEndOfFileEvent | `(int type, string sessionTag, string playerTag)` |
 | 2 | ExternalFIRRequestedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
+| 3 | PlayerStartedEvent | `(int type, string sessionTag, string playerTag)` |
+| 4 | RecorderStartedEvent | `(int type, string sessionTag, string recorderTag)` |
+| 5 | RecorderStoppedEvent | `(int type, string sessionTag, string recorderTag, int reason)` |
+| 6 | EndpointDisconnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
 
-- **PlayerEndOfFileEvent** : un `Player` a atteint la fin du fichier.
+- **PlayerEndOfFileEvent** (1) : un `Player` a atteint la fin du fichier.
   `playerTag` = nom passé à `PlayerCreate`.
-- **ExternalFIRRequestedEvent** : un endpoint distant a demandé une image
+- **ExternalFIRRequestedEvent** (2) : un endpoint distant a demandé une image
   complète (Full Intra Request). `joinableId` = `endpointId` concerné,
   `media`/`role` selon les énumérations §4. À traiter typiquement par un
   `VideoTranscoderFPU` ou une régénération d'image clé.
+- **PlayerStartedEvent** (3) : émis après un `PlayerPlay` réussi.
+- **RecorderStartedEvent** (4) : émis après un `RecorderRecord` réussi.
+- **RecorderStoppedEvent** (5) : émis à l'arrêt d'un enregistrement. `reason` :
+  `0` = arrêt explicite (`RecorderStop`), `1` = durée max atteinte (voir
+  `maxDuration` de `RecorderRecord`), `2` = silence, `3` = DTMF (2/3 non encore
+  implémentés).
+- **EndpointDisconnectedEvent** (6) : le **watchdog d'inactivité RTP** n'a plus
+  reçu de paquet depuis le seuil armé (voir `EndpointStartRTPTimeout`, §6.7).
+  `joinableId` = `endpointId`, `media`/`role` selon §4. Émis **une seule fois**
+  par transition actif→inactif.
 
-Réf. : `mcu/src/jsr309/JSR309Event.h`, `MediaSession.h` (PlayerEndOfFileEvent),
-`RTPEndpoint.cpp` (ExternalFIRRequestedEvent).
+Réf. : `mcu/src/jsr309/JSR309Event.h`, `MediaSession.h` (events Player/Recorder),
+`RTPEndpoint.cpp` (ExternalFIR / EndpointDisconnected).
 
 ---
 
@@ -281,8 +307,15 @@ de `returnVal` en cas de succès. `returnVal = []` signifie tableau vide.
 
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
-| `EventQueueCreate` | — | `[ int queueId ]` |
+| `EventQueueCreate` | — | `[ int queueId, string sourceName ]` |
 | `EventQueueDelete` | `i queueId` | `[]` |
+
+`sourceName` est le **chemin HTTP relatif** de la file d'événements à ouvrir en
+long-poll, p.ex. `"/events/jsr309/7"`. Le client doit l'utiliser tel quel
+(préfixé de `http://<host>:8080`) plutôt que de reconstruire l'URL à la main.
+> Compat : historiquement `returnVal` ne contenait que `[ queueId ]` ; le
+> `sourceName` est un ajout (gap 6). Un client tolérant lit `returnVal[1]` s'il
+> est présent, sinon retombe sur `"/events/jsr309/<queueId>"`.
 
 ### 6.2 Sessions média
 
@@ -307,14 +340,20 @@ de `returnVal` en cas de succès. `returnVal = []` signifie tableau vide.
 | `PlayerDelete` | `i sessionId, i playerId` | `[]` |
 
 À la création, un handler d'événement vidéo est posé : la fin de lecture émet un
-`PlayerEndOfFileEvent` (§5).
+`PlayerEndOfFileEvent` (§5). `PlayerPlay` émet `PlayerStartedEvent`.
+
+`RecorderRecord` : 4e paramètre **optionnel** `maxDuration` (durée max en **ms**,
+`0`/absent = illimité). À expiration, l'enregistrement est arrêté
+automatiquement et un `RecorderStoppedEvent(reason=1)` est émis. `RecorderRecord`
+réussi émet `RecorderStartedEvent` ; `RecorderStop` émet
+`RecorderStoppedEvent(reason=0)`.
 
 ### 6.4 Recorders (enregistrement)
 
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
 | `RecorderCreate` | `i sessionId, s name` | `[ int recorderId ]` |
-| `RecorderRecord` | `i sessionId, i recorderId, s filename` | `[]` |
+| `RecorderRecord` | `i sessionId, i recorderId, s filename [, i maxDuration]` | `[]` |
 | `RecorderStop` | `i sessionId, i recorderId` | `[]` |
 | `RecorderDelete` | `i sessionId, i recorderId` | `[]` |
 | `RecorderAttachToEndpoint` | `i sessionId, i recorderId, i endpointId, i media` | `[]` |
@@ -370,6 +409,8 @@ média `media` vers `endpointId`.
 | `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap` | `[ int recvPort ]` |
 | `EndpointStopReceiving` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointRequestUpdate` | `i sessionId, i endpointId, i media` | `[]` |
+| `EndpointAddICECandidate` | `i sessionId, i endpointId, i media, s candidate` | `[]` |
+| `EndpointStartRTPTimeout` | `i sessionId, i endpointId, i media, i timeoutMs` | `[]` |
 
 - **`rtpMap`** : struct XML-RPC dont **chaque clé est un payload type** (chaîne,
   ex. `"96"`) et **chaque valeur est un code codec entier** (`i`) selon
@@ -381,6 +422,23 @@ média `media` vers `endpointId`.
   SDP local.
 - `EndpointRequestUpdate` : force une mise à jour / image clé (FIR) vers ce
   média.
+- **`EndpointAddICECandidate`** (trickle ICE, Niveau 1) : `candidate` est une
+  ligne d'attribut SDP `candidate:` (avec ou sans le préfixe `candidate:`), p.ex.
+  `candidate:1 1 UDP 2130706431 192.168.1.5 54321 typ host`. Le serveur ne
+  retient que la composante **RTP (1) UDP** de type `host`/`srflx` et, si sa
+  priorité dépasse celle du candidat courant, **reconfigure la cible d'envoi**.
+  À appeler pour chaque candidat arrivant *après* le SDP initial. Combiné à
+  l'apprentissage d'adresse par STUN entrant. (Il n'y a pas d'agent ICE complet :
+  pas d'appairage ni de connectivity checks priorisés.)
+- **`EndpointStartRTPTimeout`** (watchdog d'inactivité RTP) : `timeoutMs > 0`
+  **arme** le watchdog (seuil en ms) ; `timeoutMs == 0` le **désarme**. À armer
+  **juste après l'émission du SDP answer** (voir call flow §9) : le chrono part
+  de cet instant, ce qui évite les faux positifs pendant la sonnerie et détecte
+  aussi le cas « appel répondu mais aucun média reçu ». Le dépassement émet un
+  `EndpointDisconnectedEvent` (type 6). Désarmer sur mise en attente
+  (`sendonly`/hold) puis ré-armer à la reprise. La propriété RTP `rtpTimeout`
+  (via `EndpointSetRTPProperties`) ne fait que **pré-régler le seuil** sans
+  armer.
 
 ### 6.8 Audio mixers
 
@@ -508,6 +566,193 @@ tuple a la forme (`(siiiiiiiiiii)`, réf. `xmlserialize()` dans
   (l'API ne nomme pas les paramètres, c'est du positionnel).
 - **Négatif = échec** : à la création, un id < 0 (ou `returnCode 0`) indique un
   échec — ne pas le stocker.
+
+---
+
+## 9. Call flows détaillés (SDP offer/answer ↔ RPC)
+
+Le media server **ne parle pas SIP** : c'est le contrôleur (elixip) qui gère la
+signalisation et le SDP. Le serveur ne connaît que ses commandes XML-RPC. Cette
+section décrit la correspondance exacte entre le SDP offer/answer et les appels
+RPC, dans l'ordre, pour un appel **entrant** puis **sortant**.
+
+Toutes les opérations média sont **par `media`** (`0`=audio, `1`=video,
+`2`=text) : pour un appel audio+vidéo, répéter les étapes média pour chaque
+`media` présent dans le SDP. On note `EP` = `endpointId`, `S` = `sessionId`.
+
+### 9.0 Correspondance SDP ↔ RPC
+
+| Élément SDP | Sens | RPC |
+|-------------|------|-----|
+| `m=<media> <port> …` **local** (le nôtre) | ← | `port` = retour de `EndpointStartReceiving` |
+| `c=`/candidat `host` **local** | ← | `GetMediaCandidates(RTP, media)` → `rtp://ip:port` |
+| payload types **locaux** (ce qu'on accepte) | → | `rtpMap` de `EndpointStartReceiving` |
+| `a=crypto` **local** (SRTP-SDES) | ↔ | clé fournie à `EndpointSetLocalCryptoSDES` = celle publiée dans notre SDP |
+| `a=fingerprint`/`a=setup` **local** (DTLS) | ← | `EndpointGetLocalCryptoDTLSFingerprint(hash)` |
+| `a=ice-ufrag`/`a=ice-pwd` **local** | ↔ | credentials fournis à `EndpointSetLocalSTUNCredentials` = ceux publiés |
+| `m=`/`c=` **distant** (ip:port) | → | `EndpointStartSending(media, ip, port, rtpMap)` |
+| payload types **distants** (ce qu'on envoie) | → | `rtpMap` de `EndpointStartSending` |
+| `a=crypto` **distant** (SRTP-SDES) | → | `EndpointSetRemoteCryptoSDES(suite, key)` |
+| `a=setup`/`a=fingerprint` **distant** (DTLS) | → | `EndpointSetRemoteCryptoDTLS(setup, hash, fingerprint)` |
+| `a=ice-ufrag`/`a=ice-pwd` **distant** | → | `EndpointSetRemoteSTUNCredentials(user, pwd)` |
+| `a=rtcp-mux`, ssrc, extensions… **distant** | → | `EndpointSetRTPProperties(properties)` |
+| candidats trickle **distants** (post-SDP) | → | `EndpointAddICECandidate(candidate)` |
+
+> Une seule pile de sécurité par média selon le SDP : **SDES** (SRTP par clé
+> dans le SDP), **DTLS-SRTP** (fingerprint + handshake), ou **rien** (RTP clair).
+> Poser les credentials/clefs **avant** de démarrer le média (émission/réception)
+> pour qu'aucun paquet ne circule avant l'établissement des clés.
+
+### 9.1 Appel entrant — media server = UAS (on reçoit l'offre, on renvoie la réponse)
+
+```
+Pair (offre) ──INVITE+SDP──▶ elixip ──XML-RPC──▶ mediaserver
+                             elixip ◀─200 OK+SDP── (réponse construite ici)
+```
+
+Une seule fois (réutilisable entre appels) : `EventQueueCreate` → `queueId,
+sourceName` + ouvrir le long-poll sur `sourceName`.
+
+Par appel :
+
+1. `MediaSessionCreate(tag, queueId)` → `S`
+2. `EndpointCreate(S, name, audio, video, text)` → `EP`
+   (flags = médias présents dans l'offre)
+
+Pour **chaque média** de l'offre :
+
+3. `EndpointSetRTPProperties(S, EP, media, {rtcp-mux, …})` — attributs de l'offre
+4. Sécurité **distante** (depuis l'offre), selon le cas :
+   - SDES : `EndpointSetRemoteCryptoSDES(S, EP, media, suite, key)`
+   - DTLS : `EndpointSetRemoteCryptoDTLS(S, EP, media, setup, hash, fingerprint)`
+   - ICE : `EndpointSetRemoteSTUNCredentials(S, EP, media, ufrag, pwd)`
+5. Sécurité **locale** (pour la réponse) :
+   - SDES : `EndpointSetLocalCryptoSDES(S, EP, media, suite, key)` (clé qu'on
+     publiera)
+   - DTLS : `EndpointGetLocalCryptoDTLSFingerprint(hash)` → fingerprint pour notre SDP
+   - ICE : `EndpointSetLocalSTUNCredentials(S, EP, media, ufrag, pwd)` (à publier)
+6. `EndpointStartReceiving(S, EP, media, rtpMap)` → `recvPort`
+7. `GetMediaCandidates(S, EP, RTP=0, media)` → `rtp://ip:port` (adresse locale)
+8. `EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap)`
+   (ip/port pris dans l'offre)
+
+Puis :
+
+9. **Router le média** (selon le scénario) : pont vers l'autre patte
+   (`EndpointAttachToEndpoint`), mixers (`…AttachToAudioMixerPort` /
+   `…VideoMixerPort`), player, transcoder… (cf. §9.3).
+10. **Construire et envoyer le 200 OK** : `recvPort` (étape 6) + candidat local
+    (étape 7) + crypto locale (étape 5) + payload types acceptés (rtpMap étape 6).
+11. `EndpointStartRTPTimeout(S, EP, media, timeoutMs)` — **après** l'envoi du
+    200 OK, pour armer le watchdog (voir §6.7).
+12. Trickle : à chaque candidat distant reçu ensuite,
+    `EndpointAddICECandidate(S, EP, media, candidate)`.
+
+> Étapes 3-8 : l'ordre entre « sécurité » et « start » compte (clés avant média).
+> `EndpointStartSending` peut être appelé avant l'envoi du 200 OK (l'offre porte
+> déjà l'adresse distante) — **mais l'armement (étape 11) doit venir après**.
+
+### 9.2 Appel sortant — media server = UAC (on génère l'offre, on reçoit la réponse)
+
+```
+elixip ──INVITE+SDP(offre)──▶ Pair
+elixip ◀──200 OK+SDP(réponse)── Pair
+elixip ──ACK──▶ Pair
+```
+
+Une seule fois : `EventQueueCreate` + long-poll (comme §9.1).
+
+Construction de l'**offre** :
+
+1. `MediaSessionCreate(tag, queueId)` → `S`
+2. `EndpointCreate(S, name, audio, video, text)` → `EP`
+
+Pour **chaque média** offert :
+
+3. Sécurité **locale** (pour l'offre) :
+   - SDES : `EndpointSetLocalCryptoSDES(S, EP, media, suite, key)`
+   - DTLS : `EndpointGetLocalCryptoDTLSFingerprint(hash)`
+   - ICE : `EndpointSetLocalSTUNCredentials(S, EP, media, ufrag, pwd)`
+4. `EndpointStartReceiving(S, EP, media, rtpMap)` → `recvPort`
+5. `GetMediaCandidates(S, EP, RTP=0, media)` → adresse locale
+6. **Construire et envoyer l'INVITE** avec l'offre (recvPort + candidat + crypto
+   locale + payload types offerts).
+
+À réception du **200 OK** (réponse du pair) :
+
+7. `EndpointSetRTPProperties(S, EP, media, {rtcp-mux, …})` — attributs de la réponse
+8. Sécurité **distante** (depuis la réponse) : `EndpointSetRemoteCryptoSDES` /
+   `…RemoteCryptoDTLS` / `…RemoteSTUNCredentials` selon le cas
+9. `EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap)`
+   (ip/port de la réponse ; `rtpMap` = codecs réellement retenus)
+10. **Envoyer l'ACK**.
+11. Router le média (§9.3).
+12. `EndpointStartRTPTimeout(S, EP, media, timeoutMs)` — **après** traitement de
+    la réponse / envoi de l'ACK.
+13. Trickle : `EndpointAddICECandidate(...)` pour les candidats reçus ensuite.
+
+### 9.3 Routage du média — pont B2B et conférence
+
+**Pont entre deux pattes** (`A` et `B`, deux endpoints de la même session) —
+attacher **dans les deux sens et pour chaque média** :
+
+```
+EndpointAttachToEndpoint(S, A, B, AUDIO)   // média audio de B → A
+EndpointAttachToEndpoint(S, B, A, AUDIO)   // média audio de A → B
+EndpointAttachToEndpoint(S, A, B, VIDEO)   // idem vidéo
+EndpointAttachToEndpoint(S, B, A, VIDEO)
+```
+
+> `EndpointAttachToEndpoint(S, endpointId, sourceId, media)` route le média de
+> **`sourceId` vers `endpointId`**. Un pont bidirectionnel = deux appels.
+
+**Conférence** (mélange) : créer les mixers une fois
+(`AudioMixerCreate`/`VideoMixerCreate`), puis par participant un port
+(`AudioMixerPortCreate`/`VideoMixerPortCreate`) attaché à l'endpoint
+(`AudioMixerPortAttachToEndpoint` / `VideoMixerPortAttachToEndpoint`). La
+composition vidéo passe par une mosaïque (`VideoMixerMosaic*`, §6.9).
+
+### 9.4 Renégociation (re-INVITE) et mise en attente
+
+- **Mise en attente** (`sendonly`/`recvonly`, le média entrant s'arrête
+  légitimement) : **désarmer** le watchdog par
+  `EndpointStartRTPTimeout(S, EP, media, 0)` pour éviter un faux
+  `EndpointDisconnectedEvent`. À la reprise, ré-armer avec `timeoutMs > 0`.
+- **Changement d'adresse/codec distant** : `EndpointStopSending(S, EP, media)`
+  puis `EndpointStartSending(...)` avec la nouvelle adresse / le nouveau `rtpMap`.
+- **Nouveaux candidats** (trickle) : `EndpointAddICECandidate(...)`.
+
+### 9.5 Terminaison
+
+Par média puis par objet, dans l'ordre :
+
+```
+EndpointStopSending(S, EP, media)          // par média
+EndpointStopReceiving(S, EP, media)
+EndpointDettach(S, EP, media)              // si attaché
+EndpointDelete(S, EP)
+MediaSessionDelete(S)
+EventQueueDelete(queueId)                  // si la file n'est plus réutilisée
+```
+
+Le `MediaSessionDelete` libère en cascade les objets restants de la session ;
+détruire proprement les endpoints d'abord reste préférable.
+
+### 9.6 Points de vigilance pour le contrôleur
+
+- **Armement du watchdog** : toujours **après** l'émission du answer (entrant) ou
+  le traitement du answer + ACK (sortant). Jamais pendant la sonnerie. Désarmer
+  sur hold. Traiter `EndpointDisconnectedEvent` (type 6) comme une perte de
+  média (raccrocher / réémettre selon la politique).
+- **`sessionTag`** : le `tag` passé à `MediaSessionCreate` est renvoyé tel quel
+  dans chaque événement — l'utiliser pour router l'événement vers le bon appel.
+- **`playerTag`/`recorderTag`** : de même, ce sont les `name` passés à la
+  création ; les events de cycle de vie (1, 3, 4, 5) les portent.
+- **rtpMap asymétrique** : le `rtpMap` de `StartReceiving` (ce qu'on accepte) et
+  celui de `StartSending` (ce qu'on émet) peuvent différer selon la négociation.
+- **Idempotence / erreurs** : vérifier `returnCode == 1` après **chaque** appel ;
+  en cas d'échec en cours de montage, dérouler la terminaison (§9.5) pour ne pas
+  fuiter de session/endpoint côté serveur.
 
 ---
 
