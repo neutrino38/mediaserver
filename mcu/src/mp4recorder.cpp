@@ -23,16 +23,12 @@ MP4Recorder::MP4Recorder()
 	writer = NULL;
 	recording = false;
 	videoTrackAdded = false;
-	//Create mutex
-	pthread_mutex_init(&mutex,0);
 }
 
 MP4Recorder::~MP4Recorder()
 {
 	//Close just in case (releases writer + file)
 	Close();
-	//Liberamos el mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 bool MP4Recorder::Create(const char* filename)
@@ -86,12 +82,11 @@ bool MP4Recorder::Stop()
 bool MP4Recorder::Close()
 {
 	//Serialise avec onMediaFrame
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Check mp4 file is opened
 	if (mp4 == MP4_INVALID_FILE_HANDLE)
 	{
-		pthread_mutex_unlock(&mutex);
 		return false;
 	}
 
@@ -111,8 +106,6 @@ bool MP4Recorder::Close()
 	mp4 = MP4_INVALID_FILE_HANDLE;
 	videoTrackAdded = false;
 
-	pthread_mutex_unlock(&mutex);
-
 	//NOthing more
 	return true;
 }
@@ -120,7 +113,7 @@ bool MP4Recorder::Close()
 void MP4Recorder::onMediaFrame(MediaFrame &frame)
 {
 	//Lock the access to the file
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//If not recording
 	if (recording && writer)
@@ -144,7 +137,4 @@ void MP4Recorder::onMediaFrame(MediaFrame &frame)
 		//libmedkit gere waitVideo, le timing, les pistes et les hint tracks
 		writer->ProcessFrame(&frame);
 	}
-
-	//Unlock the access to the file
-	pthread_mutex_unlock(&mutex);
 }

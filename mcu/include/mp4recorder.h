@@ -1,6 +1,7 @@
 #ifndef _MP4RECORDER_H_
 #define _MP4RECORDER_H_
 
+#include <mutex>
 #include <mp4v2/mp4v2.h>
 
 #include "config.h"
@@ -45,6 +46,6 @@ private:
 	mp4writer*	writer;		// moteur d'ecriture libmedkit
 	bool		recording;
 	bool		videoTrackAdded;	// piste video creee (non auto-creee par mp4writer)
-	pthread_mutex_t mutex;		// serialise onMediaFrame vs Close
+	std::mutex	mutex;		// serialise onMediaFrame vs Close
 };
 #endif
