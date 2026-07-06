@@ -185,7 +185,7 @@ int DTLSConnection::ClassInit()
 #else
 	return Error("DTLS is not supported. OpenSSL version required is >= 1.0.1 for DTLS.\n");
 #endif
-	return 0;
+	return 1;
 }
 
 std::string DTLSConnection::GetCertificateFingerPrint(Hash hash)
