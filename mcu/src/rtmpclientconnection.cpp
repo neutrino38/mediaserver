@@ -52,11 +52,9 @@ RTMPClientConnection::RTMPClientConnection(const std::wstring& tag)
 	inited = false;
 	running = false;
 	fd = FD_INVALID;
-	thread = NULL;
 	//Set initial time
 	gettimeofday(&startTime,0);
-	//Init mutex
-	pthread_mutex_init(&mutex,0);
+
 	//Create output chunk streams for control
 	chunkOutputStreams[2] = new RTMPChunkOutputStream(2);
 	//Create output chunk streams for command
@@ -76,8 +74,6 @@ RTMPClientConnection::~RTMPClientConnection()
 	delete(chunkOutputStreams[3]);
 	delete(chunkOutputStreams[4]);
 	delete(chunkOutputStreams[5]);
-	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 int RTMPClientConnection::Connect(const char* server,int port, const char* app,Listener *listener)
@@ -86,6 +82,15 @@ int RTMPClientConnection::Connect(const char* server,int port, const char* app,L
 	hostent *host;
 
 	Log(">RTMP Connect [host:%s:%d,url:%s]\n",server,port,app);
+
+
+	    // Créer la paire de sockets
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, wakeup_socket) < 0)
+	{
+        // Gérer l'erreur (ex: throw ou log)
+        wakeup_socket[0] = wakeup_socket[1] = FD_INVALID;
+		return Error("Failed to create wakeup socket: %s\n", strerror(errno));
+    }
 
 	//Create socket
 	fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -142,7 +147,7 @@ void RTMPClientConnection::Start()
 	running = true;
 	
 	//Create thread
-	createPriorityThread(&thread,run,this,0);
+	thread = std::thread(&RTMPClientConnection::Run,this);
 }
 
 void RTMPClientConnection::Stop()
@@ -159,6 +164,8 @@ void RTMPClientConnection::Stop()
 		//No socket
 		fd = FD_INVALID;
 	}
+    char dummy = 'x';
+    write(wakeup_socket[1], &dummy, 1);	
 }
 
 int RTMPClientConnection::Disconnect()
@@ -177,12 +184,10 @@ int RTMPClientConnection::Disconnect()
 	Stop();
 
 	//If running
-	if (thread)
+	if (thread.joinable())
 	{
 		//Wait for server thread to close
-		pthread_join(thread,NULL);
-		//No thread
-		thread = NULL;
+		thread.join();
 	}
 
 	//If got application
@@ -203,23 +208,6 @@ int RTMPClientConnection::Disconnect()
 	return 1;
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-void * RTMPClientConnection::run(void *par)
-{
-        Log("-RTMP Connecttion Thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTMPClientConnection *con = (RTMPClientConnection *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)con->Run());
-}
 
 /***************************
  * Run
@@ -231,11 +219,14 @@ int RTMPClientConnection::Run()
 	unsigned int size = 1400;
 	unsigned int len = 0;
 
-	Log(">Run connection [%p]\n",this);
+	blocksignals();
+	Log(">Run RTMP connection [thread %d]\n",getpid());
 
 	//Set values for polling
 	ufds[0].fd = fd;
 	ufds[0].events = POLLIN | POLLERR | POLLHUP;
+	ufds[1].fd = wakeup_socket[0];
+	ufds[1].events = POLLIN;
 
 	//Set non blocking so we can get an error when we are closed by end
 	int fsflags = fcntl(fd,F_GETFL,0);
@@ -265,7 +256,7 @@ int RTMPClientConnection::Run()
 	while(running)
 	{
 		//Wait for events
-		if(poll(ufds,1,-1)<0)
+		if(poll(ufds,2,-1)<0)
 			//Check again
 			continue;
 
@@ -313,6 +304,15 @@ int RTMPClientConnection::Run()
 			//Exit
 			break;
 		}
+
+		if (ufds[1].revents & POLLIN) 
+		{
+			// Write Signal: Read a byte from the wakeup socket to clear the event
+			char dummy;
+			read(wakeup_socket[0], &dummy, 1);
+			// Mettre à jour ufds[0].events si nécessaire
+			ufds[0].events = POLLIN | POLLOUT | POLLERR | POLLHUP;
+		}
 	}
 
 	Log("<Run RTMP connection\n");
@@ -322,19 +322,9 @@ int RTMPClientConnection::Run()
 
 void RTMPClientConnection::SignalWriteNeeded()
 {
-	//lock now
-	pthread_mutex_lock(&mutex);
-
-	//Set to wait also for read events
-	ufds[0].events = POLLIN | POLLOUT | POLLERR | POLLHUP;
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	//Check thred
-	if (thread)
-		//Signal the pthread this will cause the poll call to exit
-		pthread_kill(thread,SIGIO);
+	// Write a byte to the wakeup socket to signal that writing is needed
+	char dummy = 'w';
+	write(wakeup_socket[1], &dummy, 1);
 }
 
 DWORD RTMPClientConnection::SerializeChunkData(BYTE *data,DWORD size)
@@ -342,7 +332,7 @@ DWORD RTMPClientConnection::SerializeChunkData(BYTE *data,DWORD size)
 	DWORD len = 0;
 
 	//Lock mutex
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Remove the write signal
 	ufds[0].events = POLLIN | POLLERR | POLLHUP;
@@ -371,8 +361,6 @@ DWORD RTMPClientConnection::SerializeChunkData(BYTE *data,DWORD size)
 		}
 	}
 end:
-	//Un Lock mutex
-	pthread_mutex_unlock(&mutex);
 
 	//Return chunks data length	
 	return len;
