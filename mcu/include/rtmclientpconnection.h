@@ -1,6 +1,7 @@
 #ifndef _RTMPCONNECTION_H_
 #define _RTMPCONNECTION_H_
-#include <pthread.h>
+#include <thread>
+#include <mutex>
 #include <sys/poll.h>
 #include "config.h"
 #include "rtmp.h"
@@ -8,7 +9,6 @@
 #include "rtmpmessage.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
-#include <pthread.h>
 #include <map>
 
 
@@ -18,7 +18,7 @@ public:
 	RTMPConnection();
 	~RTMPConnection();
 
-	int Connect(const char* server,int port, const char* app,RTMPNetConnection::Listener );
+	int Connect(const char* server,int port, const char* app, RTMPNetConnection::Listener );
 	int Disconnect();
 
 	/* Interface */
@@ -30,7 +30,6 @@ protected:
 	void Stop();
 	int Run();
 private:
-	static  void* run(void *par);
 	void ParseData(BYTE *data,const DWORD size);
 	DWORD SerializeChunkData(BYTE *data,const DWORD size);
 	int WriteData(BYTE *data,const DWORD size);
@@ -86,8 +85,8 @@ private:
 	DWORD maxChunkSize;
 	DWORD maxOutChunkSize;
 
-	pthread_t thread;
-	pthread_mutex_t mutex;
+	std::thread thread;
+	std::mutex mutex;
 
 	RTMPNetConnection* app;
 	std::wstring	 appName;
