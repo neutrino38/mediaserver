@@ -12,6 +12,7 @@
 #include <mutex>
 #include <thread>
 #include <condition_variable>
+#include <memory>
 #include "media.h"
 #include "codecs.h"
 #include "video.h"
@@ -34,13 +35,14 @@ class MediaSession;
  * recorder et la publication de RecorderStoppedEvent(reason=1) via la session.
  * L'attente est annulable (pthread_cond_timedwait), et l'arrêt est protégé par
  * un « verrou d'arrêt » (ClaimStop) pour éviter le double arrêt / double
- * événement en cas de course avec un RecorderStop explicite. Style pthread
- * conforme au reste du code.
+ * événement en cas de course avec un RecorderStop explicite.
+ * La session est référencée par weak_ptr (H-2) : si elle est détruite avant
+ * l'échéance, le lock() échoue et la minuterie ne fait rien.
  */
 class RecorderTimer
 {
 public:
-	RecorderTimer(MediaSession* session,int recorderId,DWORD maxDurationMs);
+	RecorderTimer(std::weak_ptr<MediaSession> session,int recorderId,DWORD maxDurationMs);
 	~RecorderTimer();
 
 	void Start();
@@ -51,7 +53,7 @@ public:
 private:
 	void Run();
 
-	MediaSession*   session;
+	std::weak_ptr<MediaSession> session;
 	int             recorderId;
 	DWORD           maxDurationMs;
 	std::thread     thread;
@@ -61,7 +63,9 @@ private:
 	bool            cancelled;    //annulation (destruction) demandée
 };
 
-class MediaSession : public Player::Listener
+class MediaSession :
+	public Player::Listener,
+	public std::enable_shared_from_this<MediaSession>
 {
 public:
 	class Listener
@@ -159,7 +163,7 @@ public:
 
         int AudioTranscoderCreate(std::wstring tag);
         int AudioTranscoderDelete(int transcoderId);
-        AudioTranscoder * GetAudioTranscoder(int transcoderId);
+        std::shared_ptr<AudioTranscoder> GetAudioTranscoder(int transcoderId);
         
 	//Video Mixer management
 	int VideoMixerCreate(std::wstring tag);
@@ -196,14 +200,14 @@ public:
 	//ce qui permet à toute ressource (player, recorder, endpoint) de publier sans
 	//dépendre du câblage Joinable.
 	void SetEventHandler(int sessionId, JSR309Manager* mngr);
-	int  PostEvent(int eventContextId, JSR309Event* ev);
 
-	//Getters
+	//Getters — copies de shared_ptr : l'appelant garde l'objet vivant même si un
+	//Delete concurrent le retire des maps (C-2).
 	std::wstring& GetTag() { return tag;	}
-	
-	Endpoint* 				GetEndpoint(int endpointId) ;
-	Player*					GetPlayer(int playerId) ;
-	JSR309EventContext*		GetEventContext(int EventContextId) ;
+
+	std::shared_ptr<Endpoint>			GetEndpoint(int endpointId) ;
+	std::shared_ptr<Player>				GetPlayer(int playerId) ;
+	std::shared_ptr<JSR309EventContext>	GetEventContext(int EventContextId) ;
 	/**
 	 *  Callback that associate an actual media connection (here a web socket)
 	 *  with an endpoint. The endpoint needs to be properly prepared by calling
@@ -248,20 +252,30 @@ private:
 	
 
 
-	typedef std::map<int,Endpoint*> Endpoints;
-	typedef std::map<int,Recorder*> Recorders;
-	typedef std::map<int,Player*> Players;
+	//Les ressources qui s'échappent de la session (getters, minuteries, threads)
+	//sont détenues par shared_ptr ; les autres restent des pointeurs bruts détruits
+	//sous le mutex de la session.
+	typedef std::map<int,std::shared_ptr<Endpoint>> Endpoints;
+	typedef std::map<int,std::shared_ptr<Recorder>> Recorders;
+	typedef std::map<int,std::shared_ptr<Player>> Players;
 	typedef std::map<int,AudioMixerResource*> AudioMixers;
 	typedef std::map<int,VideoMixerResource*> VideoMixers;
-    typedef std::map<int,AudioTranscoder*> AudioTranscoders;
+	typedef std::map<int,std::shared_ptr<AudioTranscoder>> AudioTranscoders;
 	typedef std::map<int,VideoTranscoder*> VideoTranscoders;
 	typedef std::map<std::string, MediaCnxToken> Tokens;
-	typedef std::map<int, JSR309EventContext*> EventContexts;
+	typedef std::map<int, std::shared_ptr<JSR309EventContext>> EventContexts;
 	typedef std::map<int, int> EventCtxMap;
 private:
+	//Publication d'événements interne. Suppose le mutex de session tenu : remplit
+	//l'événement à partir du contexte puis le remet au manager (DeliverEvent), qui
+	//ne rappelle jamais la session — pas d'inversion de verrous (C-3).
+	int PostEvent(int eventContextId, JSR309Event* ev);
+
+private:
 	std::wstring tag;
+	//Protège toutes les maps et compteurs d'ids de la session (C-1)
 	std::mutex mutex;
-	
+
 	MediaSession::Listener *listener;
 	void* param;
 
@@ -294,8 +308,10 @@ private:
 	EventCtxMap playerEventCtx;
 	EventCtxMap recorderEventCtx;
 
-	//Minuteries de durée max par recorder (reason=1)
-	typedef std::map<int, RecorderTimer*> RecorderTimers;
+	//Minuteries de durée max par recorder (reason=1). unique_ptr : la destruction
+	//(qui joint le thread) doit toujours se faire HORS du mutex de session, car le
+	//thread de minuterie peut être bloqué dessus dans onRecorderMaxDuration.
+	typedef std::map<int, std::unique_ptr<RecorderTimer>> RecorderTimers;
 	RecorderTimers recorderTimers;
 
 	//Publication d'événements

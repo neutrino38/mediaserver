@@ -15,7 +15,7 @@ xmlrpc_value* EventQueueCreate(xmlrpc_env *env, xmlrpc_value *param_array, void 
 {
 	UTF8Parser nameParser;
         JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	//Create the event queue
 	int queueId = jsr->CreateEventQueue();
@@ -100,7 +100,7 @@ xmlrpc_value* MediaSessionDelete(xmlrpc_env *env, xmlrpc_value *param_array, voi
 xmlrpc_value* PlayerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -116,13 +116,13 @@ xmlrpc_value* PlayerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int playerId = session->PlayerCreate(parser.GetWString());
 	
-	Player * pl = session->GetPlayer(playerId);
+	std::shared_ptr<Player> pl = session->GetPlayer(playerId);
 
 	if (pl != NULL)
 	{
@@ -130,8 +130,6 @@ xmlrpc_value* PlayerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	}
 	
 	
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(playerId<0)
@@ -143,7 +141,7 @@ xmlrpc_value* PlayerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 
 xmlrpc_value* PlayerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -156,14 +154,12 @@ xmlrpc_value* PlayerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->PlayerDelete(playerId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -175,7 +171,7 @@ xmlrpc_value* PlayerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 
 xmlrpc_value* PlayerOpen(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -189,14 +185,12 @@ xmlrpc_value* PlayerOpen(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->PlayerOpen(playerId,filename);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -208,7 +202,7 @@ xmlrpc_value* PlayerOpen(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 
 xmlrpc_value* PlayerPlay(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -221,14 +215,12 @@ xmlrpc_value* PlayerPlay(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->PlayerPlay(playerId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -240,7 +232,7 @@ xmlrpc_value* PlayerPlay(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 
 xmlrpc_value* PlayerSeek(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -254,14 +246,12 @@ xmlrpc_value* PlayerSeek(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->PlayerSeek(playerId,time);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -273,7 +263,7 @@ xmlrpc_value* PlayerSeek(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 
 xmlrpc_value* PlayerStop(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -286,14 +276,12 @@ xmlrpc_value* PlayerStop(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->PlayerStop(playerId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -305,7 +293,7 @@ xmlrpc_value* PlayerStop(xmlrpc_env *env, xmlrpc_value *param_array, void *user_
 
 xmlrpc_value* PlayerClose(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -318,14 +306,12 @@ xmlrpc_value* PlayerClose(xmlrpc_env *env, xmlrpc_value *param_array, void *user
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->PlayerClose(playerId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -338,7 +324,7 @@ xmlrpc_value* PlayerClose(xmlrpc_env *env, xmlrpc_value *param_array, void *user
 xmlrpc_value* RecorderCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -354,14 +340,12 @@ xmlrpc_value* RecorderCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create recorder
 	int recorderId = session->RecorderCreate(parser.GetWString());
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(recorderId<0)
@@ -373,7 +357,7 @@ xmlrpc_value* RecorderCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 
 xmlrpc_value* RecorderDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -386,14 +370,12 @@ xmlrpc_value* RecorderDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->RecorderDelete(recorderId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -405,7 +387,7 @@ xmlrpc_value* RecorderDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 
 xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -426,14 +408,12 @@ xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->RecorderRecord(recorderId,filename,(DWORD)(maxDuration>0?maxDuration:0));
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -445,7 +425,7 @@ xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 
 xmlrpc_value* RecorderStop(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -458,14 +438,12 @@ xmlrpc_value* RecorderStop(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->RecorderStop(recorderId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -478,7 +456,7 @@ xmlrpc_value* RecorderStop(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 xmlrpc_value* RecorderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -492,14 +470,12 @@ xmlrpc_value* RecorderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_arra
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->RecorderAttachToEndpoint(recorderId,endpointId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -512,7 +488,7 @@ xmlrpc_value* RecorderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_arra
 xmlrpc_value* RecorderAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -526,14 +502,12 @@ xmlrpc_value* RecorderAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->RecorderAttachToAudioMixerPort(recorderId,mixerId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -546,7 +520,7 @@ xmlrpc_value* RecorderAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* RecorderAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -560,14 +534,12 @@ xmlrpc_value* RecorderAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->RecorderAttachToVideoMixerPort(recorderId,mixerId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -580,7 +552,7 @@ xmlrpc_value* RecorderAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* RecorderDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -593,14 +565,12 @@ xmlrpc_value* RecorderDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->RecorderDettach(recorderId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -613,7 +583,7 @@ xmlrpc_value* RecorderDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -633,13 +603,13 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int endpointId = session->EndpointCreate(parser.GetWString(),audioSupported,videoSupported,textSupported);
 	
-	Endpoint * ep = session->GetEndpoint(endpointId);
+	std::shared_ptr<Endpoint> ep = session->GetEndpoint(endpointId);
 
 	if (ep != NULL)
 	{
@@ -656,8 +626,6 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 			ep->SetEventHandler(MediaFrame::Text, MediaFrame::VIDEO_MAIN,sessionId,jsr);
 		}
 	}
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(endpointId<0)
@@ -669,7 +637,7 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 
 xmlrpc_value* EndpointDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -682,14 +650,12 @@ xmlrpc_value* EndpointDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->EndpointDelete(endpointId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -701,7 +667,7 @@ xmlrpc_value* EndpointDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 
 xmlrpc_value* EndpointGetStatistics(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -714,22 +680,19 @@ xmlrpc_value* EndpointGetStatistics(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return xmlerror(env,"Fault occurred");
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
-        Endpoint * ep = session->GetEndpoint(endpointId);
+        std::shared_ptr<Endpoint> ep = session->GetEndpoint(endpointId);
 
 
         if (ep == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env,"Endpoint not found\n");
         }
 	//Get statistics
 	const Endpoint::Statistics * epStats = ep->GetStatistics();
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!epStats)
@@ -760,7 +723,7 @@ xmlrpc_value* EndpointGetStatistics(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -777,14 +740,12 @@ xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_ar
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointSetLocalCryptoSDES(endpointId,(MediaFrame::Type)media,suite,key);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -796,7 +757,7 @@ xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_ar
 
 xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -812,14 +773,12 @@ xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_a
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointSetRemoteCryptoSDES(endpointId,(MediaFrame::Type)media,suite,key);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 	
 	//Salimos
 	if(!res)
@@ -831,7 +790,7 @@ xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_a
 
 xmlrpc_value* EndpointSetRemoteCryptoDTLS(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -848,14 +807,12 @@ xmlrpc_value* EndpointSetRemoteCryptoDTLS(xmlrpc_env *env, xmlrpc_value *param_a
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointSetRemoteCryptoDTLS(endpointId,(MediaFrame::Type)media,setup,hash,fingerprint);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -892,7 +849,7 @@ xmlrpc_value* EndpointGetLocalCryptoDTLSFingerprint(xmlrpc_env *env, xmlrpc_valu
 }
 xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -908,14 +865,12 @@ xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointSetLocalSTUNCredentials(endpointId,(MediaFrame::Type)media,username,pwd);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -927,7 +882,7 @@ xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *par
 
 xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -944,14 +899,12 @@ xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *pa
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointSetRemoteSTUNCredentials(endpointId,(MediaFrame::Type)media,username,pwd);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -965,7 +918,7 @@ xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *pa
 xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1008,14 +961,12 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointSetRTPProperties(endpointId,(MediaFrame::Type)media,properties);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1029,7 +980,7 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1046,7 +997,7 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Get the rtp map
@@ -1077,8 +1028,6 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 	//Start sending video
 	res = session->EndpointStartSending(endpointId,(MediaFrame::Type)media,sendIp,sendPort,map);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1091,7 +1040,7 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos : {sessionId, endpointId, media, candidate}
 	int sessionId;
@@ -1105,14 +1054,12 @@ xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Ajoute le candidat (trickle ICE Niveau 1)
 	int res = session->EndpointAddICECandidate(endpointId,(MediaFrame::Type)media,candidate);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1125,7 +1072,7 @@ xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array
 xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos : {sessionId, endpointId, media, timeoutMs} (gap 5)
 	int sessionId;
@@ -1139,14 +1086,12 @@ xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Arme/désarme le watchdog d'inactivité RTP (armé au SDP answer)
 	int res = session->EndpointStartRTPTimeout(endpointId,(MediaFrame::Type)media,(DWORD)(timeoutMs>0?timeoutMs:0));
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1159,7 +1104,7 @@ xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array
 xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1173,14 +1118,12 @@ xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, vo
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Stop sending video
 	res = session->EndpointStopSending(endpointId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1193,7 +1136,7 @@ xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, vo
 xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1208,7 +1151,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 	
 	//Get the rtp map
@@ -1239,8 +1182,6 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//Start receiving video and get listening port
 	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!recPort)
@@ -1255,7 +1196,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1269,14 +1210,12 @@ xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Stop sending video
 	res = session->EndpointStopReceiving(endpointId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1289,7 +1228,7 @@ xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, 
 xmlrpc_value* EndpointRequestUpdate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1303,14 +1242,12 @@ xmlrpc_value* EndpointRequestUpdate(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Stop sending text
 	res = session->EndpointRequestUpdate(endpointId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1323,7 +1260,7 @@ xmlrpc_value* EndpointRequestUpdate(xmlrpc_env *env, xmlrpc_value *param_array, 
 xmlrpc_value* EndpointAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1337,14 +1274,12 @@ xmlrpc_value* EndpointAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointAttachToPlayer(endpointId,playerId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1357,7 +1292,7 @@ xmlrpc_value* EndpointAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_array,
 xmlrpc_value* EndpointAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1371,14 +1306,12 @@ xmlrpc_value* EndpointAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_arra
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointAttachToEndpoint(endpointId,sourceId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1391,7 +1324,7 @@ xmlrpc_value* EndpointAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_arra
 xmlrpc_value* EndpointAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1405,14 +1338,12 @@ xmlrpc_value* EndpointAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointAttachToAudioMixerPort(endpointId,mixerId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1425,7 +1356,7 @@ xmlrpc_value* EndpointAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* EndpointAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1439,14 +1370,12 @@ xmlrpc_value* EndpointAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointAttachToVideoMixerPort(endpointId,mixerId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1458,7 +1387,7 @@ xmlrpc_value* EndpointAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* EndpointAttachToAudioTranscoder(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1471,20 +1400,18 @@ xmlrpc_value* EndpointAttachToAudioTranscoder(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
-        Endpoint * ep = session->GetEndpoint(endpointId);
+        std::shared_ptr<Endpoint> ep = session->GetEndpoint(endpointId);
         if (ep == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env,"The endpoint does not exist");
         }
         
-        AudioTranscoder * tr = session->GetAudioTranscoder(transcoderId);
+        std::shared_ptr<AudioTranscoder> tr = session->GetAudioTranscoder(transcoderId);
         if (tr == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env,"The audio transcoder does not exist");
         }
         
@@ -1492,11 +1419,9 @@ xmlrpc_value* EndpointAttachToAudioTranscoder(xmlrpc_env *env, xmlrpc_value *par
 	Log("-[endpoint:%ls] ==> [audio transcoder:%ls]\n",
             ep->GetName().c_str(),tr->GetName().c_str());
 
-        int res = ep->Attach(MediaFrame::Audio,MediaFrame::VIDEO_MAIN,tr);
+        int res = ep->Attach(MediaFrame::Audio,MediaFrame::VIDEO_MAIN,tr.get());
 	//La borramosmedia Session
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1509,7 +1434,7 @@ xmlrpc_value* EndpointAttachToAudioTranscoder(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* EndpointAttachToVideoTranscoder(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1522,14 +1447,12 @@ xmlrpc_value* EndpointAttachToVideoTranscoder(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointAttachToVideoTranscoder(endpointId,videoTranscoderId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1542,7 +1465,7 @@ xmlrpc_value* EndpointAttachToVideoTranscoder(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* EndpointDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1555,14 +1478,12 @@ xmlrpc_value* EndpointDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->EndpointDettach(endpointId,(MediaFrame::Type)media);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1575,7 +1496,7 @@ xmlrpc_value* EndpointDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 xmlrpc_value* AudioMixerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1591,14 +1512,12 @@ xmlrpc_value* AudioMixerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void 
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int mixerId = session->AudioMixerCreate(parser.GetWString());
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(mixerId<0)
@@ -1610,7 +1529,7 @@ xmlrpc_value* AudioMixerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void 
 
 xmlrpc_value* AudioMixerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1623,14 +1542,12 @@ xmlrpc_value* AudioMixerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->AudioMixerDelete(mixerId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1643,7 +1560,7 @@ xmlrpc_value* AudioMixerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void 
 xmlrpc_value* AudioMixerPortCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1660,14 +1577,12 @@ xmlrpc_value* AudioMixerPortCreate(xmlrpc_env *env, xmlrpc_value *param_array, v
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int portId = session->AudioMixerPortCreate(mixerId,parser.GetWString());
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(portId<0)
@@ -1680,7 +1595,7 @@ xmlrpc_value* AudioMixerPortCreate(xmlrpc_env *env, xmlrpc_value *param_array, v
 
 xmlrpc_value* AudioMixerPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1697,14 +1612,12 @@ xmlrpc_value* AudioMixerPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->AudioMixerPortSetCodec(mixerId,portId,(AudioCodec::Type)codec);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1717,7 +1630,7 @@ xmlrpc_value* AudioMixerPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array,
 
 xmlrpc_value* AudioMixerPortDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1731,14 +1644,12 @@ xmlrpc_value* AudioMixerPortDelete(xmlrpc_env *env, xmlrpc_value *param_array, v
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->AudioMixerPortDelete(mixerId,portId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1751,7 +1662,7 @@ xmlrpc_value* AudioMixerPortDelete(xmlrpc_env *env, xmlrpc_value *param_array, v
 xmlrpc_value* AudioMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1766,14 +1677,12 @@ xmlrpc_value* AudioMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->AudioMixerPortAttachToPlayer(mixerId,portId,playerId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1786,7 +1695,7 @@ xmlrpc_value* AudioMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_
 xmlrpc_value* AudioMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1800,14 +1709,12 @@ xmlrpc_value* AudioMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->AudioMixerPortAttachToEndpoint(mixerId,portId,endpointId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1820,7 +1727,7 @@ xmlrpc_value* AudioMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* AudioMixerPortDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -1833,14 +1740,12 @@ xmlrpc_value* AudioMixerPortDettach(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->AudioMixerPortDettach(mixerId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1853,7 +1758,7 @@ xmlrpc_value* AudioMixerPortDettach(xmlrpc_env *env, xmlrpc_value *param_array, 
 xmlrpc_value* VideoMixerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1869,14 +1774,12 @@ xmlrpc_value* VideoMixerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void 
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int mixerId = session->VideoMixerCreate(parser.GetWString());
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(mixerId<0)
@@ -1888,7 +1791,7 @@ xmlrpc_value* VideoMixerCreate(xmlrpc_env *env, xmlrpc_value *param_array, void 
 
 xmlrpc_value* VideoMixerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1901,14 +1804,12 @@ xmlrpc_value* VideoMixerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->VideoMixerDelete(mixerId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1921,7 +1822,7 @@ xmlrpc_value* VideoMixerDelete(xmlrpc_env *env, xmlrpc_value *param_array, void 
 xmlrpc_value* VideoMixerPortCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1939,14 +1840,12 @@ xmlrpc_value* VideoMixerPortCreate(xmlrpc_env *env, xmlrpc_value *param_array, v
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int portId = session->VideoMixerPortCreate(mixerId,parser.GetWString(),mosaicId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(portId<0)
@@ -1958,7 +1857,7 @@ xmlrpc_value* VideoMixerPortCreate(xmlrpc_env *env, xmlrpc_value *param_array, v
 
 xmlrpc_value* VideoMixerPortDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -1972,14 +1871,12 @@ xmlrpc_value* VideoMixerPortDelete(xmlrpc_env *env, xmlrpc_value *param_array, v
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->VideoMixerPortDelete(mixerId,portId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -1992,7 +1889,7 @@ xmlrpc_value* VideoMixerPortDelete(xmlrpc_env *env, xmlrpc_value *param_array, v
 xmlrpc_value* VideoMixerPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2011,14 +1908,12 @@ xmlrpc_value* VideoMixerPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int res = session->VideoMixerPortSetCodec(mixerId,portId,(VideoCodec::Type)codec,size,fps,bitrate,intraPeriod);
 	
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2031,7 +1926,7 @@ xmlrpc_value* VideoMixerPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array,
 xmlrpc_value* VideoMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2046,14 +1941,12 @@ xmlrpc_value* VideoMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerPortAttachToPlayer(mixerId,portId,playerId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2066,7 +1959,7 @@ xmlrpc_value* VideoMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_
 xmlrpc_value* VideoMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2080,14 +1973,12 @@ xmlrpc_value* VideoMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerPortAttachToEndpoint(mixerId,portId,endpointId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2100,7 +1991,7 @@ xmlrpc_value* VideoMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* VideoMixerPortDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2113,14 +2004,12 @@ xmlrpc_value* VideoMixerPortDettach(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerPortDettach(mixerId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2132,7 +2021,7 @@ xmlrpc_value* VideoMixerPortDettach(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* VideoMixerMosaicCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2147,14 +2036,12 @@ xmlrpc_value* VideoMixerMosaicCreate(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int mosaicId = session->VideoMixerMosaicCreate(mixerId,(Mosaic::Type)comp,size);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(mosaicId<0)
@@ -2166,7 +2053,7 @@ xmlrpc_value* VideoMixerMosaicCreate(xmlrpc_env *env, xmlrpc_value *param_array,
 
 xmlrpc_value* VideoMixerMosaicDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2180,14 +2067,12 @@ xmlrpc_value* VideoMixerMosaicDelete(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->VideoMixerMosaicDelete(mixerId,mosaicId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2200,7 +2085,7 @@ xmlrpc_value* VideoMixerMosaicDelete(xmlrpc_env *env, xmlrpc_value *param_array,
 xmlrpc_value* VideoMixerMosaicSetSlot(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2216,14 +2101,12 @@ xmlrpc_value* VideoMixerMosaicSetSlot(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerMosaicSetSlot(mixerId,mosaicId,num,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2236,7 +2119,7 @@ xmlrpc_value* VideoMixerMosaicSetSlot(xmlrpc_env *env, xmlrpc_value *param_array
 xmlrpc_value* VideoMixerMosaicSetCompositionType(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2251,14 +2134,12 @@ xmlrpc_value* VideoMixerMosaicSetCompositionType(xmlrpc_env *env, xmlrpc_value *
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerMosaicSetCompositionType(mixerId,mosaicId,(Mosaic::Type)comp,size);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2271,7 +2152,7 @@ xmlrpc_value* VideoMixerMosaicSetCompositionType(xmlrpc_env *env, xmlrpc_value *
 xmlrpc_value* VideoMixerMosaicSetOverlayPNG(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2285,14 +2166,12 @@ xmlrpc_value* VideoMixerMosaicSetOverlayPNG(xmlrpc_env *env, xmlrpc_value *param
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerMosaicSetOverlayPNG(mixerId,mosaicId,overlay);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2305,7 +2184,7 @@ xmlrpc_value* VideoMixerMosaicSetOverlayPNG(xmlrpc_env *env, xmlrpc_value *param
 xmlrpc_value* VideoMixerMosaicResetOverlay(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2318,14 +2197,12 @@ xmlrpc_value* VideoMixerMosaicResetOverlay(xmlrpc_env *env, xmlrpc_value *param_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerMosaicResetSetOverlay(mixerId,mosaicId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2338,7 +2215,7 @@ xmlrpc_value* VideoMixerMosaicResetOverlay(xmlrpc_env *env, xmlrpc_value *param_
 xmlrpc_value* VideoMixerMosaicAddPort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2352,14 +2229,12 @@ xmlrpc_value* VideoMixerMosaicAddPort(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerMosaicAddPort(mixerId,mosaicId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2372,7 +2247,7 @@ xmlrpc_value* VideoMixerMosaicAddPort(xmlrpc_env *env, xmlrpc_value *param_array
 xmlrpc_value* VideoMixerMosaicRemovePort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2386,14 +2261,12 @@ xmlrpc_value* VideoMixerMosaicRemovePort(xmlrpc_env *env, xmlrpc_value *param_ar
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoMixerMosaicRemovePort(mixerId,mosaicId,portId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2406,7 +2279,7 @@ xmlrpc_value* VideoMixerMosaicRemovePort(xmlrpc_env *env, xmlrpc_value *param_ar
 xmlrpc_value* AudioTranscoderCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2422,14 +2295,12 @@ xmlrpc_value* AudioTranscoderCreate(xmlrpc_env *env, xmlrpc_value *param_array, 
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int trId = session->AudioTranscoderCreate(parser.GetWString());
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(trId<0)
@@ -2441,7 +2312,7 @@ xmlrpc_value* AudioTranscoderCreate(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* AudioTranscoderDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2454,14 +2325,12 @@ xmlrpc_value* AudioTranscoderDelete(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->AudioTranscoderDelete(trId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2473,7 +2342,7 @@ xmlrpc_value* AudioTranscoderDelete(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* AudioTranscoderSetCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2490,23 +2359,20 @@ xmlrpc_value* AudioTranscoderSetCodec(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	xmlparsemap(env, map, props);
 
-        AudioTranscoder *tr = session->GetAudioTranscoder(transcoderId);
+        std::shared_ptr<AudioTranscoder> tr = session->GetAudioTranscoder(transcoderId);
         if (tr == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env,"The audio transcoder does not exist");
         }
         
         
 	//Create player
 	int res = tr->SetCodec(codec);
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2519,7 +2385,7 @@ xmlrpc_value* AudioTranscoderSetCodec(xmlrpc_env *env, xmlrpc_value *param_array
 xmlrpc_value* AudioTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2532,20 +2398,18 @@ xmlrpc_value* AudioTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
-        Endpoint * ep = session->GetEndpoint(endpointId);
+        std::shared_ptr<Endpoint> ep = session->GetEndpoint(endpointId);
         if (ep == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env, "Endpoint does not exist");
         }
         
-        AudioTranscoder * tr = session->GetAudioTranscoder(transcoderId);
+        std::shared_ptr<AudioTranscoder> tr = session->GetAudioTranscoder(transcoderId);
         if (tr == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env, "Audio Transcoder does not exist");
         }
             
@@ -2555,8 +2419,6 @@ xmlrpc_value* AudioTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *par
 
 	int res = tr->Attach(ep->GetJoinable(MediaFrame::Audio));
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2569,7 +2431,7 @@ xmlrpc_value* AudioTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* AudioTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2581,21 +2443,18 @@ xmlrpc_value* AudioTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
-        AudioTranscoder * tr = session->GetAudioTranscoder(transcoderId);
+        std::shared_ptr<AudioTranscoder> tr = session->GetAudioTranscoder(transcoderId);
         if (tr == NULL)
         {
-            jsr->ReleaseMediaSessionRef(sessionId);
             return xmlerror(env, "Audio Transcoder does not exist");
         }
             
 	//La borramos
 	int res = tr->Dettach();
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2609,7 +2468,7 @@ xmlrpc_value* AudioTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array,
 xmlrpc_value* VideoTranscoderCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2625,14 +2484,12 @@ xmlrpc_value* VideoTranscoderCreate(xmlrpc_env *env, xmlrpc_value *param_array, 
 	parser.Parse((BYTE*)str,strlen(str));
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int mixerId = session->VideoTranscoderCreate(parser.GetWString());
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(mixerId<0)
@@ -2644,7 +2501,7 @@ xmlrpc_value* VideoTranscoderCreate(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* VideoTranscoderDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2657,14 +2514,12 @@ xmlrpc_value* VideoTranscoderDelete(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
 	bool res = session->VideoTranscoderDelete(videoTranscoderId);
 
-	//Release ref
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2677,7 +2532,7 @@ xmlrpc_value* VideoTranscoderDelete(xmlrpc_env *env, xmlrpc_value *param_array, 
 xmlrpc_value* VideoTranscoderFPU(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2690,14 +2545,12 @@ xmlrpc_value* VideoTranscoderFPU(xmlrpc_env *env, xmlrpc_value *param_array, voi
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//Create player
 	int res = session->VideoTranscoderFPU(videoTranscoderId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2710,7 +2563,7 @@ xmlrpc_value* VideoTranscoderFPU(xmlrpc_env *env, xmlrpc_value *param_array, voi
 xmlrpc_value* VideoTranscoderSetCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
-	MediaSession *session;
+	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
 	//Parseamos
@@ -2733,15 +2586,13 @@ xmlrpc_value* VideoTranscoderSetCodec(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	xmlparsemap(env, map, props);
 
 	//Create player
 	int res = session->VideoTranscoderSetCodec(videoTranscoderId,(VideoCodec::Type)codec,size,fps,bitrate,intraPeriod, props);
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2754,7 +2605,7 @@ xmlrpc_value* VideoTranscoderSetCodec(xmlrpc_env *env, xmlrpc_value *param_array
 xmlrpc_value* VideoTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2767,14 +2618,12 @@ xmlrpc_value* VideoTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoTranscoderAttachToEndpoint(videoTranscoderId,endpointId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2787,7 +2636,7 @@ xmlrpc_value* VideoTranscoderAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* VideoTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -2799,14 +2648,12 @@ xmlrpc_value* VideoTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array,
 		return 0;
 
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->VideoTranscoderDettach(videoTranscoderId);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -2819,7 +2666,7 @@ xmlrpc_value* VideoTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array,
 xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int protocol;
@@ -2835,13 +2682,11 @@ xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, voi
 		return 0;
 	
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	Endpoint* endpoint = session->GetEndpoint(endPointId);
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);
+	std::shared_ptr<Endpoint> endpoint = session->GetEndpoint(endPointId);
 	
 	if (endpoint != NULL)
 	{
@@ -2868,7 +2713,7 @@ xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, voi
 xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
-	MediaSession *session = NULL;
+	std::shared_ptr<MediaSession> session;
 
 	 //Parseamos
 	int		sessionId;
@@ -2891,14 +2736,12 @@ xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_arra
 		return 0;
 		
 	//Obtenemos la referencia
-	if(!jsr->GetMediaSessionRef(sessionId,&session))
+	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
 	int res = session->ConfigureMediaConnection(endPointId,(MediaFrame::Type) media,(MediaFrame::MediaRole) role , (MediaFrame::MediaProtocol) proto, token , expectedPayload);
 
-	//Liberamos la referencia
-	jsr->ReleaseMediaSessionRef(sessionId);	
 	
 	//Salimos
 	if(!res)
