@@ -6,11 +6,6 @@
 
 PipeVideoInput::PipeVideoInput()
 {
-	//Inicializamos los mutex
-	pthread_mutex_init(&newPicMutex,0);
-	pthread_cond_init(&newPicCond,0);
-
-	//No estamos iniciados
 	//inited = false;
 	capturing = false;
 	grabPic = 0;
@@ -20,9 +15,6 @@ PipeVideoInput::PipeVideoInput()
 
 PipeVideoInput::~PipeVideoInput()
 {
-	//Liberamos los mutex
-	pthread_mutex_destroy(&newPicMutex);
-	pthread_cond_destroy(&newPicCond);
 }
 
 int PipeVideoInput::Init()
@@ -30,13 +22,10 @@ int PipeVideoInput::Init()
 	Log("PipeVideoInput init\n");
 
 	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	std::lock_guard<std::mutex> lock(newPicMutex);
 
 	//Iniciamos
 	inited = true;
-
-	//Protegemos
-	pthread_mutex_unlock(&newPicMutex);
 
 	return true;
 } 
@@ -44,16 +33,15 @@ int PipeVideoInput::Init()
 int PipeVideoInput::End()
 {
 	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	{
+		std::lock_guard<std::mutex> lock(newPicMutex);
 
-	//Terminamos
-	inited = false;
+		//Terminamos
+		inited = false;
+	}
 
 	//Se�alizamos la condicion
-	pthread_cond_signal(&newPicCond);
-
-	//Protegemos
-	pthread_mutex_unlock(&newPicMutex);
+	newPicCond.notify_all();
 
 	return true;
 } 
@@ -63,7 +51,7 @@ int PipeVideoInput::StartVideoCapture(int width,int height,int fps)
 	Log("-StartVideoCapture [%d,%d,%d]\n",width,height,fps);
 
 	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	std::lock_guard<std::mutex> lock(newPicMutex);
 
 	//Almacenamos el tama�o
 	videoWidth = width;
@@ -83,9 +71,6 @@ int PipeVideoInput::StartVideoCapture(int width,int height,int fps)
 	//Estamos capturando
 	capturing = true;
 
-	//Desprotegemos
-	pthread_mutex_unlock(&newPicMutex);
-
 	return true;
 }
 
@@ -94,7 +79,7 @@ int PipeVideoInput::StopVideoCapture()
 	Log("-StopVideoCapture\n");
 
 	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	std::lock_guard<std::mutex> lock(newPicMutex);
 
 	//LIberamos los buffers
 	if (imgBuffer[0])
@@ -111,8 +96,6 @@ int PipeVideoInput::StopVideoCapture()
 	//Clear flags
 	grabPic = NULL;
 
-	//Desprotegemos
-	pthread_mutex_unlock(&newPicMutex);
 
 	return true;
 }
@@ -122,15 +105,13 @@ BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
 	BYTE *pic;
 
 	//Bloqueamos para ver si hay un nuevo picture
-	pthread_mutex_lock(&newPicMutex);
+	std::unique_lock<std::mutex> lock(newPicMutex);
 
 	//Si no estamos iniciados
 	if (!inited || !capturing)
 	{
 		//Logeamos
 		Error("PipeVideoInput no inited or not capturing, grab failed\n");
-		//Desbloqueamos
-		pthread_mutex_unlock(&newPicMutex);
 		//Salimos
 		return NULL;
 	}
@@ -145,10 +126,15 @@ BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
 			//Calculate timeout
 			calcTimout(&ts,timeout);
 			//wait
-			pthread_cond_timedwait(&newPicCond,&newPicMutex,&ts);
+			if (newPicCond.wait_until(lock, std::chrono::system_clock::from_time_t(ts.tv_sec) + std::chrono::nanoseconds(ts.tv_nsec)) == std::cv_status::timeout)
+			{
+				//Timeout
+				Error("PipeVideoInput grab timeout\n");
+				return NULL;
+			}
 		} else {
 			//Wait ad infinitum
-			pthread_cond_wait(&newPicCond,&newPicMutex);
+			newPicCond.wait(lock);
 		}
 	}
 
@@ -158,27 +144,22 @@ BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
 	//Nos quedamos con el puntero antes de que lo cambien
 	pic=grabPic;
 
-	//Y liberamos el mutex
-	pthread_mutex_unlock(&newPicMutex);
-
 	return pic;
 }
 
 void  PipeVideoInput::CancelGrabFrame()
 {
 	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	std::lock_guard<std::mutex> lock(newPicMutex);
 
 	//No image
 	imgNew = false;
 	grabPic = NULL;
 
 	//Se�alamos
-	pthread_cond_signal(&newPicCond);
+	newPicCond.notify_all();
 
 	//Unloco mutex
-	pthread_mutex_unlock(&newPicMutex);
-	
 }
 
 DWORD PipeVideoInput::GetBufferSize()
@@ -189,7 +170,7 @@ DWORD PipeVideoInput::GetBufferSize()
 int PipeVideoInput::SetFrame(BYTE * buffer, int width, int height)
 {
 	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	std::lock_guard<std::mutex> lock(newPicMutex);
 
 	//Si estamos capturamos
 	if (capturing)
@@ -206,11 +187,7 @@ int PipeVideoInput::SetFrame(BYTE * buffer, int width, int height)
 		//Hay imagen
 		imgNew = true;
 		//Se�alamos
-		pthread_cond_signal(&newPicCond);
+		newPicCond.notify_all();
 	} 
-
-	//Y desbloqueamos
-	pthread_mutex_unlock(&newPicMutex);
-
 	return 1;
 }

@@ -1,9 +1,11 @@
 #ifndef _PIPEVIDEOINPUT_H_
 #define _PIPEVIDEOINPUT_H_
 
+#include <condition_variable>
+#include <thread>
+#include <mutex>
 #include <video.h>
 #include <framescaler.h>
-#include "pthread.h"
 
 class PipeVideoInput
 	: public VideoInput
@@ -36,9 +38,8 @@ private:
 	BYTE *imgBuffer[2];
 	BYTE *grabPic;
 
-	pthread_mutex_t newPicMutex;
-	pthread_cond_t  newPicCond;
-
+	std::mutex newPicMutex;
+	std::condition_variable newPicCond;
 };
 
 #endif
