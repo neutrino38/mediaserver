@@ -2,7 +2,6 @@
 #define _PIPEVIDEOINPUT_H_
 
 #include <condition_variable>
-#include <thread>
 #include <mutex>
 #include <video.h>
 #include <framescaler.h>
