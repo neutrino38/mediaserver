@@ -1,0 +1,16 @@
+[ req ]
+distinguished_name      	= req_distinguished_name
+
+[req_distinguished_name]
+countryName        	= FR
+countryName_default             	= FR
+countryName_min                 	= 2
+countryName_max                 	= 2
+
+localityName                   = Tataouine-Les-Bains
+organizationalUnitName         = MaBoite
+organizationalUnitName_default = MaBoite
+commonName_max                 = 64
+emailAddress                   = support@exemple.fr
+emailAddress_default           = support@example.fr
+emailAddress_max               = 40  
