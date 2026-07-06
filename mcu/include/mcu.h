@@ -1,7 +1,7 @@
 #ifndef _MCU_H_
 #define _MCU_H_
 #include <string>
-#include "pthread.h"
+#include <mutex>
 #include "multiconf.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
@@ -71,7 +71,7 @@ private:
 	Conferences		conferences;
 	ConferenceTags		tags;
 	int			maxId;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	int inited;
 };
 

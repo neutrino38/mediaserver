@@ -12,8 +12,6 @@
 **************************************/
 MCU::MCU()
 {
-	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
 	//No event mngr
 	eventMngr = NULL;
 }
@@ -26,8 +24,6 @@ MCU::~MCU()
 {
 	//End just in case
 	End();
-	//Destruimos el mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 
@@ -40,7 +36,7 @@ int MCU::Init(XmlStreamingHandler *eventMngr)
 	timeval tv;
 	
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Estamos iniciados
 	inited = true;
@@ -54,8 +50,6 @@ int MCU::Init(XmlStreamingHandler *eventMngr)
 	//Store event mngr
 	this->eventMngr = eventMngr;
 
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	//Salimos
 	return 1;
@@ -70,7 +64,7 @@ int MCU::End()
 	Log(">End MCU\n");
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Dejamos de estar iniciados
 	inited = false;
@@ -96,9 +90,6 @@ int MCU::End()
 
 	//LImpiamos las listas
 	conferences.clear();
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	Log("<End MCU\n");
 
@@ -144,7 +135,7 @@ int MCU::CreateConference(std::wstring tag,int queueId)
 	ConferenceEntry *entry = new ConferenceEntry();
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get the id
 	int confId = maxId++;
@@ -160,9 +151,6 @@ int MCU::CreateConference(std::wstring tag,int queueId)
 	conferences[confId] = entry;
 	//Add to tags
 	tags[tag] = confId;
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	//Set us as listeners
 	conf->SetListener(this,(void*)entry);
@@ -181,7 +169,7 @@ int MCU::GetConferenceRef(int id,MultiConf **conf)
 	Log("-GetConferenceRef [%d]\n",id);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Find confernce
 	Conferences::iterator it = conferences.find(id);
@@ -189,8 +177,6 @@ int MCU::GetConferenceRef(int id,MultiConf **conf)
 	//SI no esta
 	if (it==conferences.end())
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Conference not found [%d]\n",id);
 	}
@@ -201,8 +187,6 @@ int MCU::GetConferenceRef(int id,MultiConf **conf)
 	//Check it is enabled
 	if (!entry->enabled)
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Conference not enabled [%d]\n",id);
 	}
@@ -212,9 +196,6 @@ int MCU::GetConferenceRef(int id,MultiConf **conf)
 
 	//Y obtenemos el puntero a la la conferencia
 	*conf = entry->conf;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
 
 	return true;
 }
@@ -228,7 +209,7 @@ int MCU::GetConferenceId(const std::wstring& tag)
 	Log("-GetConferenceId [%ls]\n",tag.c_str());
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Find id by tag
 	ConferenceTags::iterator it = tags.find(tag);
@@ -236,19 +217,12 @@ int MCU::GetConferenceId(const std::wstring& tag)
 	//Check if found
 	if (it==tags.end())
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Conference tag not found [%ls]\n",tag.c_str());
 	}
 
 	//Get id
-	int confId = it->second;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-
-	return confId;
+	return it->second;
 }
 
 /**************************************
@@ -260,7 +234,7 @@ int MCU::ReleaseConferenceRef(int id)
 	Log(">ReleaseConferenceRef [%d]\n",id);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Find confernce
 	Conferences::iterator it = conferences.find(id);
@@ -268,8 +242,6 @@ int MCU::ReleaseConferenceRef(int id)
 	//SI no esta
 	if (it==conferences.end())
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Conference not found [%d]\n",id);
 	}
@@ -279,9 +251,6 @@ int MCU::ReleaseConferenceRef(int id)
 
 	//Aumentamos el contador
 	entry->numRef--;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
 
 	Log("<ReleaseConferenceRef\n");
 
@@ -298,7 +267,7 @@ int MCU::DeleteConference(int id)
 	int retry = 0;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	mutex.lock();
 
 	//Find conference
 	Conferences::iterator it = conferences.find(id);
@@ -307,7 +276,7 @@ int MCU::DeleteConference(int id)
 	if (it==conferences.end())
 	{
 		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
+		mutex.unlock();
 
 		//Y salimos
 		return Error("Conference not found [%d]\n",id);
@@ -328,12 +297,13 @@ int MCU::DeleteConference(int id)
 	while(entry->numRef>0)
 	{
 		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
+		mutex.unlock();
 		//FIXME: poner una condicion
 		Log("-Conference [%d] is referenced %d times. We will sleep during 2 secs an retry.\n", id, entry->numRef);
 		sleep(2);
 		//Bloqueamos
-		
+		mutex.lock();
+
 		retry++;
 		if (retry > 4)
 		{
@@ -343,14 +313,14 @@ int MCU::DeleteConference(int id)
 			return 0;
 		}
 
-                pthread_mutex_lock(&mutex);
+        mutex.lock();
 		//Find conference
 		it = conferences.find(id);
 		//Check if we found it or not
 		if (it==conferences.end())
 		{
 			//Desbloquamos el mutex
-			pthread_mutex_unlock(&mutex);
+			mutex.unlock();
 			//Y salimos
 			return Error("Conference not found [%d]\n",id);
 		}
@@ -365,7 +335,7 @@ int MCU::DeleteConference(int id)
 	conferences.erase(it);
 
 	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
+	mutex.unlock();
 
 	//End conference
 	if ( conf->End() )
@@ -442,7 +412,7 @@ int MCU::GetConferenceList(ConferencesInfo& lst)
 	Log(">GetConferenceList\n");
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//For each conference
 	for (Conferences::iterator it = conferences.begin(); it!=conferences.end(); ++it)
@@ -461,9 +431,6 @@ int MCU::GetConferenceList(ConferencesInfo& lst)
 			lst[entry->id] = info;
 		}
 	}
-	
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
 
 	Log("<GetConferenceList\n");
 
