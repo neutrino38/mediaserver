@@ -9,7 +9,7 @@
 #define	_MEDIAGATEWAY_H_
 #include <map>
 #include <string>
-#include "pthread.h"
+#include <mutex>
 #include "mediabridgesession.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
@@ -55,7 +55,7 @@ private:
 	int 				queueId;
 	MediaBridgeEntries		bridges;
 	DWORD			maxId;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	bool			inited;
 };
 
