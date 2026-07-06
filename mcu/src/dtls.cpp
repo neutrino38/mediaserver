@@ -289,7 +289,7 @@ void DTLSConnection::Reset()
 	Log("-DTLSConnection::Reset()\n");
 
 	/* If the SSL session is not yet finalized don't bother resetting */
-	if (!SSL_is_init_finished(ssl))
+	if (ssl == NULL ||!SSL_is_init_finished(ssl))
 		return;
 
 	SSL_shutdown(ssl);

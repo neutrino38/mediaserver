@@ -60,6 +60,9 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 	SWORD resampled[4096];
 	int v = -1;
 
+	//Bloqueamos (protège aussi swr/playRate contre StartPlaying/StopPlaying concurrents)
+	std::lock_guard<std::mutex> lock(mutex);
+
 	//Check if we need to calculate it
 	if (calcVAD && vad.IsRateSupported(playRate))
 		//Calculate vad
@@ -85,9 +88,6 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 		buffer = resampled;
 		size = (DWORD)produced;
 	}
-
-	//Bloqueamos
-	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get left space
 	int left = fifoBuffer.size()-fifoBuffer.length();

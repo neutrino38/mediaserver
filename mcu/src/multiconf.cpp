@@ -689,6 +689,17 @@ int MultiConf::DeleteParticipant(int id)
 
 	participantsLock.WaitUnusedAndLock();
 
+	//Re-cherche par id : l'itérateur a pu être invalidé pendant la fenêtre
+	//déverrouillée, et un DeleteParticipant concurrent a pu déjà le retirer.
+	it = participants.find(id);
+	if (it == participants.end() || it->second != part)
+	{
+		//Unlock
+		participantsLock.Unlock();
+		//Un autre thread a déjà retiré (et détruit) ce participant
+		return Error("Participant already removed [%d]\n",id);
+	}
+
 	//Y lo quitamos del mapa
 	participants.erase(it);
 
@@ -819,19 +830,21 @@ int MultiConf::End()
 
 	//Get lock
 	participantsLock.WaitUnusedAndLock();
-	
-	//Destroy all participants
-	for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
-	{
-		//Destroy it
-		if ( DestroyParticipant(it->first,it->second) == 0 ) ret = 0;;
-	}
 
-	//Clear list
-	participants.clear();
-	
+	//Extrait la liste sous verrou : DestroyParticipant reprend participantsLock
+	//(IncUse) et le mutex n'est pas récursif, il doit donc s'exécuter hors verrou.
+	Participants parts;
+	parts.swap(participants);
+
 	//Unlock
 	participantsLock.Unlock();
+
+	//Destroy all participants (hors verrou)
+	for(Participants::iterator it=parts.begin(); it!=parts.end(); it++)
+	{
+		//Destroy it
+		if ( DestroyParticipant(it->first,it->second) == 0 ) ret = 0;
+	}
 	
 	
 	
@@ -1077,16 +1090,24 @@ int MultiConf::AcceptDocSharingRequest(int confId, int partId)
 	Log(">AcceptDocSharingRequest  [partId:%d]\n",partId);
 
 	int ret = 0 ;
+
+	//Use list (protège part contre un DeleteParticipant concurrent)
+	participantsLock.IncUse();
+
 	Participant *part = GetParticipant(partId);
-	
+
 	if (part)
 	{
 		ret = sharedDocMixer.AcceptDocSharingRequest(confId,part);
-		
+
 		//sharedDocMixer.ShareSecondaryStream(part);
 	}
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	return ret;
-	
+
 }
 
 int MultiConf::RefuseDocSharingRequest(int confId,int partId)
@@ -1094,30 +1115,45 @@ int MultiConf::RefuseDocSharingRequest(int confId,int partId)
 	Log(">RefuseDocSharingRequest  [partId:%d]\n",partId);
 
 	int ret = 0 ;
+
+	//Use list (protège part contre un DeleteParticipant concurrent)
+	participantsLock.IncUse();
+
 	Participant *part = GetParticipant(partId);
-	
+
 	if (part)
 	{
 		ret = sharedDocMixer.RefuseDocSharingRequest(confId,part);
-		
+
 		//sharedDocMixer.ShareSecondaryStream(part);
 	}
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	return ret;
-	
+
 }
 
 int  MultiConf::StopDocSharing(int confId,int partId)
 {
 	int ret = 0 ;
+
+	//Use list (protège part contre un DeleteParticipant concurrent)
+	participantsLock.IncUse();
+
 	Participant *part = GetParticipant(partId);
-	
+
 	if (part)
 	{
 		ret = sharedDocMixer.StopSharing(part);
 	}
 	//else
 	//	ret = sharedDocMixer.StopSharing();
-		
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	return ret;
 
 }
@@ -1125,10 +1161,15 @@ int  MultiConf::StopDocSharing(int confId,int partId)
 int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 {
 	Log(">SetDocSharingMosaic\n");
-	
+
 	int partId =0;
+
+	//Use list (protège part contre un DeleteParticipant concurrent ;
+	//les IncUse imbriqués des boucles ci-dessous restent valides)
+	participantsLock.IncUse();
+
 	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
-	
+
 	if ( mosaicId == -1 )
 	{
 		participantsLock.IncUse();
@@ -1183,8 +1224,12 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 		}
 	}
 	sharedDocMixer.SetSharedMosaic(mosaicId);
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	Log("<SetDocSharingMosaic\n");
-		
+
 	return 1;
 
 

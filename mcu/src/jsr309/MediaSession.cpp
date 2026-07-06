@@ -12,80 +12,63 @@ RecorderTimer::RecorderTimer(MediaSession* session,int recorderId,DWORD maxDurat
 	this->session       = session;
 	this->recorderId    = recorderId;
 	this->maxDurationMs  = maxDurationMs;
-	wakeup      = false;
 	stopClaimed = false;
-	started     = false;
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
+	cancelled   = false;
 }
 
 RecorderTimer::~RecorderTimer()
 {
-	//Réveille le thread (annulation) et attend sa fin
-	pthread_mutex_lock(&mutex);
-	wakeup = true;
-	pthread_cond_signal(&cond);
-	bool joinable = started;
-	pthread_mutex_unlock(&mutex);
+	//Annule la minuterie et réveille le thread (flag sous mutex : pas de réveil perdu)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		cancelled = true;
+		cond.notify_all();
+	}
 
-	if (joinable)
-		pthread_join(thread,NULL);
-
-	pthread_cond_destroy(&cond);
-	pthread_mutex_destroy(&mutex);
+	if (thread.joinable()) thread.join();
 }
 
 void RecorderTimer::Start()
 {
-	pthread_mutex_lock(&mutex);
-	started = true;
-	pthread_mutex_unlock(&mutex);
-	pthread_create(&thread,NULL,run,this);
+	thread = std::thread(&RecorderTimer::Run,this);
 }
 
 bool RecorderTimer::ClaimStop()
 {
 	bool claimed = false;
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 	if (!stopClaimed)
 	{
 		stopClaimed = true;
 		claimed = true;
 	}
-	pthread_mutex_unlock(&mutex);
+	cond.notify_all();
 	return claimed;
 }
 
-void* RecorderTimer::run(void* arg)
-{
-	((RecorderTimer*)arg)->Run();
-	return NULL;
-}
 
 void RecorderTimer::Run()
 {
-	//Calcule l'échéance absolue (CLOCK_REALTIME, comme attend pthread_cond_timedwait)
-	struct timespec deadline;
-	clock_gettime(CLOCK_REALTIME,&deadline);
-	deadline.tv_sec  += maxDurationMs/1000;
-	deadline.tv_nsec += (long)(maxDurationMs%1000)*1000000L;
-	if (deadline.tv_nsec >= 1000000000L)
+	//Attend l'échéance, un ClaimStop ou l'annulation. Le prédicat protège des
+	//réveils intempestifs et des notifications émises avant l'entrée en attente.
+	std::unique_lock<std::mutex> lock(mutex);
+	bool woken = cond.wait_for(lock, std::chrono::milliseconds(maxDurationMs),
+	                           [this]{ return cancelled || stopClaimed; });
+	if (woken)
 	{
-		deadline.tv_sec  += 1;
-		deadline.tv_nsec -= 1000000000L;
+		//Réveillé par ClaimStop ou destruction : plus rien à faire
+		Log("-RecorderTimer::Run() timer interrupted before expiration\n");
+		return;
 	}
 
-	//Attend l'échéance ou une annulation
-	pthread_mutex_lock(&mutex);
-	int rc = 0;
-	while (!wakeup && rc != ETIMEDOUT)
-		rc = pthread_cond_timedwait(&cond,&mutex,&deadline);
-	bool timedOut = (!wakeup && rc == ETIMEDOUT);
-	pthread_mutex_unlock(&mutex);
-
-	//Échéance atteinte sans annulation : on tente de prendre l'arrêt
-	if (timedOut && ClaimStop())
+	//Échéance atteinte : tente de prendre l'arrêt (perd si RecorderStop est passé entre-temps)
+	if (!stopClaimed)
+	{
+		stopClaimed = true;
+		lock.unlock();
+		Log("-RecorderTimer::Run() max duration of %u ms reached\n", (unsigned)maxDurationMs);
 		session->onRecorderMaxDuration(recorderId);
+	}
 }
 
 MediaSession::MediaSession(std::wstring tag)

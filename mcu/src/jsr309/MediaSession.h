@@ -9,6 +9,9 @@
 #define	MEDIASESSION_H
 
 #include "config.h"
+#include <mutex>
+#include <thread>
+#include <condition_variable>
 #include "media.h"
 #include "codecs.h"
 #include "video.h"
@@ -41,22 +44,21 @@ public:
 	~RecorderTimer();
 
 	void Start();
-	//Réserve le droit d'arrêter l'enregistrement ; ne renvoie true qu'au 1er appelant.
+
+	//Signal that the recording has been stopped.
 	bool ClaimStop();
 
 private:
-	static void* run(void* arg);
 	void Run();
 
 	MediaSession*   session;
 	int             recorderId;
 	DWORD           maxDurationMs;
-	pthread_t       thread;
-	pthread_mutex_t mutex;
-	pthread_cond_t  cond;
-	bool            wakeup;       //réveil anticipé (annulation)
+	std::thread     thread;
+	std::mutex      mutex;
+	std::condition_variable cond;
 	bool            stopClaimed;  //l'arrêt a déjà été pris
-	bool            started;
+	bool            cancelled;    //annulation (destruction) demandée
 };
 
 class MediaSession : public Player::Listener
@@ -258,6 +260,7 @@ private:
 	typedef std::map<int, int> EventCtxMap;
 private:
 	std::wstring tag;
+	std::mutex mutex;
 	
 	MediaSession::Listener *listener;
 	void* param;

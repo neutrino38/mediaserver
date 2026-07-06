@@ -1955,8 +1955,8 @@ RTPPacket* RTPSession::GetPacket(DWORD & ssrc)
 {
     streamUse.IncUse();
     RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
-    streamUse.DecUse();
     RTPPacket* rtp = (s != NULL && !s->disabled) ? s->Wait() : NULL;
+	streamUse.DecUse();
     if (rtp == NULL) msleep(100);
     return rtp;
 }

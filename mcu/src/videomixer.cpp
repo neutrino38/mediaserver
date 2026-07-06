@@ -1061,7 +1061,7 @@ VideoOutput* VideoMixer::GetOutput(int id)
 	lstVideosUse.DecUse();
 
 	//Si esta devolvemos el input
-	return (VideoOutput*)(*it).second->output;
+	return output;
 }
 
 /**************************
@@ -1273,19 +1273,23 @@ int VideoMixer::SetSlot(int mosaicId,int num,int id)
 
 int VideoMixer::DeleteMosaic(int mosaicId)
 {
+	//Protect the video map
+	lstVideosUse.WaitUnusedAndLock();
+
 	//Get mosaic from id
 	Mosaics::iterator it = mosaics.find(mosaicId);
 
 	//Check if we have found it
 	if (it==mosaics.end())
+	{
+		//Desprotegemos
+		lstVideosUse.Unlock();
 		//error
 		return Error("Mosaic not found [id:%d]\n",mosaicId);
+	}
 
 	//Get the old mosaic
 	Mosaic *mosaic = it->second;
-
-	//Blcok
-	lstVideosUse.IncUse();
 
 	//For each video
 	for (Videos::iterator itv = lstVideos.begin(); itv!= lstVideos.end(); ++itv)
@@ -1296,11 +1300,12 @@ int VideoMixer::DeleteMosaic(int mosaicId)
 			itv->second->mosaic = NULL;
 	}
 
-	//Blcok
-	lstVideosUse.DecUse();
 
 	//Remove mosaic
 	mosaics.erase(it);
+
+	//Protect the video map
+	lstVideosUse.Unlock();
 
 	//Delete mosaic
 	delete(mosaic);

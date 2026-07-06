@@ -422,8 +422,14 @@ int VideoStream::StopSending()
 		    return 1;
 		}
 	     }
-	     return Error("<Failed to stop thread=[%lu]. something is blocked. running thread=[%lu]\n",
-	                   localsendVideoThread, sendVideoThread);
+	     //Le thread ne s'est pas arrêté dans les temps : on trace l'anomalie mais on
+	     //joint quand même — le laisser vivre provoquerait un use-after-free des pipes
+	     //détruits juste après par DestroyParticipant (plan smart pointers, étape 0.8).
+	     Error("-StopSending: thread=[%lu] still running after 10 attempts, joining anyway\n",
+	           localsendVideoThread);
+	     pthread_join(localsendVideoThread,NULL);
+	     Log("<StopSending thread=[%lu] joined after forced wait\n", localsendVideoThread);
+	     return 1;
 	}
 
 	Log("<StopSending\n");
@@ -462,6 +468,13 @@ int VideoStream::StopReceiving()
 		     return 1;
 		}
 	    }
+	    //Le thread ne s'est pas arrêté dans les temps : on trace l'anomalie mais on
+	    //joint quand même — le laisser vivre provoquerait un use-after-free des pipes
+	    //détruits juste après par DestroyParticipant (plan smart pointers, étape 0.8).
+	    Error("-StopReceiving: thread=[%lu] still running after 10 attempts, joining anyway\n",
+	          localrecVideoThread);
+	    pthread_join(localrecVideoThread,NULL);
+	    Log("<StopReceiving thread=[%lu] joined after forced wait\n", localrecVideoThread);
 	}
 
 	Log("<StopReceiving\n");

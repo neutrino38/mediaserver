@@ -124,6 +124,9 @@ int PipeAudioInput::PutSamples(SWORD *buffer,DWORD size)
 {
 	SWORD resampled[4096];
 
+	//Block (protège aussi swr contre StartRecording/End concurrents)
+	std::lock_guard<std::mutex> lock(mutex);
+
 	//If we need to transrate
 	if (swr)
 	{
@@ -138,9 +141,6 @@ int PipeAudioInput::PutSamples(SWORD *buffer,DWORD size)
 		buffer = resampled;
 		size = (DWORD)produced;
 	}
-
-	//Block
-	std::lock_guard<std::mutex> lock(mutex);
 
 	//Si estamos reproduciendo
 	if (recording)
@@ -191,11 +191,12 @@ int PipeAudioInput::End()
 		recording = false;
 		fifoBuffer.clear();
 
+		//Libère le resampler sous mutex (PutSamples l'utilise sous ce même mutex)
+		if (swr) swr_free(&swr);
+
 		//Terminamos
 		cond.notify_one();
 	}
-
-	if (swr) swr_free(&swr);
 
 	//Salimos
 	return true;
