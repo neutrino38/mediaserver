@@ -63,6 +63,47 @@ void log_ffmpeg(void* ptr, int level, const char* fmt, va_list vl)
 // ffmpeg >= 4 est nativement thread-safe : le gestionnaire de verrous
 // (av_lockmgr_register / lock_ffmpeg) a ete supprime en ffmpeg 5.
 
+// libmedikit route ses Log()/Debug()/Error() internes via des pointeurs de
+// fonctions (SetLogFunctions, cf. libmedikit/log.c) ; sans branchement, ses
+// Log() et Error() sont perdus (logfile/errfile restent NULL). On ne peut pas
+// inclure <medkit/log.h> ici : ses declarations extern "C" Log/Debug/Error
+// sont en conflit avec les inline de include/log.h. On redeclare donc juste
+// SetLogFunctions et on branche des wrappers au format du mcu ; la sortie
+// suit stdout et donc --mcu-log.
+extern "C" void SetLogFunctions(int (*dbg)(const char*, va_list),
+				int (*log)(const char*, va_list),
+				int (*err)(const char*, va_list));
+
+static int MedkitLogCb(const char *msg, va_list ap)
+{
+	char buf[80];
+	printf("[0x%lx][%s][LOG]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
+	vprintf(msg, ap);
+	fflush(stdout);
+	return 1;
+}
+
+static int MedkitDebugCb(const char *msg, va_list ap)
+{
+	if (Logger::IsDebugEnabled())
+	{
+		struct timeval tv;
+		gettimeofday(&tv, NULL);
+		printf("[0x%lx][%.10ld.%.3ld][DBG]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+		vprintf(msg, ap);
+	}
+	return 1;
+}
+
+static int MedkitErrorCb(const char *msg, va_list ap)
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	printf("[0x%lx][%.10ld.%.3ld][ERR]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+	vprintf(msg, ap);
+	return 0;
+}
+
 static XmlRpcServer * gserver = NULL;
 static XmlStreamingHandler * geventHandlers[4] = { NULL, NULL, NULL, NULL };
 
@@ -85,6 +126,9 @@ void signing_handler(int sig)
 
 int main(int argc,char **argv)
 {
+	//Brancher les logs de libmedikit sur ceux du mcu (stdout -> --mcu-log)
+	SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitErrorCb);
+
 	//Init random
 	srand(time(NULL));
 
