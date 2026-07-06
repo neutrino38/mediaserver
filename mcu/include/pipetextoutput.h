@@ -1,6 +1,6 @@
 #ifndef _PIPETEXTOUTPUT_H_
 #define _PIPETEXTOUTPUT_H_
-#include <pthread.h>
+#include <mutex>
 #include "fifo.h"
 #include "text.h"
 
@@ -21,7 +21,7 @@ public:
 	int End();
 private:
 	//Mutex
-	pthread_mutex_t mutex;
+	std::mutex mutex;
 
 	//Members
 	fifo<wchar_t,2048>	fifoBuffer;
