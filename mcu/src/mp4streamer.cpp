@@ -4,7 +4,7 @@
 #include <string.h>
 #include <chrono>
 // En-têtes mcu d'abord : ils fixent les gardes d'inclusion (media/audio/video/
-// codecs/avcdescriptor) de sorte que <medkit/mp4reader.h>, inclus ensuite,
+// codecs/avcdescriptor) de sorte que <medkit/ffmp4reader.h>, inclus ensuite,
 // réutilise ces mêmes définitions (désormais partagées avec libmedkit).
 #include "log.h"
 #include "codecs.h"
@@ -14,9 +14,8 @@
 #include "video.h"
 #include "avcdescriptor.h"
 #include "mp4streamer.h"
-// Lecteur MP4 de libmedkit.
-#include "medkit/mp4reader.h"
-#include <mp4v2/mp4v2.h>
+// Lecteur MP4 ffmpeg de libmedkit.
+#include "medkit/ffmp4reader.h"
 
 MP4Streamer::MP4Streamer(Listener *listener) : playing(false)
 {
@@ -24,7 +23,6 @@ MP4Streamer::MP4Streamer(Listener *listener) : playing(false)
 	this->listener = listener;
 	//No reader / file yet
 	reader = NULL;
-	mp4 = MP4_INVALID_FILE_HANDLE;
 	opened = false;
 	//No codecs
 	audioCodec = 0;
@@ -53,18 +51,16 @@ int MP4Streamer::Open(const char *filename)
 	if (opened)
 		return Error("Already opened\n");
 
-	// Open mp4 file
-	MP4FileHandle handle = MP4Read(filename);
+	//Create the libmedkit ffmpeg reader (it opens the file itself)
+	reader = new Mp4FfReader(filename);
 
 	// If not valid
-	if (handle == MP4_INVALID_FILE_HANDLE)
-		return Error("Invalid file handle for %s\n", filename);
-
-	//Store handle
-	mp4 = handle;
-
-	//Create the libmedkit reader on the open handle (it does NOT own the file)
-	reader = new mp4reader(NULL, handle);
+	if (!reader->IsOpen())
+	{
+		delete reader;
+		reader = NULL;
+		return Error("Could not open %s\n", filename);
+	}
 
 	//Try to open an audio track (native codecs, no transcoding)
 	AudioCodec::Type acodecs[] = {
@@ -162,7 +158,7 @@ QWORD MP4Streamer::PreSeek(QWORD time)
 	if (!opened || !reader)
 		return time;
 
-	//Reading and seeking share the same mp4v2 handle, so stop the worker
+	//Reading and seeking share the same demux cursor, so stop the worker
 	//before touching the reader (doSeek() stops right after anyway).
 	StopWorkerLocked();
 
@@ -238,18 +234,11 @@ int MP4Streamer::Close()
 		videoPacket = NULL;
 	}
 
-	//Release the reader (does not close the file)
+	//Release the reader (closes the file via libavformat)
 	if (reader)
 	{
 		delete reader;
 		reader = NULL;
-	}
-
-	//Close the file (owned by the streamer)
-	if (mp4 != MP4_INVALID_FILE_HANDLE)
-	{
-		MP4Close(mp4);
-		mp4 = MP4_INVALID_FILE_HANDLE;
 	}
 
 	Log("<MP4Streamer Close\n");

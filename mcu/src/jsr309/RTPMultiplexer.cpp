@@ -4,6 +4,7 @@
  * 
  * Created on 7 de septiembre de 2011, 12:19
  */
+#include <sys/time.h>
 #include "log.h"
 #include "RTPMultiplexer.h"
 
@@ -11,6 +12,9 @@ RTPMultiplexer::RTPMultiplexer()
 {
 	//Create mutex
 	pthread_mutex_init(&mutex,NULL);
+	//No "no listener" log emitted yet
+	lastNoListenerTs = 0;
+	noListenerCount = 0;
 }
 
 RTPMultiplexer::~RTPMultiplexer()
@@ -67,7 +71,20 @@ void RTPMultiplexer::Multiplex(RTPPacket &packet)
 	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
 		//Update
 		(*it)->onRTPPacket(packet);
-	if (listeners.size() == 0) Log("-RTPMultiplexer: no listener.\n");
+	if (listeners.size() == 0)
+	{
+		//Compte les paquets ignorés et limite le log à 1/s pour éviter le flood
+		noListenerCount++;
+		struct timeval tv;
+		gettimeofday(&tv,0);
+		QWORD nowMs = (QWORD)tv.tv_sec*1000 + tv.tv_usec/1000;
+		if (nowMs - lastNoListenerTs >= 1000)
+		{
+			Log("-RTPMultiplexer: no listener (%u packets ignored).\n", noListenerCount);
+			lastNoListenerTs = nowMs;
+			noListenerCount = 0;
+		}
+	}
 	//Unlock
 	pthread_mutex_unlock(&mutex);
 }

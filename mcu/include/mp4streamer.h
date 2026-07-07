@@ -13,15 +13,15 @@
 #include "codecs.h"
 #include "avcdescriptor.h"
 
-// Lecteur/ordonnanceur MP4 du mcu, désormais bâti sur le lecteur de libmedkit
-// (classe mp4reader). Toute la mécanique bas niveau (énumération des pistes,
-// lecture des trames, ordonnancement temporel) est déléguée à mp4reader ;
+// Lecteur/ordonnanceur MP4 du mcu, bâti sur le lecteur ffmpeg de libmedkit
+// (classe Mp4FfReader, libavformat). Toute la mécanique bas niveau (démux,
+// lecture des trames, ordonnancement temporel) est déléguée à Mp4FfReader ;
 // MP4Streamer n'en reste que le pilote : un thread de lecture (std::thread) qui
 // récupère les trames et les publie via le Listener.
 //
-// mp4reader est déclarée en avant pour ne pas imposer <medkit/mp4reader.h>
-// (et donc <mp4v2/...>) à tous les consommateurs de cet en-tête.
-class mp4reader;
+// Mp4FfReader est déclarée en avant pour ne pas imposer <medkit/ffmp4reader.h>
+// à tous les consommateurs de cet en-tête.
+class Mp4FfReader;
 
 class MP4Streamer
 {
@@ -66,8 +66,7 @@ private:
 
 private:
 	Listener *listener;
-	mp4reader *reader;
-	void *mp4;			// MP4FileHandle (opaque, voir mp4v2.h dans le .cpp)
+	Mp4FfReader *reader;
 	bool opened;
 
 	DWORD audioCodec;

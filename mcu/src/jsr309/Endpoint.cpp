@@ -191,7 +191,12 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 	
 	//Get rtp enpoint for media
 	Port * p = GetPort(media, role);
-		
+
+	//Check (avant GetTransport : media non supporté = port NULL)
+	if (!p)
+		//Init it
+		return Error("No media supported");
+
 	switch(p->GetTransport())
 	{
 		case MediaFrame::RTP:
@@ -199,7 +204,15 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 			RTPEndpoint* rtp = GetRTPEndpoint(media, role);
 			//Set map for RTP
 			if ( rtp )
+			{
+				//Re-signalisation offer/answer : arrêter la réception AVANT de
+				//changer la map (SetReceivingRTPMap fait delete/new sur rtpMapIn,
+				//course avec le thread RX) ; StartReceiving redémarre ensuite
+				//avec la map négociée et rend le même port local.
+				if (rtp->IsReceiving())
+					rtp->StopReceiving();
 				rtp->SetReceivingRTPMap(rtpMap);
+			}
 			break;
 		}
 			
@@ -232,11 +245,7 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 			Error(" Protocol not supported. \n");
 			return -1;
 	}
-	//Check
-	if (!p)
-		//Init it
-		return Error("No media supported");
-	
+
 	//Start
 	if (!p->StartReceiving())
 		//Exit

@@ -1183,10 +1183,10 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map);
 
 
-	//Salimos
-	if(!recPort)
+	//Salimos (StartReceiving peut rendre -1 : protocole non supporté)
+	if(recPort<=0)
 		return xmlerror(env,"No se ha podido terminar la sessionerencia\n");
-	
+
 	Debug("Endpoint Rec Port=%d\n",recPort);
 	
 	//Devolvemos el resultado

@@ -30,7 +30,8 @@ public:
 		char* GetLocalMediaHost();
 		
 	    MediaFrame::MediaProtocol GetTransport() const { return proto; }
-	    
+	    bool IsReceiving() const { return receiving; }
+
 	    virtual int Init() = 0;
 	    virtual int End() = 0;
 	    

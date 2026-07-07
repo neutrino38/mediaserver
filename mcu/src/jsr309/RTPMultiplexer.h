@@ -34,6 +34,10 @@ private:
 protected:
 	Listeners	listeners;
 	pthread_mutex_t mutex;
+	// Limitation du log "no listener" à 1/s : un flux entrant que personne ne
+	// consomme (ex. montant du pair pendant un play) inonderait sinon le log.
+	QWORD	lastNoListenerTs;   // ms, 0 = jamais loggé
+	DWORD	noListenerCount;    // paquets ignorés depuis le dernier log
 };
 
 #endif	/* RTPMULTIPLEXER_H */
