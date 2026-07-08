@@ -44,20 +44,42 @@ void Player::NegotiateCodecs()
 	// fichier possède ET que tous les endpoints attachés acceptent. Le chemin
 	// Player→RTPEndpoint est en passthrough (pas de transcodage) : il faut donc
 	// lire la piste dont le codec figure dans la rtpMap négociée avec le pair.
-	static const DWORD acodecs[] = {
+	static const AudioCodec::Type acodecs[] = {
 		AudioCodec::PCMU, AudioCodec::PCMA, AudioCodec::G722,
 		AudioCodec::AMR,  AudioCodec::OPUS, AudioCodec::GSM
 	};
+	// Phase 1 — passthrough : le fichier possède un codec accepté par le pair.
+	bool audioDone = false;
 	for (unsigned i = 0; i < sizeof(acodecs)/sizeof(acodecs[0]); i++)
 	{
 		if (HasAudioCodec(acodecs[i]) && audio.TryCodec((int)acodecs[i]) == (int)acodecs[i])
 		{
 			SetAudioCodec(acodecs[i]);
+			audioDone = true;
 			break;
 		}
 	}
+	// Phase 2 — transcodage : aucun codec du fichier n'est jouable en l'état
+	// (typiquement fichier AAC), on décode et on ré-encode vers un codec accepté
+	// par le pair. SetAudioCodecTranscoded échoue si le fichier n'a aucune piste
+	// audio décodable.
+	//
+	// v1 : cibles de transcodage limitées à PCMU/PCMA (validées : les encodeurs
+	// G711 maison acceptent une tranche arbitraire). Les encodeurs ffmpeg
+	// (G722/GSM/AMR/OPUS) ont une sémantique de taille de trame que le
+	// découpage actuel ne satisfait pas encore -> exclus tant que non validés.
+	static const AudioCodec::Type xcodecs[] = { AudioCodec::PCMU, AudioCodec::PCMA };
+	if (!audioDone)
+	{
+		for (unsigned i = 0; i < sizeof(xcodecs)/sizeof(xcodecs[0]); i++)
+		{
+			if (audio.TryCodec((int)xcodecs[i]) == (int)xcodecs[i] &&
+			    SetAudioCodecTranscoded(xcodecs[i]))
+				break;
+		}
+	}
 
-	static const DWORD vcodecs[] = {
+	static const VideoCodec::Type vcodecs[] = {
 		VideoCodec::H264, VideoCodec::VP8,
 		VideoCodec::H263_1998, VideoCodec::H263_1996
 	};

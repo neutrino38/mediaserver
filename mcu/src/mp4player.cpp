@@ -44,12 +44,12 @@ int MP4Player::Play(const char* filename,bool loop)
 	//Open audio codec
 	if (streamer.HasAudioTrack())
 		//Create audio codec
-		audioDecoder = AudioCodecFactory::CreateDecoder((AudioCodec::Type)streamer.GetAudioCodec());
+		audioDecoder = AudioCodecFactory::CreateDecoder(streamer.GetAudioCodec());
 
 	//Open video codec
 	if (streamer.HasVideoTrack())
 		//Create audio codec
-		videoDecoder = VideoCodecFactory::CreateDecoder((VideoCodec::Type)streamer.GetVideoCodec());
+		videoDecoder = VideoCodecFactory::CreateDecoder(streamer.GetVideoCodec());
 		
 	//Start playback
 	return streamer.Play();

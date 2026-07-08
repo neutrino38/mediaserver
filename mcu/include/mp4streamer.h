@@ -42,12 +42,12 @@ public:
 	bool HasAudioTrack();
 	bool HasVideoTrack();
 	bool HasTextTrack();
-	DWORD GetAudioCodec()	{ return audioCodec;	}
-	DWORD GetVideoCodec()	{ return videoCodec;	}
+	AudioCodec::Type GetAudioCodec()	{ return (AudioCodec::Type)audioCodec;	}
+	VideoCodec::Type GetVideoCodec()	{ return (VideoCodec::Type)videoCodec;	}
 
 	// Le fichier contient-il une piste de ce codec ? (sans effet de bord)
-	bool HasAudioCodec(DWORD codec);
-	bool HasVideoCodec(DWORD codec);
+	bool HasAudioCodec(AudioCodec::Type codec);
+	bool HasVideoCodec(VideoCodec::Type codec);
 
 	// Re-sélectionne la piste audio/vidéo sur le codec demandé (une alternative
 	// présente dans le fichier), après Open et AVANT Play. Utilisé par la
@@ -55,8 +55,14 @@ public:
 	// @return 1 si la piste a été (re)sélectionnée, 0 sinon (codec absent, en
 	//         cours de lecture, ou non ouvert) — la sélection courante est
 	//         préservée en cas d'échec.
-	int SetAudioCodec(DWORD codec);
-	int SetVideoCodec(DWORD codec);
+	int SetAudioCodec(AudioCodec::Type codec);
+	int SetVideoCodec(VideoCodec::Type codec);
+
+	// Active le transcodage audio : lit la piste audio source du fichier (AAC
+	// compris) et produit `target` (codec accepté par le pair). Repli quand
+	// aucun codec du fichier n'est jouable en passthrough. Après Open, avant
+	// Play. @return 1 si activé, 0 sinon (pas de source décodable / en lecture).
+	int SetAudioCodecTranscoded(AudioCodec::Type target);
 	double GetDuration();
 	DWORD GetVideoWidth();
 	DWORD GetVideoHeight();

@@ -104,19 +104,19 @@ int MP4Streamer::Open(const char *filename)
 	return 1;
 }
 
-bool MP4Streamer::HasAudioCodec(DWORD codec)
+bool MP4Streamer::HasAudioCodec(AudioCodec::Type codec)
 {
 	std::lock_guard<std::mutex> lock(lifecycleMutex);
-	return reader && reader->HasAudioCodec((AudioCodec::Type)codec);
+	return reader && reader->HasAudioCodec(codec);
 }
 
-bool MP4Streamer::HasVideoCodec(DWORD codec)
+bool MP4Streamer::HasVideoCodec(VideoCodec::Type codec)
 {
 	std::lock_guard<std::mutex> lock(lifecycleMutex);
-	return reader && reader->HasVideoCodec((VideoCodec::Type)codec);
+	return reader && reader->HasVideoCodec(codec);
 }
 
-int MP4Streamer::SetAudioCodec(DWORD codec)
+int MP4Streamer::SetAudioCodec(AudioCodec::Type codec)
 {
 	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
@@ -127,7 +127,7 @@ int MP4Streamer::SetAudioCodec(DWORD codec)
 
 	//Exact-match selection: single-codec list so only that codec's track opens
 	//(and the current selection is left untouched if the file lacks it).
-	AudioCodec::Type c = (AudioCodec::Type)codec;
+	AudioCodec::Type c = codec;
 	if (reader->OpenTrack(&c, 1, c, false) <= 0)
 		return 0;
 
@@ -147,7 +147,7 @@ int MP4Streamer::SetAudioCodec(DWORD codec)
 	return 1;
 }
 
-int MP4Streamer::SetVideoCodec(DWORD codec)
+int MP4Streamer::SetVideoCodec(VideoCodec::Type codec)
 {
 	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
@@ -156,7 +156,7 @@ int MP4Streamer::SetVideoCodec(DWORD codec)
 	if (playing.load())
 		return Error("MP4Streamer: cannot change video codec while playing\n");
 
-	VideoCodec::Type c = (VideoCodec::Type)codec;
+	VideoCodec::Type c = codec;
 	if (reader->OpenTrack(&c, 1, c, false, false) <= 0)
 		return 0;
 
@@ -172,6 +172,34 @@ int MP4Streamer::SetVideoCodec(DWORD codec)
 	videoPacket = new RTPPacket(MediaFrame::Video, videoCodec, videoCodec);
 
 	Log("MP4Streamer: video codec re-selected to %s\n", VideoCodec::GetNameFor((VideoCodec::Type)videoCodec));
+	return 1;
+}
+
+int MP4Streamer::SetAudioCodecTranscoded(AudioCodec::Type target)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	if (!opened || !reader)
+		return 0;
+	if (playing.load())
+		return Error("MP4Streamer: cannot enable transcoding while playing\n");
+
+	if (reader->OpenAudioTranscoded(target) <= 0)
+		return 0;
+
+	AudioCodec::Type ac;
+	if (reader->GetCodec(ac))
+		audioCodec = ac;	// = target
+
+	if (audioPacket)
+	{
+		delete audioPacket;
+		audioPacket = NULL;
+	}
+	audioPacket = new RTPPacket(MediaFrame::Audio, audioCodec, audioCodec);
+
+	Log("MP4Streamer: audio transcoding enabled -> %s\n",
+		AudioCodec::GetNameFor((AudioCodec::Type)audioCodec));
 	return 1;
 }
 
