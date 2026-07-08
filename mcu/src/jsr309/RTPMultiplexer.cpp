@@ -21,11 +21,11 @@ RTPMultiplexer::~RTPMultiplexer()
 {
 	//Lock mutexk
 	pthread_mutex_lock(&mutex);
-	//Iterate
-	/*for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-		//Remove stream
-		(*it)->onEndStream();
-	*/
+	//Prévient chaque listener que cette source disparaît : il doit remettre son
+	//pointeur retour à NULL, sinon son Detach ultérieur déréférencera cet objet
+	//libéré (crash « pure virtual method called »). C-13 du plan smart pointers.
+	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
+		(*it)->onJoinableEnded(this);
 	//Clean listeners
 	listeners.clear();
 	//Unlock

@@ -339,6 +339,14 @@ int RTPEndpoint::Detach()
 	return 0;
 }
 
+void RTPEndpoint::onJoinableEnded(Joinable *joinable)
+{
+	//La source à laquelle on est attaché est détruite : on oublie le pointeur
+	//retour pour ne pas la déréférencer dans un Detach ultérieur (C-13).
+	if (joined == joinable)
+		joined = NULL;
+}
+
 void RTPEndpoint::onFPURequested(RTPSession *session)
 {
 	Log("-onFPURequested [joined:%p]\n",joined);

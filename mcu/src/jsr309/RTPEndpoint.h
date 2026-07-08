@@ -47,6 +47,7 @@ public:
 	virtual void onResetStream();
 	virtual void onEndStream();
         virtual int  TryCheckCodec(int codec);
+	virtual void onJoinableEnded(Joinable *joinable);
         
 	//RTPSession::Listener
 	virtual void onFPURequested(RTPSession *session);

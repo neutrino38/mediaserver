@@ -33,6 +33,13 @@ public :
 	virtual void onRTPPacket(RTPPacket &packet);
 	virtual void onResetStream() { SendReplacementChar(true); };
 	virtual void onEndStream() { SendReplacementChar(true); };
+	//Source détruite : on oublie le pointeur retour utilisé par Port::Detach
+	//(Endpoint::Port::joined, distinct du membre masquant de WSEndpoint) — C-13.
+	virtual void onJoinableEnded(Joinable *joinable)
+	{
+		if (Endpoint::Port::joined == joinable)
+			Endpoint::Port::joined = NULL;
+	}
 
 	//Websocket::Listener
 	virtual void onOpen(WebSocket *ws);
