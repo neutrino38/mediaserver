@@ -38,6 +38,39 @@ Joinable* Player::GetJoinable(MediaFrame::Type media)
 	return NULL;
 }
 	
+void Player::NegotiateCodecs()
+{
+	// Ordre de préférence côté serveur ; on retient la 1ʳᵉ alternative que le
+	// fichier possède ET que tous les endpoints attachés acceptent. Le chemin
+	// Player→RTPEndpoint est en passthrough (pas de transcodage) : il faut donc
+	// lire la piste dont le codec figure dans la rtpMap négociée avec le pair.
+	static const DWORD acodecs[] = {
+		AudioCodec::PCMU, AudioCodec::PCMA, AudioCodec::G722,
+		AudioCodec::AMR,  AudioCodec::OPUS, AudioCodec::GSM
+	};
+	for (unsigned i = 0; i < sizeof(acodecs)/sizeof(acodecs[0]); i++)
+	{
+		if (HasAudioCodec(acodecs[i]) && audio.TryCodec((int)acodecs[i]) == (int)acodecs[i])
+		{
+			SetAudioCodec(acodecs[i]);
+			break;
+		}
+	}
+
+	static const DWORD vcodecs[] = {
+		VideoCodec::H264, VideoCodec::VP8,
+		VideoCodec::H263_1998, VideoCodec::H263_1996
+	};
+	for (unsigned i = 0; i < sizeof(vcodecs)/sizeof(vcodecs[0]); i++)
+	{
+		if (HasVideoCodec(vcodecs[i]) && video.TryCodec((int)vcodecs[i]) == (int)vcodecs[i])
+		{
+			SetVideoCodec(vcodecs[i]);
+			break;
+		}
+	}
+}
+
 void Player::onRTPPacket(RTPPacket &packet)
 {
 	switch(packet.GetMedia())

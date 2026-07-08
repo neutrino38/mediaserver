@@ -32,6 +32,14 @@ public:
 	void SetListener(Player::Listener *listener,void* param);
 	Joinable* GetJoinable(MediaFrame::Type media);
 
+	// Choisit, parmi les codecs présents dans le fichier, une alternative
+	// acceptée par TOUS les endpoints attachés (via RTPMultiplexer::TryCodec),
+	// puis re-sélectionne la piste correspondante dans le MP4Streamer. À appeler
+	// après l'attach et avant Play. Sans effet si aucun endpoint n'est attaché
+	// ou si aucun codec commun n'est trouvé (la sélection par défaut d'Open
+	// reste alors en place).
+	void NegotiateCodecs();
+
 	/* MP4Streamer listener*/
 	virtual void onRTPPacket(RTPPacket &packet);
 	virtual void onTextFrame(TextFrame &text);

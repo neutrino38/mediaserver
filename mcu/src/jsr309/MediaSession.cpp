@@ -295,6 +295,11 @@ int MediaSession::PlayerPlay(int playerId)
         //Get it
         Player* player = it->second.get();
 
+        //Choisit, parmi les codecs du fichier, une alternative acceptée par les
+        //endpoints déjà attachés (le chemin Player→endpoint est en passthrough).
+        //Sans effet si rien n'est attaché : la sélection par défaut d'Open reste.
+        player->NegotiateCodecs();
+
         //Start playback
         int res = player->Play();
 

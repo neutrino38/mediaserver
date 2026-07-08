@@ -35,32 +35,32 @@ RTPMultiplexer::~RTPMultiplexer()
 }
 int  RTPMultiplexer::TryCodec(int codec)
 {
-    int rez1, rez2;
 	//Lock mutexk
 	pthread_mutex_lock(&mutex);
-	//Iterate
-	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-        {
-		//Update
-		rez1 = (*it)->TryCheckCodec(codec);
-                if (rez1 != codec) break;
-        }
 
-        for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-        {
-		//Update
-		rez2 = (*it)->TryCheckCodec(codec);
-                if (rez2 != rez1) 
-                {
-                    rez2 = -1;
-                    break;
-                }
-        }
+	//Aucun endpoint attaché : on ne peut rien affirmer sur le codec.
+	if (listeners.empty())
+	{
+		pthread_mutex_unlock(&mutex);
+		return -1;
+	}
+
+	//Le codec est accepté seulement si TOUS les endpoints listeners l'acceptent
+	//(présent dans leur rtpMap de sortie négociée).
+	int result = codec;
+	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
+	{
+		if ((*it)->TryCheckCodec(codec) != codec)
+		{
+			result = -1;
+			break;
+		}
+	}
 
 	//Unlock
 	pthread_mutex_unlock(&mutex);
 
-        return rez2;
+	return result;
 }
 
 void RTPMultiplexer::Multiplex(RTPPacket &packet)

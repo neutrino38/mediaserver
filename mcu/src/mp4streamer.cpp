@@ -104,6 +104,77 @@ int MP4Streamer::Open(const char *filename)
 	return 1;
 }
 
+bool MP4Streamer::HasAudioCodec(DWORD codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+	return reader && reader->HasAudioCodec((AudioCodec::Type)codec);
+}
+
+bool MP4Streamer::HasVideoCodec(DWORD codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+	return reader && reader->HasVideoCodec((VideoCodec::Type)codec);
+}
+
+int MP4Streamer::SetAudioCodec(DWORD codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	if (!opened || !reader)
+		return 0;
+	if (playing.load())
+		return Error("MP4Streamer: cannot change audio codec while playing\n");
+
+	//Exact-match selection: single-codec list so only that codec's track opens
+	//(and the current selection is left untouched if the file lacks it).
+	AudioCodec::Type c = (AudioCodec::Type)codec;
+	if (reader->OpenTrack(&c, 1, c, false) <= 0)
+		return 0;
+
+	AudioCodec::Type ac;
+	if (reader->GetCodec(ac))
+		audioCodec = ac;
+
+	//Recreate the reusable RTP packet with the new codec
+	if (audioPacket)
+	{
+		delete audioPacket;
+		audioPacket = NULL;
+	}
+	audioPacket = new RTPPacket(MediaFrame::Audio, audioCodec, audioCodec);
+
+	Log("MP4Streamer: audio codec re-selected to %s\n", AudioCodec::GetNameFor((AudioCodec::Type)audioCodec));
+	return 1;
+}
+
+int MP4Streamer::SetVideoCodec(DWORD codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	if (!opened || !reader)
+		return 0;
+	if (playing.load())
+		return Error("MP4Streamer: cannot change video codec while playing\n");
+
+	VideoCodec::Type c = (VideoCodec::Type)codec;
+	if (reader->OpenTrack(&c, 1, c, false, false) <= 0)
+		return 0;
+
+	VideoCodec::Type vc;
+	if (reader->GetVideoCodec(vc))
+		videoCodec = vc;
+
+	if (videoPacket)
+	{
+		delete videoPacket;
+		videoPacket = NULL;
+	}
+	videoPacket = new RTPPacket(MediaFrame::Video, videoCodec, videoCodec);
+
+	Log("MP4Streamer: video codec re-selected to %s\n", VideoCodec::GetNameFor((VideoCodec::Type)videoCodec));
+	return 1;
+}
+
 bool MP4Streamer::HasAudioTrack()	{ return reader && reader->HasAudioTrack();	}
 bool MP4Streamer::HasVideoTrack()	{ return reader && reader->HasVideoTrack();	}
 bool MP4Streamer::HasTextTrack()	{ return reader && reader->HasTextTrack();	}

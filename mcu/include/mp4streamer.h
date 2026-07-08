@@ -44,6 +44,19 @@ public:
 	bool HasTextTrack();
 	DWORD GetAudioCodec()	{ return audioCodec;	}
 	DWORD GetVideoCodec()	{ return videoCodec;	}
+
+	// Le fichier contient-il une piste de ce codec ? (sans effet de bord)
+	bool HasAudioCodec(DWORD codec);
+	bool HasVideoCodec(DWORD codec);
+
+	// Re-sélectionne la piste audio/vidéo sur le codec demandé (une alternative
+	// présente dans le fichier), après Open et AVANT Play. Utilisé par la
+	// négociation de codec (choix de l'alternative acceptée par le pair).
+	// @return 1 si la piste a été (re)sélectionnée, 0 sinon (codec absent, en
+	//         cours de lecture, ou non ouvert) — la sélection courante est
+	//         préservée en cas d'échec.
+	int SetAudioCodec(DWORD codec);
+	int SetVideoCodec(DWORD codec);
 	double GetDuration();
 	DWORD GetVideoWidth();
 	DWORD GetVideoHeight();
