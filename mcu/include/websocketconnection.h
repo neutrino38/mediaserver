@@ -2,7 +2,9 @@
 #define _WebSocketConnection_H_
 #include <pthread.h>
 #include <sys/poll.h>
-#include <pthread.h>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <map>
 #include "config.h"
 #include "fifo.h"
@@ -290,7 +292,7 @@ public:
 		virtual void onDisconnected(WebSocketConnection* conn) = 0;
 	};
 public:
-	WebSocketConnection(Listener* listener);
+	WebSocketConnection(std::weak_ptr<Listener> listener);
 	~WebSocketConnection();
 
 	int Init(int fd);
@@ -298,7 +300,7 @@ public:
 
 
 	//Weksocket
-	virtual void Accept(WebSocket::Listener *listener);
+	virtual void Accept(std::weak_ptr<WebSocket::Listener> wsl);
 	virtual void Reject(const WORD code, const char* reason);
 	virtual void SendMessage(const std::string& message);
 	virtual void SendMessage(const BYTE* data, const DWORD size);
@@ -329,15 +331,16 @@ private:
 
 private:
 	int socket;
-	pollfd ufds[1];
+	int wakeup_socket[2]; // write signal
+	pollfd ufds[2];
 	bool inited;
 	bool running;
 
-	pthread_t thread;
-	pthread_mutex_t mutex;
+	std::thread thread;
+	std::mutex mutex;
 
 	timeval startTime;
-	Listener *listener;
+	std::weak_ptr<Listener> listener;
 
 	bool upgraded;
 	DWORD recvSize;
@@ -350,7 +353,7 @@ private:
 	std::string headerField;
 	std::string headerValue;
 
-	WebSocket::Listener *wsl;
+	std::weak_ptr<WebSocket::Listener> wsl;
 	WebSocketFrameHeader::Parser headerParser;
 	WebSocketFrameHeader* header;
 	QWORD framePos;
