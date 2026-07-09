@@ -1189,24 +1189,25 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 	if ( mosaicId == -1 )
 	{
 		participantsLock.IncUse();
-			
+
 			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 			{
 				partId 	= it->first;
 
-				// TODO : check if participant is really an RTP participant
-				part  	= std::static_pointer_cast<RTPParticipant>(it->second);
-				
-				if (part->GetDocSharingMode() == Participant::BFCP_TCP ||  part->GetDocSharingMode() == Participant::BFCP_UDP)
+				RTPParticipantPtr rtpPart = GetRTPParticipant(partId);
+				if (!rtpPart)
+					continue;
+
+				if (rtpPart->GetDocSharingMode() == Participant::BFCP_TCP ||  rtpPart->GetDocSharingMode() == Participant::BFCP_UDP)
 				{
-					part->StopSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
+					rtpPart->StopSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
 				}
-				
+
 			}
-		
+
 			participantsLock.DecUse();
 
-			
+
 	}
 	else
 	{
@@ -1214,33 +1215,34 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 		{
 			videoMixer.InitMixer(id+100000,mosaicId);
 			part->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-					
+
 		}
 		else
 		{
-		
+
 			participantsLock.IncUse();
-			
+
 			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 			{
 				partId 	= it->first;
 
-				// TODO : check if participant is really an RTP participant
-				part  	= std::static_pointer_cast<RTPParticipant>(it->second);
-				
-				if (part->GetDocSharingMode() == Participant::BFCP_TCP ||  part->GetDocSharingMode() == Participant::BFCP_UDP )
+				RTPParticipantPtr rtpPart = GetRTPParticipant(partId);
+				if (!rtpPart)
+					continue;
+
+				if (rtpPart->GetDocSharingMode() == Participant::BFCP_TCP ||  rtpPart->GetDocSharingMode() == Participant::BFCP_UDP )
 				{
-				
+
 					videoMixer.InitMixer(partId+100000,mosaicId);
-					part->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-			
+					rtpPart->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
+
 				}
-				
+
 			}
-		
+
 			participantsLock.DecUse();
 
-			
+
 		}
 	}
 	sharedDocMixer.SetSharedMosaic(mosaicId);
