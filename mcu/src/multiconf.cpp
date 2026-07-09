@@ -728,13 +728,15 @@ int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 	audioMixer.EndMixer(partId);
 	textMixer.EndMixer(partId);
 	//End participant video input/output
-	videoMixer.EndMixer(partId);	
+	videoMixer.EndMixer(partId);
 	videoMixer.EndMixer(partId+100000);
 
-        if ( part->use.WaitUnusedAndLock(2000) != 1)
-        {
-            return Error("DestroyParticipant: failed lock participant %d\n", partId);
-        }
+	//Wait for any in-flight participant thread (e.g. RTMPParticipant::onMediaFrame) to be done
+	if ( part->use.WaitUnusedAndLock(2000) != 1)
+	{
+		return Error("DestroyParticipant: failed lock participant %d\n", partId);
+	}
+	part->use.Unlock();
 
 	Log("-DestroyParticipant deleting mixers [%d]\n",partId);
 

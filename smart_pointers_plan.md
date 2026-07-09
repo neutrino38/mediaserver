@@ -242,25 +242,61 @@ create/delete conference sous trafic XML-RPC concurrent, et scénario RTMP
 (connect → `DeleteConference` concurrent → vérifier l'absence de crash grâce au `shared_ptr`
 tenu par `RTMPConnection::app`).
 
-### Phase 3 — Participants, players, tokens (cœur de `MultiConf`)
+### Phase 3 — Participants, players, tokens (cœur de `MultiConf`) — **EN COURS (démarrée manuellement 2026-07-09)**
 
-1. `participants` devient `map<int, shared_ptr<Participant>>` ; `GetParticipant` rend un
-   `shared_ptr` (corrige l'accès actuel sans lock, `multiconf.cpp:751-788`).
-2. **C-6** : `NetStream::part` devient `weak_ptr<RTMPParticipant>` ; les tokens
-   (`ConsumeParticipant*Token`) prennent le lock et rendent des `shared_ptr`.
-3. **C-7** : `players` devient `map<int, shared_ptr<MP4Player>>` + verrou dédié (aujourd'hui
-   totalement absent).
-4. **H-8** : réécrire `DeleteParticipant` : extraction du `shared_ptr` de la map sous un seul
-   lock, destruction hors lock (l'itérateur n'est plus réutilisé ; un double delete du même id
-   devient un no-op).
-5. **C-5** : `Participant::use` est retiré (trompeur) ; la garantie « les threads mixeurs ont
-   fini » est reprise par les `shared_ptr` que détiennent les structures du mixer, et par le
-   `End()` fiabilisé en phase 0.8.
-6. **M-1** : verrou sur `publishers` + `unique_ptr` pour `PublisherInfo::stream/conn`.
-7. `MultiConf::recorder` → `unique_ptr<RecorderControl>`.
+*Revue de code effectuée le 2026-07-09 sur le commit `34536c2` (« plan smart pointers - début de
+la phase 3 - manuel ») + les modifications non commitées à ce moment sur `multiconf.cpp`.*
+
+1. **Fait** : `participants` est passé à `map<int, ParticipantPtr>` (`ParticipantPtr =
+   shared_ptr<Participant>`, typedef dans `participant.h`) ; `GetParticipant(id)` et
+   `GetParticipant(id, type)` rendent des `shared_ptr` (copies) au lieu de pointeurs bruts.
+   Nouvel helper `GetRTPParticipant(id)` (`dynamic_pointer_cast<RTPParticipant>`) qui remplace
+   proprement les `(RTPParticipant*)GetParticipant(...)` C-style éparpillés dans `multiconf.cpp`
+   (SetLocalCryptoSDES, StartSending/StopSending, StartReceiving/StopReceiving, recording
+   participant, etc.) — bonne clarification de type, cohérent avec le principe §3.1.1.
+   `SharedDocMixer::part` (bonus, hors périmètre initial de la phase) est aussi passé en
+   `weak_ptr<Participant>`, avec `.lock()` correct à chaque site d'usage et l'équilibre
+   `IncUse`/`DecUse` de `StopSharing()` préservé.
+   ⚠️ **Reste un cast non sécurisé** dans les deux boucles de `SetDocSharingMosaic`
+   (`multiconf.cpp`, ~l.1191/1222) : `static_pointer_cast<RTPParticipant>(it->second)` est
+   appliqué à **tous** les participants de la map sans vérifier `GetType()`, y compris les
+   `RTMPParticipant` — défaut préexistant (même risque que l'ancien cast C-style qu'il remplace),
+   maintenant explicitement marqué `// TODO`. À corriger avec `GetRTPParticipant()` +
+   filtrage du type, par cohérence avec le reste de la passe.
+2. **Non commencé — C-6** : `ConsumeParticipantInputToken`/`ConsumeParticipantOutputToken`
+   rendent toujours un pointeur brut via `part.get()`, stocké durablement côté RTMP
+   (`NetStream::part`). La map est désormais sûre, mais cette sortie de secours contourne
+   totalement la protection : un `shared_ptr` dont le refcount tombe à zéro juste après laisse
+   `NetStream::part` pendouillant, comme avant. Reste à faire : `weak_ptr<RTMPParticipant>` côté
+   `NetStream` + verrou/`shared_ptr` au site de consommation du token.
+3. **Non commencé — C-7** (`players` → `map<int, shared_ptr<MP4Player>>` + verrou dédié).
+4. **H-8** : déjà traité en Phase 0.3 (`DeleteParticipant` re-cherche par id, itérateur non
+   réutilisé) ; le passage en `shared_ptr` de cette étape ne change pas le raisonnement, juste le
+   type stocké — RAS.
+5. **C-5 — pas encore retiré (correctement, c'est volontaire)** : `Participant::use` reste en
+   place — `use.IncUse/DecUse` est toujours utilisé massivement dans `rtmpparticipant.cpp`
+   (~8 sites, autour du traitement des frames), et rien d'autre ne garantit aujourd'hui que ces
+   accès ont cessé avant la destruction des mixers (H-6, non traité).
+   **Bug corrigé le 2026-07-09** : le commit `34536c2` avait supprimé l'appel
+   `Participant::DestroyParticipant(part)` (qui faisait `part->use.Unlock()` puis `delete part`)
+   mais avait oublié le `Unlock()` — `MultiConf::DestroyParticipant` acquérait
+   `part->use.WaitUnusedAndLock(2000)` sans jamais le relâcher avant que le dernier `shared_ptr`
+   ne détruise l'objet (`~Use` sur un mutex encore verrouillé → UB POSIX). La modification
+   intermédiaire (non commitée à l'époque) qui retirait la garde entièrement au lieu de corriger
+   l'oubli a été abandonnée : elle supprimait la seule barrière de synchronisation contre un
+   `RTMPParticipant::onMediaFrame` concurrent. Correctif retenu : garder la garde
+   `WaitUnusedAndLock(2000)` et ajouter le `part->use.Unlock()` manquant juste après, avant la
+   suppression des mixers (`multiconf.cpp`, `DestroyParticipant`). Build vérifié vert.
+   Le retrait définitif de `Participant::use` (objectif final de C-5) reste réservé à après le
+   traitement de H-6 (protection structurelle de `onMediaFrame`, phase 4).
+6. **Non commencé — M-1** (verrou `publishers` + `unique_ptr` pour `PublisherInfo::stream/conn`).
+7. **Non commencé** : `MultiConf::recorder` → `unique_ptr<RecorderControl>`.
+
+**État du build** : vert (`./install.ksh localcompile`, 2026-07-09), y compris après le correctif
+du point 5.
 
 **Livrable** : build vert + scénario join/leave massif de participants RTP et RTMP pendant
-lecture MP4.
+lecture MP4 (reste à dérouler).
 
 ### Phase 4 — Streams, pipes et listeners (couche transport)
 
