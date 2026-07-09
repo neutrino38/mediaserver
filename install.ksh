@@ -198,23 +198,9 @@ function local_compile
 	# paquet systeme xmlrpc-c-devel (AlmaLinux 9, depot crb) : memes en-tetes,
 	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile.rpm LDXMLFLAGS).
 
-	if [ ! -f staticdeps/lib/libg722_1.a ]
-	then
-		echo "compilation SIREN / G.722.1"
-		cd $HOME
-		if [ ! -r libg722_1 ]
-		then
-			#svn export http://svn.ives.fr/svn-libs-dev/libg722_1
-			git clone https://github.com/neutrino38/libg722_1.git
-		fi
-		cd libg722_1
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make clean
-		make
-		make install
-		cd $BASESRCDIR
-	fi
-	
+	# g722_1 / SIREN : plus construit. Le codec G.722.1 a ete retire du
+	# mediaserver et de libmedikit (plus aucune reference a -lg722_1).
+
 	cd $BASESRCDIR
 
 	# Sous-modules (libmedkit = codecs, libbfcp = BFCP) : on les initialise au
