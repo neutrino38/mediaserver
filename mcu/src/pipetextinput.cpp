@@ -1,7 +1,7 @@
 #include <list>
 #include "log.h"
 #include "pipetextinput.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 PipeTextInput::PipeTextInput() : inited(false)
 {

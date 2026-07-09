@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include "xmlhandler.h"
 #include "mediagateway.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 xmlrpc_value* MediaGatewayCreateMediaBridge(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {

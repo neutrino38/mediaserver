@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include "log.h"
 #include "rtmpparticipant.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtpsession.h"
 #include "video.h"
 #include "avcdescriptor.h"

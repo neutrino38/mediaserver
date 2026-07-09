@@ -6,7 +6,7 @@
 #include "websocketserver.h"
 #include "websockets.h"
 #include "Endpoint.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "text.h"
 #include "redcodec.h"
 

@@ -7,7 +7,7 @@
 // memes definitions (desormais partagees avec libmedkit), exactement comme
 // mp4recorder.cpp le fait pour mp4reader.
 #include "log.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "audio.h"
 #include "video.h"
 #include "text.h"

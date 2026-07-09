@@ -1,6 +1,6 @@
 #include "mp4player.h"
 #include "log.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 MP4Player::MP4Player() : streamer(this)
 {

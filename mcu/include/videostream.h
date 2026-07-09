@@ -3,7 +3,7 @@
 
 #include <pthread.h>
 #include "config.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtpsession.h"
 #include "RTPSmoother.h"
 #include "video.h"

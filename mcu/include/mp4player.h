@@ -5,7 +5,7 @@
 #include "pipevideoinput.h"
 #include "pipetextinput.h"
 #include "mp4streamer.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 
 

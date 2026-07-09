@@ -7,7 +7,7 @@
 
 #include "AudioEncoderWorker.h"
 #include "AudioDecoderWorker.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 #ifndef AUDIOTRANSCODER_H
 #define	AUDIOTRANSCODER_H

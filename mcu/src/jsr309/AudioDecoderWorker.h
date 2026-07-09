@@ -7,7 +7,7 @@
 
 #ifndef AUDIODECODERWORKER_H
 #define	AUDIODECODERWORKER_H
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "audio.h"
 #include "pipeaudioinput.h"
 #include "waitqueue.h"

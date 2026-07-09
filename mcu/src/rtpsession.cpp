@@ -17,7 +17,7 @@
 #include <time.h>
 #include "log.h"
 #include "tools.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtp.h"
 #include "rtpsession.h"
 #include "stunmessage.h"

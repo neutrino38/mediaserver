@@ -4,7 +4,7 @@
 #include "xmlhandler.h"
 #include "JSR309Manager.h"
 #include "MediaSession.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "amf.h"
 #include "dtls.h"
 #include "AudioTranscoder.h"

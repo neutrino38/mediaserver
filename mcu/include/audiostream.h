@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <vector>
 #include "config.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtpsession.h"
 #include "audio.h"
 #include "dtmfmessage.h"

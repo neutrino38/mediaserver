@@ -14,7 +14,7 @@
 #include <condition_variable>
 #include <memory>
 #include "media.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "video.h"
 #include "Player.h"
 #include "Recorder.h"

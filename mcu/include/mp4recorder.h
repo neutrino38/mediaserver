@@ -5,7 +5,7 @@
 #include <mp4v2/mp4v2.h>
 
 #include "config.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "audio.h"
 #include "video.h"
 #include "text.h"

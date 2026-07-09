@@ -10,7 +10,7 @@
 #include "text.h"
 #include "audio.h"
 #include "video.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "avcdescriptor.h"
 
 // Lecteur/ordonnanceur MP4 du mcu, bâti sur le lecteur ffmpeg de libmedkit

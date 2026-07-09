@@ -13,7 +13,7 @@
 #include "rtpsession.h"
 #include "rtmpnetconnection.h"
 #include "rtmpstream.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "mp4recorder.h"
 #include "waitqueue.h"
 #include "RTPSmoother.h"

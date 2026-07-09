@@ -7,7 +7,7 @@
 
 #ifndef AUDIOENCODERWORKER_H
 #define	AUDIOENCODERWORKER_H
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "audio.h"
 #include "RTPMultiplexer.h"
 

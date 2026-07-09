@@ -10,7 +10,7 @@
 #include "log.h"
 #include "RTPEndpoint.h"
 #include "rtpsession.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Port(type, MediaFrame::RTP), RTPSession(type,this,role)
 {

@@ -9,7 +9,7 @@
 #define	RTMPPARTICIPANT_H
 
 #include "rtmpstream.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "participant.h"
 #include "multiconf.h"
 #include "waitqueue.h"

@@ -7,7 +7,7 @@
 // codecs/avcdescriptor) de sorte que <medkit/ffmp4reader.h>, inclus ensuite,
 // réutilise ces mêmes définitions (désormais partagées avec libmedkit).
 #include "log.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtp.h"
 #include "text.h"
 #include "audio.h"

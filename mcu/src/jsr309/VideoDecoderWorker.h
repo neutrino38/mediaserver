@@ -8,7 +8,7 @@
 #ifndef VIDEODECODERWORKER_H
 #define	VIDEODECODERWORKER_H
 
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "video.h"
 #include "waitqueue.h"
 #include "Joinable.h"
