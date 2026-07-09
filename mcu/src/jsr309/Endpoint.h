@@ -7,6 +7,8 @@
 
 #ifndef ENDPOINT_H
 #define	ENDPOINT_H
+
+#include <memory>
 #include "Joinable.h"
 #include "websockets.h"
 #include "RTPMultiplexer.h"
@@ -24,7 +26,7 @@ public:
 	    MediaFrame::Type GetMedia() { return type; }
 	    int Detach();
 	    int Attach(Joinable * join);
-		int SwitchJoin(Port *oldPort);
+		int SwitchJoin(std::shared_ptr<Port> oldPort);
 		
 		int GetLocalMediaPort();
 		char* GetLocalMediaHost();
@@ -135,7 +137,7 @@ public:
 	const Statistics * GetStatistics();
 
 private:
-	inline Port* GetPort(MediaFrame::Type media)
+	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media)
 	{
 		if ( media >= MediaFrame::Audio && media <= MediaFrame::Text )
 		{
@@ -147,7 +149,7 @@ private:
 		}
 	}
 	
-	inline Port* GetPort(MediaFrame::Type media, MediaFrame::MediaRole role)
+	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media, MediaFrame::MediaRole role)
 	{
 		if ( role == MediaFrame::VIDEO_MAIN )
 		{
@@ -168,8 +170,8 @@ private:
 private:
 	std::wstring name;
 	//RTP sessions
-	Port * ports[4];
-	Port * ports2[4];
+	std::shared_ptr<Port> ports[4];
+	std::shared_ptr<Port> ports2[4];
 	
 	RemoteRateEstimator estimator;
 	RemoteRateEstimator estimator2;

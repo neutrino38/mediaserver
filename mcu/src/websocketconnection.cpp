@@ -16,7 +16,7 @@
 #include "tools.h"
 #include "websocketconnection.h"
 
-WebSocketConnection::WebSocketConnection(std::weak_ptr<Listener> listener)
+WebSocketConnection::WebSocketConnection(Listener* listener)
 {
 	//Store listener
 	this->listener = listener;
@@ -95,7 +95,7 @@ void WebSocketConnection::Start()
 	running = true;
 	
 	//Create thread
-	thread = std::thread(&WebSocketConnection::Run,NULL);
+	thread = std::thread(&WebSocketConnection::Run,this);
 }
 
 void WebSocketConnection::Stop()
@@ -292,13 +292,12 @@ int WebSocketConnection::Run()
 	Log("<Run WebSocket connection\n");
 	
 	//If got listener
-	std::shared_ptr<Listener> l2 = this->listener.lock();
-	if (l2)
+	if (listener)
 		//Send end
-		l2->onDisconnected(this);
+		listener->onDisconnected(this);
 
 	//Don't send more events
-	listener.reset();
+	listener = NULL;
 	return 0;
 }
 
@@ -634,10 +633,9 @@ int WebSocketConnection::on_message_complete (HTTPParser*)
 	Log("-Incoming websocket connection for url:%s\n",request->GetRequestURI().c_str());
 
 	//Check listener
-	std::shared_ptr<Listener> l2 = this->listener.lock();
-	if (l2)
+	if (listener)
 		//Send event
-		l2->onUpgradeRequest(this);
+		listener->onUpgradeRequest(this);
 	return 0;
 }
 

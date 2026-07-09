@@ -8,6 +8,8 @@
 #ifndef WEBSOCKETS_H
 #define	WEBSOCKETS_H
 
+#include <memory>
+
 class WebSocket
 {
 public:
@@ -27,7 +29,7 @@ public:
 		virtual void onClose(WebSocket *ws) = 0;
 	};
 public:
-	virtual void Accept(Listener *listener) = 0;
+	virtual void Accept(std::weak_ptr<Listener> listener) = 0;
 	virtual void Reject(const WORD code, const char* reason) = 0;
 	virtual void SendMessage(const std::string& message) = 0;
 	virtual void SendMessage(const BYTE* data, const DWORD size) = 0;

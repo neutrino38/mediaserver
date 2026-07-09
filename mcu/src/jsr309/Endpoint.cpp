@@ -19,25 +19,22 @@ Endpoint::Endpoint(std::wstring name,bool audioSupported,bool videoSupported,boo
 	//Store name
 	this->name = name;
 	//Nullify
-	for (int i=0; i<3; i++)
-	{
-	    ports[i] = ports2[i] = NULL;
-	}
+
 	//If audio
 	if (audioSupported)
 		//Create endpoint
-		ports[MediaFrame::Audio] = new RTPEndpoint(MediaFrame::Audio);
+		ports[MediaFrame::Audio] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Audio));
 	//If video
 	if (videoSupported)
 	{
 		//Create endpoint
-		ports[MediaFrame::Video] = new RTPEndpoint(MediaFrame::Video);
-		ports2[MediaFrame::Video] = new RTPEndpoint(MediaFrame::Video, MediaFrame::VIDEO_SLIDES);
+		ports[MediaFrame::Video] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Video));
+		ports2[MediaFrame::Video] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Video, MediaFrame::VIDEO_SLIDES));
 	}
 	//If video
 	if (textSupported)
 	{
-		ports[MediaFrame::Text] = new RTPEndpoint(MediaFrame::Text);
+		ports[MediaFrame::Text] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Text));
 	}
 	estimator.SetEventSource(&eventSource);
 	estimator2.SetEventSource(&eventSource);
@@ -45,11 +42,6 @@ Endpoint::Endpoint(std::wstring name,bool audioSupported,bool videoSupported,boo
 
 Endpoint::~Endpoint()
 {
-	for (int i=0; i<3; i++)
-	{
-	    if (ports[i]) delete ports[i];
-	    if (ports2[i]) delete ports2[i];
-	}
 }
 
 //Methods
@@ -59,22 +51,22 @@ int Endpoint::Init()
 	{
 	    if (ports[i]) 
 	    {
-		ports[i]->Init();
-		if ( i == MediaFrame::Video && ports[i]->GetTransport() == MediaFrame::RTP ) 
-		{
-		    RTPEndpoint * rtp = (RTPEndpoint *) ports[i];
-		    rtp->SetRemoteRateEstimator(&estimator);
-		}
+			ports[i]->Init();
+			if ( i == MediaFrame::Video && ports[i]->GetTransport() == MediaFrame::RTP ) 
+			{
+				std::shared_ptr<RTPEndpoint> rtp = std::dynamic_pointer_cast<RTPEndpoint>(ports[i]);
+				rtp->SetRemoteRateEstimator(&estimator);
+			}
 	    }
 	    
 	    if (ports2[i])
 	    {
-		ports2[i]->Init();
-		if ( i == MediaFrame::Video && ports2[i]->GetTransport() == MediaFrame::RTP) 
-		{
-		    RTPEndpoint * rtp = (RTPEndpoint *) ports2[i];
-		    rtp->SetRemoteRateEstimator(&estimator2);
-		}
+			ports2[i]->Init();
+			if ( i == MediaFrame::Video && ports2[i]->GetTransport() == MediaFrame::RTP) 
+			{
+				std::shared_ptr<RTPEndpoint> rtp = std::dynamic_pointer_cast<RTPEndpoint>(ports2[i]);
+				rtp->SetRemoteRateEstimator(&estimator2);
+			}
 	    }
 	}
 	return 0;
@@ -103,21 +95,21 @@ int Endpoint::End()
 
 RTPEndpoint* Endpoint::GetRTPEndpoint(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
-                Port * p = GetPort(media, role);
+    std::shared_ptr<Port> p = GetPort(media, role);
 
-                if ( p != NULL && p->GetTransport() == MediaFrame::RTP )
-                {
-                     return (RTPEndpoint*) p;
-                }
-                else
-                        return NULL;
+	if ( p && p->GetTransport() == MediaFrame::RTP )
+	{
+			return (RTPEndpoint*) p.get();
+	}
+	else
+			return NULL;
 }
 
 int Endpoint::StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap, MediaFrame::MediaRole role)
 {
 	//Get enpoint
 	RTPEndpoint* rtp = GetRTPEndpoint(media, role);
-	Port* p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 	
 	//Check 
 	if (!p)
@@ -130,8 +122,6 @@ int Endpoint::StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPM
 	//Set remote endpoint
 	if (rtp != NULL)
 	{
-
-            RTPEndpoint* rtp2 = (  RTPEndpoint* ) p;
 	    if(!rtp->SetRemotePort(sendIp,sendPort))
 		//Error
 		return Error("Error SetRemotePort\n");
@@ -174,7 +164,7 @@ int Endpoint::ArmRTPTimeout(MediaFrame::Type media,DWORD timeoutMs, MediaFrame::
 int Endpoint::StopSending(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
 	//Get rtp enpoint for media
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
 	//Check
 	if (!p)
@@ -190,7 +180,7 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 	Log("-StartReceiving endpoint [name:%ls,media:%s]\n",name.c_str(),MediaFrame::TypeToString(media));
 	
 	//Get rtp enpoint for media
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
 	//Check (avant GetTransport : media non supporté = port NULL)
 	if (!p)
@@ -218,7 +208,7 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 			
 		case MediaFrame::WS:
 		{
-			WSEndpoint * wsp = ( WSEndpoint * ) (p);
+			std::shared_ptr<WSEndpoint> wsp = std::dynamic_pointer_cast<WSEndpoint>(p);
 			Log("-StartReceiving WS endpoint\n");
 			for (RTPMap::iterator it = rtpMap.begin(); it!=rtpMap.end(); ++it)
 			{
@@ -258,7 +248,7 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 int Endpoint::StopReceiving(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
 	//Get rtp enpoint for media
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
 	//Check
 	if (!p)
@@ -274,7 +264,7 @@ int Endpoint::Attach(MediaFrame::Type media, MediaFrame::MediaRole role, Joinabl
 	Log("-Endpoint attaching [media:%s]\n",MediaFrame::TypeToString(media));
 
 	//Get rtp enpoint for media
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
 	//Check
 	if (!p)
@@ -290,7 +280,7 @@ int Endpoint::Detach(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
 	Log("-Endpoint detaching [media:%s]\n",MediaFrame::TypeToString(media));
 
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
 	//Check
 	if (! p)
@@ -304,7 +294,7 @@ Joinable* Endpoint::GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole ro
 {
 	Log("<Endpoint GetJoinable [media:%s]\n",MediaFrame::TypeToString(media));
 
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
 	//Check
 	if (!p)
@@ -314,7 +304,7 @@ Joinable* Endpoint::GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole ro
 		return NULL;
 	}
 	
-	return p;
+	return p.get();
 	
 }
 
@@ -402,33 +392,41 @@ int Endpoint::SetRemoteSTUNCredentials(MediaFrame::Type media,const char* userna
 int Endpoint::onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole role,
 	                           MediaFrame::MediaProtocol transp, WebSocket * ws )
 {
-    Port ** p;
+    std::shared_ptr<Port> p;
     
 	
     if ( role == MediaFrame::VIDEO_MAIN )
     {
-        p = & ( ports[media] );
+        p = ports[media];
     }
     else if (media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
     {
-        p = & ( ports2[media] );
+        p = ports2[media];
     }
     else
     {
         return Error("Invalid media %d / role %d parameters\n", media, role );
     }
     
-    if ( (*p) != NULL && (*p)->GetTransport() != MediaFrame::WS )
+    if ( p && p->GetTransport() != MediaFrame::WS )
     {
 		// Previous port was not a web socket
 		Log("Endpoint: replacing port transport=%d for %s by WebSocket\n",
-			(*p)->GetTransport(), MediaFrame::TypeToString(media) );
+			p->GetTransport(), MediaFrame::TypeToString(media) );
 
-		(*p)->End();
-			delete (*p);
+		p->End();
 		
-		(*p) = new WSEndpoint( media );
-		ws->Accept( ( WSEndpoint * ) *p );
+		std::shared_ptr<Port> wsp = std::shared_ptr<Port>(new WSEndpoint(media));
+		if ( role == MediaFrame::VIDEO_MAIN )
+		{
+			ports[media] = wsp;
+		}
+		else if (media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
+		{
+			ports2[media] = wsp;
+		}
+
+		ws->Accept( std::weak_ptr<WSEndpoint>(std::dynamic_pointer_cast<WSEndpoint>(wsp)) );
 		return 1;
     }
     else
@@ -436,8 +434,8 @@ int Endpoint::onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole
         // Previous port WAs already a using websocket
 		Log("Endpoint: Accepting WebSocket connection for media %s\n",
 			 MediaFrame::TypeToString(media) );
-		WSEndpoint * wsp = ( WSEndpoint * ) (*p);
-		ws->Accept( ( WSEndpoint * ) *p );
+		std::shared_ptr<WSEndpoint> wsp = std::dynamic_pointer_cast<WSEndpoint>(p);
+		ws->Accept( std::weak_ptr<WSEndpoint>(wsp) );
 		return 1;
     }
 }
@@ -513,24 +511,24 @@ char* Endpoint::Port::GetLocalMediaHost()
 int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::MediaRole role, 
 				        MediaFrame::MediaProtocol proto, const char * expectedPayload )
 {
-	Port * p = GetPort(media, role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 	
 	if (p != NULL)
 	{
 	    if ( p->GetTransport() != proto )
 	    {
-			Port *p2;
+			std::shared_ptr<Port> p2;
 			
 			switch(proto)
 			{
 				case MediaFrame::WS:
 					Log("Recreating WSEndpoint for media %s\n", MediaFrame::TypeToString(media) );
-					p2 = new WSEndpoint(media);
+					p2 = std::shared_ptr<Port>(new WSEndpoint(media));
 				    break;
 				
 				case MediaFrame::RTP:
 					Log("Recreating RTPEndpoint for media %s\n", MediaFrame::TypeToString(media) );
-					p2 = new RTPEndpoint(media);
+					p2 = std::shared_ptr<Port>(new RTPEndpoint(media));
 					break;
 				
 				default:
@@ -540,18 +538,15 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 			if ( role == MediaFrame::VIDEO_MAIN )
 			{
 				p2->SwitchJoin(p);
-				delete p;
 				ports[media] = p2;
 			}
 			else if ( media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
 			{
 				p2->SwitchJoin(p);
-				delete p;
 				ports2[MediaFrame::Video] = p2;
 			}
 			else
 			{
-				delete p2;
 				return Error("Invalid media=%d, role=%d .\n", media, role);
 			}
 			
@@ -615,7 +610,7 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 	{
 		int port = 0;
 		char* wshost = NULL;
-		Port* p =  GetPort(media);
+		std::shared_ptr<Port> p =  GetPort(media);
 		
 		if ( p == NULL)
 		{
@@ -657,9 +652,9 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 }
 
 
-int Endpoint::Port::SwitchJoin(Port *oldPort)
+int Endpoint::Port::SwitchJoin(std::shared_ptr<Port> oldPort)
 {
-    if (oldPort != NULL && oldPort->joined != NULL)
+    if (oldPort && oldPort->joined != NULL)
 	{
 	    Joinable * oldJoined = oldPort->joined;
 		oldPort->Detach();
@@ -677,16 +672,16 @@ Endpoint::Port::~Port()
 
 int Endpoint::SetEventContextId( MediaFrame::Type media, MediaFrame::MediaRole role, int ctxId )
 {
-	 Port * p = GetPort(media, role);
-	if (p != NULL)
+	std::shared_ptr<Port> p = GetPort(media, role);
+	if (p)
 		p->SetEventContextId(ctxId);
 	return 0;
 }
 
  int  Endpoint::SetEventHandler( MediaFrame::Type media, MediaFrame::MediaRole role, int sessionId,	JSR309Manager* jsrManager)
  {
-	Port * p = GetPort(media, role);
-	if (p != NULL)
+	std::shared_ptr<Port> p = GetPort(media, role);
+	if (p)
 		p->SetEventHandler(sessionId,jsrManager);
 	return 0;
  }
@@ -700,16 +695,13 @@ const Endpoint::Statistics * Endpoint::GetStatistics()
     {
         MediaFrame::Type m = (MediaFrame::Type) i;
         
-        Port * p = GetPort(m, MediaFrame::VIDEO_MAIN);
-
-        if ( p != NULL && p->GetTransport() == MediaFrame::RTP )
+		RTPEndpoint * rtp = GetRTPEndpoint(m, MediaFrame::VIDEO_MAIN);
+        if ( rtp )
         {
             MediaStatistics statsport;
-            std::string mediaName( MediaFrame::TypeToString(m));
-            RTPEndpoint * rtp = (RTPEndpoint *) p;
-            if (rtp->GetStatistics(0, statsport))
 
-            stats[mediaName] = statsport;
+            rtp->GetStatistics(0, statsport);
+            stats[ MediaFrame::TypeToString(m) ] = statsport;
         }
     }
     return &stats;

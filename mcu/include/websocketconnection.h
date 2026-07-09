@@ -292,7 +292,7 @@ public:
 		virtual void onDisconnected(WebSocketConnection* conn) = 0;
 	};
 public:
-	WebSocketConnection(std::weak_ptr<Listener> listener);
+	WebSocketConnection(Listener* listener);
 	~WebSocketConnection();
 
 	int Init(int fd);
@@ -340,7 +340,9 @@ private:
 	std::mutex mutex;
 
 	timeval startTime;
-	std::weak_ptr<Listener> listener;
+	//Le serveur possède la connexion et lui survit → pointeur brut (pas de weak_ptr
+	//possible vers l'objet WebSocketServer alloué sur la pile de main).
+	Listener* listener;
 
 	bool upgraded;
 	DWORD recvSize;

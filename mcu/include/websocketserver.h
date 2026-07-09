@@ -56,13 +56,14 @@ private:
 
 class TextEchoWebsocketHandler :
 	public WebSocketServer::Handler,
-	public WebSocket::Listener
+	public WebSocket::Listener,
+	public std::enable_shared_from_this<TextEchoWebsocketHandler>
 {
 public:
 	virtual void onWebSocketConnection(const HTTPRequest& request,WebSocket *ws)
 	{
 		Debug("-onUpgradeRequest %s\n", request.GetRequestURI().c_str());
-		ws->Accept(this);
+		ws->Accept(weak_from_this());
 	}
 	virtual void onOpen(WebSocket *ws)
 	{
