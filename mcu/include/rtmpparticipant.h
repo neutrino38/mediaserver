@@ -7,6 +7,7 @@
 
 #ifndef RTMPPARTICIPANT_H
 #define	RTMPPARTICIPANT_H
+#include <memory>
 
 #include "rtmpstream.h"
 #include "medkit/codecs.h"
@@ -148,6 +149,8 @@ private:
 	bool	videoMuted;
 	bool	textMuted;
 };
+
+typedef std::shared_ptr<RTMPParticipant> RTMPParticipantPtr;
 
 #endif	/* RTMPPARTICIPANT_H */
 

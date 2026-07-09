@@ -18,7 +18,6 @@ SharedDocMixer::SharedDocMixer()
 {
 	//No output
 	output  		= NULL;
-	part			= NULL;
 	logo			= NULL;
 	bfcp_server 	= NULL;
 	
@@ -32,7 +31,6 @@ SharedDocMixer::~SharedDocMixer()
 {
 	//No output
 	output  		= NULL;
-	part			= NULL;
 	logo			= NULL;	
 	conf			= NULL;
 	if ( bfcp_server != NULL )
@@ -52,23 +50,24 @@ int SharedDocMixer::Init(VideoOutput* output, Logo *logo, MultiConf* conf)
 	this->output 	= output;
 	this->logo 		= logo;
 	this->conf		= conf;
-	
-	part			= NULL;
+
+	part.reset();
 	sharedMosaic	= -1;
 	confId			= 0;
 	return 1;
 }
 
-int SharedDocMixer::ShareSecondaryStream(Participant *part)
+int SharedDocMixer::ShareSecondaryStream(ParticipantPtr part)
 {
 	Log(">ShareSecondaryStream\n");
 
-	if ( this->part != NULL )
+	ParticipantPtr currentPart = this->part.lock();
+	if ( currentPart )
 	{
 	    StopSharing();
 	}
 	
-	if ( part != NULL  && part != this->part)
+	if ( part  && part != currentPart)
 	{
 	    part->SetVideoOutput(this,MediaFrame::VIDEO_SLIDES);
 		conf->onRequestDocSharing(part->GetPartId(),L"ACTIVE");
@@ -78,9 +77,9 @@ int SharedDocMixer::ShareSecondaryStream(Participant *part)
 }
 
 
-int SharedDocMixer::initDocSharing( Participant *part,char *sendIp,int sendPort)
+int SharedDocMixer::initDocSharing( ParticipantPtr part,char *sendIp,int sendPort)
 {
-	if (part != NULL)
+	if (part)
 	{
 		switch ( part->GetDocSharingMode() )
 		{
@@ -100,11 +99,11 @@ int SharedDocMixer::initDocSharing( Participant *part,char *sendIp,int sendPort)
 }
 
 
-int SharedDocMixer::AcceptDocSharingRequest(int confId, Participant *part)
+int SharedDocMixer::AcceptDocSharingRequest(int confId, ParticipantPtr part)
 {
 	int res=0;
 	
-	if (part != NULL)
+	if (part)
 	{
 		switch ( part->GetDocSharingMode() )
 		{
@@ -134,11 +133,11 @@ int SharedDocMixer::AcceptDocSharingRequest(int confId, Participant *part)
 
 }
 
-int SharedDocMixer::RefuseDocSharingRequest(int confId, Participant *part)
+int SharedDocMixer::RefuseDocSharingRequest(int confId, ParticipantPtr part)
 {
 	int res=0;
 	
-	if (part != NULL)
+	if (part)
 	{
 		switch ( part->GetDocSharingMode() )
 		{
@@ -173,21 +172,22 @@ int SharedDocMixer::RefuseDocSharingRequest(int confId, Participant *part)
 int SharedDocMixer::StopSharing()
 {
 	
-	Participant *p = NULL;
+	ParticipantPtr p;
 
 	pthread_mutex_lock(&mutex);
 	
-        if ( part != NULL )
+	ParticipantPtr currentPart = this->part.lock();
+    if ( currentPart != NULL )
 	{
-		p=part;
+		p = currentPart;
 		p->use.IncUse();
-		part    = NULL;
+		this->part.reset();
 
 		pthread_mutex_unlock(&mutex);
 
 		conf->onRequestDocSharing(p->GetPartId(),L"NONE");
 	
-	        p->SetVideoOutput(NULL,MediaFrame::VIDEO_SLIDES);
+	    p->SetVideoOutput(NULL,MediaFrame::VIDEO_SLIDES);
 		conf->SetDocSharingMosaic(-1);
 		
 		struct BFCPInfo bfcpinfo ;
@@ -204,7 +204,7 @@ int SharedDocMixer::StopSharing()
 	}
 	else
 	{
-		 pthread_mutex_unlock(&mutex);
+		pthread_mutex_unlock(&mutex);
 	}
 	
 
@@ -220,10 +220,10 @@ int SharedDocMixer::StopSharing()
 	return 1;
 }
 
-int SharedDocMixer::StopSharing(Participant *part)
+int SharedDocMixer::StopSharing(ParticipantPtr part)
 {
-	
-	if ( this->part == part )
+	ParticipantPtr currentPart = this->part.lock();
+	if ( currentPart == part )
 	{
 	  
 	  return StopSharing();
@@ -234,8 +234,8 @@ int SharedDocMixer::StopSharing(Participant *part)
 
 int SharedDocMixer::NextFrame(BYTE *pic)
 {
-	
-	if ( part != NULL && output != NULL)
+	ParticipantPtr currentPart = this->part.lock();
+	if ( currentPart && output != NULL)
 	{
 		
 		return output->NextFrame(pic);
@@ -254,10 +254,10 @@ int SharedDocMixer::SetVideoSize(int width,int height)
 		return 0;
 }
 
-int SharedDocMixer::addParticipant(int confId, Participant *part,Participant::DocSharingMode docSharingMode,MediaFrame::MediaProtocol proto)
+int SharedDocMixer::addParticipant(int confId, ParticipantPtr part,Participant::DocSharingMode docSharingMode,MediaFrame::MediaProtocol proto)
 {
 	int res = 1;
-	if (part != NULL)
+	if (part)
 	{
 		part->SetDocSharingMode(docSharingMode);
 	 
@@ -265,7 +265,7 @@ int SharedDocMixer::addParticipant(int confId, Participant *part,Participant::Do
 		{
 			case  Participant::BFCP_TCP:
 			case  Participant::BFCP_UDP:
-				res =	StartBfcpServer(confId,part);
+				res = StartBfcpServer(confId, part);
 				if ( res  && !bfcp_server->isUserInConf(part->GetPartId()) )
 					res = bfcp_server->AddUser(  part->GetPartId() );
 					
@@ -281,10 +281,10 @@ int SharedDocMixer::addParticipant(int confId, Participant *part,Participant::Do
 	
 }
 
-int SharedDocMixer::removeParticipant(Participant *part)
+int SharedDocMixer::removeParticipant(ParticipantPtr part)
 {
 	int res = 0;
-	if (part != NULL) 
+	if (part) 
 		switch ( part->GetDocSharingMode() )
 		{
 			case  Participant::BFCP_TCP:
@@ -301,7 +301,7 @@ int SharedDocMixer::removeParticipant(Participant *part)
 }
 
 // BFCP Implementation
-bool SharedDocMixer::StartBfcpServer(int confId, Participant *part)
+bool SharedDocMixer::StartBfcpServer(int confId, ParticipantPtr part)
 {
 	if (!bfcp_server )
 		bfcp_server = new BFCP_Server( BFCP_MAX_CONF , confId , 0 , BFCP_FLOOR_ID , 0 , this );
@@ -309,14 +309,14 @@ bool SharedDocMixer::StartBfcpServer(int confId, Participant *part)
 	if (bfcp_server )
     {
 		this->confId = confId;
-		int Port = getAvailablePort();
+		int port = getAvailablePort();
 		
 		if (! bfcp_server->isStarted() )
 		{
-			if (part != NULL)
+			if (part)
 			{
 				
-					if ( bfcp_server->OpenTcpConnection( "0.0.0.0",Port,NULL,0,BFCPConnectionRole::PASSIVE) )
+					if ( bfcp_server->OpenTcpConnection( "0.0.0.0", port,NULL,0,BFCPConnectionRole::PASSIVE) )
 					{
 						Log("StartBfcpServer on TCP success \n");
 					
@@ -332,24 +332,24 @@ bool SharedDocMixer::StartBfcpServer(int confId, Participant *part)
 			Log("StartBfcpServer already started. \n");	
 		}
 		
-		Port = getAvailablePort();
+		port = getAvailablePort();
 		
 		switch ( part->GetDocSharingMode() )
 		{
 				case  Participant::BFCP_UDP:
 					
 					if ( !bfcp_server->isUserInConf(part->GetPartId()) )
-							bfcp_server->AddUser(  part->GetPartId() );
+							bfcp_server->AddUser(part->GetPartId());
 
 					
-					if ( bfcp_server->OpenUdpConnection(part->GetPartId(),"0.0.0.0", Port))
+					if ( bfcp_server->OpenUdpConnection(part->GetPartId(),(char *) "0.0.0.0", port))
 					{
-						Log("StartBfcpServer on UDP success \n");
+						Log("Started UDP/BFCP server successfully.\n");
 					
 					}
 					else
 					{
-						Log("StartBfcpServer failed \n");
+						Error("Failed to start UDP/BFCP server\n");
 					}
 					
 					break;
@@ -381,13 +381,13 @@ bool SharedDocMixer::StopBfcpServer()
 	return res;   
 }
 
-int SharedDocMixer::getServerPort(Participant *part)
+int SharedDocMixer::getServerPort(ParticipantPtr part)
 {
 	int  res = 0;
 	int transport = 0;
 	char localIp[BFCP_STRING_SIZE] = { 0 };
 	
-	if (part != NULL)
+	if (part)
 		switch ( part->GetDocSharingMode() )
 		{
 			case  Participant::BFCP_TCP:
@@ -473,6 +473,7 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
         return Status ; 
         
     //Log(_T("OnBfcpServerEvent evt[%s] state[%s] \n"), getBfcpFsmAct(p_evt),getBfcpFsmAct(p_FsmEvent->State)  ); 
+	ParticipantPtr currentPart = part.lock();
 
     switch ( p_evt )
     {
@@ -490,20 +491,20 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
     case BFCP_fsm::BFCP_ACT_FloorRequest :
 		if (conf)
 		{
-			if (part != NULL && part->GetPartId() == p_FsmEvent->userID)
+			if (currentPart && currentPart->GetPartId() == p_FsmEvent->userID)
 			{
-				Log("FloorRequest already processed for this user %i.\n",part->GetPartId());
+				Log("FloorRequest already processed for this user %i.\n",currentPart->GetPartId());
 			}
 			else
 			{
 				struct BFCPInfo bfcpinfo ;
-				if (part != NULL && GetBfcpInfo(part->GetPartId(),bfcpinfo))
+				if (currentPart && GetBfcpInfo(currentPart->GetPartId(),bfcpinfo))
 				{
-					bfcp_server->FloorRequestRespons( part->GetPartId(), part->GetPartId() , bfcpinfo.transactionId ,  bfcpinfo.floorRequestID, BFCP_REVOKED , 0 , BFCP_NORMAL_PRIORITY , false );
+					bfcp_server->FloorRequestRespons( currentPart->GetPartId(), currentPart->GetPartId() , bfcpinfo.transactionId ,  bfcpinfo.floorRequestID, BFCP_REVOKED , 0 , BFCP_NORMAL_PRIORITY , false );
 					
 					//Lock
 					pthread_mutex_lock(&mutex);
-					transactions.erase(part->GetPartId());
+					transactions.erase(currentPart->GetPartId());
 					//Unlock
 					pthread_mutex_unlock(&mutex);
 					
@@ -527,10 +528,10 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
         if ( bfcp_server )
 		{
             Status = bfcp_server->SendFloorStatus( 0 , 0 , 0 , NULL , true ) ; 
-			if (part != NULL && part->GetPartId() == p_FsmEvent->userID)
+			if (currentPart && currentPart->GetPartId() == p_FsmEvent->userID)
 			{
 				
-				StopSharing(part);
+				StopSharing(currentPart);
 				//Lock
 				pthread_mutex_lock(&mutex);
 				transactions.erase(p_FsmEvent->userID);
@@ -592,9 +593,10 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
 void SharedDocMixer::SetSharedMosaic(int mosaicId)
 {
 	Log(">SetSharedMosaic\n");
-	if (part)
+	ParticipantPtr currentPart = part.lock();
+	if (currentPart)
 	{
-		bfcp_server->SendFloorStatus( part->GetPartId() , 0 , 0 , NULL , true ) ; 
+		bfcp_server->SendFloorStatus( currentPart->GetPartId() , 0 , 0 , NULL , true ) ; 
 		sharedMosaic = mosaicId;
 	}
 }

@@ -538,7 +538,7 @@ int MultiConf::DeleteSidebar(int sidebarId)
 int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type)
 {
 	wchar_t uuid[64];
-	Participant *part = NULL;
+	ParticipantPtr part;
 
 	Log(">CreateParticipant [mosaic:%d]\n",mosaicId);
 
@@ -586,10 +586,10 @@ int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Pa
 	{
 		case Participant::RTP:
 			//Create RTP Participant
-			part = new RTPParticipant(partId,std::wstring(uuid));
+			part = std::make_shared<RTPParticipant>(partId,std::wstring(uuid));
 			break;
 		case Participant::RTMP:
-			part = new RTMPParticipant(partId);
+			part = std::make_shared<RTMPParticipant>(partId);
 			//Create RTP Participant
 			break;
 
@@ -650,7 +650,7 @@ int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Pa
 struct PartDestructionJob
 {
     MultiConf * c;
-    Participant *p;
+    ParticipantPtr p;
 };
 
 int MultiConf::DeleteParticipant(int id)
@@ -680,11 +680,11 @@ int MultiConf::DeleteParticipant(int id)
 	}
 
 	//LO obtenemos
-	Participant *part = it->second;
+	ParticipantPtr part = it->second;
 	participantsLock.Unlock();
 	
 	sharedDocMixer.StopSharing(part);
-        sharedDocMixer.removeParticipant(part);
+    sharedDocMixer.removeParticipant(part);
 
 	participantsLock.WaitUnusedAndLock();
 
@@ -714,7 +714,7 @@ int MultiConf::DeleteParticipant(int id)
 }
 
 
-int MultiConf::DestroyParticipant(int partId,Participant* part)
+int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 {
 	Log(">DestroyParticipant [%d]\n",partId);
 	bool confEmpty;
@@ -745,9 +745,6 @@ int MultiConf::DestroyParticipant(int partId,Participant* part)
 	audioMixer.DeleteMixer(partId);
 	textMixer.DeleteMixer(partId);
 	
-	part->use.Unlock(); 
-	//Delete participant
-	ret &= Participant::DestroyParticipant(part);
 	
 	participantsLock.IncUse();
 	confEmpty = ( participants.size() == 0);
@@ -758,7 +755,7 @@ int MultiConf::DestroyParticipant(int partId,Participant* part)
 	return ret;
 }
 
-Participant *MultiConf::GetParticipant(int partId)
+ParticipantPtr MultiConf::GetParticipant(int partId)
 {
 	//Find participant
 	Participants::iterator it = participants.find(partId);
@@ -768,33 +765,43 @@ Participant *MultiConf::GetParticipant(int partId)
 	{
 		//Error
 		Error("Participant %d not found\n", partId);
-		return NULL;
+		return std::shared_ptr<Participant>();
 	}
 
 	//Get the participant
 	return it->second;
 }
 
-Participant *MultiConf::GetParticipant(int partId,Participant::Type type)
+ParticipantPtr MultiConf::GetParticipant(int partId,Participant::Type type)
 {
 	//Find participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//If no participant
-	if (!part)
-		//Exit
-		return NULL;
+	if (!part) return part;
 
 	//Ensure it is from the correct type
 	if (part->GetType()!=type)
 	{
 		//Error
 		Error("Participant is not of desired type\n");
-		return NULL;
+		return std::shared_ptr<Participant>();
 	}
 
 	//Return it
 	return part;
+}
+
+RTPParticipantPtr MultiConf::GetRTPParticipant(int partId)
+{
+	//Find participant
+	ParticipantPtr part = GetParticipant(partId, Participant::RTP);
+
+	//If no participant
+	if (!part) return std::shared_ptr<RTPParticipant>();
+
+	//Return it
+	return std::dynamic_pointer_cast<RTPParticipant>(part);
 }
 
 /************************
@@ -893,7 +900,7 @@ int MultiConf::SetVideoCodec(int id,int codec,int mode,int fps,int bitrate,int i
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -917,7 +924,7 @@ int MultiConf::SetLocalCryptoSDES(int id,MediaFrame::Type media,const char *suit
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*) GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -943,7 +950,7 @@ int MultiConf::SetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *sui
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -968,7 +975,7 @@ int MultiConf::SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *set
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -994,7 +1001,7 @@ int MultiConf::SetLocalSTUNCredentials(int id,MediaFrame::Type media,const char 
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1013,22 +1020,29 @@ int MultiConf::SetRTPProperties(int id,MediaFrame::Type media,const Properties& 
 
 	//Use list
 	participantsLock.IncUse();
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 	
 	if (part)
 	{
 	    switch ( part->GetType() )
 	    {
 		case Participant::RTP:
-			ret = ( (RTPParticipant*) part )->SetRTPProperties(media,properties,role);
+			{
+				RTPParticipantPtr rtpPart = std::dynamic_pointer_cast<RTPParticipant>(part);
+				ret = rtpPart->SetRTPProperties(media,properties,role);
+			}
 			break;
 			
 		case Participant::RTMP:
-			ret = ( (RTMPParticipant*) part )->SetCodecProperties(media,properties);
+			{
+				std::shared_ptr<RTMPParticipant> rtmpPart = std::dynamic_pointer_cast<RTMPParticipant>(part);
+				ret = rtmpPart->SetCodecProperties(media,properties);
+			}
 			break;
 			
 		default:
-			Error("-SetRTPProperties: this participant type does not support properties.\n");
+			Error("-SetRTPProperties: the participant ID %d of type %d  does not support properties.\n", 
+				id, part->GetType());
 			ret = 0;
 			break;
 		}
@@ -1053,7 +1067,7 @@ int MultiConf::SetParticipantBackground(int id, const char * filename)
 	{
 		ret = 0;
 		participantsLock.IncUse();
-		Participant *part = GetParticipant(id);
+		ParticipantPtr part = GetParticipant(id);
 		if (part)
 		{
 			ret = part->LoadLogo(filename);
@@ -1068,11 +1082,11 @@ int MultiConf::SetParticipantOverlay(int mosaicId, int id, const char * filename
 	int ret;
         if (filename != NULL && strlen(filename) > 0)
         {
-	    videoMixer.SetOverlayImage(mosaicId, id, filename);
+	    	videoMixer.SetOverlayImage(mosaicId, id, filename);
         }
         else
         {
-	    videoMixer.ResetOverlayImage(mosaicId, id);
+	    	videoMixer.ResetOverlayImage(mosaicId, id);
         }	
         ret = 1;
 	return ret;
@@ -1093,7 +1107,7 @@ int MultiConf::AcceptDocSharingRequest(int confId, int partId)
 	//Use list (protège part contre un DeleteParticipant concurrent)
 	participantsLock.IncUse();
 
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	if (part)
 	{
@@ -1118,7 +1132,7 @@ int MultiConf::RefuseDocSharingRequest(int confId,int partId)
 	//Use list (protège part contre un DeleteParticipant concurrent)
 	participantsLock.IncUse();
 
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	if (part)
 	{
@@ -1141,7 +1155,7 @@ int  MultiConf::StopDocSharing(int confId,int partId)
 	//Use list (protège part contre un DeleteParticipant concurrent)
 	participantsLock.IncUse();
 
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	if (part)
 	{
@@ -1167,7 +1181,8 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 	//les IncUse imbriqués des boucles ci-dessous restent valides)
 	participantsLock.IncUse();
 
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	if ( mosaicId == -1 )
 	{
@@ -1176,7 +1191,9 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 			{
 				partId 	= it->first;
-				part  	= (RTPParticipant*) it->second;
+
+				// TODO : check if participant is really an RTP participant
+				part  	= std::static_pointer_cast<RTPParticipant>(it->second);
 				
 				if (part->GetDocSharingMode() == Participant::BFCP_TCP ||  part->GetDocSharingMode() == Participant::BFCP_UDP)
 				{
@@ -1205,7 +1222,9 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 			{
 				partId 	= it->first;
-				part  	= (RTPParticipant*) it->second;
+
+				// TODO : check if participant is really an RTP participant
+				part  	= std::static_pointer_cast<RTPParticipant>(it->second);
 				
 				if (part->GetDocSharingMode() == Participant::BFCP_TCP ||  part->GetDocSharingMode() == Participant::BFCP_UDP )
 				{
@@ -1244,7 +1263,7 @@ int MultiConf::SetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1269,7 +1288,7 @@ int MultiConf::StartSending(int id,MediaFrame::Type media,char *sendIp,int sendP
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 	
 	//Check particpant
 	if (part)
@@ -1312,7 +1331,7 @@ int MultiConf::StopSending(int id,MediaFrame::Type media,MediaFrame::MediaRole r
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1337,7 +1356,7 @@ int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,Media
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 	//Unlock
 	participantsLock.DecUse();
 	//Check participant
@@ -1390,7 +1409,7 @@ int MultiConf::StopReceiving(int id,MediaFrame::Type media,MediaFrame::MediaRole
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1426,7 +1445,7 @@ int MultiConf::SetAudioCodec(int id,int codec,const Properties& properties)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1456,7 +1475,7 @@ int MultiConf::SetTextCodec(int id,int codec)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1484,7 +1503,7 @@ int MultiConf::SetAppCodec(int confId, int id,int codec)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 	//Check participant
 	if (part)
 	{
@@ -1527,7 +1546,7 @@ int MultiConf::SetParticipantMosaic(int partId,int mosaicId)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check particpant
 	if (part)
@@ -1556,7 +1575,7 @@ int MultiConf::SetParticipantSidebar(int partId,int sidebarId)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check particpant
 	if (part)
@@ -1725,7 +1744,7 @@ int MultiConf::StartRecordingParticipant(int partId,const char* filename)
 	participantsLock.IncUse();
 
 	//Get participant
-	RTPParticipant *rtp = (RTPParticipant*)GetParticipant(partId,Participant::RTP);
+	RTPParticipantPtr rtp = GetRTPParticipant(partId);
 
 	//Check if
 	if (!rtp)
@@ -1770,7 +1789,7 @@ int MultiConf::StopRecordingParticipant(int partId)
 	participantsLock.IncUse();
 
 	//Get rtp participant
-	RTPParticipant* rtp = (RTPParticipant*)GetParticipant(partId,Participant::RTP);
+	RTPParticipantPtr rtp = GetRTPParticipant(partId);
 
 	//Check participant
 	if (rtp)
@@ -1806,7 +1825,7 @@ int MultiConf::SendFPU(int partId)
 	participantsLock.IncUse();
 
 	//Get participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check participant
 	if (part)
@@ -1829,7 +1848,7 @@ MultiConf::ParticipantStatistics* MultiConf::GetParticipantStatistic(int partId)
 	participantsLock.IncUse();
 
 	//Find participant
-	Participant* part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check participant
 	if (part)
@@ -1861,7 +1880,7 @@ int MultiConf::SetMute(int partId,MediaFrame::Type media,bool isMuted)
 	participantsLock.IncUse();
 
 	//Get participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check participant
 	if (part)
@@ -1988,7 +2007,7 @@ RTMPMediaStream::Listener* MultiConf::ConsumeParticipantInputToken(const std::ws
 	}
 	
 	//Get it
-	Participant* part = itPart->second;
+	ParticipantPtr part = itPart->second;
 
 	//Asert correct tipe
 	if (part->GetType()!=Participant::RTMP)
@@ -2001,10 +2020,10 @@ RTMPMediaStream::Listener* MultiConf::ConsumeParticipantInputToken(const std::ws
 	}
 	
 	//return it
-	return (RTMPMediaStream::Listener*)(RTMPParticipant*)part;
+	return (RTMPMediaStream::Listener*)(RTMPParticipant*) part.get();
 }
 
-RTMPParticipant* MultiConf::ConsumeParticipantOutputToken(const std::wstring &token)
+RTMPParticipant * MultiConf::ConsumeParticipantOutputToken(const std::wstring &token)
 {
 	//Check token
 	ParticipantTokens::iterator it = outputTokens.find(token);
@@ -2037,7 +2056,7 @@ RTMPParticipant* MultiConf::ConsumeParticipantOutputToken(const std::wstring &to
 	}
 
 	//Get it
-	Participant* part = itPart->second;
+	ParticipantPtr part = itPart->second;
 
 	//Asert correct tipe
 	if (part->GetType()!=Participant::RTMP)
@@ -2049,7 +2068,7 @@ RTMPParticipant* MultiConf::ConsumeParticipantOutputToken(const std::wstring &to
 	}
 
 	//return it
-	return (RTMPParticipant*)part;
+	return (RTMPParticipant*) part.get();
 }
 
 /********************************
@@ -2366,12 +2385,12 @@ void MultiConf::onRequestFPU(Participant *part)
 		listener->onParticipantRequestFPU(this,part->GetPartId());
 }
 
-void MultiConf::onDTMF(Participant *part, DTMFMessage* dtmf)
+void MultiConf::onDTMF(Participant * part, DTMFMessage* dtmf)
 {
 	//Get lock
 	participantsLock.WaitUnusedAndLock();
 	
-	//Destroy all participants
+
 	for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 	{
 		//Destroy it
@@ -2592,11 +2611,12 @@ void MultiConf::SetVADMode(int mode)
 
 int MultiConf::DumpParticipantInfo(int partId, std::string & info)
 {
-        char partName[80];
-	Participants::iterator itPart = participants.find(partId);
+    char partName[80];
+	
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check if not found
-	if (itPart==participants.end())
+	if (!part)
 	{
         	sprintf(partName, "Participant %d not found", partId);
 		//Error
@@ -2606,18 +2626,17 @@ int MultiConf::DumpParticipantInfo(int partId, std::string & info)
 	}
 
 	//Get it
-	Participant* part = itPart->second;
-        
-        sprintf(partName, "Participant %d:\n", partId);
-        info = partName;
-        int code = part->DumpInfo(info);
-        if ( code == 200)
-        {
-            sprintf(partName, "  Listening to sidebar %d:\n", audioMixer.GetMixerSidebar(partId));
-            info += partName;
-        }
+	
+	sprintf(partName, "Participant %d:\n", partId);
+	info = partName;
+	int code = part->DumpInfo(info);
+	if ( code == 200)
+	{
+		sprintf(partName, "  Listening to sidebar %d:\n", audioMixer.GetMixerSidebar(partId));
+		info += partName;
+	}
 
-        return code;
+	return code;
 }
 
  int MultiConf::DumpMixerInfo(int id, MediaFrame::Type media, std::string & info)

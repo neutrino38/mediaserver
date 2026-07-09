@@ -1,10 +1,14 @@
 #ifndef _MULTICONF_H_
 #define _MULTICONF_H_
+
 #include "videomixer.h"
+
 #include "audiomixer.h"
 #include "textmixer.h"
 #include "videomixer.h"
 #include "participant.h"
+#include "rtpparticipant.h"
+#include "rtmpparticipant.h"
 #include "FLVEncoder.h"
 #include "broadcastsession.h"
 #include "mp4player.h"
@@ -152,9 +156,9 @@ public:
 	std::wstring& GetTag() { return tag;	}
 
 	/** Participants event */
-	void onRequestFPU(Participant *part);
+	void onRequestFPU(Participant * part);
 	void onRequestDocSharing(int partId, std::wstring status);
-	void onDTMF(Participant *part, DTMFMessage* dtmf);
+	void onDTMF(Participant * part , DTMFMessage* dtmf);
 
 	/** RTMPNetConnection */
 	//virtual void Connect(RTMPNetConnection::Listener* listener); -> Not needed to be overriden yet
@@ -178,9 +182,13 @@ public:
         int DumpMixerInfo(int id, MediaFrame::Type media, std::string & info);
         int DumpInfo(std::string & info); 
 private:
-	Participant *GetParticipant(int partId);
-	Participant *GetParticipant(int partId,Participant::Type type);
-	int DestroyParticipant(int partId,Participant* part);
+	ParticipantPtr GetParticipant(int partId);
+	ParticipantPtr GetParticipant(int partId,Participant::Type type);
+	RTPParticipantPtr GetRTPParticipant(int partId);
+
+	int DestroyParticipant(int partId,ParticipantPtr part);
+
+
 private:
 	struct PublisherInfo
 	{
@@ -190,7 +198,7 @@ private:
 		RTMPClientConnection::NetStream * stream;
 	};
 private:
-	typedef std::map<int,Participant*> Participants;
+	typedef std::map<int, ParticipantPtr> Participants;
 	typedef std::set<std::wstring> BroadcastTokens;
 	typedef std::map<std::wstring,DWORD> ParticipantTokens;
 	typedef std::map<int, MP4Player*> Players;

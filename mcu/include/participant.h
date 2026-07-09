@@ -8,6 +8,7 @@
 #ifndef PARTICIPANT_H
 #define	PARTICIPANT_H
 
+#include <memory>
 #include "video.h"
 #include "audio.h"
 #include "text.h"
@@ -97,19 +98,6 @@ public:
 	virtual int RefuseDocSharingRequest(int confId,int partId)	{ return 0; };
 	virtual int StopDocSharing(int confId,int partId)			{ return 0; };
 	
-	static bool DestroyParticipant(Participant* part)
-	{
-		// Wait for all threads to be stopped
-		if ( part->use.WaitUnusedAndLock(2000) == 1)
-                {
-                    part->use.Unlock();
-                    delete part;
-                    return true;
-                }
-                return false;
-	}
-	
-	
 	int LoadLogo(const char * filename) { return logo.Load(filename); }
 	void SetDocSharingMode(DocSharingMode mode) { docSharingMode = mode; }
 	DocSharingMode GetDocSharingMode() { return docSharingMode; }
@@ -123,6 +111,8 @@ protected:
 	Logo logo;
 	//Use		use;
 };
+
+typedef std::shared_ptr<Participant> ParticipantPtr;
 
 #endif	/* PARTICIPANT_H */
 

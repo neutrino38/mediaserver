@@ -7,7 +7,7 @@
 
 #ifndef RTPPARTICIPANT_H
 #define	RTPPARTICIPANT_H
-
+#include <memory>
 #include "config.h"
 #include "participant.h"
 #include "videostream.h"
@@ -85,6 +85,8 @@ private:
 	TextInput*	textInput;
 	TextOutput*	textOutput;
 };
+
+typedef std::shared_ptr<RTPParticipant> RTPParticipantPtr;
 
 #endif	/* RTPPARTICIPANT_H */
 
