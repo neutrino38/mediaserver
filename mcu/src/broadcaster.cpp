@@ -487,13 +487,13 @@ bool Broadcaster::GetBroadcastPublishedStreams(DWORD sessId,BroadcastSession::Pu
 	return true;
 }
 
-RTMPNetConnection* Broadcaster::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
+std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
 {
 	//Depending on the app nam
 	if (appName.compare(L"streamer")==0)
 	{
 		//Create new streamer connection
-		return NULL;//new RTMPStreamerNetConnection();
+		return nullptr;//new RTMPStreamerNetConnection();
 
 		/*//A receiver stream
 		return new RTMPFLVStream(streamId);
@@ -542,7 +542,7 @@ RTMPNetConnection* Broadcaster::Connect(const std::wstring& appName,RTMPNetConne
 				//Send error
 				listener->onNetConnectionStatus(RTMP::NetConnection::Connect::Closed,L"BroadcastSession not found");
 				//Exit
-				return NULL;
+				return nullptr;
 			}
 
 			//Connect
@@ -565,7 +565,7 @@ RTMPNetConnection* Broadcaster::Connect(const std::wstring& appName,RTMPNetConne
 				//Send error
 				listener->onNetConnectionStatus(RTMP::NetConnection::Connect::Closed,L"BroadcastSession not found");
 				//Exit
-				return NULL;
+				return nullptr;
 			}
 
 			//Connect
@@ -575,17 +575,19 @@ RTMPNetConnection* Broadcaster::Connect(const std::wstring& appName,RTMPNetConne
 			ReleaseBroadcastRef(sessId);
 		}
 
-		//Return conf
-		return conn;
+		//Return conf : enveloppe le pointeur brut existant (gestion de vie inchangee,
+		//possede par BroadcastSession::publishers/watchers) juste pour respecter la
+		//nouvelle signature.
+		return std::shared_ptr<RTMPNetConnection>(conn, [](RTMPNetConnection*){});
 
 	}
 
 error:
 	//Send error
 	listener->onNetConnectionStatus(RTMP::NetConnection::Connect::InvalidApp,L"Wrong application name");
-	
+
 	//Exit
-	return NULL;
+	return nullptr;
 }
 
 RTMPNetStream* Broadcaster::CreateStream(DWORD streamId,DWORD audioCaps,DWORD videoCaps,RTMPNetStream::Listener* listener)

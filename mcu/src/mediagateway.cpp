@@ -303,7 +303,7 @@ bool MediaGateway::DeleteMediaBridge(DWORD id)
 	return true;
 }
 
-RTMPNetConnection* MediaGateway::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
+std::shared_ptr<RTMPNetConnection> MediaGateway::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
 {
 	MediaBridgeSession *sess = NULL;
 	wchar_t *stopwcs;
@@ -317,7 +317,7 @@ RTMPNetConnection* MediaGateway::Connect(const std::wstring& appName,RTMPNetConn
 		//Noting found
 		Error("Wrong format for app name\n");
 		//Exit
-		return NULL;
+		return nullptr;
 	}
 
 	//Get conf id
@@ -329,7 +329,7 @@ RTMPNetConnection* MediaGateway::Connect(const std::wstring& appName,RTMPNetConn
 		//No conference found
 		Error("MediaBridge not found [confId:%d]\n",confId);
 		//Exit
-		return NULL;
+		return nullptr;
 	}
 
 	//Connect
@@ -338,8 +338,9 @@ RTMPNetConnection* MediaGateway::Connect(const std::wstring& appName,RTMPNetConn
 	//release it
 	ReleaseMediaBridgeRef(confId);
 
-	//Return conf
-	return sess;
+	//Return conf : enveloppe le pointeur brut existant (gestion de vie inchangee,
+	//cf. C-8 reporte en Phase 5) juste pour respecter la nouvelle signature.
+	return std::shared_ptr<RTMPNetConnection>(sess, [](RTMPNetConnection*){});
 }
 
 int MediaGateway::CreateEventQueue()

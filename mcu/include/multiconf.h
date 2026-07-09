@@ -59,8 +59,8 @@ public:
 	public:
 		//Virtual desctructor
 		virtual ~Listener(){};
-		virtual void onParticipantRequestFPU(MultiConf *conf,int partId,void *param) = 0;
-		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status, void *param) = 0;
+		virtual void onParticipantRequestFPU(MultiConf *conf,int partId) = 0;
+		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status) = 0;
 		
 		
 	};
@@ -72,7 +72,7 @@ public:
 	int Init(int vad,DWORD rate);
 	int End();
 
-	void SetListener(Listener *listener,void* param);
+	void SetListener(Listener *listener);
 
 	int CreateMosaic(Mosaic::Type comp,int size);
 	int SetMosaicOverlayImage(int mosaicId,const char* filename);
@@ -206,7 +206,6 @@ private:
 	std::wstring	tag;
 
 	Listener *listener;
-	void* param;
 
 	//Los mixers
 	VideoMixer videoMixer;

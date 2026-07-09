@@ -35,7 +35,7 @@ RTMPConnection::RTMPConnection(Listener *listener)
 	//Store listener
 	this->listener = listener;
 	//No media
-	app = NULL;
+	app = nullptr;
 	//Set first media id
 	maxStreamId = 1;
 	maxTransId = 1;
@@ -168,7 +168,7 @@ int RTMPConnection::End()
 		//Disconnect application
 		app->Disconnect(this);
 		//NO app
-		app = NULL;
+		app = nullptr;
 	}
 
 	//Ended
@@ -1541,7 +1541,7 @@ void RTMPConnection::onNetConnectionDisconnected()
 	Log("-onNetConnectionDisconnected [0x%x]\n",this);
 	
 	//Delete app
-	app = NULL;
+	app = nullptr;
 
 	//Stop just in case
 	Stop();

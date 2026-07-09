@@ -10,6 +10,7 @@
 #include <map>
 #include <string>
 #include <mutex>
+#include <memory>
 #include "mediabridgesession.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
@@ -38,7 +39,7 @@ public:
 	bool End();
 
 	/** RTMP application interface*/
-	virtual RTMPNetConnection* Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
+	virtual std::shared_ptr<RTMPNetConnection> Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
 protected:
 
 	struct MediaBridgeEntry

@@ -208,23 +208,39 @@ jamais l'inverse.
 JSR309 de charge (création session/endpoints/players/recorders en parallèle de destructions,
 scénarios elixip).
 
-### Phase 2 — Conférences : `MCU` et cycle de vie de `MultiConf`
+### Phase 2 — Conférences : `MCU` et cycle de vie de `MultiConf` — **FAITE (2026-07-09, build vert)**
 
-1. `Conferences` devient `map<int, shared_ptr<ConferenceEntry>>` avec
-   `shared_ptr<MultiConf> conf` — ou directement `map<int, shared_ptr<MultiConf>>` + une petite
-   struct d'infos. `numRef` disparaît.
-2. `GetConferenceRef` retourne un `shared_ptr<MultiConf>` ; `ReleaseConferenceRef` disparaît
-   (~40 sites dans `xmlrpcmcu.cpp` — réécriture mécanique, le RAII supprime les fuites de ref
-   dans les chemins d'erreur).
-3. `DeleteConference` : `enabled=0` (ou flag interne `ending`), retrait de la map, `conf->End()`,
-   et c'est le dernier `shared_ptr` qui détruit — **suppression du polling `sleep(2)` et de la
-   fuite volontaire** (l.328-359).
-4. **H-1** : `MCU::Connect` rend le `shared_ptr` (ou l'objet connexion garde un
-   `shared_ptr<MultiConf>` le temps de la session RTMP).
-5. **M-2** : le `param` des callbacks (`ConferenceEntry*`) devient un id (+ lookup) ou un
-   `weak_ptr`.
+*Même patron que la Phase 1 (`JSR309Manager`) : `Conferences` = `map<int,ConferenceEntry>` avec
+`ConferenceEntry{int queueId; shared_ptr<MultiConf> conf;}` (valeur, pas pointeur).*
 
-**Livrable** : build vert + boucle create/delete conference sous trafic XML-RPC concurrent.
+1. **Fait** : `GetConferenceRef(int id, shared_ptr<MultiConf>&)` (même style que
+   `GetMediaSessionRef`) ; `ReleaseConferenceRef` **supprimé**. `CreateConference` utilise
+   `make_shared<MultiConf>`. `DeleteConference` extrait le `shared_ptr` sous lock puis appelle
+   `conf->End()` hors lock — **suppression du polling `sleep(2)`/4 essais et de la fuite
+   volontaire** (l.297-329,348 de l'ancien code). `MCU::End()` (destructeur) simplifié pareil.
+2. **M-2 fait** : suppression complète du `void* param` de `MultiConf::Listener`
+   (`SetListener`, `onParticipantRequestFPU/DocSharing`) — un seul émetteur/récepteur (`MCU`).
+   Les callbacks résolvent `queueId`/`id` par lookup `tags`→`conferences` sous le mutex de
+   `MCU`, comme `JSR309Manager::PostEvent` résout son contexte sous son propre mutex ; si
+   l'entrée n'est plus dans la map (conférence en cours de destruction), l'événement est
+   simplement abandonné.
+3. **H-1 fait** : `RTMPApplication::Connect` (et `RTMPConnection::Listener::OnConnect`,
+   `RTMPConnection::app`) renvoie désormais `shared_ptr<RTMPNetConnection>` au lieu d'un
+   pointeur brut. `MCU::Connect` renvoie le vrai `shared_ptr<MultiConf>` sorti de la map — le
+   `shared_ptr` que détient `RTMPConnection::app` maintient la conférence vivante pendant toute
+   la durée de la session RTMP (`CreateStream`/`DeleteStream`/`Disconnect`), corrigeant le UAF
+   potentiel. `MediaGateway::Connect` et `Broadcaster::Connect` (mêmes défauts cousins, C-8/M-5,
+   non corrigés ici) enveloppent leur pointeur existant dans un `shared_ptr` à **deleter no-op**
+   — adapte juste la signature, gestion de vie inchangée, réservée à la Phase 5.
+4. Mécanique : `xmlrpcmcu.cpp` (57 sites) et `mcustatushandler.cpp` (2 sites) adaptés comme
+   `xmlrpcjsr309.cpp` en Phase 1 (suppression de `ReleaseConferenceRef`, RAII). `rabbitmqmcu.cpp`
+   (moteli, 7 Get/24 Release, pattern non uniforme) adapté en best effort mais **non compilé** —
+   `MOTELI` n'est activé par aucun chemin de `install.ksh` actuel.
+
+**Livrable** : build vert ✅ (2026-07-09, `./install.ksh localcompile`). Reste à dérouler : boucle
+create/delete conference sous trafic XML-RPC concurrent, et scénario RTMP
+(connect → `DeleteConference` concurrent → vérifier l'absence de crash grâce au `shared_ptr`
+tenu par `RTMPConnection::app`).
 
 ### Phase 3 — Participants, players, tokens (cœur de `MultiConf`)
 

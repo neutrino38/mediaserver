@@ -101,10 +101,10 @@ void McuStatusHandler::ListConferences(TSession * const ses)
 
 void McuStatusHandler::PrintConfStatus(TSession * const ses, int confid, bool listPart)
 {
-    MultiConf *conf = NULL;
+    std::shared_ptr<MultiConf> conf;
     Debug("Printing status of conf %d.\n", confid);
 
-    if(!mcu->GetConferenceRef(confid,&conf))
+    if(!mcu->GetConferenceRef(confid,conf))
     {
         XmlRpcServer::SendError(ses, 404, "No such conference");
         return;
@@ -119,7 +119,6 @@ void McuStatusHandler::PrintConfStatus(TSession * const ses, int confid, bool li
     if ( code == 200 )
 	conf->DumpMixerInfo(1, MediaFrame::Audio, response);
 
-    mcu->ReleaseConferenceRef(confid);
     if (code == 200)
     	XmlRpcServer::SendResponse(ses, 200, response.c_str(), response.length() );
     else
@@ -129,10 +128,10 @@ void McuStatusHandler::PrintConfStatus(TSession * const ses, int confid, bool li
 
 void McuStatusHandler::PrintPartStatus(TSession * const ses, int confid, int partid)
 {
-    MultiConf *conf = NULL;
+    std::shared_ptr<MultiConf> conf;
     int code;
 
-    if (!mcu->GetConferenceRef(confid,&conf))
+    if (!mcu->GetConferenceRef(confid,conf))
     {
         XmlRpcServer::SendError(ses, 404, "No such conference");
         return;
@@ -140,7 +139,6 @@ void McuStatusHandler::PrintPartStatus(TSession * const ses, int confid, int par
 
     std::string response;
     code = conf->DumpParticipantInfo(partid, response);
-    mcu->ReleaseConferenceRef(confid);
 
     if ( code == 200 )
     {

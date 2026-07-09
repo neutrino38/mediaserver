@@ -46,11 +46,10 @@ MultiConf::~MultiConf()
                 delete(recorder);
 }
 
-void MultiConf::SetListener(Listener *listener,void* param)
+void MultiConf::SetListener(Listener *listener)
 {
 	//Store values
 	this->listener = listener;
-	this->param = param;
 }
 
 /************************
@@ -2364,7 +2363,7 @@ void MultiConf::onRequestFPU(Participant *part)
 	//Check listener
 	if (listener)
 		//Send event
-		listener->onParticipantRequestFPU(this,part->GetPartId(),this->param);
+		listener->onParticipantRequestFPU(this,part->GetPartId());
 }
 
 void MultiConf::onDTMF(Participant *part, DTMFMessage* dtmf)
@@ -2392,7 +2391,7 @@ void MultiConf::onRequestDocSharing(int partId,std::wstring status)
 	//Check listener
 	if (listener)
 		//Send event
-		listener->onParticipantRequestDocSharing(this,partId,status,this->param);
+		listener->onParticipantRequestDocSharing(this,partId,status);
 }
 
 int MultiConf::AppMixerDisplayImage(const char* filename)

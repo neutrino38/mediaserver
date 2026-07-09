@@ -2,6 +2,7 @@
 #define _BROADCASTER_H_
 #include <map>
 #include <string>
+#include <memory>
 #include "pthread.h"
 #include "broadcastsession.h"
 #include "rtmpstream.h"
@@ -43,7 +44,7 @@ public:
 	bool  GetBroadcastPublishedStreams(DWORD id,BroadcastSession::PublishedStreamsInfo &list);
 
 	/** RTMP application interface*/
-	virtual RTMPNetConnection* Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
+	virtual std::shared_ptr<RTMPNetConnection> Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
 
 	/* For RTMPNetConnection */
 	virtual RTMPNetStream* CreateStream(DWORD streamId,DWORD audioCaps,DWORD videoCaps,RTMPNetStream::Listener* listener);

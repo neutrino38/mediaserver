@@ -199,7 +199,7 @@ int McuRabbitHandler::onCreateMcuObject( const char * payload, size_t len,  MsgH
 int McuRabbitHandler::onDeleteMcuObject( const char * payload, size_t len,  MsgHeader & h )
 {
     moteli::mcu::DeleteMcuObjectReq req;
-    MultiConf *conf = NULL;
+    std::shared_ptr<MultiConf> conf;
 
     if (req.ParseFromArray( payload, len ))
     {
@@ -221,14 +221,13 @@ int McuRabbitHandler::onDeleteMcuObject( const char * payload, size_t len,  MsgH
 		break;
 
 	    case McuObjectId_ObjectType_PARTICIPANT:
-		if(!mcu->GetConferenceRef(concernedObj.confid(),&conf))
+		if(!mcu->GetConferenceRef(concernedObj.confid(),conf))
 		{
 		    return ReplyError( h, &concernedObj, 
 			   ErrorRsp_ErrCode_OBJ_NOT_FOUND,
 			   "DeleteMcuObjectReq: the conference associated with the participant to delete does not exist" );
                 }
 		ret = conf->DeleteParticipant( concernedObj.partid() );
-		mcu->ReleaseConferenceRef( concernedObj.confid() );
 		if (!ret)
 		{
 		    return ReplyError( h, &concernedObj, 
@@ -258,7 +257,7 @@ int McuRabbitHandler::onDeleteMcuObject( const char * payload, size_t len,  MsgH
  */
 int McuRabbitHandler::CreateConference( void *r, MsgHeader & h )
 {
-    MultiConf *conf = NULL;
+    std::shared_ptr<MultiConf> conf;
     CreateMcuObjectResp resp;
     CreateMcuObjectReq *req = (CreateMcuObjectReq *) r;
     UTF8Parser tagParser;
@@ -306,7 +305,7 @@ int McuRabbitHandler::CreateConference( void *r, MsgHeader & h )
     objId->set_objtype( McuObjectId_ObjectType_CONFERENCE );
     objId->set_confid( confId );
 
-    if(!mcu->GetConferenceRef(confId,&conf))
+    if(!mcu->GetConferenceRef(confId,conf))
     {
 	return ReplyError( h, objId, 
 			   ErrorRsp_ErrCode_OBJ_NOT_FOUND,
@@ -316,7 +315,6 @@ int McuRabbitHandler::CreateConference( void *r, MsgHeader & h )
     int res = conf->Init(vad,rate);
 
      //Liberamos la referencia
-     mcu->ReleaseConferenceRef(confId);
 
         //Salimos
     if(!res)
@@ -333,7 +331,7 @@ int McuRabbitHandler::CreateConference( void *r, MsgHeader & h )
 
 int McuRabbitHandler::CreateParticipant( void *r, MsgHeader & h )
 {
-    MultiConf *conf = NULL;
+    std::shared_ptr<MultiConf> conf;
     CreateMcuObjectResp resp;
     int confId;
     int mosaicId;
@@ -356,7 +354,7 @@ int McuRabbitHandler::CreateParticipant( void *r, MsgHeader & h )
 
     // Recuperer l'ID de la conf de rattachement
     confId = req->parentobj().confid();
-    if(!mcu->GetConferenceRef(confId,&conf))
+    if(!mcu->GetConferenceRef(confId,conf))
 	return  ReplyError( h, &req->parentobj(), 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "CreateParticipant: conf does not exist");
@@ -380,7 +378,6 @@ int McuRabbitHandler::CreateParticipant( void *r, MsgHeader & h )
 
         case moteli::mcu::SKYPE:
         default:
-	    mcu->ReleaseConferenceRef(confId);
             return  ReplyError( h, &req->parentobj(),  ErrorRsp_ErrCode_INVALID_PARAMETER, "Unsupported participant type");
         }
 
@@ -391,11 +388,9 @@ int McuRabbitHandler::CreateParticipant( void *r, MsgHeader & h )
                                 parser.GetWString(),
                                 type);
 
-	mcu->ReleaseConferenceRef(confId);
     }
     else
     {
-	mcu->ReleaseConferenceRef(confId);
 	return  ReplyError( h, &req->parentobj(),  ErrorRsp_ErrCode_INVALID_PARAMETER, "Missing participant parameter");
     }
 
@@ -631,7 +626,7 @@ int McuRabbitHandler::onSetMediaPropertiesReq( const char * payload, size_t len,
     if ( req.ParseFromArray( payload, len ) )
     {
 	const McuObjectId & partId = req.partid();
-	MultiConf * conf = NULL;
+	std::shared_ptr<MultiConf> conf;
 	Properties properties;
 	SetMediaPropertiesResp resp;
 	
@@ -642,14 +637,13 @@ int McuRabbitHandler::onSetMediaPropertiesReq( const char * payload, size_t len,
 			    "SetMediaPropertiesReq: partId is not a participant.");
 	}
 	
-	if(!mcu->GetConferenceRef(partId.confid(), &conf))
+	if(!mcu->GetConferenceRef(partId.confid(), conf))
 		return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "SetMediaPropertiesReq: cannot find specified confId");
 
 	if ( !req.has_codecproperty() )
 	{
-		mcu->ReleaseConferenceRef(partId.confid());
 		return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "SetMediaPropertiesReq: missing codec properties");
@@ -669,13 +663,11 @@ int McuRabbitHandler::onSetMediaPropertiesReq( const char * payload, size_t len,
 	    {
 		case moteli::mcu::AUDIO:
 		    conf->SetAudioCodec(partId.partid(), ConvAudioCodecType(req.codecproperty().codec()), properties);
-		    mcu->ReleaseConferenceRef(partId.confid());
 		    resp.set_nbpropapplied(properties.size());		    break;
 		
 		case moteli::mcu::VIDEO:
 		    if ( ! req.has_codecproperty() )
 		    {
-			 mcu->ReleaseConferenceRef(partId.confid());
                         return  ReplyError( h, &partId,
                             ErrorRsp_ErrCode_INVALID_PARAMETER,
                             "SetMediaPropertiesReq[Video]: no codec property specified.");
@@ -685,7 +677,6 @@ int McuRabbitHandler::onSetMediaPropertiesReq( const char * payload, size_t len,
 			const moteli::mcu::SetMediaPropertiesReq_CodecProperty & cprop = req.codecproperty(); 
 	 		if ( ! cprop.has_fps() || ! cprop.has_bitrate() || ! cprop.has_intraperiod() || ! cprop.has_size() )
 			{
-			    mcu->ReleaseConferenceRef(partId.confid());
 	 		    return  ReplyError( h, &partId, ErrorRsp_ErrCode_INVALID_PARAMETER,
 						"SetMediaPropertiesReq[Video]: one of the following parameter "
 						"is missing in the request: fps, bitrate, intraperiod or picture size.");
@@ -697,18 +688,15 @@ int McuRabbitHandler::onSetMediaPropertiesReq( const char * payload, size_t len,
 					(int) cprop.fps(), (int) cprop.bitrate(), (int) cprop.intraperiod(),
 					properties);
 		        resp.set_nbpropapplied(properties.size());
-		        mcu->ReleaseConferenceRef(partId.confid());
 		    }
 		    break;
 		    
 		case moteli::mcu::TEXT:
 		    conf->SetTextCodec((int) partId.partid(), (int) ConvTextCodecType(req.codecproperty().codec()));
 		    resp.set_nbpropapplied(properties.size());
-		    mcu->ReleaseConferenceRef(partId.confid());
 		    break;
 		
 		default:
-		    mcu->ReleaseConferenceRef(partId.confid());
 		    return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "SetMediaPropertiesReq: unsupported media");
@@ -723,7 +711,6 @@ int McuRabbitHandler::onSetMediaPropertiesReq( const char * payload, size_t len,
 	{
 	    Error("-SetMediaPropertiesReq: exception caught. confId=%d, partId=%d.\n", partId.confid(), partId.partid() ); 
 	    Error("-SetMediaPropertiesReq: exception msg = %s.\n", e.what() );
-	    if (conf != NULL) mcu->ReleaseConferenceRef(partId.confid());
 	    return ReplyError( h, &partId, ErrorRsp_ErrCode_PROCESSING_ERR,
 		               e.what());
 
@@ -745,7 +732,7 @@ int McuRabbitHandler::onStartMediaReq( const char * payload, size_t len,  MsgHea
     if ( req.ParseFromArray( payload, len ) )
     {
 	const McuObjectId & partId = req.partid();
-	MultiConf * conf = NULL;
+	std::shared_ptr<MultiConf> conf;
 	Properties properties;
 	moteli::mcu::StartMediaResp resp;
 	
@@ -756,7 +743,7 @@ int McuRabbitHandler::onStartMediaReq( const char * payload, size_t len,  MsgHea
 			    "StartMediaReq: partId is not a participant.");
 	}
 	
-	if(!mcu->GetConferenceRef(partId.confid(), &conf))
+	if(!mcu->GetConferenceRef(partId.confid(), conf))
 		return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "StartMediaReq: cannot find specified confId");
@@ -772,12 +759,12 @@ int McuRabbitHandler::onStartMediaReq( const char * payload, size_t len,  MsgHea
 			
 			if (mdef.mediadirection() == moteli::mcu::SEND || mdef.mediadirection() == moteli::mcu::SENDRECV)
 			{
-			    StartSendingMedia( conf, partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
+			    StartSendingMedia( conf.get(), partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
 			}
 			
 			if (mdef.mediadirection() == moteli::mcu::RECV || mdef.mediadirection() == moteli::mcu::SENDRECV)
 			{
-			    int port = StartReceivingMedia( conf, partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
+			    int port = StartReceivingMedia( conf.get(), partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
 
 			    moteli::mcu::MediaStatus * mstat = resp.add_medias();
         		    mstat->set_mediatype(mdef.mediatype());
@@ -798,7 +785,6 @@ int McuRabbitHandler::onStartMediaReq( const char * payload, size_t len,  MsgHea
 			    }
 			}
 		}
-		mcu->ReleaseConferenceRef(partId.confid());
 	        resp.set_allocated_partid( new McuObjectId(partId));
 	        return SendMessage(h, &resp);
 	    }
@@ -806,7 +792,6 @@ int McuRabbitHandler::onStartMediaReq( const char * payload, size_t len,  MsgHea
 	    {
 	        Error("-StartMediaReq: exception caught. confId=%d, partId=%d.\n", partId.confid(), partId.partid() ); 
 	        Error("-StartMediaReq: exception msg = %s.\n", e.what() );
-	        if (conf != NULL) mcu->ReleaseConferenceRef(partId.confid());
 	        return ReplyError( h, &partId, ErrorRsp_ErrCode_PROCESSING_ERR,
 		               e.what());
 
@@ -814,7 +799,6 @@ int McuRabbitHandler::onStartMediaReq( const char * payload, size_t len,  MsgHea
 	}
 	else
 	{
-		mcu->ReleaseConferenceRef(partId.confid());
 		return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "StartMediaReq: no media specified");
@@ -964,7 +948,7 @@ int McuRabbitHandler::onStopMediaReq( const char * payload, size_t len,  MsgHead
     if ( req.ParseFromArray( payload, len ) )
     {
 	const McuObjectId & partId = req.partid();
-	MultiConf * conf = NULL;
+	std::shared_ptr<MultiConf> conf;
 	Properties properties;
 	moteli::mcu::StopMediaResp resp;
 	
@@ -975,7 +959,7 @@ int McuRabbitHandler::onStopMediaReq( const char * payload, size_t len,  MsgHead
 			    "StopMediaReq: partId is not a participant.");
 	}
 	
-	if(!mcu->GetConferenceRef(partId.confid(), &conf))
+	if(!mcu->GetConferenceRef(partId.confid(), conf))
 		return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "StopMediaReq: cannot find specified confId");
@@ -990,15 +974,14 @@ int McuRabbitHandler::onStopMediaReq( const char * payload, size_t len,  MsgHead
 			
 			if (mdef.mediadirection() == moteli::mcu::SEND || mdef.mediadirection() == moteli::mcu::SENDRECV)
 			{
-			    StopSendingMedia( conf, partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
+			    StopSendingMedia( conf.get(), partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
 			}
 			
 			if (mdef.mediadirection() == moteli::mcu::RECV || mdef.mediadirection() == moteli::mcu::SENDRECV)
 			{
-			    StopReceivingMedia( conf, partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
+			    StopReceivingMedia( conf.get(), partId.partid(), ConvMediaType(mdef.mediatype()), &mdef, &resp );
 			}
 		}
-		mcu->ReleaseConferenceRef(partId.confid());
 	        resp.set_allocated_partid( new McuObjectId(partId));
 	        return SendMessage(h, &resp);
 	    }
@@ -1006,7 +989,6 @@ int McuRabbitHandler::onStopMediaReq( const char * payload, size_t len,  MsgHead
 	    {
 	        Error("-StopMediaReq: exception caught. confId=%d, partId=%d.\n", partId.confid(), partId.partid() ); 
 	        Error("-StopMediaReq: exception msg = %s.\n", e.what() );
-	        if (conf != NULL) mcu->ReleaseConferenceRef(partId.confid());
 	        return ReplyError( h, &partId, ErrorRsp_ErrCode_PROCESSING_ERR,
 		               e.what());
 
@@ -1014,7 +996,6 @@ int McuRabbitHandler::onStopMediaReq( const char * payload, size_t len,  MsgHead
 	}
 	else
 	{
-		mcu->ReleaseConferenceRef(partId.confid());
 		return  ReplyError( h, &partId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "StartMediaReq: no media specified");
@@ -1077,11 +1058,11 @@ int McuRabbitHandler::onAddToMixerReq( const char * payload, size_t len,  MsgHea
     if ( req.ParseFromArray( payload, len ) )
     {
 	const McuObjectId & mixerId = req.objid();
-	MultiConf * conf = NULL;
+	std::shared_ptr<MultiConf> conf;
 	Properties properties;
 	moteli::mcu::AddParticipantsToMixerResp resp;
 
-	if (!mcu->GetConferenceRef(mixerId.confid(), &conf))
+	if (!mcu->GetConferenceRef(mixerId.confid(), conf))
 		return  ReplyError( h, &mixerId, 
 			    ErrorRsp_ErrCode_INVALID_PARAMETER,
 			    "onAddToMixerReq: cannot find specified confId");
@@ -1093,7 +1074,6 @@ int McuRabbitHandler::onAddToMixerReq( const char * payload, size_t len,  MsgHea
 		     case McuObjectId_ObjectType_SIDEBAR:
 			if ( ! mixerId.has_sidebarid() )
 			{
-				if (conf != NULL) mcu->ReleaseConferenceRef(mixerId.confid());
 				return ReplyError( h, &mixerId, 
 						   ErrorRsp_ErrCode_INVALID_PARAMETER,
 						   "onAddToMixerReq: no SIDEBAR id specified.");			
@@ -1113,7 +1093,6 @@ int McuRabbitHandler::onAddToMixerReq( const char * payload, size_t len,  MsgHea
 		     case McuObjectId_ObjectType_MOSAIC:
 			if ( ! mixerId.has_mosaicid() )
 			{
-				if (conf != NULL) mcu->ReleaseConferenceRef(mixerId.confid());
 				return ReplyError( h, &mixerId, 
 						   ErrorRsp_ErrCode_INVALID_PARAMETER,
 						   "onAddToMixerReq: no MOSAIC id specified.");			
@@ -1130,7 +1109,6 @@ int McuRabbitHandler::onAddToMixerReq( const char * payload, size_t len,  MsgHea
 			break;
 		     
 		     default:
-		        if (conf != NULL) mcu->ReleaseConferenceRef(mixerId.confid());
 			return ReplyError( h, &mixerId, 
 					   ErrorRsp_ErrCode_INVALID_PARAMETER,
 					   "onAddToMixerReq: specified object ID must be a mosaic or a sidebar");
@@ -1140,14 +1118,12 @@ int McuRabbitHandler::onAddToMixerReq( const char * payload, size_t len,  MsgHea
 	{
 	        Error("-onAddToMixerReq: exception caught. confId=%d.\n", mixerId.confid(), 0 ); 
 	        Error("-onAddToMixerReq: exception msg = %s.\n", e.what() );
-	        if (conf != NULL) mcu->ReleaseConferenceRef(mixerId.confid());
 	        return ReplyError( h, &mixerId, ErrorRsp_ErrCode_PROCESSING_ERR,
 		               e.what());
 
 	}	    
 	
 	resp.set_allocated_objid(new McuObjectId(mixerId));
-	if (conf != NULL) mcu->ReleaseConferenceRef(mixerId.confid());
 	return SendMessage(h, &resp);
     }
     else
