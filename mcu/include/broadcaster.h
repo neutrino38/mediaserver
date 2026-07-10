@@ -38,8 +38,7 @@ public:
 	bool  PublishBroadcast(DWORD id,const std::wstring &pin);
 	bool  AddBroadcastToken(DWORD id,const std::wstring &token);
 	bool  UnPublishBroadcast(DWORD id);
-	bool  GetBroadcastRef(DWORD id,BroadcastSession **broadcast);
-	bool  ReleaseBroadcastRef(DWORD id);
+	bool  GetBroadcastRef(DWORD id,std::shared_ptr<BroadcastSession> &broadcast);
 	bool  DeleteBroadcast(DWORD confId);
 	bool  GetBroadcastPublishedStreams(DWORD id,BroadcastSession::PublishedStreamsInfo &list);
 
@@ -57,12 +56,10 @@ protected:
 	struct BroadcastEntry
 	{
 		DWORD id;
-		DWORD numRef;
-		DWORD enabled;
 		std::wstring name;
                 std::wstring tag;
 		std::wstring pin;
-		BroadcastSession* session;
+		std::shared_ptr<BroadcastSession> session;
 	};
 	typedef std::map<DWORD,BroadcastEntry> BroadcastEntries;
 	typedef std::map<std::wstring,DWORD> PublishedBroadcasts;

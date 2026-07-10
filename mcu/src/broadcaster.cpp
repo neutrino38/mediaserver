@@ -61,16 +61,8 @@ bool Broadcaster::End()
 
 	//Paramos las sesions
 	for (BroadcastEntries::iterator it=broadcasts.begin(); it!=broadcasts.end(); it++)
-	{
-		//Obtenemos la sesion
-		BroadcastSession *session = it->second.session;
-
-		//La paramos
-		session->End();
-
-		//Y la borramos
-		delete session;
-	}
+		//La paramos (el shared_ptr destruye la sesion al vaciar la map)
+		it->second.session->End();
 
 	//Clear the broadcaster list
 	broadcasts.clear();
@@ -94,22 +86,20 @@ DWORD Broadcaster::CreateBroadcast(const std::wstring &name,const std::wstring &
 
 
 	//Creamos la session
-	BroadcastSession * session = new BroadcastSession(tag);
+	std::shared_ptr<BroadcastSession> session = std::make_shared<BroadcastSession>(tag);
 
 	//Obtenemos el id
 	DWORD sessionId = maxId++;
 
 	//Creamos la entrada
-	BroadcastEntry entry; 
+	BroadcastEntry entry;
 
 	//Guardamos los datos
 	entry.id 	= sessionId;
 	entry.name 	= name;
         entry.tag       = tag;
 	entry.session 	= session;
-	entry.enabled 	= 1;
-	entry.numRef	= 0;
-	
+
 	//Bloqueamos
 	pthread_mutex_lock(&mutex);
 
@@ -323,7 +313,7 @@ DWORD Broadcaster::GetTokenBroadcastId(const std::wstring &token)
 * GetBroadcastRef
 *	Obtiene una referencia a una sesion
 **************************************/
-bool Broadcaster::GetBroadcastRef(DWORD id,BroadcastSession **session)
+bool Broadcaster::GetBroadcastRef(DWORD id,std::shared_ptr<BroadcastSession> &session)
 {
 	Log(">GetBroadcastRef [%d]\n",id);
 
@@ -342,56 +332,13 @@ bool Broadcaster::GetBroadcastRef(DWORD id,BroadcastSession **session)
 		return Error("Session no encontrada [%d]\n",id);
 	}
 
-	//Get entry
-	BroadcastEntry &entry = it->second;
-
-	//Aumentamos el contador
-	entry.numRef++;
-
-	//Y obtenemos el puntero a la la sesion
-	*session = entry.session;
+	//Y obtenemos la referencia compartida a la sesion
+	session = it->second.session;
 
 	//Desbloquamos el mutex
 	pthread_mutex_unlock(&mutex);
 
 	Log("<GetBroadcastRef \n");
-
-	return true;
-}
-
-/**************************************
-* ReleaseBroadcastRef
-*	Libera una referencia a una sesion
-**************************************/
-bool Broadcaster::ReleaseBroadcastRef(DWORD id)
-{
-	Log(">ReleaseBroadcastRef [%d]\n",id);
-
-	//Bloqueamos
-	pthread_mutex_lock(&mutex);
-
-	//Find session reference
-	BroadcastEntries::iterator it = broadcasts.find(id);
-
-	//SI no esta
-	if (it==broadcasts.end())
-	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
-		//Y salimos
-		return Error("Session no encontrada [%d]\n",id);
-	}
-
-	//Get entry
-	BroadcastEntry &entry = it->second;
-
-	//Aumentamos el contador
-	entry.numRef--;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-
-	Log("<ReleaseBroadcastRef\n");
 
 	return true;
 }
@@ -403,6 +350,8 @@ bool Broadcaster::ReleaseBroadcastRef(DWORD id)
 bool Broadcaster::DeleteBroadcast(DWORD id)
 {
 	Log(">DeleteSession [%d]\n",id);
+
+	std::shared_ptr<BroadcastSession> session;
 
 	//Bloqueamos
 	pthread_mutex_lock(&mutex);
@@ -420,39 +369,14 @@ bool Broadcaster::DeleteBroadcast(DWORD id)
 		return Error("Session no encontrada [%d]\n",id);
 	}
 
-	//Get entry
-	BroadcastEntry &entry = it->second;
-
-	//Whait to get free
-	while(entry.numRef>0)
-	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
-		//FIXME: poner una condicion
-		sleep(20);
-		//Bloqueamos
-		pthread_mutex_lock(&mutex);
-		//Find broadcast
-		it =  broadcasts.find(id);
-		//Check if we found it or not
-		if (it==broadcasts.end())
-		{
-			//Desbloquamos el mutex
-			pthread_mutex_unlock(&mutex);
-			//Y salimos
-			return Error("Broadcast no encontrada [%d]\n",id);
-		}
-		//Get entry again
-		entry = it->second;
-	}
-
-	//Get sessionerence
-	BroadcastSession *session = entry.session;
+	//Extrae la sesion bajo lock : una vez fuera de la map, nadie puede obtener
+	//nuevas referencias (remplaza el polling numRef/sleep(20), M-5)
+	session = std::move(it->second.session);
 
 	//If it was published
-	if (!entry.pin.empty())
+	if (!it->second.pin.empty())
 		//Remove from published list
-		published.erase(entry.pin);
+		published.erase(it->second.pin);
 
 	//Remove from list
 	broadcasts.erase(it);
@@ -460,11 +384,9 @@ bool Broadcaster::DeleteBroadcast(DWORD id)
 	//Desbloquamos el mutex
 	pthread_mutex_unlock(&mutex);
 
-	//End
+	//End : idempotente, y seguro aunque un handler siga teniendo una referencia —
+	//el ultimo shared_ptr destruira el objeto.
 	session->End();
-
-	//Delete sessionerence
-	delete session;
 
 	Log("<DeleteSession [%d]\n",id);
 
@@ -474,15 +396,13 @@ bool Broadcaster::DeleteBroadcast(DWORD id)
 
 bool Broadcaster::GetBroadcastPublishedStreams(DWORD sessId,BroadcastSession::PublishedStreamsInfo &list)
 {
-	BroadcastSession *sess;
+	std::shared_ptr<BroadcastSession> sess;
 	//Get ref
-	if(!GetBroadcastRef(sessId,&sess))
+	if(!GetBroadcastRef(sessId,sess))
 		//Error
 		return Error("Broadcast id not found\n");
 	//Get list
 	sess->GetBroadcastPublishedStreams(list);
-	//Release ref
-	ReleaseBroadcastRef(sessId);
 	//OK
 	return true;
 }
@@ -503,7 +423,7 @@ std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appN
 		return new RTMPMP4Stream(streamId);
 		 * */
 	} else if (appName.find(L"broadcaster")==0) {
-		BroadcastSession* sess = NULL;
+		std::shared_ptr<BroadcastSession> sess;
 		RTMPNetConnection* conn = NULL;
 		DWORD sessId = 0;
 
@@ -535,7 +455,7 @@ std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appN
 			//Get session id from token
 			sessId = GetPublishedBroadcastId(val);
 			//Get conference if got id
-			if(!sessId || !GetBroadcastRef(sessId,&sess))
+			if(!sessId || !GetBroadcastRef(sessId,sess))
 			{
 				//No conference found
 				Error("BroadcastSession not found [sessId:%d]\n",sessId);
@@ -547,9 +467,6 @@ std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appN
 
 			//Connect
 			conn = sess->ConnectPublisher(listener);
-
-			//release it
-			ReleaseBroadcastRef(sessId);
 		} else if (type.compare(L"watcher")== 0) {
 			//Get session id from token
 			sessId = GetTokenBroadcastId(val);
@@ -558,7 +475,7 @@ std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appN
 				//Try the pin
 				sessId = GetPublishedBroadcastId(val);
 			//Get conference if got id
-			if(!sessId || !GetBroadcastRef(sessId,&sess))
+			if(!sessId || !GetBroadcastRef(sessId,sess))
 			{
 				//No conference found
 				Error("BroadcastSession not found [sessId:%d]\n",sessId);
@@ -570,15 +487,17 @@ std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appN
 
 			//Connect
 			conn = sess->ConnectWatcher(listener);
-
-			//release it
-			ReleaseBroadcastRef(sessId);
 		}
 
-		//Return conf : enveloppe le pointeur brut existant (gestion de vie inchangee,
-		//possede par BroadcastSession::publishers/watchers) juste pour respecter la
-		//nouvelle signature.
-		return std::shared_ptr<RTMPNetConnection>(conn, [](RTMPNetConnection*){});
+		//Check we got a connection
+		if (!conn)
+			//Exit
+			return nullptr;
+
+		//Return conn : el conn pertenece a BroadcastSession (publishers/watchers) ; el
+		//shared_ptr aliasing comparte la propiedad de la sesion, manteniendola viva
+		//mientras dure la conexion RTMP (M-5, sin cambiar el owner del conn).
+		return std::shared_ptr<RTMPNetConnection>(sess, conn);
 
 	}
 

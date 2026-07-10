@@ -5,6 +5,7 @@
 #include "overlay.h"
 #include "vad.h"
 #include <map>
+#include <memory>
 
 class Mosaic
 {
@@ -143,7 +144,7 @@ protected:
 protected:
 	Participants participants;
 	ParticipantInfos partVad;
-	std::map<int,Overlay *> overlays;
+	std::map<int,std::unique_ptr<Overlay>> overlays;
 	int mosaicChanged;
 
 	// information on whether slot is locked, free, fixed (= id of participant), vad
@@ -164,7 +165,7 @@ protected:
 	Type	mosaicType;
 	int     mosaicSize;
 
-	Overlay* overlay;
+	std::unique_ptr<Overlay> overlay;
 	bool	 overlayNeedsUpdate;
 
 	bool  keepAspect;

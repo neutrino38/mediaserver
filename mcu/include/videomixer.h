@@ -77,11 +77,14 @@ private:
 	{
 		std::shared_ptr<PipeVideoInput>  input;
 		std::shared_ptr<PipeVideoOutput> output;
+		//Observateur non possedant : le Mosaic est detenu par la map mosaics ;
+		//remis a jour/NULL sous lstVideosUse (verrou ecrivain) a chaque
+		//suppression/remplacement, donc valide tant que MixVideo tourne.
 		Mosaic *mosaic;
 	} VideoSource;
 
 	typedef std::map<int,VideoSource *> Videos;
-	typedef std::map<int,Mosaic *> Mosaics;
+	typedef std::map<int,std::shared_ptr<Mosaic>> Mosaics;
 private:
 	static DWORD vadDefaultChangePeriod;
 private:
@@ -95,6 +98,7 @@ private:
 
 	//Las propiedades del mosaico
 	Logo 	logo;
+	//Observateur non possedant sur un Mosaic detenu par la map mosaics.
 	Mosaic	*defaultMosaic;
 
 	//Threads, mutex y condiciones

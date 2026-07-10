@@ -96,7 +96,7 @@ Mosaic::Mosaic(Type type,DWORD size)
 	overlayNeedsUpdate = false;
 
 	//No overlay
-	overlay = NULL;
+	overlay = nullptr;
 
 	//No vad particpant
 	vadParticipant = 0;
@@ -106,8 +106,6 @@ Mosaic::Mosaic(Type type,DWORD size)
 
 Mosaic::~Mosaic()
 {
-	std::map<int, Overlay *>::iterator it;
-
 	//Free memory
 	free(mosaicBuffer);
 
@@ -134,12 +132,7 @@ Mosaic::~Mosaic()
 		free(mosaicSlotsBlockingTime);
 		
 	
-	// Clean all overlays
-	for (it = overlays.begin(); it != overlays.end(); ++it)
-	{
-	    if (it->second != NULL) delete it->second;
-	}
-	
+	// Clean all overlays (les unique_ptr detruisent les Overlay)
 	overlays.clear();
 }
 
@@ -441,12 +434,10 @@ int Mosaic::RemoveParticipant(int id)
 		//Delete it
 		partVad.erase(itVad);
 
-	std::map<int, Overlay *>::iterator ito = overlays.find(id);
+	std::map<int, std::unique_ptr<Overlay>>::iterator ito = overlays.find(id);
 	if ( ito !=  overlays.end() )
-	{
-	    if (ito->second = NULL) delete ito->second;
+	    //erase detruit le unique_ptr (corrige la fuite du "= NULL" precedent)
 	    overlays.erase(ito);
-	}
 	//Recalculate positions
 	CalculatePositions();
 
@@ -728,12 +719,8 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
     {    
 	Log("-SetOverlay [%s] for mosaic\n",filename);
 
-	//Reset any previous one
-	if (overlay)
-		//Delete it
-		delete(overlay);
-	//Create new one
-	overlay = new Overlay(mosaicTotalWidth,mosaicTotalHeight);
+	//Create new one (le unique_ptr detruit l'ancien)
+	overlay = std::make_unique<Overlay>(mosaicTotalWidth,mosaicTotalHeight);
 	//And load it
 	if(!overlay->LoadImage(filename))
 		//Error
@@ -751,20 +738,14 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
 	{
 	    //Par is in the mosaic
 	    Overlay * o = NULL;
-	    std::map<int, Overlay *>::iterator ito = overlays.find(id);
-		
+	    std::map<int, std::unique_ptr<Overlay>>::iterator ito = overlays.find(id);
+
 	    // Create overlay if neede
-	    if ( ito ==  overlays.end() )
-	    {
-		o = NULL;
-	    }
-	    else
-	    {
-		o = ito->second;
-	    }
-	    
+	    if ( ito !=  overlays.end() )
+		o = ito->second.get();
+
 	    if ( o == NULL ) o = new Overlay();
-		
+
 	    if (filename != NULL && strlen(filename) > 0)
 		ret = o->LoadImage(filename);
 	    else
@@ -775,7 +756,7 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
 
 	    if ( ito ==  overlays.end() )
 	    {
-		overlays[id] = o;
+		overlays[id] = std::unique_ptr<Overlay>(o);
 	    }
 	}
 	else
@@ -797,12 +778,8 @@ int Mosaic::ResetOverlay(int id)
     {
 	//Log
 	Log("-Reset mosaic overlay\n");
-	//Reset any previous one
-	if (overlay)
-		//Delete it
-		delete(overlay);
-	//remove it
-	overlay = NULL;
+	//Reset any previous one (le unique_ptr detruit l'Overlay)
+	overlay.reset();
 	//OK
 	return 1;
     }
@@ -812,7 +789,7 @@ int Mosaic::ResetOverlay(int id)
 	Participants::const_iterator it = participants.find(id);
 	if (it != participants.end() )
 	{
-	    std::map<int, Overlay *>::iterator ito = overlays.find(id);
+	    std::map<int, std::unique_ptr<Overlay>>::iterator ito = overlays.find(id);
 
 	    if ( ito != overlays.end() )
 	    {
@@ -833,7 +810,7 @@ int Mosaic::SetOverlayTXT(int id, const char* msg,int scriptCode)
     {
         //Par is in the mosaic
 	Overlay * o = NULL;
-	std::map<int, Overlay *>::iterator ito = overlays.find(id);
+	std::map<int, std::unique_ptr<Overlay>>::iterator ito = overlays.find(id);
 	// Create overlay if neede
 	if ( ito ==  overlays.end() )
 	{
@@ -841,7 +818,7 @@ int Mosaic::SetOverlayTXT(int id, const char* msg,int scriptCode)
 	}
 	else
 	{
-	    o = ito->second;
+	    o = ito->second.get();
 	}
 	
         if (it->second >= 0 && it->second < numSlots )
@@ -855,7 +832,7 @@ int Mosaic::SetOverlayTXT(int id, const char* msg,int scriptCode)
 
 	if ( ito ==  overlays.end() )
 	{
-	   overlays[id] = o;
+	   overlays[id] = std::unique_ptr<Overlay>(o);
 	}
    }
    return res;
@@ -1015,15 +992,15 @@ void Mosaic::Dump()
 
 BYTE * Mosaic::ApplyParticipantOverlay(int pos, BYTE *picY, BYTE *picU, BYTE *picV, int imgWidth, int imgHeight, bool changeFrame)
 {
-	std::map<int, Overlay *>::iterator it = overlays.find(mosaicPos[pos]);
+	std::map<int, std::unique_ptr<Overlay>>::iterator it = overlays.find(mosaicPos[pos]);
 
-	
+
 	// if (it != overlays.end() )
 	//	Log("-ApplyOverlay: pos=%d, part=%d, hascontent=%d.\n",
 	//	    pos, mosaicPos[pos], (int)  it->second->HasContent() );
-	
+
 	//If found
-	if (it != overlays.end() && it->second != NULL && it->second->HasContent() )
+	if (it != overlays.end() && it->second && it->second->HasContent() )
 	{
 	     it->second->Resize(imgWidth, imgHeight);
 	     return it->second->Display(picY, picU, picV, mosaicTotalWidth, mosaicTotalHeight, changeFrame);
@@ -1033,20 +1010,17 @@ BYTE * Mosaic::ApplyParticipantOverlay(int pos, BYTE *picY, BYTE *picU, BYTE *pi
 
 void Mosaic::MoveOverlays(Mosaic *other)
 {
-    std::map<int, Overlay *>::iterator it;
+    std::map<int, std::unique_ptr<Overlay>>::iterator it;
 
     overlays.clear();
     for (it = other->overlays.begin(); it != other->overlays.end(); ++it)
     {
-	overlays[it->first] = it->second;
+	overlays[it->first] = std::move(it->second);
 	Log("-MoveOverlay: moved overlay for part %d.\n", it->first);
-    }	
+    }
     other->overlays.clear();
 
     if (other->overlay)
-    {
-	this->overlay = other->overlay;
-	other->overlay = NULL;
-    }
+	this->overlay = std::move(other->overlay);
 }
 

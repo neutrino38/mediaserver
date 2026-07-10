@@ -28,8 +28,7 @@ public:
 	bool  SetMediaBridgeOutputToken(DWORD id,const std::wstring &token);
 	DWORD GetMediaBridgeIdFromInputToken(const std::wstring &token);
 	DWORD GetMediaBridgeIdFromOutputToken(const std::wstring &token);
-	bool  GetMediaBridgeRef(DWORD id,MediaBridgeSession **session);
-	bool  ReleaseMediaBridgeRef(DWORD id);
+	bool  GetMediaBridgeRef(DWORD id,std::shared_ptr<MediaBridgeSession> &session);
 	bool  DeleteMediaBridge(DWORD confId);
 	int CreateEventQueue();
 	int DeleteEventQueue(int id);
@@ -45,10 +44,8 @@ protected:
 	struct MediaBridgeEntry
 	{
 		DWORD id;
-		DWORD numRef;
-		DWORD enabled;
 		std::wstring name;
-		MediaBridgeSession* session;
+		std::shared_ptr<MediaBridgeSession> session;
 	};
 	typedef std::map<DWORD,MediaBridgeEntry> MediaBridgeEntries;
 private:

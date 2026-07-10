@@ -49,7 +49,7 @@ int VideoMixer::LoadLogo(const char * filename)
 		{
 			//Set logo and strech it
 			itMosaic->second->KeepAspectRatio(false);
-			UpdateMosaic(itMosaic->second);
+			UpdateMosaic(itMosaic->second.get());
 		}
 
 		lstVideosUse.Unlock();
@@ -205,7 +205,7 @@ int VideoMixer::MixVideo()
 			int vadPos = Mosaic::NotShown;
 
 			//Get Mosaic
-			Mosaic *mosaic = itMosaic->second;
+			Mosaic *mosaic = itMosaic->second.get();
 
 			//If vad mode is full
 			if (vadMode!=NoVAD && proxy)
@@ -511,7 +511,7 @@ int VideoMixer::SetOverlayImage(int mosaicId, int id, const char* filename)
 		return Error("Mosaic not found [id:%d]\n",mosaicId);
 
 	//Get the old mosaic
-	Mosaic *mosaic = it->second;
+	Mosaic *mosaic = it->second.get();
 
 	//Exit
 	return mosaic->SetOverlayImage(id, filename);
@@ -534,7 +534,7 @@ int VideoMixer::ResetOverlayImage(int mosaicId, int id)
 		return Error("Mosaic not found [id:%d]\n",mosaicId);
 
 	//Get the old mosaic
-	Mosaic *mosaic = it->second;
+	Mosaic *mosaic = it->second.get();
 
 	//Exit
 	return mosaic->ResetOverlay(id);
@@ -560,7 +560,7 @@ int VideoMixer::GetMosaicPositions(int mosaicId,std::list<int> &positions)
 	}
 
 	//Get the old mosaic
-	Mosaic *mosaic = it->second;
+	Mosaic *mosaic = it->second.get();
 
 	//Get num slots
 	DWORD numSlots = mosaic->GetNumSlots();
@@ -593,7 +593,7 @@ int VideoMixer::Init(Mosaic::Type comp,int size, const char * logoFile)
 	int id = CreateMosaic(comp,size);
 
 	//Set default
-	defaultMosaic = mosaics[id];
+	defaultMosaic = mosaics[id].get();
 
 	// Estamos mzclando
 	mixingVideo = true;
@@ -644,16 +644,7 @@ int VideoMixer::End()
 	//Clean the list
 	lstVideos.clear();
 
-	//For each mosaic
-	for (Mosaics::iterator it=mosaics.begin();it!=mosaics.end();++it)
-	{
-		//Get mosaic
-		Mosaic *mosaic = it->second;
-		//Delete the mosaic
-		delete(mosaic);
-	}
-
-	//Clean list
+	//Clean list (les shared_ptr detruisent les Mosaic)
 	mosaics.clear();
 
 	//Desprotegemos la lista
@@ -744,7 +735,7 @@ int VideoMixer::InitMixer(int id,int mosaicId)
 	//If found
 	if (itMosaic!=mosaics.end())
 		//Set mosaic
-		video->mosaic = itMosaic->second;
+		video->mosaic = itMosaic->second.get();
 	else
 		//Send only participant
 		Log("-No mosaic for participant found, will be send only.\n");
@@ -775,7 +766,7 @@ int VideoMixer::SetMixerMosaic(int id,int mosaicId)
 	//If found
 	if (itMosaic!=mosaics.end())
 		//Set it
-		mosaic = itMosaic->second;
+		mosaic = itMosaic->second.get();
 	else
 		//Send only participant
 		Log("-No mosaic for participant found, will be send only.\n");
@@ -867,7 +858,7 @@ int VideoMixer::RemoveMosaicParticipant(int mosaicId, int partId)
 	}
 
 	//Get mosaic
-	Mosaic* mosaic = itMosaic->second;
+	Mosaic* mosaic = itMosaic->second.get();
 
 
 	Log("In Mosaic %d VAD participant is  %d.\n", itMosaic->first, mosaic->GetVADParticipant() );
@@ -949,7 +940,7 @@ int VideoMixer::EndMixer(int id)
 		for (Mosaics::iterator it = mosaics.begin(); it!=mosaics.end(); ++it)
 		{
 			//Get mosaic
-			Mosaic *mosaic = it->second;
+			Mosaic *mosaic = it->second.get();
 			//Remove particiapant ande get position for user
 			//int pos = mosaic->RemoveParticipant(id);
 			int pos = mosaic->GetPosition(id);
@@ -1118,11 +1109,12 @@ int VideoMixer::SetCompositionType(int mosaicId,Mosaic::Type comp, int size)
 	if (it!=mosaics.end())
 	{
 		//Get the old mosaic
-		oldMosaic = it->second;
+		oldMosaic = it->second.get();
 	}
 	
-	//New mosaic
-	Mosaic *mosaic = Mosaic::CreateMosaic(comp,size);	
+	//New mosaic (propriedad en shared_ptr ; mosaic = observador crudo para la logica local)
+	std::shared_ptr<Mosaic> mosaicPtr(Mosaic::CreateMosaic(comp,size));
+	Mosaic *mosaic = mosaicPtr.get();
 
 	//If we had a previus mosaic
 	if (oldMosaic)
@@ -1178,8 +1170,8 @@ int VideoMixer::SetCompositionType(int mosaicId,Mosaic::Type comp, int size)
 			//Set new one as defautl
 			defaultMosaic = mosaic;
 
-		//Delete old one
-		delete(oldMosaic);
+		//El antiguo mosaic se destruye al reemplazar el shared_ptr en la map
+		//(mosaics[mosaicId] = mosaicPtr), tras haber leido todos sus datos.
 	}
 
 	//Recalculate positions
@@ -1189,7 +1181,7 @@ int VideoMixer::SetCompositionType(int mosaicId,Mosaic::Type comp, int size)
 	UpdateMosaic(mosaic);
 
 	//And in the list
-	mosaics[mosaicId] = mosaic;
+	mosaics[mosaicId] = mosaicPtr;
 
 	//Signal for new video
 	pthread_cond_signal(&mixVideoCond);
@@ -1265,7 +1257,7 @@ int VideoMixer::SetSlot(int mosaicId,int num,int id)
 
 
 	//Get the old mosaic
-	Mosaic *mosaic = it->second;
+	Mosaic *mosaic = it->second.get();
 
 	//If it does not have mosaic
 	if (!mosaic)
@@ -1321,28 +1313,27 @@ int VideoMixer::DeleteMosaic(int mosaicId)
 		return Error("Mosaic not found [id:%d]\n",mosaicId);
 	}
 
-	//Get the old mosaic
-	Mosaic *mosaic = it->second;
+	//Get the old mosaic : conserve una referencia compartida para destruir el
+	//Mosaic FUERA del verrou (el destructor puede ser lento).
+	std::shared_ptr<Mosaic> mosaic = it->second;
 
 	//For each video
 	for (Videos::iterator itv = lstVideos.begin(); itv!= lstVideos.end(); ++itv)
 	{
 		//Check it it has dis mosaic
-		if (itv->second->mosaic == mosaic)
+		if (itv->second->mosaic == mosaic.get())
 			//Set to null
 			itv->second->mosaic = NULL;
 	}
 
 
-	//Remove mosaic
+	//Remove mosaic (la map suelta su shared_ptr ; 'mosaic' mantiene vivo el objeto)
 	mosaics.erase(it);
 
 	//Protect the video map
 	lstVideosUse.Unlock();
 
-	//Delete mosaic
-	delete(mosaic);
-
+	//El Mosaic se destruye aqui al salir del scope, fuera del verrou.
 	//Exit
 	return 1;
 }
@@ -1370,7 +1361,7 @@ void VideoMixer::SetVADMode(VADMode vadMode)
 	{
 	    for ( Mosaics::iterator itMosaic=mosaics.begin();itMosaic!=mosaics.end();++itMosaic)
 	    {
-		Mosaic * mosaic = itMosaic->second;
+		Mosaic * mosaic = itMosaic->second.get();
 		int vadPos = mosaic->GetVADPosition();
 		int vadId = mosaic->GetVADParticipant();			//Set logo and strech it
 		
