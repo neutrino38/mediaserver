@@ -7,6 +7,7 @@
 
 #ifndef JOINABLE_H
 #define	JOINABLE_H
+#include <memory>
 #include "rtp.h"
 #include "xmlstreaminghandler.h"
 #include "JSR309Event.h"
@@ -31,10 +32,6 @@ public:
 		virtual void onResetStream() = 0;
 		virtual void onEndStream() = 0;
         virtual int  TryCheckCodec(int codec) { return codec; }
-		// Notifie le listener que la source à laquelle il est attaché est en cours
-		// de destruction : il doit oublier son pointeur retour (sinon dangling puis
-		// « pure virtual method called » lors du Detach ultérieur). No-op par défaut.
-		virtual void onJoinableEnded(Joinable *joinable) {}
 	};
 	
 public:

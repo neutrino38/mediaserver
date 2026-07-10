@@ -33,13 +33,9 @@ public :
 	virtual void onRTPPacket(RTPPacket &packet);
 	virtual void onResetStream() { SendReplacementChar(true); };
 	virtual void onEndStream() { SendReplacementChar(true); };
-	//Source détruite : on oublie le pointeur retour utilisé par Port::Detach
-	//(Endpoint::Port::joined, distinct du membre masquant de WSEndpoint) — C-13.
-	virtual void onJoinableEnded(Joinable *joinable)
-	{
-		if (Endpoint::Port::joined == joinable)
-			Endpoint::Port::joined = NULL;
-	}
+	//Le lien retour Endpoint::Port::joined est désormais un weak_ptr : le
+	//Port::Detach le lock() et ne déréférence jamais une source détruite. Plus
+	//besoin de notification onJoinableEnded (C-13, lien A).
 
 	//Websocket::Listener
 	virtual void onOpen(WebSocket *ws);

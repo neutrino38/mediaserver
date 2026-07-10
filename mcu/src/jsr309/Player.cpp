@@ -21,21 +21,21 @@ void Player::SetListener(Player::Listener *listener,void* param)
 	this->param = param;
 }
 
-Joinable* Player::GetJoinable(MediaFrame::Type media)
+std::shared_ptr<Joinable> Player::GetJoinable(MediaFrame::Type media)
 {
+	//shared_ptr aliasing : partage le compteur du Player mais pointe sur le
+	//multiplexeur membre. Garde le Player vivant tant qu'un appelant conserve le
+	//shared_ptr, et rend le weak_ptr `joined` du listener cohérent avec la vie du Player.
 	switch(media)
 	{
 		case MediaFrame::Video:
-			//Return multiplexer
-			return &video;
+			return std::shared_ptr<Joinable>(shared_from_this(), &video);
 		case MediaFrame::Audio:
-			//Return multiplexer
-			return &audio;
+			return std::shared_ptr<Joinable>(shared_from_this(), &audio);
 		case MediaFrame::Text:
-			//Return multiplexer
-			return &text;
+			return std::shared_ptr<Joinable>(shared_from_this(), &text);
 	}
-	return NULL;
+	return nullptr;
 }
 	
 void Player::NegotiateCodecs()
@@ -140,8 +140,8 @@ void Player::onMediaFrame(MediaFrame &frame)
 
 int Player::SetEventContextId( MediaFrame::Type media,  int ctxId )
 {
-	Joinable* j = GetJoinable(media);
-	if (j != NULL)
+	std::shared_ptr<Joinable> j = GetJoinable(media);
+	if (j)
 		j->SetEventContextId(ctxId);
 	return 0;
 }
@@ -149,8 +149,8 @@ int Player::SetEventContextId( MediaFrame::Type media,  int ctxId )
 
 int Player::SetEventHandler( MediaFrame::Type media, int sessionId,	JSR309Manager* jsrManager)
 {
-	Joinable* j = GetJoinable(media);
-	if (j != NULL)
+	std::shared_ptr<Joinable> j = GetJoinable(media);
+	if (j)
 		j->SetEventHandler(sessionId,jsrManager);
 
 	return 0;

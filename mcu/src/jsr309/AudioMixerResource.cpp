@@ -49,7 +49,7 @@ int AudioMixerResource::CreatePort(std::wstring &tag)
 		return Error("Couldn't set audio mixer\n");
 
 	//Create the audio port
-	Port *port = new Port(tag);
+	std::shared_ptr<Port> port = std::make_shared<Port>(tag);
 
 	//Init encoder and decoder
 	port->encoder.Init(mixer.GetInput(portId));
@@ -77,7 +77,7 @@ int AudioMixerResource::SetPortCodec(int portId,AudioCodec::Type codec)
 		return Error("Audio port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//Set codec
 	port->encoder.SetCodec(codec);
@@ -97,7 +97,7 @@ int AudioMixerResource::DeletePort(int portId)
 		return Error("Audio port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 	
 	//Remove it from list
 	ports.erase(it);
@@ -112,9 +112,9 @@ int AudioMixerResource::DeletePort(int portId)
 	//End remove
 	mixer.DeleteMixer(portId);
 
-	//Delete object
-	delete (port);
-	
+	//Le shared_ptr local détruit le Port en sortie de portée (après End) : un
+	//weak_ptr `joined` d'un listener encore attaché expire alors proprement (C-13).
+
 	//OK
 	return 1;
 }
@@ -125,17 +125,14 @@ int AudioMixerResource::End()
 	for (Ports::iterator it = ports.begin(); it!= ports.end();++it)
 	{
 		//Get port
-		Port *port = it->second;
+		std::shared_ptr<Port> port = it->second;
 
 		//End encoder and decoder
 		port->encoder.End();
 		port->decoder.End();
-
-		//Delete object
-		delete (port);
 	}
 
-	//Clear list
+	//Clear list (les shared_ptr détruisent les Port)
 	ports.clear();
 
 	//End mixer
@@ -144,7 +141,7 @@ int AudioMixerResource::End()
 	return 1;
 }
 
-Joinable* AudioMixerResource:: GetJoinable(int portId)
+std::shared_ptr<Joinable> AudioMixerResource:: GetJoinable(int portId)
 {
 	//Find port
 	Ports::iterator it = ports.find(portId);
@@ -154,17 +151,16 @@ Joinable* AudioMixerResource:: GetJoinable(int portId)
         {
             Error("Audio port not found\n");
 		//Error
-		return NULL;
+		return nullptr;
         }
 
-	//LO obtenemos
-	Port *port = it->second;
-
-	//Return it
-	return &port->encoder;
+	//shared_ptr aliasing : partage le compteur du Port mais pointe sur son
+	//`encoder`. Le weak_ptr `joined` du listener attaché expire quand le Port
+	//est détruit (DeletePort/End) — C-13, lien A.
+	return std::shared_ptr<Joinable>(it->second, &it->second->encoder);
 }
 
-int AudioMixerResource::Attach(int portId,Joinable *join)
+int AudioMixerResource::Attach(int portId,const std::shared_ptr<Joinable> & join)
 {
 	//Find port
 	Ports::iterator it = ports.find(portId);
@@ -175,7 +171,7 @@ int AudioMixerResource::Attach(int portId,Joinable *join)
 		return Error("Audio port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//Init
 	//OK
@@ -193,7 +189,7 @@ int AudioMixerResource::Dettach(int portId)
 		return Error("Audio port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//OK
 	return port->decoder.Dettach();

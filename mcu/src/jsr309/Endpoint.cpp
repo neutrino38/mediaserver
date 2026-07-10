@@ -259,7 +259,7 @@ int Endpoint::StopReceiving(MediaFrame::Type media, MediaFrame::MediaRole role)
 }
 
 //Attach
-int Endpoint::Attach(MediaFrame::Type media, MediaFrame::MediaRole role, Joinable *join)
+int Endpoint::Attach(MediaFrame::Type media, MediaFrame::MediaRole role, const std::shared_ptr<Joinable> & join)
 {
 	Log("-Endpoint attaching [media:%s]\n",MediaFrame::TypeToString(media));
 
@@ -290,7 +290,7 @@ int Endpoint::Detach(MediaFrame::Type media, MediaFrame::MediaRole role)
 	return p->Detach();
 }
 
-Joinable* Endpoint::GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role)
+std::shared_ptr<Joinable> Endpoint::GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
 	Log("<Endpoint GetJoinable [media:%s]\n",MediaFrame::TypeToString(media));
 
@@ -301,11 +301,13 @@ Joinable* Endpoint::GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole ro
 	{
 		//Init it
 		Error("This media or role is not supported\n");
-		return NULL;
+		return nullptr;
 	}
-	
-	return p.get();
-	
+
+	//Le Port est déjà détenu par shared_ptr (Endpoint::ports[]) : on rend une vue
+	//Joinable partageant sa propriété (C-13, lien A).
+	return std::static_pointer_cast<Joinable>(p);
+
 }
 
 
@@ -440,19 +442,20 @@ int Endpoint::onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole
     }
 }
 
-int Endpoint::Port::Attach(Joinable *join)
+int Endpoint::Port::Attach(const std::shared_ptr<Joinable> & join)
 {
-    if (join == joined)
+    //Déjà attaché à cette même source ?
+    if (join == joined.lock())
     {
 	return 1;
     }
 
-    //Store new one
+    //Store new one (lien retour non possédant)
     joined = join;
      //If it is not null
-    if (joined)
+    if (join)
 	//Join to the new one
-	    joined->AddListener((RTPEndpoint*) this);
+	    join->AddListener((RTPEndpoint*) this);
 
     //OK
     return 1;
@@ -460,12 +463,12 @@ int Endpoint::Port::Attach(Joinable *join)
 
 int Endpoint::Port::Detach()
 {
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : ne déréférence pas si la source a disparu
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Remove ourself as listeners
-		joined->RemoveListener( (RTPEndpoint*) this);
+		j->RemoveListener( (RTPEndpoint*) this);
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
 	return 1;
 }
 
@@ -654,11 +657,13 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 
 int Endpoint::Port::SwitchJoin(std::shared_ptr<Port> oldPort)
 {
-    if (oldPort && oldPort->joined != NULL)
+    if (oldPort)
 	{
-	    Joinable * oldJoined = oldPort->joined;
+	    if (std::shared_ptr<Joinable> oldJoined = oldPort->joined.lock())
+	    {
 		oldPort->Detach();
 		Attach(oldJoined);
+	    }
 	}
 	return 0;
 }

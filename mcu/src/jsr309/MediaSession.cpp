@@ -194,14 +194,10 @@ int MediaSession::End()
 	//Delete all players
 	endedPlayers.clear();
 
-	//Delete all video transcoders
+	//End all video transcoders (le shared_ptr détruit ensuite)
 	for (VideoTranscoders::iterator it=endedVideoTranscoders.begin(); it!=endedVideoTranscoders.end(); ++it)
-	{
 		//End it
 		it->second->End();
-		//Delete object
-		delete(it->second);
-	}
 	endedVideoTranscoders.clear();
 
 	//End all audio transcoders (le shared_ptr détruit ensuite)
@@ -210,24 +206,16 @@ int MediaSession::End()
 		it->second->End();
 	endedAudioTranscoders.clear();
 
-	//Delete all audio mixers
+	//End all audio mixers (le shared_ptr détruit ensuite)
 	for (AudioMixers::iterator it=endedAudioMixers.begin(); it!=endedAudioMixers.end(); ++it)
-	{
 		//End it
 		it->second->End();
-		//Delete object
-		delete(it->second);
-	}
 	endedAudioMixers.clear();
 
-	//Delete all video mixers
+	//End all video mixers (le shared_ptr détruit ensuite)
 	for (VideoMixers::iterator it=endedVideoMixers.begin(); it!=endedVideoMixers.end(); ++it)
-	{
 		//End it
 		it->second->End();
-		//Delete object
-		delete(it->second);
-	}
 	endedVideoMixers.clear();
 
 	//Delete all endpoints
@@ -611,7 +599,7 @@ int MediaSession::RecorderAttachToAudioMixerPort(int recorderId,int mixerId,int 
                 return Error("AudioMixerResource not found\n");
 
 	 //Get it
-        AudioMixerResource* audioMixer = itMixer->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = itMixer->second;
 
 	//Attach
 	return recorder->Attach(MediaFrame::Audio,audioMixer->GetJoinable(portId));
@@ -640,7 +628,7 @@ int MediaSession::RecorderAttachToVideoMixerPort(int recorderId,int mixerId,int 
                 return Error("AudioMixerResource not found\n");
 
 	 //Get it
-        VideoMixerResource* videoMixer = itMixer->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = itMixer->second;
 
 	//And attach
 	return recorder->Attach(MediaFrame::Video,videoMixer->GetJoinable(portId));
@@ -1133,7 +1121,7 @@ int MediaSession::EndpointAttachToAudioMixerPort(int endpointId,int mixerId,int 
                 return Error("AudioMixerResource not found\n");
 
 	 //Get it
-        AudioMixerResource* audioMixer = itMixer->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = itMixer->second;
 
 	//Attach
 	return endpoint->Attach(MediaFrame::Audio,MediaFrame::VIDEO_MAIN,audioMixer->GetJoinable(portId));
@@ -1165,7 +1153,7 @@ int MediaSession::EndpointAttachToVideoMixerPort(int endpointId,int mixerId,int 
                 return Error("VideoMixerResource not found\n");
 
 	 //Get it
-        VideoMixerResource* videoMixer = itMixer->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = itMixer->second;
 
 	//And attach
 	return endpoint->Attach(MediaFrame::Video,MediaFrame::VIDEO_MAIN,videoMixer->GetJoinable(portId));
@@ -1194,7 +1182,7 @@ int MediaSession::EndpointAttachToVideoTranscoder(int endpointId,int videoTransc
                 return Error("VideoTranscoder not found[%d]\n",videoTranscoderId);
 
 	 //Get it
-        VideoTranscoder* videoTranscoder = itTranscoder->second;
+        std::shared_ptr<VideoTranscoder> videoTranscoder = itTranscoder->second;
 
 	//Log endpoint tag name
 	Log("-EndpointAttachToVideoTranscoder [endpoint:%ls,transcoder:%ls]\n",endpoint->GetName().c_str(),videoTranscoder->GetName().c_str());
@@ -1284,7 +1272,7 @@ void MediaSession::onEndOfFile(Player *player,void* playerId)
 int MediaSession::AudioMixerCreate(std::wstring tag)
 {
 	//Create player
-	AudioMixerResource* audioMixer = new AudioMixerResource(tag);
+	std::shared_ptr<AudioMixerResource> audioMixer = std::make_shared<AudioMixerResource>(tag);
 	//Init it
 	audioMixer->Init();
 
@@ -1300,8 +1288,9 @@ int MediaSession::AudioMixerCreate(std::wstring tag)
 
 int MediaSession::AudioMixerDelete(int mixerId)
 {
-	//End + delete hors verrou (End joint les threads du mixer)
-	AudioMixerResource* audioMixer;
+	//End hors verrou (End joint les threads du mixer) ; le shared_ptr local
+	//détruit le mixer en sortie de portée.
+	std::shared_ptr<AudioMixerResource> audioMixer;
 
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -1323,9 +1312,6 @@ int MediaSession::AudioMixerDelete(int mixerId)
 	//End it
 	audioMixer->End();
 
-	//Relete audioMixer
-	delete(audioMixer);
-
 	return 1;
 }
 
@@ -1341,7 +1327,7 @@ int MediaSession::AudioMixerPortCreate(int mixerId,std::wstring tag)
                 //Exit
                 return Error("AudioMixerResource not found\n");
         //Get it
-        AudioMixerResource* audioMixer = it->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = it->second;
 
 	//Execute
 	return audioMixer->CreatePort(tag);
@@ -1359,7 +1345,7 @@ int MediaSession::AudioMixerPortSetCodec(int mixerId,int portId,AudioCodec::Type
                 //Exit
                 return Error("AudioMixerResource not found\n");
         //Get it
-        AudioMixerResource* audioMixer = it->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = it->second;
 
 	//Execute
 	return audioMixer->SetPortCodec(portId,codec);
@@ -1377,7 +1363,7 @@ int MediaSession::AudioMixerPortDelete(int mixerId,int portId)
                 //Exit
                 return Error("AudioMixerResource not found\n");
         //Get it
-        AudioMixerResource* audioMixer = it->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = it->second;
 
 	//Execute
 	return audioMixer->DeletePort(portId);
@@ -1396,7 +1382,7 @@ int MediaSession::AudioMixerPortAttachToEndpoint(int mixerId,int portId,int endp
                 //Exit
                 return Error("AudioMixerResource not found\n");
         //Get it
-        AudioMixerResource* audioMixer = it->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = it->second;
 
 	//Get endpoint
         Endpoints::iterator itEnd = endpoints.find(endpointId);
@@ -1428,7 +1414,7 @@ int MediaSession::AudioMixerPortAttachToPlayer(int mixerId,int portId,int player
                 //Exit
                 return Error("AudioMixerResource not found\n");
         //Get it
-        AudioMixerResource* audioMixer = it->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = it->second;
 
 	 //Get Player
         Players::iterator itPlayer = players.find(playerId);
@@ -1457,7 +1443,7 @@ int MediaSession::AudioMixerPortDettach(int mixerId,int portId)
                 //Exit
                 return Error("AudioMixerResource not found\n");
         //Get it
-        AudioMixerResource* audioMixer = it->second;
+        std::shared_ptr<AudioMixerResource> audioMixer = it->second;
 
        //Attach
 	return audioMixer->Dettach(portId);
@@ -1466,7 +1452,7 @@ int MediaSession::AudioMixerPortDettach(int mixerId,int portId)
 int MediaSession::VideoMixerCreate(std::wstring tag)
 {
 	//Create player
-	VideoMixerResource* videoMixer = new VideoMixerResource(tag);
+	std::shared_ptr<VideoMixerResource> videoMixer = std::make_shared<VideoMixerResource>(tag);
 	//Init
 	videoMixer->Init(Mosaic::mosaic2x2,PAL);
 
@@ -1482,8 +1468,9 @@ int MediaSession::VideoMixerCreate(std::wstring tag)
 
 int MediaSession::VideoMixerDelete(int mixerId)
 {
-	//End + delete hors verrou (End joint les threads du mixer)
-	VideoMixerResource* videoMixer;
+	//End hors verrou (End joint les threads du mixer) ; le shared_ptr local
+	//détruit le mixer en sortie de portée.
+	std::shared_ptr<VideoMixerResource> videoMixer;
 
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -1505,9 +1492,6 @@ int MediaSession::VideoMixerDelete(int mixerId)
 	//End it
 	videoMixer->End();
 
-	//Relete videoMixer
-	delete(videoMixer);
-
 	return 1;
 }
 
@@ -1523,7 +1507,7 @@ int MediaSession::VideoMixerPortCreate(int mixerId,std::wstring tag, int mosaicI
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
 	//Execute
 	return videoMixer->CreatePort(tag,mosaicId);
@@ -1541,7 +1525,7 @@ int MediaSession::VideoMixerPortSetCodec(int mixerId,int portId,VideoCodec::Type
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
 	//Execute
 	return videoMixer->SetPortCodec(portId,codec,size,fps,bitrate,intraPeriod);
@@ -1559,7 +1543,7 @@ int MediaSession::VideoMixerPortDelete(int mixerId,int portId)
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
 	//Execute
 	return videoMixer->DeletePort(portId);
@@ -1578,7 +1562,7 @@ int MediaSession::VideoMixerPortAttachToEndpoint(int mixerId,int portId,int endp
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
 	//Get endpoint
         Endpoints::iterator itEnd = endpoints.find(endpointId);
@@ -1610,7 +1594,7 @@ int MediaSession::VideoMixerPortAttachToPlayer(int mixerId,int portId,int player
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
 	 //Get Player
         Players::iterator itPlayer = players.find(playerId);
@@ -1639,7 +1623,7 @@ int MediaSession::VideoMixerPortDettach(int mixerId,int portId)
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->Dettach(portId);
@@ -1657,7 +1641,7 @@ int MediaSession::VideoMixerMosaicCreate(int mixerId,Mosaic::Type comp,int size)
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->CreateMosaic(comp,size);
@@ -1675,7 +1659,7 @@ int MediaSession::VideoMixerMosaicDelete(int mixerId,int mosaicId)
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->DeleteMosaic(mosaicId);
@@ -1693,7 +1677,7 @@ int MediaSession::VideoMixerMosaicSetSlot(int mixerId,int mosaicId,int num,int p
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->SetSlot(mosaicId,num,portId);
@@ -1711,7 +1695,7 @@ int MediaSession::VideoMixerMosaicSetCompositionType(int mixerId,int mosaicId,Mo
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->SetCompositionType(mosaicId,comp,size);
@@ -1729,7 +1713,7 @@ int MediaSession::VideoMixerMosaicSetOverlayPNG(int mixerId,int mosaicId,const c
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->SetOverlayPNG(mosaicId,overlay);
@@ -1747,7 +1731,7 @@ int MediaSession::VideoMixerMosaicResetSetOverlay(int mixerId,int mosaicId)
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->ResetOverlay(mosaicId);
@@ -1765,7 +1749,7 @@ int MediaSession::VideoMixerMosaicAddPort(int mixerId,int mosaicId,int portId)
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->AddMosaicParticipant(mosaicId,portId);
@@ -1783,7 +1767,7 @@ int MediaSession::VideoMixerMosaicRemovePort(int mixerId,int mosaicId,int portId
                 //Exit
                 return Error("VideoMixerResource not found [%d]\n",mixerId);
         //Get it
-        VideoMixerResource* videoMixer = it->second;
+        std::shared_ptr<VideoMixerResource> videoMixer = it->second;
 
        //Attach
 	return videoMixer->RemoveMosaicParticipant(mosaicId,portId);
@@ -1859,7 +1843,7 @@ std::shared_ptr<AudioTranscoder> MediaSession::GetAudioTranscoder(int transcoder
 int MediaSession::VideoTranscoderCreate(std::wstring tag)
 {
 	//Create trascoder
-	VideoTranscoder* videoTranscoder = new VideoTranscoder(tag);
+	std::shared_ptr<VideoTranscoder> videoTranscoder = std::make_shared<VideoTranscoder>(tag);
 	//Init
 	videoTranscoder->Init(false);
 
@@ -1885,7 +1869,7 @@ int MediaSession::VideoTranscoderFPU(int videoTranscoderId)
                 //Exit
                 return Error("VideoTranscoder not found [%d]\n",videoTranscoderId);
         //Get it
-        VideoTranscoder* videoTranscoder = it->second;
+        std::shared_ptr<VideoTranscoder> videoTranscoder = it->second;
 
 	//Execute
 	videoTranscoder->Update();
@@ -1907,7 +1891,7 @@ int MediaSession::VideoTranscoderSetCodec(int videoTranscoderId,VideoCodec::Type
                 //Exit
                 return Error("VideoTranscoder not found [%d]\n",videoTranscoderId);
         //Get it
-        VideoTranscoder* videoTranscoder = it->second;
+        std::shared_ptr<VideoTranscoder> videoTranscoder = it->second;
 
 	//Execute
 	return videoTranscoder->SetCodec(codec,size,fps,bitrate,intraPeriod, props);
@@ -1915,8 +1899,9 @@ int MediaSession::VideoTranscoderSetCodec(int videoTranscoderId,VideoCodec::Type
 
 int MediaSession::VideoTranscoderDelete(int videoTranscoderId)
 {
-	//End + delete hors verrou (End arrête les workers du transcodeur)
-	VideoTranscoder* videoTranscoder;
+	//End hors verrou (End arrête les workers du transcodeur) ; le shared_ptr
+	//local détruit le transcodeur en sortie de portée.
+	std::shared_ptr<VideoTranscoder> videoTranscoder;
 
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -1938,9 +1923,6 @@ int MediaSession::VideoTranscoderDelete(int videoTranscoderId)
 	//End it
 	videoTranscoder->End();
 
-	//Relete videoMixer
-	delete(videoTranscoder);
-
 	return 1;
 }
 
@@ -1956,7 +1938,7 @@ int MediaSession::VideoTranscoderAttachToEndpoint(int videoTranscoderId,int endp
                 //Exit
                 return Error("VideoTranscoder not found [%d]\n",videoTranscoderId);
         //Get it
-        VideoTranscoder* videoTranscoder = it->second;
+        std::shared_ptr<VideoTranscoder> videoTranscoder = it->second;
 
 	//Get endpoint
         Endpoints::iterator itEnd = endpoints.find(endpointId);
@@ -1988,7 +1970,7 @@ int MediaSession::VideoTranscoderDettach(int videoTranscoderId)
                 //Exit
                 return Error("VideoTranscoder not found [%d]\n",videoTranscoderId);
         //Get it
-        VideoTranscoder* videoTranscoder = it->second;
+        std::shared_ptr<VideoTranscoder> videoTranscoder = it->second;
 
        //Attach
 	return videoTranscoder->Dettach();

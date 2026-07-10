@@ -40,13 +40,16 @@ public:
 	int DeletePort(int portId);
 	int End();
 	//Get joinables
-	Joinable *GetJoinable(int portId);
+	std::shared_ptr<Joinable> GetJoinable(int portId);
 	//Port Attach  to
-	int Attach(int portId,Joinable *);
+	int Attach(int portId,const std::shared_ptr<Joinable> &);
 	int Dettach(int portId);
 
 private:
-	typedef std::map<int,Port*> Ports;
+	//Port détenu par shared_ptr : GetJoinable rend une vue aliasing sur son
+	//`encoder`, ce qui laisse le weak_ptr `joined` du listener attaché expirer
+	//proprement quand le port est supprimé (C-13, lien A).
+	typedef std::map<int,std::shared_ptr<Port>> Ports;
 
 private:
 	std::wstring tag;

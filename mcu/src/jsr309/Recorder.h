@@ -10,6 +10,7 @@
 
 #include "config.h"
 #include <string>
+#include <memory>
 #include "Joinable.h"
 #include "mp4recorder.h"
 #include <map>
@@ -28,12 +29,15 @@ public:
 	virtual void onEndStream();
 
 	//Attach
-	int Attach(MediaFrame::Type media, Joinable *join);
+	int Attach(MediaFrame::Type media, const std::shared_ptr<Joinable> & join);
 	int Dettach(MediaFrame::Type media);
 
 	std::wstring& GetTag() { return tag; }
 private:
-	typedef std::map<MediaFrame::Type,Joinable*> JoinedMap;
+	//Liens retour NON possédants vers les sources : weak_ptr → lock() au site
+	//d'usage. Une source détruite avant nous fait échouer le lock() (le Dettach/
+	//~Recorder ultérieur ne déréférence pas d'objet libéré) — C-13, lien A.
+	typedef std::map<MediaFrame::Type,std::weak_ptr<Joinable>> JoinedMap;
 private:
 	std::wstring tag;
 	RTPDepacketizer* video;

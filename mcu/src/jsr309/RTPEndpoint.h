@@ -35,7 +35,7 @@ public:
 	MediaFrame::Type GetType() { return type; }
 
 	//Attach/Dettach to joinables
-	int Attach(Joinable *join);
+	int Attach(const std::shared_ptr<Joinable> & join);
 	int Detach();
 
 	//Joinable interface
@@ -47,8 +47,7 @@ public:
 	virtual void onResetStream();
 	virtual void onEndStream();
         virtual int  TryCheckCodec(int codec);
-	virtual void onJoinableEnded(Joinable *joinable);
-        
+
 	//RTPSession::Listener
 	virtual void onFPURequested(RTPSession *session);
 	virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate);

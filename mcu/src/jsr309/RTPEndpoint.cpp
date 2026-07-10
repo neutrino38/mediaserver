@@ -151,9 +151,9 @@ int RTPEndpoint::StartSending()
 		return Error("Not initied");
 
 	//Check if wer are joined
-	if (joined)
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Rquest a FPU
-		joined->Update();
+		j->Update();
         //Send
 	sending = true;
 
@@ -252,7 +252,7 @@ void RTPEndpoint::onResetStream()
 void RTPEndpoint::onEndStream()
 {
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
 }
 
 int RTPEndpoint::Run()
@@ -306,23 +306,23 @@ void* RTPEndpoint::run(void *par)
 	return NULL;
 }
 
-int RTPEndpoint::Attach(Joinable *join)
+int RTPEndpoint::Attach(const std::shared_ptr<Joinable> & join)
 {
 	//Check if inited
 	if (!portinited)
 		//Error
 		return Error("Not inited");
 
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : source encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
-	//Store new one
+		j->RemoveListener(this);
+	//Store new one (lien retour non possédant)
 	joined = join;
 	//If it is not null
-	if (joined)
+	if (join)
 		//Join to the new one
-		joined->AddListener(this);
+		join->AddListener(this);
 
 	//OK
 	return 1;
@@ -330,46 +330,37 @@ int RTPEndpoint::Attach(Joinable *join)
 
 int RTPEndpoint::Detach()
 {
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : ne déréférence pas si la source a disparu
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
+		j->RemoveListener(this);
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
 	return 0;
-}
-
-void RTPEndpoint::onJoinableEnded(Joinable *joinable)
-{
-	//La source à laquelle on est attaché est détruite : on oublie le pointeur
-	//retour pour ne pas la déréférencer dans un Detach ultérieur (C-13).
-	if (joined == joinable)
-		joined = NULL;
 }
 
 void RTPEndpoint::onFPURequested(RTPSession *session)
 {
-	Log("-onFPURequested [joined:%p]\n",joined);
 	//Check if joined
-	if (joined)
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Request update
-		joined->Update();
+		j->Update();
 }
 
 void RTPEndpoint::onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD estimation)
 {
 	//Check if joined
-       if (joined)
+       if (std::shared_ptr<Joinable> j = joined.lock())
                //Request update
-               joined->SetREMB(estimation);
+               j->SetREMB(estimation);
 }
 
 void RTPEndpoint::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD estimation,DWORD overhead)
 {
 	//Check if joined
-       if (joined)
+       if (std::shared_ptr<Joinable> j = joined.lock())
                //Request update
-               joined->SetREMB(estimation);
+               j->SetREMB(estimation);
 }
 
 void RTPEndpoint::onRTPTimeout(RTPSession *session)

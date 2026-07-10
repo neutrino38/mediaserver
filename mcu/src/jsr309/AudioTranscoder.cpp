@@ -126,17 +126,18 @@ void AudioTranscoder::onEndStream()
 }
 
 
-int AudioTranscoder::Attach(Joinable *join)
+int AudioTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 {
-	
+
 	if (!allowBridging)
-    {   
+    {
 		decoder.Attach(join);
     }
 	else
     {
 		decoder.Start();
-		join->AddListener(this);
+		if (join)
+			join->AddListener(this);
 	}
 	return 0;
 }

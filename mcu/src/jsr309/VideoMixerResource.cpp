@@ -49,7 +49,7 @@ int VideoMixerResource::CreatePort(std::wstring &tag, int mosaicId)
 		return Error("Couldn't set video mixer\n");
 
 	//Create the video port
-	Port *port = new Port(tag);
+	std::shared_ptr<Port> port = std::make_shared<Port>(tag);
 
 	//Init encoder and decoder
 	port->encoder.Init(mixer.GetInput(portId));
@@ -78,7 +78,7 @@ int VideoMixerResource::SetPortCodec(int portId,VideoCodec::Type codec,int mode,
 		return Error("Video port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//Set codec
 	port->encoder.SetCodec(codec,mode,fps,bitrate,intraPeriod, props);
@@ -98,7 +98,7 @@ int VideoMixerResource::DeletePort(int portId)
 		return Error("Video port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//Remove it from list
 	ports.erase(it);
@@ -113,8 +113,8 @@ int VideoMixerResource::DeletePort(int portId)
 	//End remove
 	mixer.DeleteMixer(portId);
 
-	//Delete object
-	delete (port);
+	//Le shared_ptr local détruit le Port en sortie de portée (après End) : un
+	//weak_ptr `joined` d'un listener encore attaché expire alors proprement (C-13).
 
 	//OK
 	return 1;
@@ -126,17 +126,14 @@ int VideoMixerResource::End()
 	for (Ports::iterator it = ports.begin(); it!= ports.end();++it)
 	{
 		//Get port
-		Port *port = it->second;
+		std::shared_ptr<Port> port = it->second;
 
 		//End encoder and decoder
 		port->encoder.End();
 		port->decoder.End();
-
-		//Delete object
-		delete (port);
 	}
 
-	//Clear list
+	//Clear list (les shared_ptr détruisent les Port)
 	ports.clear();
 
 	//End mixer
@@ -145,7 +142,7 @@ int VideoMixerResource::End()
 	return 1;
 }
 
-Joinable* VideoMixerResource:: GetJoinable(int portId)
+std::shared_ptr<Joinable> VideoMixerResource:: GetJoinable(int portId)
 {
 	//Find port
 	Ports::iterator it = ports.find(portId);
@@ -155,17 +152,16 @@ Joinable* VideoMixerResource:: GetJoinable(int portId)
 	{
 		//Error
 		Error("Video port not found\n");
-		return NULL;
+		return nullptr;
 	}
 
-	//LO obtenemos
-	Port *port = it->second;
-
-	//Return it
-	return &port->encoder;
+	//shared_ptr aliasing : partage le compteur du Port mais pointe sur son
+	//`encoder`. Le weak_ptr `joined` du listener attaché expire quand le Port
+	//est détruit (DeletePort/End) — C-13, lien A.
+	return std::shared_ptr<Joinable>(it->second, &it->second->encoder);
 }
 
-int VideoMixerResource::Attach(int portId,Joinable *join)
+int VideoMixerResource::Attach(int portId,const std::shared_ptr<Joinable> & join)
 {
 	//Find port
 	Ports::iterator it = ports.find(portId);
@@ -176,7 +172,7 @@ int VideoMixerResource::Attach(int portId,Joinable *join)
 		return Error("Video port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//OK
 	return port->decoder.Attach(join);
@@ -193,7 +189,7 @@ int VideoMixerResource::Dettach(int portId)
 		return Error("Video port not found\n");
 
 	//LO obtenemos
-	Port *port = it->second;
+	std::shared_ptr<Port> port = it->second;
 
 	//OK
 	return port->decoder.Dettach();

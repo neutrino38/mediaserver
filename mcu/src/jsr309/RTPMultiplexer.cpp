@@ -21,12 +21,10 @@ RTPMultiplexer::~RTPMultiplexer()
 {
 	//Lock mutexk
 	pthread_mutex_lock(&mutex);
-	//Prévient chaque listener que cette source disparaît : il doit remettre son
-	//pointeur retour à NULL, sinon son Detach ultérieur déréférencera cet objet
-	//libéré (crash « pure virtual method called »). C-13 du plan smart pointers.
-	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-		(*it)->onJoinableEnded(this);
-	//Clean listeners
+	//C-13 (lien A) : le lien retour `joined` de chaque listener est désormais un
+	//weak_ptr. La destruction de cette source (dernier shared_ptr relâché) fait
+	//expirer ces weak_ptr : le Detach ultérieur du listener lock() dans le vide et
+	//ne déréférence plus cet objet libéré. Plus besoin de notifier onJoinableEnded.
 	listeners.clear();
 	//Unlock
 	pthread_mutex_unlock(&mutex);

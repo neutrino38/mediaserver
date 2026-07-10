@@ -1419,7 +1419,9 @@ xmlrpc_value* EndpointAttachToAudioTranscoder(xmlrpc_env *env, xmlrpc_value *par
 	Log("-[endpoint:%ls] ==> [audio transcoder:%ls]\n",
             ep->GetName().c_str(),tr->GetName().c_str());
 
-        int res = ep->Attach(MediaFrame::Audio,MediaFrame::VIDEO_MAIN,tr.get());
+        //AudioTranscoder EST un Joinable (source) : on passe le shared_ptr, dont
+        //l'endpoint dérivera un weak_ptr `joined` (C-13, lien A).
+        int res = ep->Attach(MediaFrame::Audio,MediaFrame::VIDEO_MAIN,tr);
 	//La borramosmedia Session
 
 

@@ -29,7 +29,7 @@ public:
 	virtual void onEndStream();
 
 	//Attach
-	int Attach(Joinable *join);
+	int Attach(const std::shared_ptr<Joinable> & join);
 	int Dettach();
 
 private:
@@ -58,7 +58,9 @@ private:
 	DWORD	lastSeq;
 	bool	waitIntra;
 
-	Joinable *joined;
+	// Lien retour NON possédant vers la source (weak_ptr → lock() au site d'usage) :
+	// une source détruite fait échouer le lock() (C-13, lien A).
+	std::weak_ptr<Joinable> joined;
         bool useThread;
 };
 

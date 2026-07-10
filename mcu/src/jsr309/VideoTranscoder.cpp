@@ -101,7 +101,7 @@ void VideoTranscoder::onEndStream()
 	decoder.onEndStream();
 }
 
-int VideoTranscoder::Attach(Joinable *join)
+int VideoTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 {
 	decoder.Attach(join);
 	return 0;

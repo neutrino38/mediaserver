@@ -25,7 +25,7 @@ public:
 	    virtual ~Port();
 	    MediaFrame::Type GetMedia() { return type; }
 	    int Detach();
-	    int Attach(Joinable * join);
+	    int Attach(const std::shared_ptr<Joinable> & join);
 		int SwitchJoin(std::shared_ptr<Port> oldPort);
 		
 		int GetLocalMediaPort();
@@ -64,7 +64,10 @@ public:
 
 
 	protected:
-	    Joinable *joined;
+	    // Lien retour NON possédant vers la source : weak_ptr → lock() au site
+	    // d'usage. Si la source est détruite, lock() échoue et le Detach ultérieur
+	    // ne déréférence pas d'objet libéré (C-13, lien A — remplace onJoinableEnded).
+	    std::weak_ptr<Joinable> joined;
 	    MediaFrame::Type type;
 		MediaFrame::MediaProtocol proto;
 	    bool sending;
@@ -74,7 +77,6 @@ public:
 	    // Protected constructir
 	    Port( MediaFrame::Type type, MediaFrame::MediaProtocol transp) : RTPMultiplexer()
 	    {
-	        joined = NULL;
 			this->type = type;
 			this->proto = transp;
 			sending = false;
@@ -114,9 +116,9 @@ public:
 	int SetRTPTsTransparency(MediaFrame::Type media, bool transparency, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
 
 	//Attach
-	int Attach(MediaFrame::Type media, MediaFrame::MediaRole role, Joinable *join);
+	int Attach(MediaFrame::Type media, MediaFrame::MediaRole role, const std::shared_ptr<Joinable> & join);
 	int Detach(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
-	Joinable* GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role  = MediaFrame::VIDEO_MAIN);
+	std::shared_ptr<Joinable> GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role  = MediaFrame::VIDEO_MAIN);
 
 	std::wstring& GetName() { return name; }
 	

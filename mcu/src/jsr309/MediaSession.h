@@ -258,10 +258,10 @@ private:
 	typedef std::map<int,std::shared_ptr<Endpoint>> Endpoints;
 	typedef std::map<int,std::shared_ptr<Recorder>> Recorders;
 	typedef std::map<int,std::shared_ptr<Player>> Players;
-	typedef std::map<int,AudioMixerResource*> AudioMixers;
-	typedef std::map<int,VideoMixerResource*> VideoMixers;
+	typedef std::map<int,std::shared_ptr<AudioMixerResource>> AudioMixers;
+	typedef std::map<int,std::shared_ptr<VideoMixerResource>> VideoMixers;
 	typedef std::map<int,std::shared_ptr<AudioTranscoder>> AudioTranscoders;
-	typedef std::map<int,VideoTranscoder*> VideoTranscoders;
+	typedef std::map<int,std::shared_ptr<VideoTranscoder>> VideoTranscoders;
 	typedef std::map<std::string, MediaCnxToken> Tokens;
 	typedef std::map<int, std::shared_ptr<JSR309EventContext>> EventContexts;
 	typedef std::map<int, int> EventCtxMap;
