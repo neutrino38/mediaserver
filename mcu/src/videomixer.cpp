@@ -145,7 +145,7 @@ int VideoMixer::MixVideo()
 		for (it=lstVideos.begin();it!=lstVideos.end();++it)
 		{
 			//Get input
-			PipeVideoInput *input = it->second->input;
+			PipeVideoInput *input = it->second->input.get();
 
 			//Get mosaic
 			Mosaic *mosaic = it->second->mosaic;
@@ -379,7 +379,7 @@ int VideoMixer::MixVideo()
 							if (it!=lstVideos.end())
 							{
 								//Get output
-								PipeVideoOutput *output = it->second->output;
+								PipeVideoOutput *output = it->second->output.get();
 								//Check if it has chenged
 								if (output)
 								{
@@ -414,7 +414,7 @@ int VideoMixer::MixVideo()
 					if (it!=lstVideos.end())
 					{
 						//Get output
-						PipeVideoOutput *output = it->second->output;
+						PipeVideoOutput *output = it->second->output.get();
 						//Check if it has chenged
 						if (output && (output->IsChanged(version) || vadPos!=oldVadPos || vadId != oldVad))
 							//Change mosaic
@@ -431,7 +431,7 @@ int VideoMixer::MixVideo()
 				int id = it->first;
 
 				//Get output
-				PipeVideoOutput *output = it->second->output;
+				PipeVideoOutput *output = it->second->output.get();
 
 				//Get position
 				int pos = mosaic->GetPosition(id);
@@ -636,9 +636,8 @@ int VideoMixer::End()
 	{
 		//Obtenemos el video source
 		VideoSource *video = (*it).second;
-		//Delete video stream
-		delete video->input;
-		delete video->output;
+		//Les pipes sont des shared_ptr : rendus quand le dernier stream les
+		//relâche (Point 1 / C-4).
 		delete video;
 	}
 
@@ -688,8 +687,12 @@ int VideoMixer::CreateMixer(int id)
 	VideoSource *video = new VideoSource();
 
 	//POnemos el input y el output
-	video->input  = new PipeVideoInput();
-	video->output = new PipeVideoOutput(&mixVideoMutex,&mixVideoCond);
+	//NB : PipeVideoOutput reçoit le mutex/cond du VideoMixer lui-même (couplage
+	//de durée de vie résiduel) — la co-propriété shared_ptr du pipe ne le rend
+	//PAS indépendant de la durée de vie du VideoMixer, qui vit toute la durée de
+	//la conférence (membre de MultiConf détruit après participants). Point 1.
+	video->input  = std::make_shared<PipeVideoInput>();
+	video->output = std::make_shared<PipeVideoOutput>(&mixVideoMutex,&mixVideoCond);
 	//No mosaic yet
 	video->mosaic = NULL;
 
@@ -1002,9 +1005,9 @@ int VideoMixer::DeleteMixer(int id)
 	//Desprotegemos la lista
 	lstVideosUse.Unlock();
 
-	//SI esta borramos los objetos
-	delete video->input;
-	delete video->output;
+	//Les pipes sont des shared_ptr : la struct conteneur est libérée ici, mais
+	//le pipe reste vivant tant qu'un stream participant en détient une copie
+	//(Point 1 / C-4).
 	delete video;
 
 	Log("<DeleteMixer video [%d]\n",id);
@@ -1029,12 +1032,27 @@ VideoInput* VideoMixer::GetInput(int id)
 
 	//Si esta
 	if (it != lstVideos.end())
-		input = (VideoInput*)(*it).second->input;
+		input = (VideoInput*)(*it).second->input.get();
 
 	//Desprotegemos
 	lstVideosUse.DecUse();
 
 	//Si esta devolvemos el input
+	return input;
+}
+
+/***********************
+* GetSharedInput
+*	Copie de shared_ptr sur le pipe d'entrée (co-propriété, Point 1 / C-4)
+************************/
+std::shared_ptr<VideoInput> VideoMixer::GetSharedInput(int id)
+{
+	lstVideosUse.IncUse();
+	Videos::iterator it = lstVideos.find(id);
+	std::shared_ptr<VideoInput> input;
+	if (it != lstVideos.end())
+		input = (*it).second->input;
+	lstVideosUse.DecUse();
 	return input;
 }
 
@@ -1055,12 +1073,27 @@ VideoOutput* VideoMixer::GetOutput(int id)
 
 	//Si esta
 	if (it != lstVideos.end())
-		output = (VideoOutput*)(*it).second->output;
+		output = (VideoOutput*)(*it).second->output.get();
 
 	//Desprotegemos
 	lstVideosUse.DecUse();
 
 	//Si esta devolvemos el input
+	return output;
+}
+
+/***********************
+* GetSharedOutput
+*	Copie de shared_ptr sur le pipe de sortie (co-propriété, Point 1 / C-4)
+************************/
+std::shared_ptr<VideoOutput> VideoMixer::GetSharedOutput(int id)
+{
+	lstVideosUse.IncUse();
+	Videos::iterator it = lstVideos.find(id);
+	std::shared_ptr<VideoOutput> output;
+	if (it != lstVideos.end())
+		output = (*it).second->output;
+	lstVideosUse.DecUse();
 	return output;
 }
 
@@ -1194,7 +1227,7 @@ int VideoMixer::UpdateMosaic(Mosaic* mosaic)
 			if (it!=lstVideos.end())
 			{
 				//Get output
-				PipeVideoOutput *output = it->second->output;
+				PipeVideoOutput *output = it->second->output.get();
 				//Update slot
 				mosaic->Clean(i);
 				mosaic->KeepAspectRatio( output->IsAspectRatioKept() );

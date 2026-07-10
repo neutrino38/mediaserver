@@ -242,7 +242,7 @@ create/delete conference sous trafic XML-RPC concurrent, et scénario RTMP
 (connect → `DeleteConference` concurrent → vérifier l'absence de crash grâce au `shared_ptr`
 tenu par `RTMPConnection::app`).
 
-### Phase 3 — Participants, players, tokens (cœur de `MultiConf`) — **EN COURS (démarrée manuellement 2026-07-09)**
+### Phase 3 — Participants, players, tokens (cœur de `MultiConf`) — **FAITE (2026-07-09, build vert)**
 
 *Revue de code effectuée le 2026-07-09 sur le commit `34536c2` (« plan smart pointers - début de
 la phase 3 - manuel ») + les modifications non commitées à ce moment sur `multiconf.cpp`.*
@@ -257,19 +257,41 @@ la phase 3 - manuel ») + les modifications non commitées à ce moment sur `mul
    `SharedDocMixer::part` (bonus, hors périmètre initial de la phase) est aussi passé en
    `weak_ptr<Participant>`, avec `.lock()` correct à chaque site d'usage et l'équilibre
    `IncUse`/`DecUse` de `StopSharing()` préservé.
-   ⚠️ **Reste un cast non sécurisé** dans les deux boucles de `SetDocSharingMosaic`
-   (`multiconf.cpp`, ~l.1191/1222) : `static_pointer_cast<RTPParticipant>(it->second)` est
-   appliqué à **tous** les participants de la map sans vérifier `GetType()`, y compris les
-   `RTMPParticipant` — défaut préexistant (même risque que l'ancien cast C-style qu'il remplace),
-   maintenant explicitement marqué `// TODO`. À corriger avec `GetRTPParticipant()` +
-   filtrage du type, par cohérence avec le reste de la passe.
-2. **Non commencé — C-6** : `ConsumeParticipantInputToken`/`ConsumeParticipantOutputToken`
-   rendent toujours un pointeur brut via `part.get()`, stocké durablement côté RTMP
-   (`NetStream::part`). La map est désormais sûre, mais cette sortie de secours contourne
-   totalement la protection : un `shared_ptr` dont le refcount tombe à zéro juste après laisse
-   `NetStream::part` pendouillant, comme avant. Reste à faire : `weak_ptr<RTMPParticipant>` côté
-   `NetStream` + verrou/`shared_ptr` au site de consommation du token.
-3. **Non commencé — C-7** (`players` → `map<int, shared_ptr<MP4Player>>` + verrou dédié).
+   **Cast non sécurisé de `SetDocSharingMosaic` corrigé (2026-07-09)** : les deux boucles
+   (`multiconf.cpp`, ~l.1193/1227) faisaient `static_pointer_cast<RTPParticipant>(it->second)`
+   sur **tous** les participants de la map sans vérifier `GetType()`, y compris les
+   `RTMPParticipant` (le `// TODO` marquait déjà le défaut). Remplacé par
+   `std::dynamic_pointer_cast<RTPParticipant>(it->second)` avec `continue` si nul — même
+   pattern que `GetRTPParticipant()` (qui fait déjà ce dynamic_pointer_cast en interne après
+   vérification de `GetType()`). Bonus : la variable `part` du haut de fonction est repassée en
+   `RTPParticipantPtr` (elle avait été retypée en `ParticipantPtr` dans une tentative de
+   correctif intermédiaire qui ne compilait pas — `Participant` n'a pas de
+   `StartSending/StopSending(MediaFrame::Type, MediaFrame::MediaRole)`, ce sont des méthodes
+   propres à `RTPParticipant`). Build vérifié vert.
+2. **C-6 fait (2026-07-09)** : `NetStream::part` (`multiconf.h`) est passé de `RTMPParticipant*`
+   à `std::weak_ptr<RTMPParticipant>`, avec `.lock()` à chaque site d'usage (`doPlay` — pour
+   l'`Attach()` initial —, `doPause`, `doResume`, `doCommand`/`onCongestion`, `Close()`).
+   `ConsumeParticipantOutputToken` rend désormais un `std::weak_ptr<RTMPParticipant>` (au lieu
+   d'un `RTMPParticipant*` extrait via `part.get()`), et la recherche dans `participants` y est
+   protégée par `participantsLock.IncUse()/DecUse()` (elle ne l'était pas du tout avant — bug de
+   plus, corrigé au passage). Le type est vérifié par `dynamic_pointer_cast<RTMPParticipant>`
+   (remplace le test `GetType()!=Participant::RTMP` + cast C-style). `ConsumeParticipantInputToken`
+   reçoit le même traitement pour la recherche protégée + `dynamic_pointer_cast`, mais **garde
+   volontairement** son retour en pointeur brut (`RTMPMediaStream::Listener*`) : il est consommé
+   de façon synchrone par `NetStream::doPublish` (`AddMediaListener`), et la durée de vie une fois
+   enregistré comme listener relève du mécanisme générique `RTMPMediaStream::listeners`
+   (déjà correct, cf. §1.4) — le passage de ce mécanisme générique en `weak_ptr` est le chantier
+   H-6/M-6, explicitement réservé à la Phase 4, pas repris ici.
+3. **C-7 fait (2026-07-09)** : `players` → `map<int, unique_ptr<MP4Player>>` (ownership exclusif,
+   jamais partagé hors de `MultiConf` → `unique_ptr` plutôt que `shared_ptr`, plus simple), avec
+   nouveau verrou dédié `playersLock` (`Use`, même style que `participantsLock`) :
+   `WaitUnusedAndLock`/`Unlock` autour des insertions/suppressions (`CreatePlayer`,
+   `DeletePlayer`), `IncUse`/`DecUse` autour des lectures (`StartPlaying`, `StopPlaying`).
+   `DeletePlayer` extrait le `unique_ptr` sous verrou puis fait `Stop()`/mixers/`End()` **hors**
+   verrou (même principe que `DestroyParticipant`, Phase 1) — plus de `delete` manuel, RAII.
+   Le nettoyage de `MultiConf::End()` (boucle `while(players.size()>0)`) lisait la map sans aucune
+   protection ; remplacé par un instantané protégé (`playersLock.IncUse()/DecUse()` pour lire un
+   id valide à chaque itération, `DeletePlayer` refait sa propre recherche/lock).
 4. **H-8** : déjà traité en Phase 0.3 (`DeleteParticipant` re-cherche par id, itérateur non
    réutilisé) ; le passage en `shared_ptr` de cette étape ne change pas le raisonnement, juste le
    type stocké — RAS.
@@ -289,33 +311,92 @@ la phase 3 - manuel ») + les modifications non commitées à ce moment sur `mul
    suppression des mixers (`multiconf.cpp`, `DestroyParticipant`). Build vérifié vert.
    Le retrait définitif de `Participant::use` (objectif final de C-5) reste réservé à après le
    traitement de H-6 (protection structurelle de `onMediaFrame`, phase 4).
-6. **Non commencé — M-1** (verrou `publishers` + `unique_ptr` pour `PublisherInfo::stream/conn`).
-7. **Non commencé** : `MultiConf::recorder` → `unique_ptr<RecorderControl>`.
+6. **M-1 fait (2026-07-09)** : `PublisherInfo::conn`/`stream` (`RTMPClientConnection*` /
+   `RTMPClientConnection::NetStream*`) passent en `unique_ptr` — ownership exclusif, jamais
+   partagé hors de `MultiConf`. Nouveau verrou dédié `publishersLock` (`Use`) sur toutes les
+   fonctions touchant `publishers` (`StartPublishing`, `StopPublishing`, `StopBroadcaster`,
+   et les callbacks `RTMPClientConnection::Listener` `onConnected`/`onNetStreamCreated`/
+   `onDisconnected`, jusque-là **totalement non protégés** — le `//TODO: should we lock? I
+   expect so` de `onDisconnected` est résolu) : `WaitUnusedAndLock`/`Unlock` pour les
+   insertions/suppression (`StartPublishing`, `StopBroadcaster`, `onDisconnected` qui fait
+   l'`erase`), `IncUse`/`DecUse` pour les lectures/mutations en place (`StopPublishing`,
+   `onConnected`, `onNetStreamCreated`). Les `PublisherInfo info = it->second;` (copies, devenues
+   impossibles avec des membres `unique_ptr`) sont remplacées par des références
+   (`PublisherInfo&`, déjà le style utilisé par `onConnected`/`onNetStreamCreated`). Plus de
+   `delete` manuel : `stream`/`conn` sont détruits par leur `unique_ptr` à l'`erase()`. Le
+   comportement fonctionnel de `StopPublishing` (qui ne fait pas l'`erase`, laissé à
+   `onDisconnected`) et le test `if (inited) return;` d'`onDisconnected` (qui semble inversé par
+   rapport à l'intention du commentaire) sont **inchangés** — bug logique préexistant signalé
+   mais volontairement non corrigé ici (hors périmètre smart pointers).
+7. **`MultiConf::recorder` fait (2026-07-09)** : `RecorderControl*` → `std::unique_ptr<RecorderControl>`
+   (ownership exclusif, jamais partagé). `StartRecordingBroadcaster`/`StopRecordingBroadcaster`
+   utilisent `std::make_unique<FLVRecorder>()`/`std::make_unique<MP4Recorder>()` et
+   `static_cast<FLVRecorder*>(recorder.get())`/`static_cast<MP4Recorder*>(recorder.get())` pour
+   les `switch(recorder->GetType())` (cast toujours sûr : le type réel correspond à celui créé).
+   **Bug latent corrigé au passage** : si `recorder->Record()` échouait, le code faisait
+   `return 0;` directement au lieu de sauter au label `start_recording_failed`, fuitant le
+   recorder et laissant `recorder` non-nul (bloquant tout `StartRecordingBroadcaster` futur) —
+   remplacé par un `goto start_recording_failed;` cohérent avec le cas d'échec de `Create()`
+   juste au-dessus. `recorder.reset()` remplace les `delete recorder; recorder = NULL;` manuels ;
+   le destructeur de `MultiConf` n'a plus besoin de gérer `recorder` explicitement (RAII).
 
-**État du build** : vert (`./install.ksh localcompile`, 2026-07-09), y compris après le correctif
-du point 5.
+**État du build** : vert (`./install.ksh localcompile`, 2026-07-09) après chaque sous-étape
+(cast `SetDocSharingMosaic`, `recorder`, `players`, `publishers`, `C-6`).
 
-**Livrable** : build vert + scénario join/leave massif de participants RTP et RTMP pendant
-lecture MP4 (reste à dérouler).
+**Livrable** : build vert. Reste à dérouler manuellement (aucune suite de tests automatisée) :
+scénario join/leave massif de participants RTP et RTMP pendant lecture/enregistrement MP4,
+create/delete player et publisher RTMP en boucle, publish/unpublish RTMP concurrent avec
+déconnexions réseau (pour exercer `onDisconnected`/M-1), et play RTMP `participant/<token>`
+concurrent avec `DeleteParticipant` (pour exercer le `weak_ptr` de C-6).
 
-### Phase 4 — Streams, pipes et listeners (couche transport)
+### Phase 4 — Streams, pipes et listeners (couche transport) — **POINTS 1-6 FAITS (2026-07-10, build vert) ; POINT 7 (C-13) RÉSERVÉ**
 
-1. **Pipes** : les mixers stockent des `shared_ptr<Pipe*put>` ; les streams des participants en
-   détiennent une copie (co-propriété). `DeleteMixer` retire de la map ; la mémoire n'est rendue
-   que quand le stream a réellement lâché le pipe → C-4 devient structurellement impossible,
-   même si un join échoue.
-2. **H-3** : `VideoStream::rtpSession` (session partagée slides) devient un
-   `weak_ptr`/`shared_ptr` observé, avec `End()` idempotent sur `RTPSession` — plus de
-   double-End ni de GetPacket sur session en teardown.
-3. **H-5** : destructeurs idempotents — `~RTPParticipant`, `~AudioStream`, `~VideoStream`,
-   `~TextStream` appellent `End()` (modèle `~RTMPParticipant`).
-4. **M-6** : `RTPSession::listener` → `weak_ptr<Listener>` (lock au site d'appel dans le thread
-   `Run()`), les participants héritent de `enable_shared_from_this` via la phase 3.
-5. **H-6** : `RTMPParticipant::onMediaFrame` protégé (IncUse/état, ou queue à durée de vie
-   propre) ; `attached` → `weak_ptr`.
-6. **M-3** : `MP4Player` : décodeurs en `unique_ptr`, ordre de destruction corrigé (streamer
-   arrêté d'abord — ou `Stop()` dans le destructeur).
-7. **C-13 (solution structurelle)** : le graphe d'attach JSR309 (`Endpoint::Port::joined` ↔
+*Points 1 à 6 implémentés le 2026-07-10, build vert (`./install.ksh localcompile`) après chaque
+étape. Ordre suivi : H-5 → M-3 → Point 1 (pipes) → H-3 → H-6 → M-6. Le point 7 (C-13 structurel)
+est explicitement reporté à une session dédiée : l'exploration a montré qu'il est bien plus large
+que ce que ce texte supposait (voir la note « écarts » en fin de point 7).*
+
+1. **Pipes — FAIT.** `AudioSource`/`VideoSource`/`TextSource`(+`TextPrivate`) des 3 mixers stockent
+   `shared_ptr<Pipe*put>` (`make_shared` dans `CreateMixer`, plus de `delete` du pipe dans
+   `DeleteMixer`/`End`/`EndMixer`). Nouveaux accesseurs `GetSharedInput`/`GetSharedOutput` (copies
+   de `shared_ptr` sous `IncUse`) ; `GetInput`/`GetOutput` bruts conservés (`.get()`) pour les
+   consommateurs internes de `MultiConf`. Streams participants (`AudioStream`/`VideoStream`/
+   `TextStream` **et** membres directs de `RTMPParticipant`) détiennent une copie `shared_ptr` du
+   pipe → C-4 structurellement impossible. **Pièges traités** : (a) `RTMPParticipant` a le même
+   défaut que `RTPParticipant` (traité aussi) ; (b) `SharedDocMixer` passe un pointeur NON possédé
+   à `SetVideoOutput` → **double surcharge** Video (brute non-possédante à deleter no-op /
+   `shared_ptr` possédante), jamais unifiée ; (c) `TextStream::Init` partagé avec
+   `MediaBridgeSession` → surcharge `shared_ptr` ajoutée à côté de la brute. `SetAudioInput/Output`,
+   `SetTextInput/Output` passés directement en `shared_ptr` (seuls les mixers les alimentent).
+   Consommateurs internes (`audioEncoder`/`flvEncoder`/`recEncoder`/`appMixer`/`sharedDocMixer`/
+   `player`) **volontairement non convertis** (leur sûreté repose sur l'ordre `Stop*/End*` avant
+   `Delete*`, inchangé) — risque résiduel documenté. `PipeVideoOutput` reste couplé au mutex/cond du
+   `VideoMixer` (documenté, hors périmètre).
+2. **H-3 — FAIT.** (a) `RTPParticipant::End()` boucle désormais **SLIDES avant MAIN** (index
+   décroissant) : le vrai bug était l'ordre (fermeture des sockets de MAIN pendant que le
+   `recVideoThread` de SLIDES lit, fd reuse race), pas seulement la durée de vie. (b) Défense en
+   profondeur : `VideoStream::rtpSession` → `std::weak_ptr<RTPSession>`, `.lock()` à chaque site
+   (End, StopReceiving, RecVideo re-lock **par itération** avec repli non-possédant sur sa propre
+   session, GetStatistics). `RTPParticipant : enable_shared_from_this` ; liaison par défaut de
+   chaque flux sur sa propre session dans `Init()` (pas le constructeur), SLIDES→MAIN via
+   `onNewStream`. `RTPSession::End()` déjà idempotent.
+3. **H-5 — FAIT.** `~RTPParticipant`, `~AudioStream`, `~VideoStream`, `~TextStream` appellent
+   `End()` (idempotent) en tête (modèle `~RTMPParticipant`).
+4. **M-6 — FAIT.** `RTPSession` gagne `SetWeakListener(weak_ptr<Listener>)` + `LockListener()`
+   (coexistence : `weakListener.lock()` si armé, sinon wrapper non-possédant du `listener` brut
+   historique — préserve `MediaBridgeSession`, non converti). Les ~10 sites d'appel passent par
+   `if (auto l = LockListener()) l->onX(...)`. `VideoStream`/`AudioStream` gagnent `SetWeakListener`
+   (délègue à `rtp`). Liaison dans `RTPParticipant::Init()` avec **`static_pointer_cast` obligatoire**
+   (diamant non virtuel `RTPSession::Listener` via `VideoStream::Listener` **et**
+   `AudioStream::Listener`). `text` : listener volontairement NULL, inchangé.
+5. **H-6 — FAIT.** `onMediaFrame` encadré par `use.IncUse()/DecUse()` (pour que le
+   `WaitUnusedAndLock(2000)` de `DestroyParticipant` voie l'appel du thread réseau source).
+   `attached` protégé par un `pthread_mutex_t attachedMutex` dédié (extraction sous verrou,
+   `RemoveMediaListener` appelé hors verrou) — **pas** de `weak_ptr` ici (les sources RTMP ne sont
+   pas `shared_ptr`-gérées ; chantier C-8/Phase 5).
+6. **M-3 — FAIT.** `MP4Player::audioDecoder`/`videoDecoder` → `unique_ptr` ; `~MP4Player()` appelle
+   `Stop()` (arrête/joint le worker `streamer`) avant que les `unique_ptr` ne se détruisent.
+7. **C-13 (solution structurelle) — NON FAIT, réservé à une session dédiée.** le graphe d'attach JSR309 (`Endpoint::Port::joined` ↔
    `RTPMultiplexer::listeners`) passe en observateurs `weak_ptr`, remplaçant le correctif manuel
    `onJoinableEnded` de la phase 0.10. Les deux liens sont non-possédants → `weak_ptr` des deux
    côtés, avec `lock()` au site d'appel (protège aussi contre une destruction concurrente, ce que
@@ -328,8 +409,32 @@ lecture MP4 (reste à dérouler).
    une fois les `Port` gérés par `shared_ptr` (aujourd'hui `new/delete` bruts dans `Endpoint`) — donc
    dépend de la conversion des `Endpoint`/`Port`.
 
-**Livrable** : build vert + scénarios vidéo (FPU, slides/BFCP, resize mosaïque) sous churn de
-participants.
+   **Écarts découverts (exploration 2026-07-10), à intégrer avant d'implémenter C-13** :
+   `Endpoint::Port` est **déjà** `shared_ptr` (commit `39b759a`, le texte « new/delete bruts » est
+   obsolète). Mais `AudioMixerResource`/`VideoMixerResource`/`VideoTranscoder` sont **encore des
+   pointeurs bruts** dans `MediaSession` (seuls `Player`, `Endpoint`, `Recorder`, `AudioTranscoder`
+   sont déjà `shared_ptr`) ; leurs `Port` internes (`AudioMixerResource::Port`, distincts de
+   `Endpoint::Port`) sont aussi `new/delete` bruts. `RTPMultiplexer::listeners` est un
+   `std::set<Listener*>` (pas une liste → comparateur `owner_before` ou changement de conteneur pour
+   passer en `weak_ptr`). `Player` a **3** multiplexeurs (audio/vidéo/**texte**). Surtout : le
+   correctif Phase 0.10 `onJoinableEnded` **ne couvre que `RTPEndpoint`/`WSEndpoint`** — `Recorder`,
+   `AudioDecoderJoinableWorker`, `VideoDecoderJoinableWorker` ont le même `joined` brut non protégé
+   (mêmes crashs « pure virtual method called » possibles par ces chemins). `AudioTranscoder` doit
+   être ajouté à la liste des sources. Une correction minimale possible en attendant (non faite) :
+   étendre `onJoinableEnded` à ces 3 classes.
+
+**Correctif collatéral (2026-07-10)** : le rebuild complet (nécessaire car `mcu/Makefile.rpm` ne
+suit pas les dépendances headers → objets périmés) a exposé une régression du paquet système
+**ffmpeg** (`libavutil/base64.h` a perdu ses gardes `extern "C"` entre le 2026-07-09 et le
+2026-07-10) : `websocketconnection.cpp` (include manquant) et `rtpsession.cpp` (include nu →
+symboles C++ mangled à l'édition de liens) corrigés en enveloppant l'include dans `extern "C"`.
+
+**Livrable** : build vert ✅ (2026-07-10, `./install.ksh localcompile`). Reste à dérouler
+manuellement (pas de suite de tests) : participant RTP + BFCP + partage document, `DeleteParticipant`
+pendant flux SLIDES actif (H-3, idéalement sous `-fsanitize=address`) ; participant RTMP,
+`DeleteParticipant` pendant `SendVideo`/`RecVideo` (Point 1) ; source RTMP attachée envoyant en
+continu + `DeleteParticipant` (H-6) ; lecture MP4 en boucle + `DeletePlayer` pendant lecture (M-3) ;
+vérifier que FPU/bitrate arrivent toujours en marche normale (M-6, pas de régression silencieuse).
 
 ### Phase 5 — Sous-systèmes restants et nettoyage
 

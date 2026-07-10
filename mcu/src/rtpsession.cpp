@@ -21,7 +21,9 @@
 #include "rtp.h"
 #include "rtpsession.h"
 #include "stunmessage.h"
+extern "C" {
 #include <libavutil/base64.h>
+}
 #include <openssl/ossl_typ.h>
 
 BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
@@ -314,9 +316,9 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	sendSRTPSession = session;
 
 	//Request an intra to start clean
-	if (listener)
+	if (auto l = LockListener())
 		//Request a I frame
-		listener->onFPURequested(this);
+		l->onFPURequested(this);
 
 	//Evrything ok
 	return 1;
@@ -1605,9 +1607,9 @@ int RTPSession::ReadRTP()
                    inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port),
                    MediaFrame::TypeToString(media));
 		//Check if got listener
-		if (listener)
+		if (auto l = LockListener())
 			//Request a I frame
-			listener->onFPURequested(this);
+			l->onFPURequested(this);
 	}
 
 	//Check minimum size for rtp packet
@@ -1763,9 +1765,9 @@ int RTPSession::ReadRTP()
 					Log("-Creating default stream SSRC [new:%x] for RTPSession=%p \n",ssrc,this);
 					SetDefaultStream(true, ssrc);
 				}
-				else if (listener) //call listener
+				else if (auto l = LockListener()) //call listener
 				{
-					listener->onNewStream(this, ssrc, true);
+					l->onNewStream(this, ssrc, true);
 				}
 				else
 				{
@@ -1925,8 +1927,8 @@ int RTPSession::Run()
 			rtpTimedOut = true;
 			Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
 			//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
-			if (listener)
-				listener->onRTPTimeout(this);
+			if (auto l = LockListener())
+				l->onRTPTimeout(this);
 		}
 
 		if ((ufds[0].revents & POLLHUP) || (ufds[0].revents & POLLERR) || (ufds[1].revents & POLLHUP) || (ufds[0].revents & POLLERR))
@@ -2081,9 +2083,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							//Get field
 							RTCPRTPFeedback::TempMaxMediaStreamBitrateField *field = (RTCPRTPFeedback::TempMaxMediaStreamBitrateField*) fb->GetField(i);
 							//Check if it is for us
-							if (listener && field->GetSSRC()==sendSSRC)
+							if (auto l = LockListener(); l && field->GetSSRC()==sendSSRC)
 								//call listener
-								listener->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+								l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
@@ -2118,9 +2120,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 					case RTCPPayloadFeedback::PictureLossIndication:
 					case RTCPPayloadFeedback::FullIntraRequest:
 						//Chec listener
-						if (listener)
+						if (auto l = LockListener())
 							//Send intra refresh
-							listener->onFPURequested(this);
+							l->onFPURequested(this);
 						break;
 					case RTCPPayloadFeedback::SliceLossIndication:
 						Log("-RTCP SliceLossIndication received\n");
@@ -2156,9 +2158,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 								//Get bitrate
 								DWORD bitrate = mantisa << exp;
 								//Check if it is for us
-								if (listener)
+								if (auto l = LockListener())
 									//call listener
-									listener->onReceiverEstimatedMaxBitrate(this,bitrate);
+									l->onReceiverEstimatedMaxBitrate(this,bitrate);
 							}
 						}
 						break;
@@ -2168,9 +2170,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 			case RTCPPacket::FullIntraRequest:
 				//This is message deprecated and just for H261, but just in case
 				//Check listener
-				if (listener)
+				if (auto l = LockListener())
 					//Send intra refresh
-					listener->onFPURequested(this);
+					l->onFPURequested(this);
 				break;
 			case RTCPPacket::NACK:
 				break;
@@ -2385,9 +2387,9 @@ void RTPSession::ReSendPacket(int seq)
                         if (err!=srtp_err_status_ok)
                         {
                                 //Check if got listener
-                                if (listener)
+                                if (auto l = LockListener())
                                         //Request a I frame
-                                        listener->onFPURequested(this);
+                                        l->onFPURequested(this);
                                 //Nothing
                                 Error("-RTPSession::ReSendPacket() | Error protecting RTP packet [%d] sending intra instead\n",err);
 				return;
@@ -2410,9 +2412,9 @@ void RTPSession::ReSendPacket(int seq)
 		Debug("-could not resent necket packet seq %d: not in buffer anymore. first seq = %d, cout = %d, rtpsess=%p useNacl=%d\n", 
 			ext, first, rtxs.size(), this, useNACK);
                                 //Check if got listener
-                if (listener)
+                if (auto l = LockListener())
                         //Request a I frame
-                        listener->onFPURequested(this);
+                        l->onFPURequested(this);
 
 	}
 

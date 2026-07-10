@@ -78,13 +78,20 @@ public:
 	virtual int SetTextCodec(TextCodec::Type codec) = 0;
 	
 	
+	//Video : DEUX chemins (Point 1 / C-4) — chemin "emprunté" (pointeur brut,
+	//pour SharedDocMixer qui passe un objet non alloué par new) et chemin
+	//"possédant" (shared_ptr, co-propriété du pipe du mixer). Ne jamais unifier :
+	//un shared_ptr possédant sur le SharedDocMixer ferait un delete illégal.
 	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;
 	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;
+	virtual int SetVideoInput(std::shared_ptr<VideoInput> input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;
+	virtual int SetVideoOutput(std::shared_ptr<VideoOutput> output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;
 	virtual VideoOutput*  GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;
-	virtual int SetAudioInput(AudioInput* input) = 0;
-	virtual int SetAudioOutput(AudioOutput *output) = 0;
-	virtual int SetTextInput(TextInput* input) = 0;
-	virtual int SetTextOutput(TextOutput* output) = 0;
+	//Audio/Text : uniquement alimentés par les mixers → shared_ptr direct.
+	virtual int SetAudioInput(std::shared_ptr<AudioInput> input) = 0;
+	virtual int SetAudioOutput(std::shared_ptr<AudioOutput> output) = 0;
+	virtual int SetTextInput(std::shared_ptr<TextInput> input) = 0;
+	virtual int SetTextOutput(std::shared_ptr<TextOutput> output) = 0;
 
 	virtual MediaStatistics GetStatistics(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;
 	virtual int SetMute(MediaFrame::Type media, bool isMuted,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) = 0;

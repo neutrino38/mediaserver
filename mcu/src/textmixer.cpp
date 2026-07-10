@@ -204,9 +204,9 @@ int TextMixer::CreateMixer(int id,std::wstring &name)
 	//Set id
 	text->id = id;
 
-	//POnemos el input y el output
-	text->input  = new PipeTextInput();
-	text->output = new PipeTextOutput();
+	//POnemos el input y el output (co-propriété shared_ptr, Point 1 / C-4)
+	text->input  = std::make_shared<PipeTextInput>();
+	text->output = std::make_shared<PipeTextOutput>();
 	//Create the worker
 	text->worker = new TextMixerWorker();
 
@@ -261,7 +261,7 @@ int TextMixer::InitMixer(int id)
 	text->worker->Init();
 
 	//Set participant as reader for the worker
-	text->worker->AddReader(id,text->input);
+	text->worker->AddReader(id,text->input.get());
 
 	Log("-Text [%d,%ls]\n",text->id,text->name.c_str());
 
@@ -373,9 +373,10 @@ int TextMixer::DeleteMixer(int id)
 	//Desprotegemos la lista
 	lstTextsUse.Unlock();
 
-	//SI esta borramos los objetos
-	delete text->input;
-	delete text->output;
+	//Les pipes sont des shared_ptr : rendus quand le dernier stream les relâche
+	//(Point 1 / C-4). Le worker (raw) est détruit avant les shared_ptr : il
+	//détient un pointeur brut vers input, mais son propre thread est arrêté par
+	//DetachAllReaders/End dans EndMixer.
 	delete text->worker;
 	delete text;
 
@@ -399,12 +400,27 @@ TextInput* TextMixer::GetInput(int id)
 
 	//Si esta
 	if (it != sources.end())
-		input = (TextInput*)it->second->input;
+		input = (TextInput*)it->second->input.get();
 
 	//Desprotegemos
 	lstTextsUse.DecUse();
 
 	//Si esta devolvemos el input
+	return input;
+}
+
+/***********************
+* GetSharedInput
+*	Copie de shared_ptr sur le pipe d'entrée (co-propriété, Point 1 / C-4)
+************************/
+std::shared_ptr<TextInput> TextMixer::GetSharedInput(int id)
+{
+	lstTextsUse.IncUse();
+	TextSources::iterator it = sources.find(id);
+	std::shared_ptr<TextInput> input;
+	if (it != sources.end())
+		input = it->second->input;
+	lstTextsUse.DecUse();
 	return input;
 }
 
@@ -423,10 +439,10 @@ TextOutput* TextMixer::GetOutput(int id)
 	//Obtenemos el output
 	TextOutput *output = NULL;
 
-	//Si esta	
+	//Si esta
 	if (it != sources.end())
 		//Store it
-		output = it->second->output;
+		output = it->second->output.get();
 
 	//if still not found
 	if (!output)
@@ -436,13 +452,36 @@ TextOutput* TextMixer::GetOutput(int id)
 		//If it exist
 		if (it!=privates.end())
 			//Store it
-			output = it->second->output;
+			output = it->second->output.get();
 	}
 
 	//Desprotegemos
 	lstTextsUse.DecUse();
 
 	//Si esta devolvemos el input
+	return output;
+}
+
+/***********************
+* GetSharedOutput
+*	Copie de shared_ptr sur le pipe de sortie (sources puis privates), Point 1
+************************/
+std::shared_ptr<TextOutput> TextMixer::GetSharedOutput(int id)
+{
+	lstTextsUse.IncUse();
+	std::shared_ptr<TextOutput> output;
+	//Chercher d'abord dans les sources
+	TextSources::iterator it = sources.find(id);
+	if (it != sources.end())
+		output = it->second->output;
+	//Sinon dans les privates
+	if (!output)
+	{
+		TextPrivates::iterator itp = privates.find(id);
+		if (itp != privates.end())
+			output = itp->second->output;
+	}
+	lstTextsUse.DecUse();
 	return output;
 }
 
@@ -474,8 +513,8 @@ int TextMixer::CreatePrivate(int id,int to,std::wstring &name)
 	priv->id = id;
 	//Set target mixer
 	priv->to = to;
-	//Create output
-	priv->output = new PipeTextOutput();
+	//Create output (co-propriété shared_ptr, Point 1)
+	priv->output = std::make_shared<PipeTextOutput>();
 	//Set name
 	priv->name = name;
 
@@ -612,8 +651,8 @@ int TextMixer::DeletePrivate(int id)
 	//Desprotegemos la lista
 	lstTextsUse.Unlock();
 
-	//SI esta borramos los objetos
-	delete priv->output;
+	//priv->output est un shared_ptr : rendu quand le dernier détenteur le
+	//relâche (Point 1). La struct conteneur est libérée ici.
 	delete priv;
 
 	return 0;
@@ -635,7 +674,7 @@ TextOutput* TextMixer::GetPrivateOutput(int id)
 
 	//Si esta
 	if (it != privates.end())
-		output = it->second->output;
+		output = it->second->output.get();
 
 	//Desprotegemos
 	lstTextsUse.DecUse();

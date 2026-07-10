@@ -21,9 +21,14 @@ RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag) :
 
 RTPParticipant::~RTPParticipant()
 {
+	//Défense en profondeur (H-5, modèle ~RTMPParticipant) : arrête/joint tous
+	//les threads même si l'appelant a oublié d'appeler End(). End() est
+	//idempotent (DestroyParticipant/MultiConf::End l'appellent déjà).
+	End();
+
 	for(int i=0; i < MAX_VIDEO_STREAM && video[i] != NULL ; ++i)
 		delete(video[i]);
-	
+
 }
 
 int RTPParticipant::SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties,MediaFrame::MediaRole role)
@@ -87,11 +92,16 @@ int RTPParticipant::End()
 
 	ret &= audio.End();
 	ret &= text.End();
-	
-	//End all streams
-	for(int i=0; i < MAX_VIDEO_STREAM && video[i] != NULL ; ++i)
-		ret &= video[i]->End();
-	
+
+	//End all streams (H-3) : SLIDES peut avoir son rtpSession aliasé sur celui de
+	//MAIN (cf. onNewStream). On arrête TOUJOURS le flux "observateur" (SLIDES,
+	//index le plus haut) AVANT le flux "observé" (MAIN, index 0) — jamais
+	//l'inverse — sinon rtp.End() de MAIN ferme les sockets pendant que le
+	//recVideoThread de SLIDES lit encore dessus (fd reuse race).
+	for(int i = MAX_VIDEO_STREAM - 1; i >= 0 ; --i)
+		if (video[i] != NULL)
+			ret &= video[i]->End();
+
 
 	//aggregater results
 	return ret;
@@ -101,16 +111,31 @@ int RTPParticipant::Init()
 {
 	int ret = 1;
 	
+	//Lien par défaut de chaque flux vidéo sur SA PROPRE session (H-3) : weak_ptr
+	//aliasé sur le bloc de contrôle de ce participant. shared_from_this() est
+	//légal ici (Init appelé après make_shared), illégal dans le constructeur.
+	auto self = shared_from_this();
 	for(int i=0; i < MAX_VIDEO_STREAM && video[i] != NULL ; ++i)
-	
+
 	{
 		//Set estimator for video
 		video[i]->SetRemoteRateEstimator(&estimator);
 		//Init each stream
 		ret &= video[i]->Init(NULL,NULL);
+		//Observe sa propre session par défaut
+		video[i]->SetRTPSession(std::shared_ptr<RTPSession>(self,&video[i]->GetOwnSession()),0);
+		//M-6 : arme le listener RTP en weak_ptr. static_pointer_cast obligatoire :
+		//RTPParticipant hérite de RTPSession::Listener par DEUX chemins non
+		//virtuels (VideoStream::Listener et AudioStream::Listener) → conversion
+		//directe ambiguë. On passe par le sous-objet VideoStream::Listener.
+		video[i]->SetWeakListener(std::static_pointer_cast<VideoStream::Listener>(self));
 	}
-	
+
 	ret &= audio.Init(audioInput,audioOutput);
+	//M-6 : idem via le sous-objet AudioStream::Listener.
+	audio.SetWeakListener(std::static_pointer_cast<AudioStream::Listener>(self));
+	//text : listener volontairement NULL (cf. constructeur text(NULL)) —
+	//comportement historique inchangé, pas de weak listener.
 	ret &= text.Init(textInput,textOutput);
 	//aggregater results
 	return ret;
@@ -366,7 +391,10 @@ void RTPParticipant::onNewStream( RTPSession *session, DWORD newSsrc, bool recei
 	if (GetDocSharingMode() == Participant::BFCP_TCP || GetDocSharingMode() == Participant::BFCP_UDP)
 	{
 		session->AddStream(receiving,newSsrc);
-		video[MediaFrame::VIDEO_SLIDES]->SetRTPSession(session,newSsrc);
+		//SLIDES observe la session de MAIN (H-3) : weak_ptr aliasé sur le bloc de
+		//contrôle de ce participant (session appartient à ce participant), pour
+		//que lock() garde MAIN vivant pendant que SLIDES lit.
+		video[MediaFrame::VIDEO_SLIDES]->SetRTPSession(std::shared_ptr<RTPSession>(shared_from_this(),session),newSsrc);
 	}
 	else
 	{

@@ -7,6 +7,7 @@
 #include "pipeaudiooutput.h"
 #include "sidebar.h"
 #include <map>
+#include <memory>
 
 class AudioMixer : public VADProxy
 {
@@ -24,6 +25,10 @@ public:
 	int DeleteMixer(int id);
 	AudioInput*  GetInput(int id);
 	AudioOutput* GetOutput(int id);
+	//Co-propriété (Point 1 / C-4) : rendent une copie de shared_ptr sur le pipe,
+	//pour que le stream participant le maintienne vivant tant qu'il l'utilise.
+	std::shared_ptr<AudioInput>  GetSharedInput(int id);
+	std::shared_ptr<AudioOutput> GetSharedOutput(int id);
 	void Process(void);
 
 	int CreateSidebar();
@@ -46,10 +51,10 @@ private:
 private:
 
 	//Tipos
-	typedef struct 
+	typedef struct
 	{
-		PipeAudioInput  *input;
-		PipeAudioOutput *output;
+		std::shared_ptr<PipeAudioInput>  input;
+		std::shared_ptr<PipeAudioOutput> output;
 		SWORD		buffer[Sidebar::MIXER_BUFFER_SIZE];
 		DWORD		len;
 		Sidebar*	sidebar;

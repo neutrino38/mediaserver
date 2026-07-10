@@ -33,14 +33,17 @@ public:
 	virtual int SendDTMF(DTMFMessage* dtmf);
 	virtual MediaStatistics GetStatistics(MediaFrame::Type type,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 
-	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{ videoInput	= input;	return 0; }
-	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { videoOutput	= output;	return 0; }
-	virtual VideoOutput* GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return videoOutput;	}
+	//Video : double chemin (emprunté brut / possédant shared_ptr, Point 1 / C-4).
+	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{ videoInput	= input ? std::shared_ptr<VideoInput>(input,[](VideoInput*){}) : nullptr;	return 0; }
+	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { videoOutput	= output ? std::shared_ptr<VideoOutput>(output,[](VideoOutput*){}) : nullptr;	return 0; }
+	virtual int SetVideoInput(std::shared_ptr<VideoInput> input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{ videoInput	= std::move(input);	return 0; }
+	virtual int SetVideoOutput(std::shared_ptr<VideoOutput> output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { videoOutput	= std::move(output);	return 0; }
+	virtual VideoOutput* GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return videoOutput.get();	}
 
-	virtual int SetAudioInput(AudioInput* input)	{ audioInput	= input;	return 0; }
-	virtual int SetAudioOutput(AudioOutput *output)	{ audioOutput	= output;	return 0; }
-	virtual int SetTextInput(TextInput* input)	{ textInput	= input;	return 0; }
-	virtual int SetTextOutput(TextOutput* output)	{ textOutput	= output;	return 0; }
+	virtual int SetAudioInput(std::shared_ptr<AudioInput> input)	{ audioInput	= std::move(input);	return 0; }
+	virtual int SetAudioOutput(std::shared_ptr<AudioOutput> output)	{ audioOutput	= std::move(output);	return 0; }
+	virtual int SetTextInput(std::shared_ptr<TextInput> input)	{ textInput	= std::move(input);	return 0; }
+	virtual int SetTextOutput(std::shared_ptr<TextOutput> output)	{ textOutput	= std::move(output);	return 0; }
 	virtual int SetMute(MediaFrame::Type media, bool isMuted,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	virtual int Init();
 	virtual int End();
@@ -100,6 +103,9 @@ private:
 	static void* startSendingText(void *par);
 private:
 	RTMPMediaStream		*attached;
+	//Protège les lectures/écritures du pointeur `attached` (H-6). Indépendant
+	//de `use` (Participant). Jamais tenu pendant un appel vers un autre objet.
+	pthread_mutex_t		attachedMutex;
 	RTMPMetaData		*meta;
 	MediaStatistics		audioStats;
 	MediaStatistics		videoStats;
@@ -138,12 +144,13 @@ private:
 	bool	sendFPU;
 	timeval	first;
 
-	VideoInput*	videoInput;
-	VideoOutput*	videoOutput;
-	AudioInput*	audioInput;
-	AudioOutput*	audioOutput;
-	TextInput*	textInput;
-	TextOutput*	textOutput;
+	//Co-propriété des pipes du mixer (Point 1 / C-4).
+	std::shared_ptr<VideoInput>	videoInput;
+	std::shared_ptr<VideoOutput>	videoOutput;
+	std::shared_ptr<AudioInput>	audioInput;
+	std::shared_ptr<AudioOutput>	audioOutput;
+	std::shared_ptr<TextInput>	textInput;
+	std::shared_ptr<TextOutput>	textOutput;
 
 	bool	audioMuted;
 	bool	videoMuted;

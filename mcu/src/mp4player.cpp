@@ -4,17 +4,15 @@
 
 MP4Player::MP4Player() : streamer(this)
 {
-	audioDecoder = NULL;
-	videoDecoder = NULL;
+	//audioDecoder/videoDecoder sont des unique_ptr : déjà nuls par défaut.
 }
 
 MP4Player::~MP4Player()
 {
-	//Delete codecs
-	if (audioDecoder)
-		delete (audioDecoder);
-	if (videoDecoder)
-		delete (videoDecoder);
+	//Arrête le thread de lecture (streamer) AVANT que les unique_ptr des
+	//décodeurs ne se détruisent : onRTPPacket tourne sur ce thread et utilise
+	//audioDecoder/videoDecoder (M-3). Stop() joint le worker avant de revenir.
+	Stop();
 }
 
 int MP4Player::Init(AudioOutput *audioOutput,VideoOutput *videoOutput,TextOutput *textOutput)
@@ -44,12 +42,12 @@ int MP4Player::Play(const char* filename,bool loop)
 	//Open audio codec
 	if (streamer.HasAudioTrack())
 		//Create audio codec
-		audioDecoder = AudioCodecFactory::CreateDecoder(streamer.GetAudioCodec());
+		audioDecoder.reset(AudioCodecFactory::CreateDecoder(streamer.GetAudioCodec()));
 
 	//Open video codec
 	if (streamer.HasVideoTrack())
 		//Create audio codec
-		videoDecoder = VideoCodecFactory::CreateDecoder(streamer.GetVideoCodec());
+		videoDecoder.reset(VideoCodecFactory::CreateDecoder(streamer.GetVideoCodec()));
 		
 	//Start playback
 	return streamer.Play();

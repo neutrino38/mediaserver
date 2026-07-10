@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <vector>
+#include <memory>
 #include "config.h"
 #include "medkit/codecs.h"
 #include "rtpsession.h"
@@ -24,7 +25,9 @@ public:
 	AudioStream(Listener* listener);
 	~AudioStream();
 
-	int Init(AudioInput *input,AudioOutput *output);
+	int Init(std::shared_ptr<AudioInput> input,std::shared_ptr<AudioOutput> output);
+	//M-6 : arme le listener géré par shared_ptr sur la session interne.
+	void SetWeakListener(std::weak_ptr<RTPSession::Listener> l) { rtp.SetWeakListener(std::move(l)); }
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetAudioCodec(AudioCodec::Type codec,const Properties& properties);
 	int StartSending(char* sendAudioIp,int sendAudioPort,RTPMap& rtpMap);
@@ -60,8 +63,10 @@ private:
 
 	//Los objectos gordos
 	RTPSession	rtp;
-	AudioInput	*audioInput;
-	AudioOutput	*audioOutput;
+	//Co-propriété du pipe du mixer (Point 1 / C-4) : le pipe reste vivant tant
+	//que ce stream le détient, même si DeleteMixer a déjà retiré la map.
+	std::shared_ptr<AudioInput>	audioInput;
+	std::shared_ptr<AudioOutput>	audioOutput;
 
 	//Parametros del audio
 	AudioCodec::Type audioCodec;

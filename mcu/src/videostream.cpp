@@ -25,9 +25,9 @@ VideoStream::VideoStream(Listener* listener, Logo & muteLogo, MediaFrame::MediaR
 	//Inicializamos a cero todo
 	sendingVideo = TaskIdle;
 	receivingVideo = TaskIdle;
-	videoInput	= NULL;
-	videoOutput	= NULL;
-	rtpSession	= NULL;
+	videoInput	= nullptr;
+	videoOutput	= nullptr;
+	//rtpSession est un weak_ptr : vide par défaut, lié dans RTPParticipant::Init
 	
 	videoCodec=VideoCodec::H263_1996;
 	videoCaptureMode=0;
@@ -57,6 +57,9 @@ VideoStream::VideoStream(Listener* listener, Logo & muteLogo, MediaFrame::MediaR
 ********************************/
 VideoStream::~VideoStream()
 {
+	//Défense en profondeur (H-5) : garantit l'arrêt/join de tous les threads
+	//même si l'appelant a oublié d'appeler End(). End() est idempotent.
+	End();
 	//Clean object
 	pthread_mutex_destroy(&mutex);
 	pthread_cond_destroy(&cond);
@@ -135,11 +138,13 @@ int VideoStream::Init(VideoInput *input,VideoOutput *output)
 {
 	Log(">Init video stream\n");
 	
-	//Guardamos los objetos
+	//Guardamos los objetos. Cette surcharge brute (appelée avec (NULL,NULL) par
+	//RTPParticipant::Init) n'écrase donc pas ce que SetVideoInput/Output
+	//possédant vient de poser. Chemin "emprunté" : shared_ptr non possédant.
 	if (input != NULL)
-		videoInput  = input;
+		videoInput  = std::shared_ptr<VideoInput>(input, [](VideoInput*){});
 	if (output != NULL)
-		videoOutput = output;
+		videoOutput = std::shared_ptr<VideoOutput>(output, [](VideoOutput*){});
 	
 	//No estamos haciendo nada
 	sendingVideo = TaskIdle;
@@ -369,16 +374,18 @@ int VideoStream::End()
 
 	//Cerramos la session de rtp
 	rtp.End();
-	
-	//Cerramos la session de rtp
-	if (rtpSession)
-		rtpSession->End();
+
+	//Cerramos la session de rtp observée (peut être celle de MAIN si SLIDES).
+	//RTPSession::End() est idempotent ; RTPParticipant::End() (H-3) termine
+	//SLIDES avant MAIN, donc pas de fermeture prématurée de la session lue.
+	if (auto session = rtpSession.lock())
+		session->End();
 
 
 	ret = StopReceiving();
 	ret &= StopSending();
 
-	rtpSession = NULL;
+	rtpSession.reset();
 	
 	
 	Log("<End\n");
@@ -454,10 +461,10 @@ int VideoStream::StopReceiving()
 
 		//Dejamos de recivir
 		receivingVideo = TaskStopping;
-		
-		if (rtpSession)
+
+		if (auto session = rtpSession.lock())
 			//Cancel rtp
-			rtpSession->CancelGetPacket(recSSRC);
+			session->CancelGetPacket(recSSRC);
 		
 		msleep(100000);
 		if (receivingVideo == TaskIdle)
@@ -755,9 +762,13 @@ int VideoStream::RecVideo()
 	bool		waitIntra = false;
 	Log(">RecVideo\n");
 	
-	if (rtpSession == NULL)
-		rtpSession = &rtp;
-	
+	//Session observée (liée par RTPParticipant::Init ; SLIDES peut observer la
+	//session de MAIN). Repli non-possédant sur sa propre session, toujours
+	//valide tant que ce thread tourne (H-3).
+	std::shared_ptr<RTPSession> session = rtpSession.lock();
+	if (!session)
+		session = std::shared_ptr<RTPSession>(&rtp, [](RTPSession*){});
+
 	//Inicializamos el tiempo
 	gettimeofday(&before,NULL);
 
@@ -765,13 +776,20 @@ int VideoStream::RecVideo()
 	setZeroTime(&lastFPURequest);
 
 	//Mientras tengamos que capturar
-	rtpSession->ResetPacket(recSSRC, false);
+	session->ResetPacket(recSSRC, false);
 	if ( receivingVideo == TaskStarting) receivingVideo = TaskRunning;
 
 	while (receivingVideo == TaskRunning)
 	{
+		//Re-verrouille à chaque itération : si le participant propriétaire de la
+		//session observée disparaît, .lock() échoue → repli sur sa propre session
+		//(pas d'UAF sur une session en teardown, H-3).
+		session = rtpSession.lock();
+		if (!session)
+			session = std::shared_ptr<RTPSession>(&rtp, [](RTPSession*){});
+
 		//Obtenemos el paquete
-		RTPPacket* packet = rtpSession->GetPacket(recSSRC);
+		RTPPacket* packet = session->GetPacket(recSSRC);
 
 		//Check
 		if (!packet)
@@ -818,7 +836,7 @@ int VideoStream::RecVideo()
 				//Request it
 				listener->onRequestFPU();
 				//Request also over rtp
-				rtpSession->RequestFPU(recSSRC);
+				session->RequestFPU(recSSRC);
 				//Update time
 				getUpdDifTime(&lastFPURequest);
 				//Waiting for refresh
@@ -881,14 +899,9 @@ int VideoStream::RecVideo()
 			{
 				//Set frame size
 				if (videoOutput != NULL)
-					videoOutput->SetVideoSize(width,height);
-
-				//Check if muted
-				if (!muted)
-					//Send it
-				if (videoOutput != NULL)
 				{
-					videoOutput->NextFrame(frame);
+					videoOutput->SetVideoSize(width,height);
+					if (!muted) videoOutput->NextFrame(frame);
 				}
 			}
 		}
@@ -907,7 +920,7 @@ int VideoStream::RecVideo()
 				//Request it
 				listener->onRequestFPU();
 				//Request also over rtp
-				rtpSession->RequestFPU(recSSRC);
+				session->RequestFPU(recSSRC);
 				//Update time
 				getUpdDifTime(&lastFPURequest);
 				//Waiting for refresh
@@ -1009,9 +1022,9 @@ MediaStatistics VideoStream::GetStatistics()
 {
 	MediaStatistics stats;
 
-	if (rtpSession)
+	if (auto session = rtpSession.lock())
 	{
-            rtpSession->GetStatistics(recSSRC, stats);
+            session->GetStatistics(recSSRC, stats);
 	}
 	//Fill stats
 	stats.isReceiving	= IsReceiving();

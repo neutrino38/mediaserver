@@ -6,6 +6,7 @@
 #include "pipetextinput.h"
 #include "mp4streamer.h"
 #include "medkit/codecs.h"
+#include <memory>
 
 
 
@@ -27,9 +28,12 @@ public:
 
 private:
 	
+	//streamer déclaré EN PREMIER (donc détruit EN DERNIER) : son thread worker
+	//utilise audioDecoder/videoDecoder ; ~MP4Player appelle Stop() pour joindre
+	//ce worker avant que les unique_ptr des décodeurs ne se détruisent (M-3).
 	MP4Streamer streamer;
-	AudioDecoder *audioDecoder;
-	VideoDecoder *videoDecoder;
+	std::unique_ptr<AudioDecoder> audioDecoder;
+	std::unique_ptr<VideoDecoder> videoDecoder;
 	VideoOutput *videoOutput;
 	AudioOutput *audioOutput;
 	TextOutput  *textOutput;

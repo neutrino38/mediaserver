@@ -290,10 +290,9 @@ int AudioMixer::End()
 		//Terminamos
 		audio->input->End();
 		audio->output->End();
-		
-		//SI esta borramos los objetos
-		delete audio->input;
-		delete audio->output;
+
+		//Les pipes sont des shared_ptr : la mémoire n'est rendue que quand le
+		//dernier détenteur (stream participant) les relâche (Point 1 / C-4).
 		delete audio;
 	}
 
@@ -343,8 +342,8 @@ int AudioMixer::CreateMixer(int id)
 	AudioSource *audio = new AudioSource();
 
 	//POnemos el input y el output
-	audio->input  = new PipeAudioInput();
-	audio->output = new PipeAudioOutput(vad);
+	audio->input  = std::make_shared<PipeAudioInput>();
+	audio->output = std::make_shared<PipeAudioOutput>(vad);
 	//No sidebar yet
 	audio->sidebar = NULL;
 	//Clean buffer
@@ -497,10 +496,10 @@ int AudioMixer::DeleteMixer(int id)
 	//Desprotegemos la lista
 	lstAudiosUse.Unlock();
 
-	//SI esta borramos los objetos
-	delete audio->input;
-	delete audio->output;
-	delete audio; 
+	//Les pipes sont des shared_ptr : ce delete ne libère la struct conteneur
+	//que si aucun stream participant ne détient encore une copie du pipe
+	//(Point 1 / C-4 : le pipe reste vivant jusqu'à ce que le stream le relâche).
+	delete audio;
 
 	return 0;
 }
@@ -522,12 +521,27 @@ AudioInput* AudioMixer::GetInput(int id)
 
 	//Si esta
 	if (it != audios.end())
-		input = it->second->input;
+		input = it->second->input.get();
 
 	//Desprotegemos
 	lstAudiosUse.DecUse();
 
 	//Si esta devolvemos el input
+	return input;
+}
+
+/***********************
+* GetSharedInput
+*	Copie de shared_ptr sur le pipe d'entrée (co-propriété, Point 1 / C-4)
+************************/
+std::shared_ptr<AudioInput> AudioMixer::GetSharedInput(int id)
+{
+	lstAudiosUse.IncUse();
+	Audios::iterator it = audios.find(id);
+	std::shared_ptr<AudioInput> input;
+	if (it != audios.end())
+		input = it->second->input;
+	lstAudiosUse.DecUse();
 	return input;
 }
 
@@ -546,14 +560,29 @@ AudioOutput* AudioMixer::GetOutput(int id)
 	//Obtenemos el output
 	AudioOutput *output = NULL;
 
-	//Si esta	
+	//Si esta
 	if (it != audios.end())
-		output = it->second->output;
+		output = it->second->output.get();
 
 	//Desprotegemos
 	lstAudiosUse.DecUse();
 
 	//Si esta devolvemos el input
+	return output;
+}
+
+/***********************
+* GetSharedOutput
+*	Copie de shared_ptr sur le pipe de sortie (co-propriété, Point 1 / C-4)
+************************/
+std::shared_ptr<AudioOutput> AudioMixer::GetSharedOutput(int id)
+{
+	lstAudiosUse.IncUse();
+	Audios::iterator it = audios.find(id);
+	std::shared_ptr<AudioOutput> output;
+	if (it != audios.end())
+		output = it->second->output;
+	lstAudiosUse.DecUse();
 	return output;
 }
 

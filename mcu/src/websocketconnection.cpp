@@ -7,6 +7,9 @@
 #include <string>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
+extern "C" {
+#include <libavutil/base64.h>
+}
 #include "http.h"
 #include <signal.h>
 #include <errno.h>

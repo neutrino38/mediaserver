@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <mutex>
+#include <memory>
 #include <map>
 #include <string>
 #include <poll.h>
@@ -58,6 +59,10 @@ private:
 public:
 	RTPSession(MediaFrame::Type media,Listener *listener, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	~RTPSession();
+	//M-6 : enregistrement différé d'un listener géré par shared_ptr
+	//(RTPParticipant). Une fois appelé, prend le pas sur le pointeur brut du
+	//constructeur (utilisé tel quel par MediaBridgeSession, non converti).
+	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
 	int Init();
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetLocalPort(int recvPort);
@@ -286,7 +291,18 @@ private:
 	MediaFrame::MediaRole role;
 	
 	Listener* listener;
-	
+	//M-6 : listener géré par shared_ptr (prioritaire si hasWeakListener).
+	std::weak_ptr<Listener> weakListener;
+	bool hasWeakListener = false;
+	//Résout le listener courant : weak_ptr.lock() si armé, sinon wrapper
+	//non-possédant du pointeur brut (comportement historique inchangé).
+	std::shared_ptr<Listener> LockListener()
+	{
+		if (hasWeakListener)
+			return weakListener.lock();
+		return listener ? std::shared_ptr<Listener>(listener, [](Listener*){}) : nullptr;
+	}
+
 	Streams streams;
 	RTPStream * defaultStream;
 	

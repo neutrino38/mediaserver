@@ -54,7 +54,7 @@ public:
 		void Close();
 	private:
 		MultiConf *conf;
-                RTMPParticipant * part;
+                std::weak_ptr<RTMPParticipant> part;
 		bool opened;
 	};
 
@@ -148,7 +148,7 @@ public:
 	bool AddParticipantOutputToken(int partId,const std::wstring &token);
 	bool AddBroadcastToken(const std::wstring &token);
 
-	RTMPParticipant* ConsumeParticipantOutputToken(const std::wstring &token);
+	std::weak_ptr<RTMPParticipant> ConsumeParticipantOutputToken(const std::wstring &token);
 	RTMPMediaStream::Listener* ConsumeParticipantInputToken(const std::wstring &token);
 	RTMPMediaStream* ConsumeBroadcastToken(const std::wstring &token);
 
@@ -194,14 +194,14 @@ private:
 	{
 		DWORD			id;
 		std::wstring		name;
-		RTMPClientConnection*	conn;
-		RTMPClientConnection::NetStream * stream;
+		std::unique_ptr<RTMPClientConnection>			conn;
+		std::unique_ptr<RTMPClientConnection::NetStream>	stream;
 	};
 private:
 	typedef std::map<int, ParticipantPtr> Participants;
 	typedef std::set<std::wstring> BroadcastTokens;
 	typedef std::map<std::wstring,DWORD> ParticipantTokens;
-	typedef std::map<int, MP4Player*> Players;
+	typedef std::map<int, std::unique_ptr<MP4Player>> Players;
 	typedef std::map<int, PublisherInfo> Publishers;
 
 private:
@@ -233,11 +233,13 @@ private:
 	AudioEncoderWorker	audioEncoder;
 	TextEncoder		textEncoder;
 	BroadcastSession	broadcast;
-	RecorderControl*	recorder;
+	std::unique_ptr<RecorderControl>	recorder;
 	Publishers		publishers;
 	int			maxPublisherId;
 
 	Use			participantsLock;
+	Use			playersLock;
+	Use			publishersLock;
 };
 
 #endif

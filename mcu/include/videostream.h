@@ -2,6 +2,7 @@
 #define _VIDEOSTREAM_H_
 
 #include <pthread.h>
+#include <memory>
 #include "config.h"
 #include "medkit/codecs.h"
 #include "rtpsession.h"
@@ -47,11 +48,21 @@ public:
 	int IsReceiving() { return receivingVideo;}
 	MediaStatistics GetStatistics();
 	
-	void SetVideoInput(VideoInput* input)	{  videoInput = input;	}
-	void SetVideoOutput(VideoOutput* output) { videoOutput = output ;}
-	VideoOutput* GetVideoOutput() { return videoOutput;}
+	//Chemin "emprunté" (SharedDocMixer/NULL) : shared_ptr NON possédant, ne
+	//détruit jamais l'objet pointé (Point 1 / C-4).
+	void SetVideoInput(VideoInput* input)	{  videoInput = input ? std::shared_ptr<VideoInput>(input, [](VideoInput*){}) : nullptr; }
+	void SetVideoOutput(VideoOutput* output) { videoOutput = output ? std::shared_ptr<VideoOutput>(output, [](VideoOutput*){}) : nullptr; }
+	//Chemin "possédant" : co-propriété du pipe du mixer.
+	void SetVideoInput(std::shared_ptr<VideoInput> input)	{  videoInput = std::move(input);	}
+	void SetVideoOutput(std::shared_ptr<VideoOutput> output) { videoOutput = std::move(output); }
+	VideoOutput* GetVideoOutput() { return videoOutput.get();}
 	
-	void SetRTPSession(RTPSession* rtpsess, DWORD newSSRC) { if (rtpSession) rtpSession->CancelGetPacket(recSSRC); rtpSession = rtpsess ; recSSRC = newSSRC ; }
+	//H-3 : session RTP observée en weak_ptr — SLIDES peut observer la session de
+	//MAIN (alias). lock() au site d'usage protège contre un teardown concurrent.
+	RTPSession& GetOwnSession() { return rtp; }
+	//M-6 : arme le listener géré par shared_ptr sur la session interne.
+	void SetWeakListener(std::weak_ptr<RTPSession::Listener> l) { rtp.SetWeakListener(std::move(l)); }
+	void SetRTPSession(std::weak_ptr<RTPSession> rtpsess, DWORD newSSRC) { if (auto cur = rtpSession.lock()) cur->CancelGetPacket(recSSRC); rtpSession = std::move(rtpsess) ; recSSRC = newSSRC ; }
 	
 protected:
 	int SendVideo();
@@ -66,10 +77,13 @@ private:
 	MediaFrame::Listener *mediaListener;
 
 	//Los objectos gordos
-	VideoInput     	*videoInput;
-	VideoOutput 	*videoOutput;
+	//Co-propriété du pipe du mixer (Point 1 / C-4) : le pipe survit tant que ce
+	//stream le détient, même si DeleteMixer a retiré la map. Pour le chemin
+	//"emprunté" (SharedDocMixer), shared_ptr à deleter no-op.
+	std::shared_ptr<VideoInput>	videoInput;
+	std::shared_ptr<VideoOutput>	videoOutput;
 	RTPSession      rtp;
-	RTPSession*     rtpSession;
+	std::weak_ptr<RTPSession>     rtpSession;
 	RTPSmoother		smoother;
 	
 	DWORD 	recSSRC;
