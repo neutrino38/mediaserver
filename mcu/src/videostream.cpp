@@ -1,3 +1,7 @@
+#include <sstream>
+#include <chrono>
+#include <mutex>
+#include <condition_variable>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -14,6 +18,12 @@
 #include "acumulator.h"
 #include "RTPSmoother.h"
 
+std::string GetThreadId(std::thread & thread)
+{
+	std::ostringstream oss;
+	oss << thread.get_id();;
+	return oss.str();
+}
 
 /**********************************
 * VideoStream
@@ -45,10 +55,7 @@ VideoStream::VideoStream(Listener* listener, Logo & muteLogo, MediaFrame::MediaR
 	mediaRole = role;
 	
 	recSSRC = 0;
-	
-	//Create objects
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
+	//mutex/cond : std::mutex / std::condition_variable (RAII, rien à initialiser)
 }
 
 /*******************************
@@ -60,10 +67,7 @@ VideoStream::~VideoStream()
 	//Défense en profondeur (H-5) : garantit l'arrêt/join de tous les threads
 	//même si l'appelant a oublié d'appeler End(). End() est idempotent.
 	End();
-	//Clean object
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
-
+	//mutex/cond : std::mutex / std::condition_variable (RAII, rien à détruire)
 }
 
 /**********************************************
@@ -200,41 +204,7 @@ int VideoStream::SetRTPProperties(const Properties& properties)
 	}
 	return rtp.SetProperties(properties);
 }
-/**************************************
-* startSendingVideo
-*	Function helper for thread
-**************************************/
-void* VideoStream::startSendingVideo(void *par)
-{
-	Log("SendVideoThread [%d]\n",getpid());
 
-	//OBtenemos el objeto
-	VideoStream *conf = (VideoStream *)par;
-
-	//Bloqueamos las se�ales
-	blocksignals();
-
-	//Y ejecutamos la funcion
-	pthread_exit((void *)(intptr_t)conf->SendVideo());
-}
-
-/**************************************
-* startReceivingVideo
-*	Function helper for thread
-**************************************/
-void* VideoStream::startReceivingVideo(void *par)
-{
-	Log("RecVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	VideoStream *conf = (VideoStream *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)(intptr_t)conf->RecVideo());
-}
 
 /***************************************
 * StartSending
@@ -242,7 +212,10 @@ void* VideoStream::startReceivingVideo(void *par)
 ***************************************/
 int VideoStream::StartSending(char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap)
 {
-	Log(">StartSendingVideo [%s,%d]\n",sendVideoIp,sendVideoPort);
+	if (sendVideoIp) 
+		Log(">StartSendingVideo [%s,%d]\n",sendVideoIp,sendVideoPort);
+	else
+		Log(">StartSendingVideo with previous configuration\n");
 
 	//Y esperamos que salga
 	StopSending();
@@ -254,15 +227,18 @@ int VideoStream::StartSending(char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap
 	if (sendVideoPort==0)
 		return Error("No video\n");
 
-	//Iniciamos las sesiones rtp de envio
-	if(!rtp.SetRemotePort(sendVideoIp,sendVideoPort))
-		return Error("Error abriendo puerto rtp\n");
+	if (sendVideoIp)
+	{
+		//Iniciamos las sesiones rtp de envio
+		if(!rtp.SetRemotePort(sendVideoIp,sendVideoPort))
+			return Error("Error abriendo puerto rtp\n");
+	}
 
 	//Set sending map
-	rtp.SetSendingRTPMap(rtpMap);
+	if (!rtpMap.empty()) rtp.SetSendingRTPMap(rtpMap);
 	
 	//Set video codec
-	if(!rtp.SetSendingCodec(videoCodec))
+	if (!rtp.SetSendingCodec(videoCodec))
 		//Error
 		return Error("%s video codec not supported by peer\n",VideoCodec::GetNameFor(videoCodec));
 
@@ -270,40 +246,19 @@ int VideoStream::StartSending(char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap
 	sendingVideo = TaskStarting;
 
 	//Arrancamos los procesos
-	createPriorityThread(&sendVideoThread,startSendingVideo,this,0);
+	sendVideoThread = std::thread(&VideoStream::SendVideo, this);
 
 	//LOgeamos
-	Log("<StartSending video in thread [%d]\n",sendVideoThread);
+	Log("<StartSending video in thread [%s]\n",GetThreadId(sendVideoThread).c_str());
 
 	return 1;
 }
 
 int VideoStream::StartSending()
 {
-	Log(">StartSendingVideo with previous configuration\n");
+	RTPMap dummy;
 
-	//Si estabamos mandando tenemos que parar
-	StopSending();
-
-	int sendVideoPort = rtp.GetRemotePort();
-
-	//Si tenemos video
-	if (sendVideoPort==0)
-		return Error("No video\n");
-	
-        if (sendingVideo != TaskIdle)
-		return Error("Cannot start sending video: bad state.\n");
-	
-	//Estamos mandando
-	sendingVideo = TaskStarting;
-
-	//Arrancamos los procesos
-	createPriorityThread(&sendVideoThread,startSendingVideo,this,0);
-
-	//LOgeamos
-	Log("<StartSending video [%d]\n",sendingVideo);
-
-	return 1;
+	return StartSending(nullptr, 0, dummy);
 }
 
 /***************************************
@@ -322,13 +277,13 @@ int VideoStream::StartReceiving(RTPMap& rtpMap)
 	int recVideoPort= rtp.GetLocalPort();
 
 	//Set receving map
-	rtp.SetReceivingRTPMap(rtpMap);
+	if (!rtpMap.empty()) rtp.SetReceivingRTPMap(rtpMap);
 
 	//Estamos recibiendo
 	receivingVideo= TaskStarting;
 
 	//Arrancamos los procesos
-	createPriorityThread(&recVideoThread,startReceivingVideo,this,0);
+	recVideoThread = std::thread(&VideoStream::RecVideo, this);
 
 	//Logeamos
 	Log("-StartReceiving Video [%d]\n",recVideoPort);
@@ -338,25 +293,9 @@ int VideoStream::StartReceiving(RTPMap& rtpMap)
 
 int VideoStream::StartReceiving()
 {
-	//Si estabamos reciviendo tenemos que parar
-	StopReceiving();	
+	RTPMap dummy;
 
-	if (receivingVideo != TaskIdle)
-		return Error("Failed to start receiving video. Task in bad state.\n");
-
-	//Iniciamos las sesiones rtp de recepcion
-	int recVideoPort= rtp.GetLocalPort();
-
-	//Estamos recibiendo
-	receivingVideo = TaskStarting;
-
-	//Arrancamos los procesos
-	createPriorityThread(&recVideoThread,startReceivingVideo,this,0);
-
-	//Logeamos
-	Log("-StartReceiving Video [%d]\n",recVideoPort);
-
-	return recVideoPort;
+	return StartReceiving(dummy);
 }
 
 
@@ -393,16 +332,18 @@ int VideoStream::End()
 	return ret;
 }
 
+
+
 /***************************************
 * StopSending
-*     Manu paranood version.
+*     Manu paranoid version.
 ***************************************/
 int VideoStream::StopSending()
 {
 	// save thread ID
-	pthread_t localsendVideoThread = sendVideoThread;
-	
-	Log(">StopSending thread=[%d]\n",localsendVideoThread);
+	auto threadID = GetThreadId(sendVideoThread);
+
+	Log(">StopSending thread=[%s]\n",threadID.c_str());
 
 	//Esperamos a que se cierren las threads de envio
 	if (sendingVideo == TaskRunning || sendingVideo == TaskStarting)
@@ -417,25 +358,25 @@ int VideoStream::StopSending()
 			//Cencel video grab
 			videoInput->CancelGrabFrame();
 
-		//Cancel sending
-		pthread_cond_signal(&cond);
+		//Cancel sending (réveille l'attente de pacing dans SendVideo)
+		cond.notify_all();
 		msleep(100000);
 		
 		if ( sendingVideo == TaskIdle )
 		{
 		    //Y esperamos
-		    pthread_join(localsendVideoThread,NULL);
-		    Log("<StopSending thread=[%lu] after %d attempt(s).\n", localsendVideoThread, i);
+		    if (sendVideoThread.joinable()) sendVideoThread.join();
+		    Log("<StopSending thread=[%s] after %d attempt(s).\n", threadID.c_str(), i);
 		    return 1;
 		}
 	     }
 	     //Le thread ne s'est pas arrêté dans les temps : on trace l'anomalie mais on
 	     //joint quand même — le laisser vivre provoquerait un use-after-free des pipes
 	     //détruits juste après par DestroyParticipant (plan smart pointers, étape 0.8).
-	     Error("-StopSending: thread=[%lu] still running after 10 attempts, joining anyway\n",
-	           localsendVideoThread);
-	     pthread_join(localsendVideoThread,NULL);
-	     Log("<StopSending thread=[%lu] joined after forced wait\n", localsendVideoThread);
+	     Error("-StopSending: thread=[%s] still running after 10 attempts, joining anyway\n",
+	           threadID.c_str());
+	     if (sendVideoThread.joinable()) sendVideoThread.join();
+	     Log("<StopSending thread=[%s] joined after forced wait\n", threadID.c_str());
 	     return 1;
 	}
 
@@ -450,8 +391,8 @@ int VideoStream::StopSending()
 ***************************************/
 int VideoStream::StopReceiving()
 {
-	pthread_t localrecVideoThread = recVideoThread;
-	Log(">StopReceiving thread ID=%d\n", localrecVideoThread);
+	auto threadID = GetThreadId(recVideoThread);
+	Log(">StopReceiving thread ID=%s\n", threadID.c_str());
 	
 	//Y esperamos a que se cierren las threads de recepcion
 	if (receivingVideo == TaskRunning || receivingVideo == TaskStarting)
@@ -470,18 +411,18 @@ int VideoStream::StopReceiving()
 		if (receivingVideo == TaskIdle)
 		{
 		    //Esperamos
-		     pthread_join(localrecVideoThread,NULL);
-		     Log("<StopReceiving\n");
-		     return 1;
+		    if (recVideoThread.joinable()) recVideoThread.join();
+		    Log("<StopReceiving\n");
+		    return 1;
 		}
 	    }
 	    //Le thread ne s'est pas arrêté dans les temps : on trace l'anomalie mais on
 	    //joint quand même — le laisser vivre provoquerait un use-after-free des pipes
 	    //détruits juste après par DestroyParticipant (plan smart pointers, étape 0.8).
-	    Error("-StopReceiving: thread=[%lu] still running after 10 attempts, joining anyway\n",
-	          localrecVideoThread);
-	    pthread_join(localrecVideoThread,NULL);
-	    Log("<StopReceiving thread=[%lu] joined after forced wait\n", localrecVideoThread);
+	    Error("-StopReceiving: thread=[%s] still running after 10 attempts, joining anyway\n",
+	          threadID.c_str());
+	    if (recVideoThread.joinable()) recVideoThread.join();
+	    Log("<StopReceiving thread=[%s] joined after forced wait\n", threadID.c_str());
 	}
 
 	Log("<StopReceiving\n");
@@ -507,6 +448,7 @@ int VideoStream::SendVideo()
 	DWORD fpsOut = 0;
 	
 	Log(">SendVideo [width:%d,size:%d,bitrate:%d,fps:%d,intra:%d]\n",videoGrabWidth,videoGrabHeight,videoBitrate,videoFPS,videoIntraPeriod);
+	blocksignals();
 
 	//Creamos el encoder
 	VideoEncoder* videoEncoder = VideoCodecFactory::CreateEncoder(videoCodec,videoProperties);
@@ -645,8 +587,6 @@ int VideoStream::SendVideo()
 		if (frameTime)
 		{
 			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
 			//Calculate slept time
 			QWORD sleep = frameTime;
 			//Remove extra sleep from prev
@@ -656,12 +596,17 @@ int VideoStream::SendVideo()
 			else
 				//Do not overflow
 				sleep = 1;
-			//Calculate timeout
+			//Calculate timeout (deadline absolue CLOCK_REALTIME = prev + sleep µs)
 			calcAbsTimeoutNS(&ts,&prev,sleep);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Convertit en time_point system_clock (= CLOCK_REALTIME) pour wait_until
+			auto deadline = std::chrono::system_clock::from_time_t(ts.tv_sec)
+				+ std::chrono::nanoseconds(ts.tv_nsec);
+			//Wait next or stopped : le prédicat rend true si on doit s'arrêter
+			//(réveil par notify_all de StopSending) → canceled ; false au timeout.
+			std::unique_lock<std::mutex> lock(mutex);
+			bool canceled = cond.wait_until(lock, deadline,
+				[this]{ return sendingVideo != TaskRunning; });
+			lock.unlock();
 			//Check if we have been canceled
 			if (canceled)
 				//Exit
@@ -741,7 +686,7 @@ int VideoStream::SendVideo()
 		delete videoEncoder;
 
 	//Salimos
-	Log("<SendVideo [%d]\n",sendingVideo);
+	Log("<SendVideo [%d]\n",sendingVideo.load());
 
 	return 0;
 }
@@ -761,13 +706,16 @@ int VideoStream::RecVideo()
 	DWORD		lastSeq = RTPPacket::MaxExtSeqNum;
 	bool		waitIntra = false;
 	Log(">RecVideo\n");
-	
+	blocksignals();
+
+	if ( receivingVideo == TaskStarting ) receivingVideo = TaskRunning;
+
 	//Session observée (liée par RTPParticipant::Init ; SLIDES peut observer la
-	//session de MAIN). Repli non-possédant sur sa propre session, toujours
-	//valide tant que ce thread tourne (H-3).
-	std::shared_ptr<RTPSession> session = rtpSession.lock();
-	if (!session)
-		session = std::shared_ptr<RTPSession>(&rtp, [](RTPSession*){});
+	//session de MAIN). keepAlive maintient le participant observé vivant pendant
+	//toute la durée de ce thread (cas SLIDES). Repli : sa propre session `rtp`
+	//(cas MAIN, ou weak_ptr non lié) — toujours valide tant que ce thread tourne.
+	std::shared_ptr<RTPSession> keepAlive = rtpSession.lock();
+	RTPSession* session = keepAlive ? keepAlive.get() : &rtp;
 
 	//Inicializamos el tiempo
 	gettimeofday(&before,NULL);
@@ -777,16 +725,10 @@ int VideoStream::RecVideo()
 
 	//Mientras tengamos que capturar
 	session->ResetPacket(recSSRC, false);
-	if ( receivingVideo == TaskStarting) receivingVideo = TaskRunning;
+	
 
 	while (receivingVideo == TaskRunning)
 	{
-		//Re-verrouille à chaque itération : si le participant propriétaire de la
-		//session observée disparaît, .lock() échoue → repli sur sa propre session
-		//(pas d'UAF sur une session en teardown, H-3).
-		session = rtpSession.lock();
-		if (!session)
-			session = std::shared_ptr<RTPSession>(&rtp, [](RTPSession*){});
 
 		//Obtenemos el paquete
 		RTPPacket* packet = session->GetPacket(recSSRC);
@@ -998,9 +940,7 @@ int VideoStream::RecVideo()
 	receivingVideo = TaskIdle;
 
 	Log("<RecVideo\n");
-
-	//Salimos
-	pthread_exit(0);
+	return 0;
 }
 
 int VideoStream::SetMediaListener(MediaFrame::Listener *listener)

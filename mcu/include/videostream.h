@@ -2,7 +2,11 @@
 #define _VIDEOSTREAM_H_
 
 #include <pthread.h>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <memory>
+#include <atomic>
 #include "config.h"
 #include "medkit/codecs.h"
 #include "rtpsession.h"
@@ -61,15 +65,23 @@ public:
 	//MAIN (alias). lock() au site d'usage protège contre un teardown concurrent.
 	RTPSession& GetOwnSession() { return rtp; }
 	//M-6 : arme le listener géré par shared_ptr sur la session interne.
-	void SetWeakListener(std::weak_ptr<RTPSession::Listener> l) { rtp.SetWeakListener(std::move(l)); }
-	void SetRTPSession(std::weak_ptr<RTPSession> rtpsess, DWORD newSSRC) { if (auto cur = rtpSession.lock()) cur->CancelGetPacket(recSSRC); rtpSession = std::move(rtpsess) ; recSSRC = newSSRC ; }
+	void SetWeakListener(std::weak_ptr<RTPSession::Listener> l)
+	{ 
+		rtp.SetWeakListener(std::move(l));
+	}
+
+	void SetRTPSession(std::weak_ptr<RTPSession> rtpsess, DWORD newSSRC) 
+	{ 
+		if (auto cur = rtpSession.lock()) cur->CancelGetPacket(recSSRC);
+		rtpSession = std::move(rtpsess);
+		recSSRC = newSSRC; 
+	}
 	
 protected:
 	int SendVideo();
 	int RecVideo();
 
 private:
-	static void* startSendingVideo(void *par);
 	static void* startReceivingVideo(void *par);
 
 	//Listners
@@ -101,14 +113,15 @@ private:
 	Properties	videoProperties;
 
 	//Las threads
-	pthread_t 	sendVideoThread;
-	pthread_t 	recVideoThread;
-	pthread_mutex_t mutex;
-	pthread_cond_t	cond;
+	std::thread sendVideoThread;
+	std::thread	recVideoThread;
+
+	std::mutex mutex;
+	std::condition_variable	cond;
 
 	//Controlamos si estamos mandando o no
-	enum TaskState sendingVideo;	
-	enum TaskState receivingVideo;
+	std::atomic<enum TaskState> sendingVideo;	
+	std::atomic<enum TaskState> receivingVideo;
 	bool	inited;
 	bool	sendFPU;
 	bool	muted;
