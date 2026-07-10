@@ -1900,9 +1900,19 @@ int RTPSession::Run()
 	while(running)
 	{
 		//Wait for events (attente bornée si watchdog armé, sinon infinie)
-		if(poll(ufds,2,rtpTimeoutArmed?pollTimeout:-1)<0)
-			//Check again
-			continue;
+		int nready = poll(ufds,2,rtpTimeoutArmed?pollTimeout:-1);
+		if(nready<0)
+		{
+			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler
+			if (errno==EINTR || errno==EAGAIN)
+				continue;
+			//Erreur dure (EBADF, EINVAL, ENOMEM...) : inutile de boucler à vide,
+			//on log et on sort proprement (msleep de garde anti busy-spin)
+			Error("-RTPSession poll error, arret de la boucle: errno=%d (%s) [%p]\n",
+					errno,strerror(errno),this);
+			msleep(10);
+			break;
+		}
 
 		if (ufds[0].revents & POLLIN)
 		{
@@ -1931,10 +1941,15 @@ int RTPSession::Run()
 				l->onRTPTimeout(this);
 		}
 
-		if ((ufds[0].revents & POLLHUP) || (ufds[0].revents & POLLERR) || (ufds[1].revents & POLLHUP) || (ufds[0].revents & POLLERR))
+		//Erreur/fermeture sur l'un des deux sockets : POLLHUP (pair parti),
+		//POLLERR (erreur socket) ou POLLNVAL (fd fermé, ex. via End()).
+		//NB: on teste bien ufds[1] pour le socket RTCP (bug historique corrige).
+		if ((ufds[0].revents & (POLLHUP|POLLERR|POLLNVAL)) ||
+		    (ufds[1].revents & (POLLHUP|POLLERR|POLLNVAL)))
 		{
-			//Error
-			Log("Pool error event [%d]\n",ufds[0].revents);
+			//Error : on sort proprement de la boucle
+			Log("-RTPSession sortie sur evenement socket RTP=0x%x RTCP=0x%x [%p]\n",
+					ufds[0].revents,ufds[1].revents,this);
 			//Exit
 			break;
 		}
