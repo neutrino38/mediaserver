@@ -408,7 +408,7 @@ int MediaSession::RecorderCreate(std::wstring tag)
 	return recorderId;
 }
 
-int MediaSession::RecorderRecord(int recorderId,const char* filename,DWORD maxDuration)
+int MediaSession::RecorderRecord(int recorderId,const char* filename,DWORD maxDuration,bool waitVideo)
 {
 	//L'éventuelle minuterie précédente est détruite HORS verrou (join du thread)
 	std::unique_ptr<RecorderTimer> oldTimer;
@@ -425,6 +425,8 @@ int MediaSession::RecorderRecord(int recorderId,const char* filename,DWORD maxDu
 			return Error("Recorder not found\n");
 		//Get it
 		Recorder* recorder = it->second.get();
+		//waitVideo doit être posé avant Create (qui instancie le mp4writer)
+		recorder->SetWaitVideo(waitVideo);
 		//create recording
 		if (!recorder->Create(filename))
 			//Error

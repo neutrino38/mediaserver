@@ -40,11 +40,16 @@ public:
 	virtual RecorderControl::Type GetType()	{ return RecorderControl::MP4;	}
 
 	virtual void onMediaFrame(MediaFrame &frame);
+
+	// A appeler avant Create() : si false, l'audio/texte s'enregistre sans
+	// attendre la premiere I-frame video (appels sans video notamment).
+	void SetWaitVideo(bool wait)	{ waitVideo = wait; }
 private:
 
 	MP4FileHandle	mp4;
 	mp4writer*	writer;		// moteur d'ecriture libmedkit
 	bool		recording;
+	bool		waitVideo = true;	// attendre la 1re I-frame avant d'ecrire
 	bool		videoTrackAdded;	// piste video creee (non auto-creee par mp4writer)
 	std::mutex	mutex;		// serialise onMediaFrame vs Close
 };

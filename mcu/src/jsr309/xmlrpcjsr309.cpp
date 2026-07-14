@@ -395,10 +395,13 @@ xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	int recorderId;
 	char *filename;
 	int maxDuration = 0;
+	int waitVideo = 1;
 
-	//maxDuration (ms) est un 4e argument optionnel (rétrocompatibilité : les anciens
-	//clients n'envoient que 3 arguments).
-	if (xmlrpc_array_size(env, param_array) >= 4)
+	//maxDuration (ms) et waitVideo (0/1) sont des 4e et 5e arguments optionnels
+	//(rétrocompatibilité : les anciens clients n'envoient que 3 arguments).
+	if (xmlrpc_array_size(env, param_array) >= 5)
+		xmlrpc_parse_value(env, param_array, "(iisii)", &sessionId, &recorderId, &filename, &maxDuration, &waitVideo);
+	else if (xmlrpc_array_size(env, param_array) >= 4)
 		xmlrpc_parse_value(env, param_array, "(iisi)", &sessionId, &recorderId, &filename, &maxDuration);
 	else
 		xmlrpc_parse_value(env, param_array, "(iis)", &sessionId, &recorderId, &filename);
@@ -412,7 +415,7 @@ xmlrpc_value* RecorderRecord(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 		return xmlerror(env,"Media session not found\n");
 
 	//La borramos
-	bool res = session->RecorderRecord(recorderId,filename,(DWORD)(maxDuration>0?maxDuration:0));
+	bool res = session->RecorderRecord(recorderId,filename,(DWORD)(maxDuration>0?maxDuration:0),waitVideo!=0);
 
 
 	//Salimos

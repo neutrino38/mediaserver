@@ -48,10 +48,10 @@ bool MP4Recorder::Create(const char* filename)
 		//Error
 		return Error("-Error opening mp4 file for recording\n");
 
-	// waitVideo=true : on attend la premiere I-frame (comportement historique).
+	// waitVideo (true par defaut) : attendre la premiere I-frame avant d'ecrire.
 	// ctxdata=NULL : pas de transcodage video interne (le callback video ne sera
 	// pas arme, cf. Mp4RecoderVideoCb qui verifie le pointeur).
-	writer = new mp4writer(NULL, mp4, true);
+	writer = new mp4writer(NULL, mp4, waitVideo);
 	videoTrackAdded = false;
 
 	//Success
