@@ -396,7 +396,7 @@ que ce que ce texte supposait (voir la note « écarts » en fin de point 7).*
    pas `shared_ptr`-gérées ; chantier C-8/Phase 5).
 6. **M-3 — FAIT.** `MP4Player::audioDecoder`/`videoDecoder` → `unique_ptr` ; `~MP4Player()` appelle
    `Stop()` (arrête/joint le worker `streamer`) avant que les `unique_ptr` ne se détruisent.
-7. **C-13 (solution structurelle) — NON FAIT, réservé à une session dédiée.** le graphe d'attach JSR309 (`Endpoint::Port::joined` ↔
+7. **C-13 (solution structurelle) — LIEN A FAIT (2026-07-10, build vert), lien B toujours réservé.** le graphe d'attach JSR309 (`Endpoint::Port::joined` ↔
    `RTPMultiplexer::listeners`) passe en observateurs `weak_ptr`, remplaçant le correctif manuel
    `onJoinableEnded` de la phase 0.10. Les deux liens sont non-possédants → `weak_ptr` des deux
    côtés, avec `lock()` au site d'appel (protège aussi contre une destruction concurrente, ce que
@@ -420,8 +420,62 @@ que ce que ce texte supposait (voir la note « écarts » en fin de point 7).*
    correctif Phase 0.10 `onJoinableEnded` **ne couvre que `RTPEndpoint`/`WSEndpoint`** — `Recorder`,
    `AudioDecoderJoinableWorker`, `VideoDecoderJoinableWorker` ont le même `joined` brut non protégé
    (mêmes crashs « pure virtual method called » possibles par ces chemins). `AudioTranscoder` doit
-   être ajouté à la liste des sources. Une correction minimale possible en attendant (non faite) :
-   étendre `onJoinableEnded` à ces 3 classes.
+   être ajouté à la liste des sources.
+
+   **INCREMENT SÛR FAIT (2026-07-10, build vert) — solution structurelle toujours réservée.**
+   Décision (maintainer) : implémenter la « correction minimale » plutôt que la conversion
+   structurelle `weak_ptr` (refactor de propriété ~15 fichiers temps réel, non validable sans
+   tests de charge). Fait :
+   - `onJoinableEnded` étendu à `AudioDecoderJoinableWorker`, `VideoDecoderJoinableWorker`
+     (nulle `joined`) et `Recorder` (retire de la `JoinedMap` toutes les entrées pointant sur la
+     source détruite). Même sémantique lock-free que `RTPEndpoint::onJoinableEnded`. Ferme le
+     **sens avant** (source détruite d'abord → `joined`/entrée pendouillante → `Dettach` crashe)
+     pour ces classes — donc aussi pour `AudioTranscoder`/`VideoTranscoder`, qui délèguent leur
+     rôle listener à leur membre `decoder` (et leur rôle source à leur membre `encoder`, un
+     `RTPMultiplexer(Smoother)` dont le `~` notifie déjà). Toutes les sources de `GetJoinable`
+     sont bien des `RTPMultiplexer`-dérivés (Endpoint::Port, multiplexeurs du Player, encoders
+     des mixer resources/transcoders), donc `~RTPMultiplexer` couvre la notification.
+   - **Sens inverse pour `Recorder`** : `~Recorder` ne faisait **aucun** `Dettach` et
+     `RecorderDelete` ne détache pas avant de libérer → une source encore attachée gardait un
+     `Recorder*` pendouillant. Corrigé : `~Recorder` fait `RemoveListener(this)` sur chaque source
+     encore dans la map (les sources déjà mortes ont été retirées par `onJoinableEnded`, donc les
+     restantes sont vivantes). Les workers, eux, se nettoient déjà via `~ → End() → Dettach() →
+     RemoveListener` (sens inverse normal OK).
+
+   **LIEN A IMPLÉMENTÉ (2026-07-10, build vert `./install.ksh localcompile`) — solution structurelle
+   du sens avant.** Le lien retour `joined` (listener → source) passe en `weak_ptr<Joinable>` ; tous
+   les `GetJoinable` rendent un `shared_ptr<Joinable>`. Ceci **remplace** le correctif manuel
+   `onJoinableEnded` de la phase 0.10 (supprimé : boucle de notification dans `~RTPMultiplexer`,
+   surcharges `onJoinableEnded` de RTPEndpoint/WSEndpoint/Recorder/workers, et la déclaration de base
+   `Joinable::Listener::onJoinableEnded`). Détail :
+   - **Sources → `shared_ptr<Joinable>`** : `Endpoint::GetJoinable` rend `static_pointer_cast` du
+     `shared_ptr<Port>` (Port déjà `shared_ptr`) ; `Player : enable_shared_from_this`, GetJoinable
+     rend un **aliasing** `shared_ptr<Joinable>(shared_from_this(), &audio/&video/&text)` ;
+     `AudioMixerResource`/`VideoMixerResource` : `Ports` map → `map<int,shared_ptr<Port>>`, GetJoinable
+     rend un **aliasing** `shared_ptr<Joinable>(port_sp, &port->encoder)` ; `DeletePort`/`End`
+     tiennent un `shared_ptr` local (fin des `delete`).
+   - **Listeners : `joined` → `weak_ptr<Joinable>`** dans `Endpoint::Port` (+ RTPEndpoint qui utilise
+     le membre hérité), `Recorder::JoinedMap` (`map<Type,weak_ptr>`), `Audio/VideoDecoderJoinableWorker`.
+     `lock()` à chaque déréf (Detach, FPU `Update`, `SetREMB`, `~Recorder`). Signatures `Attach(...)`
+     passées de `Joinable*` à `const shared_ptr<Joinable>&` (Endpoint, Port, RTPEndpoint, Recorder,
+     mixers, transcoders, workers) + les 2 sites XML-RPC (`ep->Attach(...,tr)`, `tr->Attach(ep->GetJoinable(...))`).
+   - **Mixers/transcoder → `shared_ptr` dans `MediaSession`** (décision « tant qu'on y est ») :
+     `AudioMixers`/`VideoMixers`/`VideoTranscoders` maps en `shared_ptr`, `make_shared` à la création,
+     `delete` supprimés (extraction sous lock + `End()` hors lock, destruction par le `shared_ptr`
+     local — patron Phase 5).
+   - **Effet** : quand une source meurt (dernier `shared_ptr` relâché), le `weak_ptr` des listeners
+     expire ; leur `Detach` ultérieur `lock()` dans le vide → plus de « pure virtual method called »,
+     **et** protection contre une destruction concurrente côté source→listener (lock() atomique).
+
+   **Résidu restant (nécessite le LIEN B — session dédiée)** : le sens **inverse**
+   `RTPMultiplexer::listeners` reste un `std::set<Joinable::Listener*>` (pointeurs bruts). Un worker
+   qui reçoit `onEndStream` remet son `joined` sans `RemoveListener` ; s'il est ensuite détruit alors
+   que la source vit, la source garde un `Listener*` pendouillant (crash au `Multiplex` suivant). Ce
+   sens est aujourd'hui couvert par le `Dettach`-à-la-destruction des listeners (`~Recorder`
+   `RemoveListener`, workers `~→End→Dettach`, `~Port→Detach`) mais **pas** contre une destruction
+   concurrente. Le LIEN B (listeners en conteneur `weak_ptr` + `owner_before`, `lock()` au
+   `Multiplex`, aliasing des `decoder` workers membres par valeur) est le remède complet — très
+   invasif car les listeners sont des membres par valeur, réservé à une session dédiée.
 
 **Correctif collatéral (2026-07-10)** : le rebuild complet (nécessaire car `mcu/Makefile.rpm` ne
 suit pas les dépendances headers → objets périmés) a exposé une régression du paquet système
@@ -436,16 +490,59 @@ pendant flux SLIDES actif (H-3, idéalement sous `-fsanitize=address`) ; partici
 continu + `DeleteParticipant` (H-6) ; lecture MP4 en boucle + `DeletePlayer` pendant lecture (M-3) ;
 vérifier que FPU/bitrate arrivent toujours en marche normale (M-6, pas de régression silencieuse).
 
-### Phase 5 — Sous-systèmes restants et nettoyage
+### Phase 5 — Sous-systèmes restants et nettoyage — **POINTS 1-3 FAITS + DOC (2026-07-10, build vert)**
 
-1. **C-8** : `MediaGateway::bridges` → `map<int, shared_ptr<MediaBridgeSession>>` ;
-   `GetMediaBridgeRef` rend un `shared_ptr` ; le `//TODO` de `DeleteMediaBridge` est résolu par
-   construction.
-2. **M-5** : `Broadcaster` : aligner sur le même modèle (supprime le `sleep(20)`).
-3. Mosaïques : `VideoMixer::mosaics` → `shared_ptr<Mosaic>` (avec 0.2 déjà fait, faible urgence) ;
-   `Overlay` en `unique_ptr`.
-4. Retrait progressif de `use.h` là où il ne sert plus ; documentation du modèle cible dans
-   CLAUDE.md ; audit final `grep -n "delete " mcu/src | wc -l` pour mesurer le reliquat.
+1. **C-8 — FAIT.** `MediaGateway::bridges` → `map<DWORD, MediaBridgeEntry{DWORD id; wstring name;
+   shared_ptr<MediaBridgeSession> session;}>` (compteurs `numRef`/`enabled` supprimés).
+   `GetMediaBridgeRef(id, shared_ptr&)` rend une copie du `shared_ptr` ; `ReleaseMediaBridgeRef`
+   **supprimé** (les 19 handlers de `xmlrpcmediagateway.cpp` adaptés mécaniquement, RAII).
+   `DeleteMediaBridge` extrait le `shared_ptr` sous lock, `erase`, puis `End()` hors lock — le
+   `//TODO: Wait for numref == 0` jamais implémenté est résolu par construction. `CreateMediaBridge`
+   passe à `make_shared`. `MediaGateway::Connect` renvoie le vrai `shared_ptr<MediaBridgeSession>`
+   (qui **est** un `RTMPNetConnection`), tenu par `RTMPConnection::app` → maintient la session vivante
+   pendant toute la connexion RTMP (fin de la mitigation deleter no-op de la Phase 2).
+2. **M-5 — FAIT.** `Broadcaster::broadcasts` → `shared_ptr<BroadcastSession>` (mêmes suppressions
+   `numRef`/`enabled`) ; `GetBroadcastRef(id, shared_ptr&)` rend une copie ; `ReleaseBroadcastRef`
+   **supprimé** (handler `xmlrpcbroadcaster.cpp` + `GetBroadcastPublishedStreams` adaptés).
+   `DeleteBroadcast` : **suppression du polling `numRef`/`sleep(20)`**, extraction sous lock + `End()`
+   hors lock. `Broadcaster::Connect` : le `conn` renvoyé par `ConnectPublisher`/`ConnectWatcher`
+   appartient à la `BroadcastSession` (pas la session elle-même) → **`shared_ptr` aliasing**
+   `shared_ptr<RTMPNetConnection>(sess, conn)` : expose `conn` mais partage la propriété de `sess`,
+   la gardant vivante pendant la connexion (meilleur que le deleter no-op, qui laissait la session
+   mourir sous le conn). Garde `if(!conn) return nullptr;` ajoutée. `pthread_mutex` conservé (pas
+   converti en `std::mutex`, hors périmètre).
+3. **Mosaïques — FAIT.** `VideoMixer::mosaics` → `map<int, shared_ptr<Mosaic>>` (plus de `delete`
+   manuel : `End`/`SetCompositionType`/`DeleteMosaic` s'appuient sur le RAII ; `DeleteMosaic` garde
+   un `shared_ptr` local pour détruire le `Mosaic` **hors** verrou comme avant). `defaultMosaic` et
+   `VideoSource::mosaic` restent des **observateurs bruts** (leur validité est déjà garantie par la
+   discipline `lstVideosUse` en écriture qui les remet à jour/NULL avant toute suppression — documenté
+   dans le header). `Overlay` → `unique_ptr` : `Mosaic::overlay` (`unique_ptr<Overlay>`) et
+   `Mosaic::overlays` (`map<int, unique_ptr<Overlay>>`) ; `MoveOverlays` utilise `std::move` ;
+   **bug préexistant corrigé** dans `RemoveParticipant` (`if (ito->second = NULL) delete ito->second;`
+   — affectation au lieu de comparaison → fuite ; remplacé par le simple `erase` qui détruit le
+   `unique_ptr`).
+4. **Nettoyage — DOC FAITE, retrait `use.h` REPORTÉ (volontaire).** Modèle cible documenté dans
+   `CLAUDE.md` (section « Memory-ownership model »). Audit : `grep -n "delete " mcu/src | wc -l` = 159
+   (beaucoup légitimes : `delete[]`, buffers locaux, sous-systèmes non migrés). `use.h`
+   (`Use`/`IncUse`/`WaitUnusedAndLock`) est **encore porteur dans ~20 fichiers** (chemins chauds
+   participant/mixer/rtp : `participantsLock`, `playersLock`, `publishersLock`, `lstVideosUse`,
+   `streamUse`, `RTMPMediaStream::listeners`, `Participant::use`…) → son retrait reste « au fil de
+   l'eau », pas une passe unique. Aucune instance de `Use` n'est devenue morte du fait de la Phase 5
+   (Gateway/Broadcaster utilisaient déjà `std::mutex`/`pthread`, pas `Use`).
+   **Décision maintainer (2026-07-10) : GARDER `use.h` tel quel.** Il ne reste **aucun `Use` mort** ;
+   chaque usage restant fait office de verrou lecteur/écrivain (sémantique `WaitUnusedAndLock` =
+   attente de `cont==0`, non récursif — subtilement différente de `std::shared_mutex`). Le remplacer
+   par `std::shared_mutex` dans les chemins temps réel introduirait un risque de deadlock/course non
+   détectable sans tests de charge. Retrait réservé aux prochains refactors ciblés.
+
+**État du build** : vert ✅ (`./install.ksh localcompile`, 2026-07-10, rebuild complet `rm *.o`).
+
+**Livrable** : build vert. Reste à dérouler manuellement (pas de suite de tests) : create/delete
+MediaBridge et Broadcast en boucle sous trafic XML-RPC concurrent ; connexion RTMP `bridge`/
+`broadcaster/watcher` + `DeleteMediaBridge`/`DeleteBroadcast` concurrent (vérifier que le `shared_ptr`
+tenu par `RTMPConnection::app` évite le crash) ; `CreateMosaic`/`DeleteMosaic`/`SetCompositionType`
+en boucle pendant un flux vidéo actif (exercer le RAII des mosaïques et des overlays sous
+`lstVideosUse`).
 
 ---
 
