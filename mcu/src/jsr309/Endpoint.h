@@ -9,10 +9,13 @@
 #define	ENDPOINT_H
 
 #include <memory>
+#include <map>
+#include <string>
 #include "Joinable.h"
 #include "websockets.h"
 #include "RTPMultiplexer.h"
 #include "remoterateestimator.h"
+#include "medkit/negotiator.h"
 
 class RTPEndpoint;
 
@@ -33,6 +36,20 @@ public:
 		
 	    MediaFrame::MediaProtocol GetTransport() const { return proto; }
 	    bool IsReceiving() const override { return receiving; }
+
+	    // --- Négociation de codecs (phase 4 nego_fmtp) ---
+	    // Route les propriétés codec.* (préfixe « codec. » retiré) vers le stockage
+	    // local consommé par le négociateur. Les clés transport sont ignorées ici
+	    // (elles continuent vers RTPSession, qui ignore de son côté codec.*).
+	    void StoreCodecProperties(const Properties& properties);
+	    // Filtre la map proposée selon les codecs réellement supportés (décision D)
+	    // et dérive le fmtp local (params seuls, décision E) SANS ouvrir de codec.
+	    // Remplit acceptedOut (sous-ensemble accepté) et mémorise le résultat
+	    // (fmtp par PT + effectiveProps) pour le retour XML-RPC et l'encodeur (ph.5).
+	    void NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut);
+	    // fmtp de la dernière négociation : PT -> paramètres (params seuls). Un codec
+	    // sans fmtp est absent (décision E). Vide tant qu'aucune négociation n'a eu lieu.
+	    const std::map<int,std::string>& GetNegotiatedFmtp() const { return negotiatedFmtp; }
 
 	    virtual int Init() = 0;
 	    virtual int End() = 0;
@@ -74,6 +91,13 @@ public:
 	    bool receiving;
 	    bool portinited;
 	    MediaStatistics stats;
+	    // Propriétés locales de codec (clés « <codec>.<param> », préfixe codec.
+	    // retiré) alimentées par EndpointSetRTPProperties, lues par le négociateur.
+	    Properties codecProperties;
+	    // Résultat de la dernière négociation : PT -> params fmtp (décision E).
+	    std::map<int,std::string> negotiatedFmtp;
+	    // effectiveProps par PT retenu, pour brancher l'encodeur d'émission (phase 5).
+	    std::map<int,Properties> negotiatedProps;
 	    // Protected constructir
 	    Port( MediaFrame::Type type, MediaFrame::MediaProtocol transp) : RTPMultiplexer()
 	    {
@@ -118,6 +142,9 @@ public:
 	//Attach
 	int Attach(MediaFrame::Type media, MediaFrame::MediaRole role, const std::shared_ptr<Joinable> & join);
 	int Detach(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+
+	//Récupère le fmtp négocié (PT -> paramètres) du port media/role (phase 4).
+	int GetNegotiatedFmtp(MediaFrame::Type media, MediaFrame::MediaRole role, std::map<int,std::string>& out);
 	std::shared_ptr<Joinable> GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role  = MediaFrame::VIDEO_MAIN);
 
 	std::wstring& GetName() { return name; }

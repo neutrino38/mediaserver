@@ -132,7 +132,7 @@ public:
 	//Watchdog d'inactivité RTP (gap 5) : arme/désarme le flux d'un endpoint.
 	int EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs);
 	int EndpointStopSending(int endpointId,MediaFrame::Type media);
-	int EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap);
+	int EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut);
 	int EndpointStopReceiving(int endpointId,MediaFrame::Type media);
 
 	int EndpointRequestUpdate(int endpointId,MediaFrame::Type media);

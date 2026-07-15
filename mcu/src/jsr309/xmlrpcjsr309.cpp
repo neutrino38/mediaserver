@@ -1186,8 +1186,9 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		xmlrpc_DECREF(val);
 	}
 
-	//Start receiving video and get listening port
-	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map);
+	//Start receiving video and get listening port + fmtp négocié (phase 4)
+	std::map<int,std::string> fmtpMap;
+	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map,fmtpMap);
 
 
 	//Salimos (StartReceiving peut rendre -1 : protocole non supporté)
@@ -1195,9 +1196,25 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		return xmlerror(env,"No se ha podido terminar la sessionerencia\n");
 
 	Debug("Endpoint Rec Port=%d\n",recPort);
-	
+
+	//Retour enrichi (§5.2) : returnVal = [recPort, {"<pt>":"<params fmtp>"}].
+	//Le second élément est ascendant-compatible : les clients existants ne lisent
+	//que returnVal[0]. Un PT proposé non supporté a été filtré (décision D) ; un
+	//codec sans fmtp est absent de la struct (décision E).
+	xmlrpc_value* fmtpStruct = xmlrpc_struct_new(env);
+	for (std::map<int,std::string>::const_iterator it=fmtpMap.begin(); it!=fmtpMap.end(); ++it)
+	{
+		char ptStr[16];
+		snprintf(ptStr,sizeof(ptStr),"%d",it->first);
+		xmlrpc_value* v = xmlrpc_string_new(env,it->second.c_str());
+		xmlrpc_struct_set_value(env,fmtpStruct,ptStr,v);
+		xmlrpc_DECREF(v);
+	}
+
 	//Devolvemos el resultado
-	return xmlok(env,xmlrpc_build_value(env,"(i)",recPort));
+	xmlrpc_value* ret = xmlrpc_build_value(env,"(iS)",recPort,fmtpStruct);
+	xmlrpc_DECREF(fmtpStruct);
+	return xmlok(env,ret);
 }
 
 xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)

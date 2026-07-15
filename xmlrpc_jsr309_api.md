@@ -7,8 +7,9 @@ Documentation de l'API XML-RPC exposée par `mcu/src/jsr309/xmlrpcjsr309.cpp`
 Cette interface est le pilotage « bas niveau » du media server, calqué sur le
 modèle JSR-309 (Media Server Control API). C'est elle qu'utilise le client Java
 `XmlRpcMcuClient` / la couche `jsr309impl/`. Elle est la cible visée pour
-l'implémentation de l'interface Mediaserveur du projet
-[elixip](https://github.com/neutrino38/elixip).
+l'implémentation de l'interface Mediaserveur d'un **contrôleur SIP** externe
+(p. ex. le projet [elixip](https://github.com/neutrino38/elixip)), qui gère la
+signalisation et le SDP en pilotant le média serveur par cette API.
 
 > Toutes les chaînes de caractères (noms/tags) sont attendues et renvoyées en
 > **UTF-8** (le serveur les repasse par un `UTF8Parser` → `std::wstring`).
@@ -122,7 +123,9 @@ JSR309Manager
 4. Sécurité : `EndpointSetLocalCryptoSDES` / `EndpointSetRemoteCryptoSDES` ou
    DTLS / STUN selon le transport.
 5. `EndpointStartReceiving(sessionId, endpointId, media, rtpMap)` → port local
-   d'écoute (à publier dans le SDP local).
+   d'écoute **et** `fmtp` par PT accepté (`returnVal[1]`, à publier dans le SDP
+   local). Précéder au besoin d'`EndpointSetRTPProperties(codec.*)` pour piloter
+   le `fmtp` local (voir `CODECS.md`).
 6. `EndpointStartSending(sessionId, endpointId, media, ip, port, rtpMap)` (à
    partir du SDP distant).
 7. Attaches média (vers un autre endpoint, un mixer, un player, un transcoder…).
@@ -134,7 +137,7 @@ JSR309Manager
 > 📎 Le déroulé **détaillé** entrant / sortant, avec la correspondance
 > SDP offer/answer ↔ RPC (ordre exact, crypto, ICE, armement du watchdog,
 > re-INVITE, terminaison), est en **§9**. C'est la référence à suivre pour
-> implémenter le contrôleur elixip.
+> implémenter le contrôleur SIP.
 
 ---
 
@@ -263,8 +266,8 @@ Chaque événement est un tuple dont le **premier entier est le type d'événeme
 
 ### Types d'événements
 
-> ⚠️ **Contrat de fil** : ces codes numériques sont partagés avec elixip et les
-> clients Java (`JSR309Event::Events`). Ils ne doivent jamais être réordonnés ni
+> ⚠️ **Contrat de fil** : ces codes numériques sont partagés avec le contrôleur
+> SIP et les clients Java (`JSR309Event::Events`). Ils ne doivent jamais être réordonnés ni
 > réutilisés. Source unique : `mcu/src/jsr309/JSR309Event.h`.
 
 | Type | Nom | Tuple |
@@ -456,7 +459,7 @@ média `media` vers `endpointId`.
 | `EndpointSetRTPProperties` | `i sessionId, i endpointId, i media, S properties` | `[]` |
 | `EndpointStartSending` | `i sessionId, i endpointId, i media, s sendIp, i sendPort, S rtpMap` | `[]` |
 | `EndpointStopSending` | `i sessionId, i endpointId, i media` | `[]` |
-| `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap` | `[ int recvPort ]` |
+| `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap` | `[ int recvPort, S fmtpByPt ]` |
 | `EndpointStopReceiving` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointRequestUpdate` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointAddICECandidate` | `i sessionId, i endpointId, i media, s candidate` | `[]` |
@@ -467,11 +470,34 @@ média `media` vers `endpointId`.
   `AudioCodec::Type` / `VideoCodec::Type` / `TextCodec::Type`. Exemple :
   `{ "0": 0, "8": 8, "101": 100 }` (PCMU, PCMA, telephone-event).
 - **`properties`** (`EndpointSetRTPProperties`) : struct XML-RPC clé→valeur, les
-  deux **chaînes** (paramètres RTP additionnels : rtcp-mux, ssrc, etc.).
-- `EndpointStartReceiving` renvoie le **port local** ouvert à publier dans le
-  SDP local.
+  deux **chaînes**. Deux familles de clés cohabitent :
+  - **transport** (rtcp-mux, ssrc, tmmbr, extensions, `rtpTimeout`…) : appliquées
+    à la session RTP ;
+  - **codec** (préfixe `codec.`, ex. `codec.h264.profile-level-id`,
+    `codec.opus.useinbandfec`) : depuis la phase 4 de `nego_fmtp.md`, elles sont
+    **routées vers le stockage local de l'endpoint** et consommées par le
+    négociateur pour dériver le `fmtp` local (voir `CODECS.md` pour la liste des
+    clés par codec). La session RTP les ignore.
+- `EndpointStartReceiving` renvoie (§5.2 de `nego_fmtp.md`, **livré phase 4**) :
+  - `returnVal[0]` = **port local** ouvert à publier dans le SDP local (inchangé,
+    clients actuels OK) ;
+  - `returnVal[1]` = struct `{ "<pt>": "<paramètres fmtp>" }` par payload type
+    **réellement accepté**. Les PT proposés mais **non supportés sont filtrés** et
+    n'apparaissent pas (décision D) : le contrôleur SIP reconstruit la m-line et
+    les `a=fmtp` à partir de cette struct. La valeur est le corps du `fmtp`
+    **sans** le préfixe `a=fmtp:<pt> ` (décision E) ; un codec sans `fmtp`
+    (PCMU, T140…) est **absent** de la struct.
 - `EndpointRequestUpdate` : force une mise à jour / image clé (FIR) vers ce
   média.
+
+> 🔷 **Négociation entrante (`fmtp` distant) — encore en cours** (phase 5 de
+> `nego_fmtp.md`). Le **canal** existe déjà : `EndpointSetRTPProperties` accepte
+> une clé `codec.<nomCodec>.fmtp` portant les paramètres `fmtp` **reçus du pair**
+> (p. ex. `codec.h264.fmtp = "profile-level-id=42e01f;packetization-mode=1"`), et
+> ces clés sont bien stockées côté endpoint. En revanche leur **parsing** (pour
+> contraindre l'**émission** : borner notre encodeur au profil du pair) et le
+> câblage endpoint → producteur (transcodeur/mixer) restent à livrer (H.264 en
+> premier). Cf. §9.7 pour l'ordre d'appel exact selon le sens de l'appel.
 - **`EndpointAddICECandidate`** (trickle ICE, Niveau 1) : `candidate` est une
   ligne d'attribut SDP `candidate:` (avec ou sans le préfixe `candidate:`), p.ex.
   `candidate:1 1 UDP 2130706431 192.168.1.5 54321 typ host`. Le serveur ne
@@ -601,7 +627,7 @@ tuple a la forme (`(siiiiiiiiiii)`, réf. `xmlserialize()` dans
 
 ---
 
-## 8. Notes pour l'intégration elixip
+## 8. Notes pour l'intégration du contrôleur SIP
 
 - **Enveloppe** : toujours vérifier `returnCode == 1` avant d'exploiter
   `returnVal` ; sinon lire `errorMsg`.
@@ -621,7 +647,7 @@ tuple a la forme (`(siiiiiiiiiii)`, réf. `xmlserialize()` dans
 
 ## 9. Call flows détaillés (SDP offer/answer ↔ RPC)
 
-Le media server **ne parle pas SIP** : c'est le contrôleur (elixip) qui gère la
+Le media server **ne parle pas SIP** : c'est le contrôleur SIP qui gère la
 signalisation et le SDP. Le serveur ne connaît que ses commandes XML-RPC. Cette
 section décrit la correspondance exacte entre le SDP offer/answer et les appels
 RPC, dans l'ordre, pour un appel **entrant** puis **sortant**.
@@ -636,7 +662,9 @@ Toutes les opérations média sont **par `media`** (`0`=audio, `1`=video,
 |-------------|------|-----|
 | `m=<media> <port> …` **local** (le nôtre) | ← | `port` = retour de `EndpointStartReceiving` |
 | `c=`/candidat `host` **local** | ← | `GetMediaCandidates(RTP, media)` → `rtp://ip:port` |
-| payload types **locaux** (ce qu'on accepte) | → | `rtpMap` de `EndpointStartReceiving` |
+| payload types **locaux** (ce qu'on accepte) | → | `rtpMap` de `EndpointStartReceiving` (PT non supportés **filtrés** du retour) |
+| `a=fmtp:<pt>` **local** (nos paramètres) | ← | `returnVal[1]` de `EndpointStartReceiving` (`{ "<pt>":"<params>" }`) |
+| paramètres codec **locaux** à imposer (ex. `h264.profile-level-id`) | → | `EndpointSetRTPProperties(codec.<x>.<param>)` **avant** `EndpointStartReceiving` |
 | `a=crypto` **local** (SRTP-SDES) | ↔ | clé fournie à `EndpointSetLocalCryptoSDES` = celle publiée dans notre SDP |
 | `a=fingerprint`/`a=setup` **local** (DTLS) | ← | `EndpointGetLocalCryptoDTLSFingerprint(hash)` |
 | `a=ice-ufrag`/`a=ice-pwd` **local** | ↔ | credentials fournis à `EndpointSetLocalSTUNCredentials` = ceux publiés |
@@ -656,8 +684,8 @@ Toutes les opérations média sont **par `media`** (`0`=audio, `1`=video,
 ### 9.1 Appel entrant — media server = UAS (on reçoit l'offre, on renvoie la réponse)
 
 ```
-Pair (offre) ──INVITE+SDP──▶ elixip ──XML-RPC──▶ mediaserver
-                             elixip ◀─200 OK+SDP── (réponse construite ici)
+Pair (offre) ──INVITE+SDP──▶ contrôleur SIP ──XML-RPC──▶ mediaserver
+                             contrôleur SIP ◀─200 OK+SDP── (réponse construite ici)
 ```
 
 Une seule fois (réutilisable entre appels) : `EventQueueCreate` → `queueId,
@@ -681,7 +709,9 @@ Pour **chaque média** de l'offre :
      publiera)
    - DTLS : `EndpointGetLocalCryptoDTLSFingerprint(hash)` → fingerprint pour notre SDP
    - ICE : `EndpointSetLocalSTUNCredentials(S, EP, media, ufrag, pwd)` (à publier)
-6. `EndpointStartReceiving(S, EP, media, rtpMap)` → `recvPort`
+6. `EndpointStartReceiving(S, EP, media, rtpMap)` → `[recvPort, fmtpByPt]`.
+   `rtpMap` = les PT de l'offre qu'on veut accepter ; le retour ne conserve que
+   les PT **réellement supportés** (`fmtpByPt` donne leurs `a=fmtp`).
 7. `GetMediaCandidates(S, EP, RTP=0, media)` → `rtp://ip:port` (adresse locale)
 8. `EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap)`
    (ip/port pris dans l'offre)
@@ -692,7 +722,8 @@ Puis :
    (`EndpointAttachToEndpoint`), mixers (`…AttachToAudioMixerPort` /
    `…VideoMixerPort`), player, transcoder… (cf. §9.3).
 10. **Construire et envoyer le 200 OK** : `recvPort` (étape 6) + candidat local
-    (étape 7) + crypto locale (étape 5) + payload types acceptés (rtpMap étape 6).
+    (étape 7) + crypto locale (étape 5) + payload types acceptés + lignes
+    `a=fmtp:<pt> <params>` reconstruites depuis `fmtpByPt` (`returnVal[1]`, étape 6).
 11. `EndpointStartRTPTimeout(S, EP, media, timeoutMs)` — **après** l'envoi du
     200 OK, pour armer le watchdog (voir §6.7).
 12. Trickle : à chaque candidat distant reçu ensuite,
@@ -705,9 +736,9 @@ Puis :
 ### 9.2 Appel sortant — media server = UAC (on génère l'offre, on reçoit la réponse)
 
 ```
-elixip ──INVITE+SDP(offre)──▶ Pair
-elixip ◀──200 OK+SDP(réponse)── Pair
-elixip ──ACK──▶ Pair
+contrôleur SIP ──INVITE+SDP(offre)──▶ Pair
+contrôleur SIP ◀──200 OK+SDP(réponse)── Pair
+contrôleur SIP ──ACK──▶ Pair
 ```
 
 Une seule fois : `EventQueueCreate` + long-poll (comme §9.1).
@@ -723,10 +754,12 @@ Pour **chaque média** offert :
    - SDES : `EndpointSetLocalCryptoSDES(S, EP, media, suite, key)`
    - DTLS : `EndpointGetLocalCryptoDTLSFingerprint(hash)`
    - ICE : `EndpointSetLocalSTUNCredentials(S, EP, media, ufrag, pwd)`
-4. `EndpointStartReceiving(S, EP, media, rtpMap)` → `recvPort`
+4. `EndpointStartReceiving(S, EP, media, rtpMap)` → `[recvPort, fmtpByPt]`.
+   Le `fmtp` local (`fmtpByPt`) exprime nos **capacités brutes** (config +
+   défauts) ; la contrainte du pair n'arrive qu'à l'étape 7 (voir phase 5).
 5. `GetMediaCandidates(S, EP, RTP=0, media)` → adresse locale
 6. **Construire et envoyer l'INVITE** avec l'offre (recvPort + candidat + crypto
-   locale + payload types offerts).
+   locale + payload types offerts + `a=fmtp` reconstruits depuis `fmtpByPt`).
 
 À réception du **200 OK** (réponse du pair) :
 
@@ -803,6 +836,68 @@ détruire proprement les endpoints d'abord reste préférable.
 - **Idempotence / erreurs** : vérifier `returnCode == 1` après **chaque** appel ;
   en cas d'échec en cours de montage, dérouler la terminaison (§9.5) pour ne pas
   fuiter de session/endpoint côté serveur.
+
+### 9.7 Négociation des codecs et des `fmtp` (dynamique cible)
+
+> 🔷 Décrit le comportement **cible** (conception `nego_fmtp.md`), en cours
+> d'implémentation. Tant qu'il n'est pas livré, `EndpointStartReceiving` ne
+> renvoie que `[recvPort]` et la clé `codec.<x>.fmtp` est ignorée — un contrôleur
+> tolérant teste la présence de `returnVal[1]`.
+
+**Principe.** Le média serveur devient l'autorité sur les codecs : il **filtre**
+la `rtpMap` proposée par ses codecs réellement supportés et **produit les
+paramètres `fmtp`** du SDP local. Le contrôleur SIP n'a plus à coder en dur
+`profile-level-id`, `sprop-parameter-sets`, `useinbandfec`, etc.
+
+**Rappel de sémantique SDP.** Un SDP décrit la capacité **en réception** de celui
+qui l'émet. L'offer (INVITE) = ce que le distant sait **décoder** ; l'answer
+(200 OK) = ce que **nous** savons décoder. L'answer est un **sous-ensemble** de
+l'offer (RFC 3264) : l'offer sert donc de **menu** dans lequel on pioche notre
+propre réception, en réutilisant les **numéros de PT de l'offer**. Le `fmtp` de
+l'offer (capacité de décodage du distant) contraint surtout **notre émission** ;
+notre `fmtp` d'answer reste l'expression de **notre** capacité de décodage.
+
+**Appel entrant (UAS — on reçoit l'INVITE, on construit l'answer).** Le `fmtp`
+distant est connu dès l'offer → le pousser **avant** `StartReceiving` :
+
+```
+Par média de l'offre :
+1. EndpointSetRTPProperties(S, EP, media, { "codec.<x>.fmtp": "<fmtp de l'offre>", … })
+2. EndpointStartReceiving(S, EP, media, rtpMap_offre)
+     → returnVal = [ recvPort, { "<pt>": "<fmtp local>" } ]   # PT filtrés + fmtp
+3. Construire l'answer : m-line = PT de returnVal[1], a=fmtp = valeurs de returnVal[1],
+   recvPort + crypto/candidats locaux.
+4. Envoyer le 200 OK.
+5. EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap_answer)
+     → l'émission respecte d'emblée les contraintes du pair (étape 1).
+6. EndpointStartRTPTimeout(...)   # après le 200 OK
+```
+
+**Appel sortant (UAC — on génère l'INVITE, on reçoit l'answer).** Aucun `fmtp`
+distant à `StartReceiving` → l'ingestion vient **avant** `StartSending` :
+
+```
+Par média offert :
+1. EndpointStartReceiving(S, EP, media, rtpMap_qu_on_veut_offrir)
+     → returnVal = [ recvPort, { "<pt>": "<fmtp local = nos capacités>" } ]
+       (H.264 : sprop-parameter-sets best-effort / omis — pas encore encodé)
+2. Construire et envoyer l'INVITE (m-line + a=fmtp depuis returnVal[1]).
+À réception du 200 OK :
+3. EndpointSetRTPProperties(S, EP, media, { "codec.<x>.fmtp": "<fmtp de l'answer>", … })
+4. EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap_answer)
+     → l'encodeur est configuré selon le fmtp du pair (étape 3).
+5. Envoyer l'ACK ; 6. EndpointStartRTPTimeout(...)
+```
+
+**Points de vigilance.**
+- Le `rtpMap` d'entrée de `StartReceiving` est le **menu** ; le média serveur
+  peut en retirer des PT (non supportés) → se fier à `returnVal[1]` pour la
+  m-line, pas à ce qu'on a proposé.
+- `codec.<x>.fmtp` et les propriétés transport (`rtcp-mux`, `ssrc`…) coexistent
+  dans le même `EndpointSetRTPProperties` : le serveur route les clés `codec.*`
+  vers la négociation et les autres vers le transport.
+- Les paramètres `fmtp` renvoyés sont **sans** `a=fmtp:<pt> ` : le contrôleur SIP
+  préfixe lui-même avec le PT (qu'il connaît déjà, clé de la struct).
 
 ---
 

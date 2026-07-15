@@ -201,7 +201,12 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 				//avec la map négociée et rend le même port local.
 				if (rtp->IsReceiving())
 					rtp->StopReceiving();
-				rtp->SetReceivingRTPMap(rtpMap);
+				//Négociation phase 4 : filtre la map proposée selon les codecs
+				//réellement supportés (décision D) et mémorise le fmtp local
+				//(params seuls) pour le retour XML-RPC enrichi (§5.2).
+				RTPMap accepted;
+				p->NegotiateReceiving(rtpMap, accepted);
+				rtp->SetReceivingRTPMap(accepted);
 			}
 			break;
 		}
@@ -310,6 +315,19 @@ std::shared_ptr<Joinable> Endpoint::GetJoinable(MediaFrame::Type media, MediaFra
 
 }
 
+int Endpoint::GetNegotiatedFmtp(MediaFrame::Type media, MediaFrame::MediaRole role, std::map<int,std::string>& out)
+{
+	std::shared_ptr<Port> p = GetPort(media, role);
+
+	//Check
+	if (!p)
+		return Error("No media supported");
+
+	//Copie le fmtp mémorisé lors du dernier StartReceiving (phase 4).
+	out = p->GetNegotiatedFmtp();
+	return 1;
+}
+
 
 int Endpoint::RequestUpdate(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
@@ -362,10 +380,17 @@ int Endpoint::SetLocalSTUNCredentials(MediaFrame::Type media,const char* usernam
 
 int Endpoint::SetRTPProperties(MediaFrame::Type media,const Properties& properties, MediaFrame::MediaRole role)
 {
+	std::shared_ptr<Port> p = GetPort(media, role);
 	RTPEndpoint* rtp = GetRTPEndpoint(media, role);
 
+	//Route les clés codec.* vers le stockage du négociateur (phase 4, §4.3).
+	//RTPSession les ignore ; on les capte ici pour dériver le fmtp local.
+	if (p)
+		p->StoreCodecProperties(properties);
+
+	//Les clés transport continuent vers RTPSession (qui ignore codec.*).
 	if (rtp) return rtp->SetProperties(properties);
-	
+
 	return Error("Unknown media [%d]\n",media);
 }
 
@@ -470,6 +495,59 @@ int Endpoint::Port::Detach()
 	//Not joined anymore
 	joined.reset();
 	return 1;
+}
+
+void Endpoint::Port::StoreCodecProperties(const Properties& properties)
+{
+	//Même convention que le MCU (VideoStream::SetRTPProperties) : on ne garde que
+	//les clés « codec.<codec>.<param> » et on retire le préfixe « codec. » pour
+	//obtenir « <codec>.<param> » (ex. h264.profile-level-id), forme attendue par
+	//les générateurs de fmtp de la phase 2 (*Encoder::GetFmtpParams).
+	for (Properties::const_iterator it=properties.begin(); it!=properties.end(); ++it)
+	{
+		if (it->first.compare(0, 6, "codec.")==0)
+		{
+			std::string key = it->first.substr(6);
+			codecProperties[key] = it->second;
+		}
+	}
+}
+
+void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut)
+{
+	//Repart d'un état propre à chaque (re)négociation.
+	acceptedOut.clear();
+	negotiatedFmtp.clear();
+	negotiatedProps.clear();
+
+	//RTPMap (BYTE,BYTE) -> map<int,int> attendue par le négociateur (agnostique
+	//du RTPMap MCU, cf. phase 3).
+	std::map<int,int> in;
+	for (RTPMap::const_iterator it=proposed.begin(); it!=proposed.end(); ++it)
+		in[it->first] = it->second;
+
+	NegotiationResult result;
+	//remoteFmtp ignoré en phase 4 (ingestion = phase 5).
+	if (!CodecNegotiator::Negotiate(type, in, codecProperties, NULL, result))
+	{
+		//Média non négociable (ne devrait pas arriver pour audio/vidéo/texte) :
+		//on retombe sur la map proposée telle quelle (comportement historique).
+		acceptedOut = proposed;
+		return;
+	}
+
+	//Reconstruit la RTPMap acceptée (sous-ensemble filtré, décision D).
+	for (std::map<int,int>::const_iterator it=result.acceptedMap.begin(); it!=result.acceptedMap.end(); ++it)
+		acceptedOut[(BYTE)it->first] = (BYTE)it->second;
+
+	//Mémorise le fmtp par PT (params seuls, absent si vide — décision E) et les
+	//effectiveProps (réservées à l'encodeur d'émission, phase 5).
+	for (std::vector<NegotiatedCodec>::const_iterator it=result.codecs.begin(); it!=result.codecs.end(); ++it)
+	{
+		if (!it->fmtp.empty())
+			negotiatedFmtp[it->payloadType] = it->fmtp;
+		negotiatedProps[it->payloadType] = it->effectiveProps;
+	}
 }
 
 int Endpoint::Port::GetLocalMediaPort()

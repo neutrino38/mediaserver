@@ -1008,7 +1008,7 @@ int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
 	return endpoint->StopSending(media);
 }
 
-int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap)
+int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1026,7 +1026,14 @@ int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,R
 	Log("-EndpointStartReceiving [%ls,media:%s]\n",endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
 	//Execute
-	return endpoint->StartReceiving(media,rtpMap);
+	int port = endpoint->StartReceiving(media,rtpMap);
+
+	//Récupère le fmtp négocié (phase 4) pour le retour enrichi XML-RPC (§5.2).
+	//Sous le même verrou : négociation et lecture du résultat sont atomiques.
+	if (port > 0)
+		endpoint->GetNegotiatedFmtp(media, MediaFrame::VIDEO_MAIN, fmtpOut);
+
+	return port;
 }
 int MediaSession::EndpointStopReceiving(int endpointId,MediaFrame::Type media)
 {
