@@ -16,7 +16,31 @@ bool Recorder::Create(const char *filename)
 	//Origine de l'axe temps de l'enregistrement (ancre du rebasage texte)
 	gettimeofday(&recStart,NULL);
 	textForwarder.Reset();
+
+	//Pas de source vidéo attachée, ou vidéo non négociée (StartReceiving jamais
+	//reçu) : inutile d'attendre une I-frame qui ne viendra pas — sans cela le
+	//MP4 resterait vide (waitVideo jette audio et texte).
+	if (!MediaIsActive(MediaFrame::Video))
+	{
+		Log("-Recorder: no negotiated video source, disabling waitVideo\n");
+		SetWaitVideo(false);
+	}
+
 	return MP4Recorder::Create(filename);
+}
+
+bool Recorder::MediaIsActive(MediaFrame::Type media)
+{
+	//Attaché pour ce média ?
+	JoinedMap::iterator it = joined.find(media);
+	if (it==joined.end())
+		return false;
+	//Source encore vivante ?
+	std::shared_ptr<Joinable> j = it->second.lock();
+	if (!j)
+		return false;
+	//Négociée côté source ?
+	return j->IsReceiving();
 }
 
 Recorder::Recorder(std::wstring tag) : textForwarder(*this)
@@ -70,6 +94,19 @@ void Recorder::onRTPPacket(RTPPacket &packet)
 			onAudioPacket(packet);
 			break;
 		case MediaFrame::Video:
+			//Écho : repousse le paquet vers l'émetteur de la source.
+			//Pour un RTPEndpoint, le Joinable de réception EST aussi
+			//l'émetteur (Joinable::Listener) ; le dynamic_cast échoue
+			//proprement pour les autres sources (ports de mixer).
+			if (echoVideo)
+			{
+				if (std::shared_ptr<Joinable> j = videoSource.lock())
+				{
+					Joinable::Listener* sender = dynamic_cast<Joinable::Listener*>(j.get());
+					if (sender)
+						sender->onRTPPacket(packet);
+				}
+			}
 			//Do we have video depacketizer
 			if (!video)
 				//Create new
@@ -265,12 +302,20 @@ int Recorder::Attach(MediaFrame::Type media, const std::shared_ptr<Joinable> & j
 		join->AddListener(this);
 	}
 
+	//Copie dédiée pour l'écho (lue par le thread RTP vidéo hors de la map)
+	if (media==MediaFrame::Video)
+		videoSource = join;
+
 	return 1;
 }
 
 int Recorder::Dettach(MediaFrame::Type media)
 {
 	Log("-Endpoint detaching [media:%d]\n",media);
+
+	//Plus d'écho vers une source qu'on quitte
+	if (media==MediaFrame::Video)
+		videoSource.reset();
 
 	//Get joined
 	JoinedMap::iterator it = joined.find(media);

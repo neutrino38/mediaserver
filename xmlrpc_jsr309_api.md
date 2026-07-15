@@ -342,18 +342,12 @@ long-poll, p.ex. `"/events/jsr309/7"`. Le client doit l'utiliser tel quel
 À la création, un handler d'événement vidéo est posé : la fin de lecture émet un
 `PlayerEndOfFileEvent` (§5). `PlayerPlay` émet `PlayerStartedEvent`.
 
-`RecorderRecord` : 4e paramètre **optionnel** `maxDuration` (durée max en **ms**,
-`0`/absent = illimité). À expiration, l'enregistrement est arrêté
-automatiquement et un `RecorderStoppedEvent(reason=1)` est émis. `RecorderRecord`
-réussi émet `RecorderStartedEvent` ; `RecorderStop` émet
-`RecorderStoppedEvent(reason=0)`.
-
 ### 6.4 Recorders (enregistrement)
 
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
 | `RecorderCreate` | `i sessionId, s name` | `[ int recorderId ]` |
-| `RecorderRecord` | `i sessionId, i recorderId, s filename [, i maxDuration]` | `[]` |
+| `RecorderRecord` | `i sessionId, i recorderId, s filename [, i maxDuration [, i waitVideo [, i echoVideo]]]` | `[]` |
 | `RecorderStop` | `i sessionId, i recorderId` | `[]` |
 | `RecorderDelete` | `i sessionId, i recorderId` | `[]` |
 | `RecorderAttachToEndpoint` | `i sessionId, i recorderId, i endpointId, i media` | `[]` |
@@ -362,6 +356,62 @@ réussi émet `RecorderStartedEvent` ; `RecorderStop` émet
 | `RecorderDettach` | `i sessionId, i recorderId, i media` | `[]` |
 
 `media` = `MediaFrame::Type` (§4).
+
+#### Médias enregistrés (MP4)
+
+Le Recorder attaché à un endpoint enregistre les **trois médias** dans le MP4 :
+
+- **Vidéo** : H.264 tel quel (piste `avc1` + hint track RTP). L'enregistrement
+  vidéo démarre à la première I-frame reçue.
+- **Audio** : PCMU/PCMA écrits tels quels ; **tout autre codec (Opus, G.722,
+  AMR…) est transcodé en AAC-LC** à la fréquence native du décodeur
+  (Opus → AAC mono 48 kHz). Aucune configuration côté client.
+- **Texte temps réel** : T.140 nu ou **T140RED (RFC 4103)** — la redondance est
+  décodée (récupération des paquets perdus), les keepalives (BOM UTF-8, trames
+  vides) sont filtrés. Écrit en piste **sous-titres 3GPP (`tx3g`)**, timestamps
+  recalés sur l'axe temps de l'enregistrement.
+
+#### Paramètres optionnels de `RecorderRecord`
+
+- **`maxDuration`** (4e, ms, `0`/absent = illimité) : à expiration,
+  l'enregistrement est arrêté automatiquement et un
+  `RecorderStoppedEvent(reason=1)` est émis.
+- **`waitVideo`** (5e, `0`/`1`, défaut `1`) : si `1`, audio et texte sont
+  **jetés tant que la première I-frame vidéo n'est pas arrivée** (les pistes
+  démarrent ensemble). Mettre `0` pour enregistrer audio/texte immédiatement.
+  **Désactivation automatique** : si aucune source vidéo n'est attachée au
+  recorder, ou si la vidéo attachée n'a pas été négociée (pas de
+  `EndpointStartReceiving(Video)`), le serveur force `waitVideo=0` de lui-même
+  — sinon le MP4 resterait vide. Trace : `Recorder: no negotiated video
+  source, disabling waitVideo`.
+- **`echoVideo`** (6e, `0`/`1`, défaut `0`) : le Recorder **renvoie en écho
+  chaque paquet vidéo reçu vers l'endpoint source** (l'appelant se voit pendant
+  qu'il s'enregistre). L'écho s'éteint au `RecorderStop`. **Prérequis côté
+  client** : `EndpointStartSending(Video)` doit avoir été appelé **avant**
+  `RecorderRecord` (sinon chaque paquet est refusé avec la trace `trying to
+  send packet on an inactive RTP EP`), et la carte de codecs d'émission doit
+  contenir le PT vidéo reçu. Sans effet si la source du média vidéo n'est pas
+  un endpoint (port de mixer).
+
+#### Événements et conseils d'intégration
+
+- `RecorderRecord` réussi émet `RecorderStartedEvent` ; `RecorderStop` émet
+  `RecorderStoppedEvent(reason=0)` (voir §5).
+- **Ne pas armer `EndpointStartRTPTimeout` sur le média Text** pendant un
+  enregistrement : le T.140 n'émet que pendant la frappe, un silence de
+  quelques secondes est normal et déclencherait un faux
+  `EndpointDisconnectedEvent`.
+
+Séquence type « enregistrement de message » (vidéo négociée) :
+
+```
+EndpointStartReceiving(Audio|Video|Text)   # cartes PT -> codec
+EndpointStartSending(Video, ip, port, map) # requis pour l'écho
+RecorderCreate / RecorderAttachToEndpoint (Audio, Video, Text)
+RecorderRecord(sessionId, recId, "msg.mp4", maxDuration, 1, 1)
+... RecorderStoppedEvent ou RecorderStop ...
+RecorderDettach ×3 / RecorderDelete
+```
 
 ### 6.5 Endpoints — cycle de vie et attaches
 

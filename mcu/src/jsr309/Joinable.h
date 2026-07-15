@@ -43,6 +43,11 @@ public:
 	virtual void Update() = 0;
 	virtual void SetREMB(DWORD estimation) = 0;
 	virtual void RemoveListener(Listener *listener) = 0;
+
+	//Média effectivement négocié côté source (StartReceiving reçu) — override
+	//dans Endpoint::Port. Les sources toujours actives (mixers, transcoders,
+	//players) gardent le défaut.
+	virtual bool IsReceiving() const { return true; }
 protected:
 	bool PostEvent( JSR309Event *event);
 private:

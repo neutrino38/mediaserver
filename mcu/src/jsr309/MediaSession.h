@@ -103,7 +103,7 @@ public:
 	//Recorder functionality
 	//maxDuration : durée max d'enregistrement en ms (0 = illimité). À expiration,
 	//arrêt auto + RecorderStoppedEvent(reason=1).
-	int RecorderRecord(int recorderId,const char* filename,DWORD maxDuration=0,bool waitVideo=true);
+	int RecorderRecord(int recorderId,const char* filename,DWORD maxDuration=0,bool waitVideo=true,bool echoVideo=false);
 	int RecorderStop(int recorderId);
 
 	//Callback interne appelé par RecorderTimer à l'expiration de la durée max.

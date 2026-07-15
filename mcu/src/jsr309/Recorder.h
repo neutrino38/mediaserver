@@ -38,6 +38,14 @@ public:
 	int Attach(MediaFrame::Type media, const std::shared_ptr<Joinable> & join);
 	int Dettach(MediaFrame::Type media);
 
+	//Une source est attachée pour ce média ET négociée côté source
+	//(Joinable::IsReceiving — les Endpoint::Port reflètent StartReceiving)
+	bool MediaIsActive(MediaFrame::Type media);
+
+	//Écho vidéo : renvoyer chaque paquet vidéo reçu vers l'émetteur de la
+	//source (RecorderRecord arg 6, éteint par RecorderStop)
+	void SetEchoVideo(bool echo)	{ echoVideo = echo; }
+
 	std::wstring& GetTag() { return tag; }
 private:
 	//Liens retour NON possédants vers les sources : weak_ptr → lock() au site
@@ -82,6 +90,11 @@ private:
 	TextForwarder	textForwarder;
 	timeval		recStart;	// instant du Create(), origine de l'axe temps
 	JoinedMap	 joined;
+	//Copie dédiée de joined[Video] pour l'écho : lue par le thread RTP vidéo
+	//sans traverser la map (que les Attach/Dettach XML-RPC peuvent muter) —
+	//même motif weak_ptr + lock() au site d'usage que VideoStream::rtpSession
+	std::weak_ptr<Joinable> videoSource;
+	bool		echoVideo = false;
 };
 
 #endif	/* RECORDER_H */
