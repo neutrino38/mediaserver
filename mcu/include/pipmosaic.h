@@ -20,6 +20,8 @@ public:
 	virtual int Update(int index,BYTE *frame,int width,int heigth);
 	virtual int Clean(int index);
 protected:
+	// Le slot principal (pos 0) est toujours étiré plein cadre (fidèle à l'existant).
+	virtual bool StretchSlot(int pos) const { return pos == 0; }
 	virtual int GetWidth(int pos);
 	virtual int GetHeight(int pos);
 	virtual int GetTop(int pos);

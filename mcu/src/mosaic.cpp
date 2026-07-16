@@ -33,6 +33,14 @@ int Mosaic::Update(int index, const PictPtr& pic)
 		if (!cpu) return 0;
 	}
 
+	// Mémorise la trame ORIGINALE (GPU comprise) et l'aspect du slot pour le
+	// futur chemin graphe (BuildDesc/Compose). N'affecte pas le rendu actuel.
+	if (index >= 0 && index < (int) slotFrames.size())
+	{
+		slotFrames[index]     = pic;
+		slotKeepAspect[index] = keepAspect;
+	}
+
 	AVFrame* f = cpu->GetAVFrame();
 	if (!f || f->format != AV_PIX_FMT_YUV420P)
 		return 0;
@@ -46,6 +54,97 @@ int Mosaic::Update(int index, const PictPtr& pic)
 	                        AV_PIX_FMT_YUV420P, w, h, 1);
 
 	return Update(index, tmp.data(), w, h);
+}
+
+// Calcule la taille effective de la vignette (letterbox/pillarbox) et son décalage
+// dans le slot. Copie fidèle de l'arithmétique des Update(BYTE*) historiques
+// (partedmosaic.cpp / asymmetricmosaic.cpp) : compare le ratio de l'image au ratio
+// GLOBAL de la mosaïque (membre 'ratio'), diff vertical rendu pair (offset U/V).
+void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
+                                  int& outW, int& outH, int& dx, int& dy)
+{
+	const int slotW = GetWidth(pos);
+	const int slotH = GetHeight(pos);
+
+	//Par défaut : remplit le slot, aucun décalage.
+	outW = slotW;
+	outH = slotH;
+	dx   = 0;
+	dy   = 0;
+
+	if (inW <= 0 || inH <= 0)
+		return;
+
+	// StretchSlot force l'étirement plein slot (PIP pos==0).
+	if (StretchSlot(pos))
+		return;
+
+	DWORD picRatio = ComputeAspectRatio(inW, inH);
+
+	if ((picRatio / 100) == (ratio / 100) || !keepAspect)
+	{
+		// Même ratio (à ~1% près) ou ancien comportement : remplit le slot.
+		return;
+	}
+	else if (picRatio > ratio)
+	{
+		// Bandes haut/bas : conserve la largeur, réduit la hauteur.
+		outW = slotW;
+		outH = (int) ((slotW * 1000) / picRatio);
+		int diff = (slotH - outH) / 2;
+		// diff pair sinon offset U/V incorrect (cf. code historique).
+		if (diff > 0 && (diff % 2) != 0) diff--;
+		dx = 0;
+		dy = diff;
+	}
+	else // picRatio < ratio
+	{
+		// Bandes gauche/droite : conserve la hauteur, réduit la largeur.
+		outH = slotH;
+		outW = (int) ((slotH * picRatio) / 1000);
+		int diff = (slotW - outW) / 2;
+		dx = diff;
+		dy = 0;
+	}
+}
+
+// Construit la description du graphe de composition d'après l'état courant des
+// slots (trames mémorisées). Slots ACTIFS uniquement (trame non nulle), ordre =
+// ordre Z (pos croissant). N'écrit aucun pixel. Overlays renseignés en Phase 4.
+MosaicGraphDesc Mosaic::BuildDesc()
+{
+	MosaicGraphDesc desc;
+	desc.width           = mosaicTotalWidth;
+	desc.height          = mosaicTotalHeight;
+	desc.wantGPU         = false;   // chemin GPU : Phase 5
+	desc.blackBackground = HasBlackBackground();
+	desc.hasMosaicOverlay = false;  // overlays : Phase 4
+
+	for (int pos = 0; pos < numSlots && pos < (int) slotFrames.size(); pos++)
+	{
+		const PictPtr& pic = slotFrames[pos];
+		if (!pic || !pic->GetAVFrame())
+			continue;   // slot vide : pas de branche, fond visible
+
+		AVFrame* f = pic->GetAVFrame();
+
+		MosaicSlotDesc s;
+		s.pos   = pos;
+		s.inW   = f->width;
+		s.inH   = f->height;
+		s.inFmt = f->format;
+		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU (clé de reconfig)
+
+		int dx, dy;
+		ComputeSlotPlacement(pos, f->width, f->height, slotKeepAspect[pos],
+		                     s.w, s.h, dx, dy);
+		s.x = GetLeft(pos) + dx;
+		s.y = GetTop(pos)  + dy;
+
+		desc.slots.push_back(s);
+	}
+
+	return desc;
 }
 
 // Enveloppe le composite (BYTE* YUV420P contigu) dans un Pict (copie). Pont
@@ -134,6 +233,10 @@ Mosaic::Mosaic(Type type,DWORD size)
 
 	//Store number of slots
 	numSlots = GetNumSlotsForType(type);
+
+	//Chemin avfilter : trames par slot (vide au départ) + aspect par slot
+	slotFrames.resize(numSlots);
+	slotKeepAspect.assign(numSlots, true);
 
 	//Allocate sizes
 	mosaicSlots = (int*)malloc(numSlots*sizeof(int));

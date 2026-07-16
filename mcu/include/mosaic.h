@@ -4,9 +4,11 @@
 #include "video.h"
 #include "framescaler.h"
 #include "overlay.h"
+#include "mosaiccompositor.h"
 #include "vad.h"
 #include <map>
 #include <memory>
+#include <vector>
 
 class Mosaic
 {
@@ -143,6 +145,24 @@ protected:
 	virtual int GetHeight(int pos) = 0;
 	virtual int GetTop(int pos) = 0;
 	virtual int GetLeft(int pos) = 0;
+
+	// Fond noir (mosaic1p1) au lieu du gris neutre. cf. HasBlackBackground du
+	// constructeur d'AsymmetricMosaic (peint-en-noir).
+	virtual bool HasBlackBackground() const { return false; }
+	// Slot toujours étiré plein cadre, aspect ignoré (PIPMosaic pos==0, fidèle à
+	// l'étirement historique du slot principal PIP).
+	virtual bool StretchSlot(int pos) const { return false; }
+
+	// Calcule la taille effective de la vignette (letterbox/pillarbox) et son
+	// décalage dans le slot, d'après ComputeAspectRatio et keepAspect. Factorise
+	// l'arithmétique dupliquée des Update(BYTE*) (partedmosaic / asymmetricmosaic).
+	void ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
+	                          int& outW, int& outH, int& dx, int& dy);
+
+	// Construit la description du graphe de composition (géométrie + placement
+	// letterbox de chaque slot ACTIF). N'écrit aucun pixel. cf. mosaic_avfilter_plan.md §3.
+	MosaicGraphDesc BuildDesc();
+
 protected:
 	void SetChanged()	{ mosaicChanged = true; overlayNeedsUpdate = true; }
 
@@ -182,6 +202,16 @@ protected:
 
 protected:
 	int GetNextFreeSlot(int id);
+
+	// --- Chemin avfilter (migration graphe unique, cf. mosaic_avfilter_plan.md) ---
+	// Dernière trame connue par slot (nullptr = slot vide, pas de branche).
+	std::vector<PictPtr> slotFrames;
+	// Aspect à conserver, mémorisé par slot au moment du Update (corrige la course
+	// bénigne du drapeau global keepAspect écrasé à chaque Update).
+	std::vector<bool>    slotKeepAspect;
+	PictPtr              background;   // Pict de fond WxH (généré paresseusement)
+	PictPtr              composite;    // cache du dernier composite
+	MosaicCompositor     compositor;   // matérialisation du graphe
 };
 
 #endif

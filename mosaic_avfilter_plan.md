@@ -503,16 +503,27 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
 - **Validation** : build vert, aucun appelant, non-régression triviale (lancement
   d'une conf de test).
 
-### Phase 1 — `MosaicCompositor` (nouvelle classe, non branchée)
+### Phase 1 — `MosaicCompositor` (nouvelle classe, non branchée) — FAIT 2026-07-16
 - `mcu/include/mosaiccompositor.h` + `mcu/src/mosaiccompositor.cpp` : structures §3.2,
   interface §3.3, chemin **CPU uniquement** (le GPU vient en Phase 5) ; `BuildGraph`
   génère la chaîne §1.3 par `avfilter_graph_parse_ptr` ; `Compose` push+pull §4/§6.
 - Ajouter `mosaiccompositor.o` à `OBJS` dans `mcu/Makefile.rpm` (ligne 90).
-- **Validation** : build vert ; test autonome façon `negotest` (optionnel mais
-  recommandé) : composer 4 `Pict::CreateBlack`/couleurs dans un 2x2 et vérifier
-  dimensions/valeurs de plans du composite.
+- **Détails d'implémentation** : buffersrc créés par `avfilter_graph_create_filter`
+  (pour poser plus tard `hw_frames_ctx` par entrée), corps de chaîne (scale + cascade
+  overlay) par `avfilter_graph_parse_ptr` ; labels ouverts = buffersrc côté `outputs`,
+  sink côté `inputs` (nom = dernier label produit). Overlays participants empilés
+  APRÈS toutes les vignettes (fidèle à l'exemple asymétrique §1.3), overlay mosaïque
+  en dernier. Sink contraint `AV_PIX_FMT_YUV420P` (`av_opt_set_int_list`). Cas
+  dégénéré (0 slot) : `[bg] null`. `MosaicSlotDesc` a gagné `ovX/ovY` (position
+  absolue de l'overlay participant = GetLeft/GetTop du slot). `Configure` : structure
+  GPU-d'abord/repli-CPU en place (`gpuBroken`), `BuildGraph(true)` renvoie false
+  jusqu'en Phase 5.
+- **Validation** : build vert (`make -f Makefile.rpm mcu`) ; test autonome
+  `scratchpad/compositest.cpp` (façon `negotest`) 4/4 : 2x2 (luma par slot),
+  letterbox (fond visible dans les bandes), reconfiguration paresseuse 2x2→no-op→1x1,
+  30 ticks consécutifs (1 trame/tick, pas d'EAGAIN).
 
-### Phase 2 — Description de géométrie dans `Mosaic` (chemin actuel conservé)
+### Phase 2 — Description de géométrie dans `Mosaic` (chemin actuel conservé) — FAIT 2026-07-16
 - Base `Mosaic` : membres `slotFrames/slotKeepAspect/background/composite/compositor` ;
   `ComputeSlotPlacement` factorisé (copie fidèle de l'arithmétique
   `partedmosaic.cpp:144-205` / `asymmetricmosaic.cpp:119-173`) ; `BuildDesc()` ;
@@ -521,8 +532,17 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   déléguer au pont BYTE\* existant (comportement inchangé).
 - Fichiers : `mcu/include/mosaic.h`, `mcu/src/mosaic.cpp`, les 3 dérivées (ajout des
   deux petits virtuels seulement). `rm` des `.o` mcu (header mosaic.h).
-- **Validation** : build vert, rendu strictement identique (l'ancien chemin compose
-  toujours) ; log de `BuildDesc()` comparé aux positions attendues pour chaque type.
+- **Détails** : `ComputeSlotPlacement` compare `picRatio` au ratio GLOBAL de la
+  mosaïque (membre `ratio`, comme l'existant), diff vertical rendu pair ; `StretchSlot`
+  court-circuite l'aspect (PIP pos 0). `BuildDesc` = slots ACTIFS uniquement (trame
+  mémorisée non nulle), `x=GetLeft+dx`, `y=GetTop+dy` ; `wantGPU=false` et overlays
+  laissés à Phase 4/5. **PIÈGE name-hiding** : la surcharge `Update(BYTE*)` des
+  dérivées masque `Update(const PictPtr&)` de la base — OK car videomixer appelle via
+  `Mosaic*` ; ajouter `using Mosaic::Update;` seulement si appel via type dérivé.
+- **Validation** : build vert (mcu complet) ; test autonome `scratchpad/desctest.cpp`
+  (sous-classes exposant `BuildDesc`) OK : 2x2 fill+letterbox 16:9 (w352 h198 y44) +
+  slot vide exclu, keepAspect=false→plein slot, PIP stretch slot 0 plein cadre, fond
+  noir 1p1.
 
 ### Phase 3 — Bascule du composite sur le graphe (CPU)
 - `Mosaic::GetPict()` → `Configure(BuildDesc()) + Compose(...)` avec **repli** vers
