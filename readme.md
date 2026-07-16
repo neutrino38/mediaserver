@@ -10,8 +10,8 @@ and can be used to provide these functions. It is controlled remotely over XML-R
 
 - Bitstream : RTP, SRTP, SRTP-DTLS (Webrtc); NACK, REMB, TMMBR, Text over Websocket
 - RTMP (flash related protocol) support
-- Audio Codecs : GSM, G.711, G.722, OPUS some others
-- Video Codecs : H.263, H.263+, H.264, VP8
+- Audio Codecs : GSM, G.711, G.722, OPUS, AAC some others
+- Video Codecs : H.263, H.263+, H.264, VP8, AV1
 - Realtime text as RFC 4103 with RED support
 - BFCP floor control for document / screen sharing
 
@@ -43,6 +43,14 @@ All build steps are driven by the `install.ksh` script at the root of the
 project. It takes a single argument selecting the action to perform.
 
 ### 1. Install the build prerequisites
+
+Here are the most of prerequisites:
+
+- ffmpeg (from RPMFUSION)
+- ImageMagic 7 - RPM needs to be rebuilt from source
+- webrtc-audio-processing
+- libsrtp
+- xmlrpc-c
 
 The build links dynamically against system packages. Install them once with:
 
@@ -111,47 +119,56 @@ To produce the RPM package (this is what the release build runs):
 ./install.ksh rpm nosign
 ```
 
-The `nosign` argument produces an **unsigned** package. Omitting it makes
-`rpmbuild` GPG-sign the package with the IVèS key (it clones the private
-`gnupg` key repository first, so it only works in the IVèS environment):
 
 ```sh
 ./install.ksh rpm            # GPG-signed package (IVèS only)
 ```
 
-Under the hood `install.ksh rpm`:
-
-1. sets up the `rpmbuild` macros and directory tree (`./rpmbuild/…`);
-2. runs `rpmbuild -bb` on `mcumediaserver.spec` — whose `%build` stage calls
-   `install.ksh localcompile` after initialising the submodules;
-3. moves the resulting `*.rpm` to the project root and cleans the build tree.
-
-The RPM installs the binary to `/opt/ives/bin/mediaserver`, the SysV init
-script to `/etc/init.d/mediaserver` and the configuration to
-`/etc/mediaserver/`.
 
 ## Running
 
-IVèS deployment convention: symlink the freshly built binary over the
-installed one.
+# Command line options
 
-```sh
-cd /opt/ives/bin/
-mv mediaserver mediaserver.release           # back up the current binary
-ln -s /home/user/mediaserver/bin/debug/mcu mediaserver
+```
+mcu [-h|--help] [-f] [-d]
+    [--mcu-log <log_file>] [--mcu-pid <pid_file>]
+    [--http-port <control_port>] [--rtmp-port <port>]
+    [--websocket-port <ws_port>] [--websocket-host hôte]
+    [--min-rtp-port <min_port>] [--max-rtp-port port]
+    [--vad-period <m>]
 ```
 
-Restart the application:
+### Options générales
 
-```sh
-/etc/init.d/mediaserver restart
-```
+| Option | Défaut | Description |
+|---|---|---|
+| `-h`, `--help` | — | Affiche la version et l'aide, puis quitte. |
+| `-f` | désactivé | Lance le serveur en démon « safe mode » : double `fork()`, détachement du terminal (`setsid`), puis un processus superviseur relance automatiquement le serveur s'il meurt sur un signal (crash). La sortie standard est redirigée vers le fichier de log et le PID est écrit dans le fichier PID. |
+| `-d` | désactivé | Active les logs de debug (`Logger::EnableDebug`). |
+| `--mcu-log fichier` | `mcu.log` | Fichier de log (utilisé pour rediriger stdout/stderr en mode démon `-f`). |
+| `--mcu-pid fichier` | `mcu.pid` | Fichier où le PID du processus serveur est écrit (mode démon `-f` uniquement). |
 
-Follow the execution:
+### Ports et réseau
 
-```sh
-tail -f /var/log/mcu.log
-```
+| Option | Défaut | Description |
+|---|---|---|
+| `--http-port port` | `8080` | Port d'écoute du serveur HTTP portant l'API de contrôle XML-RPC (et les flux d'événements HTTP). |
+| `--rtmp-port port` | `1935` | Port d'écoute du serveur RTMP. |
+| `--websocket-port port` | `9090` | Port d'écoute du serveur WebSocket. |
+| `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Non listé dans l'aide `--help`. |
+| `--min-rtp-port port` | `49152` | Borne basse de la plage de ports UDP allouée aux sessions RTP/RTCP. |
+| `--max-rtp-port port` | `65535` | Borne haute de la plage de ports RTP/RTCP. |
+
+### Média
+
+| Option | Défaut | Description |
+|---|---|---|
+| `--vad-period ms` | `5000` | Période (en millisecondes) de changement de la mosaïque pilotée par la détection d'activité vocale (VAD). |
+
+
+### Certificat DTLS
+
+Le certificat utilisé pour DTLS-SRTP (WebRTC) n'est **pas** configurable en ligne de commande : les chemins sont fixés en dur à `/etc/mediaserver/mcu.crt` et `/etc/mediaserver/mcu.key`.
 
 # Modernization
 
