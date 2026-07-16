@@ -127,6 +127,53 @@ To produce the RPM package (this is what the release build runs):
 
 ## Running
 
+The RPM installs the server as a **systemd service** (`mediaserver.service`,
+replacing the old SysV `/etc/init.d/mediaserver` script). The binary is
+`/opt/ives/bin/mediaserver`, the configuration lives in `/etc/mediaserver/`.
+
+```sh
+systemctl start mediaserver          # démarrer
+systemctl stop mediaserver           # arrêter (SIGTERM → arrêt propre)
+systemctl restart mediaserver        # redémarrer
+systemctl status mediaserver         # état
+systemctl enable  mediaserver        # démarrage au boot
+```
+
+The unit runs the binary **in the foreground** (`Type=simple`) — it does *not*
+use the `-f` daemon mode: systemd manages the process lifecycle and PID itself,
+and a clean stop is done by sending `SIGTERM` (handled by `signing_handler`,
+which flushes the event queues and stops the XML-RPC server). A crash triggers
+an automatic restart (`Restart=on-failure`).
+
+### Logs
+
+Standard output/error are captured by systemd. The historical convention is
+kept: they are appended to `/var/log/mcu.log`, and they are also available
+through the journal:
+
+```sh
+tail -f /var/log/mcu.log             # convention historique
+journalctl -u mediaserver -f         # via le journal systemd
+```
+
+### Command-line options / configuration
+
+Command-line options are set through the `OPTIONS` variable in
+`/etc/sysconfig/mediaserver` (sourced by the unit) — e.g.:
+
+```sh
+OPTIONS="--http-port 9090 --websocket-port 8100"
+```
+
+> ⚠️ Do **not** put `-f` in `OPTIONS`: under systemd the process must stay in
+> the foreground. `--mcu-pid` is likewise useless (systemd tracks the PID).
+
+After editing the unit or the sysconfig file, reload systemd:
+
+```sh
+systemctl daemon-reload && systemctl restart mediaserver
+```
+
 # Command line options
 
 ```
@@ -134,6 +181,7 @@ mcu [-h|--help] [-f] [-d]
     [--mcu-log <log_file>] [--mcu-pid <pid_file>]
     [--http-port <control_port>] [--rtmp-port <port>]
     [--websocket-port <ws_port>] [--websocket-host hôte]
+    [--websocket-secure] [--websocket-cert <pem>] [--websocket-key <pem>]
     [--min-rtp-port <min_port>] [--max-rtp-port port]
     [--vad-period <m>]
 ```
@@ -143,10 +191,10 @@ mcu [-h|--help] [-f] [-d]
 | Option | Défaut | Description |
 |---|---|---|
 | `-h`, `--help` | — | Affiche la version et l'aide, puis quitte. |
-| `-f` | désactivé | Lance le serveur en démon « safe mode » : double `fork()`, détachement du terminal (`setsid`), puis un processus superviseur relance automatiquement le serveur s'il meurt sur un signal (crash). La sortie standard est redirigée vers le fichier de log et le PID est écrit dans le fichier PID. |
+| `-f` | désactivé | Lance le serveur en démon « safe mode » : double `fork()`, détachement du terminal (`setsid`), puis un processus superviseur relance automatiquement le serveur s'il meurt sur un signal (crash). La sortie standard est redirigée vers le fichier de log et le PID est écrit dans le fichier PID. **Ne pas utiliser sous systemd** (voir *Running*) : systemd gère lui-même le cycle de vie et le redémarrage. |
 | `-d` | désactivé | Active les logs de debug (`Logger::EnableDebug`). |
-| `--mcu-log fichier` | `mcu.log` | Fichier de log (utilisé pour rediriger stdout/stderr en mode démon `-f`). |
-| `--mcu-pid fichier` | `mcu.pid` | Fichier où le PID du processus serveur est écrit (mode démon `-f` uniquement). |
+| `--mcu-log fichier` | `mcu.log` | Fichier de log (utilisé pour rediriger stdout/stderr en mode démon `-f` uniquement ; sans effet en avant-plan / sous systemd, où stdout/stderr vont dans `/var/log/mcu.log` et le journal). |
+| `--mcu-pid fichier` | `mcu.pid` | Fichier où le PID du processus serveur est écrit (mode démon `-f` uniquement ; inutile sous systemd). |
 
 ### Ports et réseau
 
@@ -166,9 +214,33 @@ mcu [-h|--help] [-f] [-d]
 | `--vad-period ms` | `5000` | Période (en millisecondes) de changement de la mosaïque pilotée par la détection d'activité vocale (VAD). |
 
 
-### Certificat DTLS
+### WebRTC — WebSocket sécurisé (wss://)
 
-Le certificat utilisé pour DTLS-SRTP (WebRTC) n'est **pas** configurable en ligne de commande : les chemins sont fixés en dur à `/etc/mediaserver/mcu.crt` et `/etc/mediaserver/mcu.key`.
+Le transport WebSocket (utilisé notamment pour le texte temps réel et le canal
+de signalisation des endpoints Web) peut être servi en TLS (`wss://`). Ces
+options n'affectent **que** le serveur WebSocket ; le média WebRTC (SRTP) est
+sécurisé séparément par DTLS (voir ci-dessous).
+
+| Option | Défaut | Description |
+|---|---|---|
+| `--websocket-secure` | désactivé | Active le WebSocket sécurisé (`wss://`). Implicite dès que `--websocket-cert` ou `--websocket-key` est fourni. |
+| `--websocket-cert fichier` | *(certificat DTLS)* | Certificat PEM présenté pour `wss://`. Implique `--websocket-secure`. À défaut, réutilise le certificat DTLS (`/etc/mediaserver/mcu.crt`). |
+| `--websocket-key fichier` | *(clé DTLS)* | Clé privée PEM pour `wss://`. Implique `--websocket-secure`. À défaut, réutilise la clé DTLS (`/etc/mediaserver/mcu.key`). |
+| `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Utile derrière un proxy / en `wss://`. |
+
+
+### WebRTC — Certificat DTLS-SRTP
+
+Le média WebRTC (audio/vidéo/texte) est chiffré par **DTLS-SRTP**. Le certificat
+et la clé utilisés pour la poignée de main DTLS ne sont **pas** configurables en
+ligne de commande : les chemins sont fixés en dur à `/etc/mediaserver/mcu.crt` et
+`/etc/mediaserver/mcu.key`.
+
+Ce certificat est aussi la valeur par défaut du WebSocket sécurisé (voir plus
+haut). Le RPM le génère automatiquement s'il est absent, via le script
+`%post` `certcommunication.sh` : un certificat auto-signé **ECDSA P-256**
+(signé SHA-256, valable 10 ans), compatible OpenSSL 3 et les navigateurs WebRTC
+(le RSA 1024 historique était refusé).
 
 # Modernization
 

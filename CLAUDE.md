@@ -40,7 +40,7 @@ make -f mcu/Makefile.rpm mcu      # output: bin/debug/mcu
 - `DISTRO` in `Makefile.rpm` only detects `fc`/`el5`/`el6`; the **default (`else`) branch is the AlmaLinux 9 dynamic-link mode** (there is no explicit `el9` yet).
 - `mcu.proto` is compiled by `staticdeps/bin/protoc` only when `MOTELI=yes`.
 
-- The RPM spec (`mcumediaserver.spec`) is AlmaLinux 9-only (CentOS 6/el5 compat removed): `%prep` inits the git submodules and `%build` runs `install.ksh localcompile`. It still installs a SysV `mediaserver.init` (systemd migration pending — see `almalinux9_port_plan.md` §B).
+- The RPM spec (`mcumediaserver.spec`) is AlmaLinux 9-only (CentOS 6/el5 compat removed): `%prep` inits the git submodules and `%build` runs `install.ksh localcompile`. It installs a **systemd unit** (`mediaserver.service`, `Type=simple`) via the standard `%systemd_post`/`%systemd_preun`/`%systemd_postun_with_restart` scriptlets — the old SysV `mediaserver.init` was removed. Command-line options live in `/etc/sysconfig/mediaserver` (`OPTIONS=`, sourced by the unit); the binary runs in the foreground (no `-f`), so systemd owns the PID and lifecycle, and stop is a `SIGTERM` (handled by `signing_handler`).
 
 ### Running (IVèS deployment convention)
 
@@ -48,11 +48,11 @@ make -f mcu/Makefile.rpm mcu      # output: bin/debug/mcu
 cd /opt/ives/bin/
 mv mediaserver mediaserver.release          # back up current binary
 ln -s /home/user/mediaserver/bin/debug/mcu mediaserver
-/etc/init.d/mediaserver restart
-tail -f /var/log/mcu.log                     # follow execution
+systemctl restart mediaserver
+tail -f /var/log/mcu.log                     # follow execution (also: journalctl -u mediaserver -f)
 ```
 
-RPM installs the binary to `/opt/ives/bin/mediaserver`, init script to `/etc/init.d/mediaserver`, config to `/etc/mediaserver/`.
+RPM installs the binary to `/opt/ives/bin/mediaserver`, the systemd unit to `%{_unitdir}/mediaserver.service`, its options to `/etc/sysconfig/mediaserver`, config to `/etc/mediaserver/`. stdout/stderr are appended to `/var/log/mcu.log` by systemd (`StandardOutput`/`StandardError`).
 
 There is no automated test suite. `rtmptest` is a standalone manual test target in `mcu/Makefile.rpm`.
 
