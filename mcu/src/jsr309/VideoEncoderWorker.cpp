@@ -248,7 +248,7 @@ int VideoEncoderMultiplexerWorker::Encode()
 	while (encoding)
 	{
 		//Nos quedamos con el puntero antes de que lo cambien
-		BYTE *pic;
+		PictPtr pic;
 
                 if (useInputSize && input->HasNativeSizeChanged() )
                 {
@@ -343,7 +343,7 @@ int VideoEncoderMultiplexerWorker::Encode()
 		}
 
 		//Procesamos el frame
-		VideoFrame *videoFrame = videoEncoder->EncodeFrame(pic,input->GetBufferSize());
+		VideoFrame *videoFrame = videoEncoder->EncodeFrame(pic);
 
 		//If was failed
 		if (!videoFrame)

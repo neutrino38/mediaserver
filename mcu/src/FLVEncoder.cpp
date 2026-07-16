@@ -542,7 +542,7 @@ int FLVEncoder::EncodeVideo()
 	while(encodingVideo)
 	{
 		//Nos quedamos con el puntero antes de que lo cambien
-		BYTE* pic=videoInput->GrabFrame(frameTime);
+		PictPtr pic=videoInput->GrabFrame(frameTime);
 
 		//Check pic
 		if (!pic)
@@ -558,7 +558,7 @@ int FLVEncoder::EncodeVideo()
 		}
 
 		//Encode next frame
-		VideoFrame *encoded = encoder->EncodeFrame(pic,videoInput->GetBufferSize());
+		VideoFrame *encoded = encoder->EncodeFrame(pic);
 
 		//Check
 		if (!encoded)

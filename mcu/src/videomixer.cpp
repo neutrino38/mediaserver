@@ -13,20 +13,19 @@ typedef std::set<Pair, std::greater<Pair> > RevOrderedSetOfPairs;
 
 DWORD VideoMixer::vadDefaultChangePeriod = 5000;
 
-inline void CleanSlot(int pos, Mosaic *mosaic, Logo &p_logo)
+inline void CleanSlot(int pos, Mosaic *mosaic, const PictPtr &p_logo)
 {
-	if ( p_logo.GetFrame())
+	if ( p_logo )
 	{
 		mosaic->KeepAspectRatio(false);
 		//Update with logo
-	
-		mosaic->Update(pos,p_logo.GetFrame(),p_logo.GetWidth(),p_logo.GetHeight());
+		mosaic->Update(pos,p_logo);
 	}
 	else
 	{
 		//Clean it
 		mosaic->Clean(pos);
-		
+
 	}
 }
 
@@ -38,7 +37,8 @@ inline void CleanSlot(int pos, Mosaic *mosaic)
 
 int VideoMixer::LoadLogo(const char * filename)
 {
-	if (logo.Load(filename))
+	logo = Pict::Load(filename);
+	if (logo)
 	{
 		//Protegemos la lista
 		lstVideosUse.WaitUnusedAndLock();
@@ -152,8 +152,8 @@ int VideoMixer::MixVideo()
 
 			//Si no ha cambiado el frame volvemos al principio
 			if (input && mosaic && (mosaic->HasChanged() || forceUpdate))
-				//Colocamos el frame
-				input->SetFrame(mosaic->GetFrame(),mosaic->GetWidth(),mosaic->GetHeight());
+				//Colocamos el frame (composite mosaïque -> Pict, pont Phase 5)
+				input->SetFrame(mosaic->GetPict());
 		}
 
 		
@@ -386,7 +386,7 @@ int VideoMixer::MixVideo()
 									//Change mosaic
 									CleanSlot(i, mosaic);
 									mosaic->KeepAspectRatio( output->IsAspectRatioKept() );
-									mosaic->Update(i,output->GetFrame(),output->GetWidth(),output->GetHeight());
+									mosaic->Update(i,output->GetFrame());
 								}
 							}
 						    }
@@ -419,7 +419,7 @@ int VideoMixer::MixVideo()
 						if (output && (output->IsChanged(version) || vadPos!=oldVadPos || vadId != oldVad))
 							//Change mosaic
 							mosaic->KeepAspectRatio( output->IsAspectRatioKept() );		
-							mosaic->Update(vadPos,output->GetFrame(),output->GetWidth(),output->GetHeight());
+							mosaic->Update(vadPos,output->GetFrame());
 					}
 				}
 			}
@@ -445,7 +445,7 @@ int VideoMixer::MixVideo()
 					{
 						if ( output->SizeHasChanged(version) )mosaic->Clean(pos);
 					
-						mosaic->Update(pos,output->GetFrame(),output->GetWidth(),output->GetHeight());
+						mosaic->Update(pos,output->GetFrame());
 					}
 				}
 				
@@ -587,7 +587,7 @@ int VideoMixer::Init(Mosaic::Type comp,int size, const char * logoFile)
 {
 	if ( logoFile == NULL ) logoFile = "/var/lib/mediaserver/logo.png";
 	//Allocamos para el logo
-	logo.Load(logoFile);
+	logo = Pict::Load(logoFile);
 
 	//Create default misxer
 	int id = CreateMosaic(comp,size);
@@ -1223,7 +1223,7 @@ int VideoMixer::UpdateMosaic(Mosaic* mosaic)
 				//Update slot
 				mosaic->Clean(i);
 				mosaic->KeepAspectRatio( output->IsAspectRatioKept() );
-				mosaic->Update(i,output->GetFrame(),output->GetWidth(),output->GetHeight());
+				mosaic->Update(i,output->GetFrame());
 			} else {
 				//Check logo
 				CleanSlot(i, mosaic, logo);

@@ -1,6 +1,7 @@
 #ifndef _MOSAIC_H_
 #define _MOSAIC_H_
 #include "config.h"
+#include "video.h"
 #include "framescaler.h"
 #include "overlay.h"
 #include "vad.h"
@@ -58,7 +59,15 @@ public:
 	void Reset()		{ mosaicChanged = true; }
 
 	BYTE* GetFrame();
+	// Composite enveloppé dans un Pict (copie du BYTE* contigu en YUV420P). Pont
+	// TEMPORAIRE symétrique de Update(PictPtr) jusqu'à la refonte avfilter (Phase 5).
+	PictPtr GetPict();
 	virtual int Update(int index,BYTE *frame,int width,int heigth) = 0;
+	// Surcharge AVFrame (migration Pict) : aplatit la trame en YUV420P contigu
+	// (redescente GPU si nécessaire) puis délègue à la surcharge BYTE* ci-dessus.
+	// Pont TEMPORAIRE : les internals mosaïque restent BYTE*/FrameScaler jusqu'à
+	// leur passage en graphe avfilter (Phase 5, cf. avframe.md).
+	int Update(int index, const PictPtr& pic);
 	virtual int Clean(int index) = 0;
 
 	int AddParticipant(int id);

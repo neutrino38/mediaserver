@@ -14,6 +14,70 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 #include <libavutil/common.h>
+#include <libavutil/imgutils.h>
+}
+
+// Pont AVFrame -> BYTE* (migration Pict) : aplatit une trame en YUV420P contigu
+// et délègue à la surcharge BYTE* propre à chaque mosaïque. Copie temporaire
+// jusqu'à la refonte des mosaïques en graphe avfilter (Phase 5, cf. avframe.md).
+int Mosaic::Update(int index, const PictPtr& pic)
+{
+	if (!pic || !pic->GetAVFrame())
+		return 0;
+
+	// Mosaïque CPU pour l'instant : redescente GPU->CPU si besoin.
+	PictPtr cpu = pic;
+	if (pic->IsGPUPict())
+	{
+		cpu = pic->DownloadToCPU();
+		if (!cpu) return 0;
+	}
+
+	AVFrame* f = cpu->GetAVFrame();
+	if (!f || f->format != AV_PIX_FMT_YUV420P)
+		return 0;
+
+	const int w = f->width;
+	const int h = f->height;
+
+	std::vector<BYTE> tmp((size_t) w * h * 3 / 2);
+	av_image_copy_to_buffer(tmp.data(), (int) tmp.size(),
+	                        (const uint8_t* const*) f->data, f->linesize,
+	                        AV_PIX_FMT_YUV420P, w, h, 1);
+
+	return Update(index, tmp.data(), w, h);
+}
+
+// Enveloppe le composite (BYTE* YUV420P contigu) dans un Pict (copie). Pont
+// TEMPORAIRE jusqu'à la refonte avfilter des mosaïques (Phase 5, cf. avframe.md).
+PictPtr Mosaic::GetPict()
+{
+	BYTE* buf = GetFrame();
+	if (!buf)
+		return nullptr;
+
+	const int w = mosaicTotalWidth;
+	const int h = mosaicTotalHeight;
+	if (w <= 0 || h <= 0)
+		return nullptr;
+
+	AVFrame* f = av_frame_alloc();
+	if (!f)
+		return nullptr;
+	f->format = AV_PIX_FMT_YUV420P;
+	f->width  = w;
+	f->height = h;
+	if (av_frame_get_buffer(f, 32) < 0)
+	{
+		av_frame_free(&f);
+		return nullptr;
+	}
+
+	const uint8_t* src[4] = { buf, buf + w*h, buf + w*h*5/4, NULL };
+	int srcLs[4] = { w, w/2, w/2, 0 };
+	av_image_copy(f->data, f->linesize, src, srcLs, AV_PIX_FMT_YUV420P, w, h);
+
+	return std::make_shared<Pict>(f);
 }
 
 int Mosaic::GetNumSlotsForType(Mosaic::Type type)

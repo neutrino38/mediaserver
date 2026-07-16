@@ -29,7 +29,7 @@ std::string GetThreadId(std::thread & thread)
 * VideoStream
 *	Constructor
 ***********************************/
-VideoStream::VideoStream(Listener* listener, Logo & muteLogo, MediaFrame::MediaRole role) : 
+VideoStream::VideoStream(Listener* listener, PictPtr & muteLogo, MediaFrame::MediaRole role) :
 	rtp(MediaFrame::Video,listener,role), logo(muteLogo)
 {
 	//Inicializamos a cero todo
@@ -499,7 +499,7 @@ int VideoStream::SendVideo()
 	while (sendingVideo == TaskRunning)
 	{
 		//Nos quedamos con el puntero antes de que lo cambien
-		BYTE *pic = videoInput->GrabFrame(frameTime/1000);
+		PictPtr pic = videoInput->GrabFrame(frameTime/1000);
 
 		//Check picture
 		if (!pic)
@@ -573,7 +573,7 @@ int VideoStream::SendVideo()
 		}
 		
 		//Procesamos el frame
-		VideoFrame *videoFrame = videoEncoder->EncodeFrame(pic,videoInput->GetBufferSize());
+		VideoFrame *videoFrame = videoEncoder->EncodeFrame(pic);
 
 		//If was failed
 		if (!videoFrame)
@@ -833,7 +833,7 @@ int VideoStream::RecVideo()
 			//Try to decode what is in the buffer
 			videoDecoder->DecodePacket(NULL,0,1,1);
 			//Get picture
-			BYTE *frame = videoDecoder->GetFrame();
+			PictPtr frame = videoDecoder->GetFrame();
 			width = videoDecoder->GetWidth();
 			height = videoDecoder->GetHeight();
 			//Check values
@@ -885,22 +885,22 @@ int VideoStream::RecVideo()
 			frameSeqNum = RTPPacket::MaxExtSeqNum;
 
 			//Get picture
-			BYTE *frame = videoDecoder->GetFrame();
+			PictPtr frame = videoDecoder->GetFrame();
 			//DWORD width = videoDecoder->GetWidth();
 			//If it is muted
 			if (muted)
 			{
-				frame = logo.GetFrame();
+				frame = logo;
 				//Check size
-				if (frame && (logo.GetWidth()!=width || logo.GetHeight()!=height))
+				if (frame && (logo->GetWidth()!=(DWORD)width || logo->GetHeight()!=(DWORD)height))
 				{
 					//Get dimension
-					width = logo.GetWidth();
-					height = logo.GetHeight();
+					width = logo->GetWidth();
+					height = logo->GetHeight();
 				if (videoOutput != NULL)
 					//Set them in the encoder
 					videoOutput->SetVideoSize(width,height);
-				}			
+				}
 				waitIntra = false;
 			}
 			else
@@ -981,14 +981,12 @@ int VideoStream::SetMute(bool isMuted)
 	if (muted)
 	{
 		//Push the avatar logo
-		BYTE *frame 	= logo.GetFrame();
-		DWORD width		= logo.GetWidth();
-		DWORD height	= logo.GetHeight();
+		PictPtr frame	= logo;
 		//Check size
 		if (frame && videoOutput != NULL)
 		{
 			//Set them in the encoder
-			videoOutput->SetVideoSize(width,height);
+			videoOutput->SetVideoSize(frame->GetWidth(),frame->GetHeight());
 			videoOutput->NextFrame(frame);
 		}
 	}

@@ -10,7 +10,6 @@
 #include <string>
 #include "config.h"
 #include "video.h"
-#include "medkit/logo.h"
 
 class AppMixer
 {
@@ -19,11 +18,11 @@ public:
 
 	int Init(VideoOutput *output);
 	int DisplayImage(const char* filename);
-	int DisplayImage(Logo *p_logo);
+	int DisplayImage(const PictPtr& p_logo);
 	int End();
 
 private:
-	Logo		logo;
+	PictPtr		logo;
 	VideoOutput*	output;
 };
 

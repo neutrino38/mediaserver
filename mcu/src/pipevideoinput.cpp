@@ -2,15 +2,16 @@
 #include "pipevideoinput.h"
 #include "tools.h"
 #include <stdlib.h>
-#include <string.h>
 
 PipeVideoInput::PipeVideoInput()
 {
 	//inited = false;
 	capturing = false;
-	grabPic = 0;
-	imgBuffer[0] = NULL;
-	imgBuffer[1] = NULL;
+	imgNew = 0;
+	videoWidth = 0;
+	videoHeight = 0;
+	videoSize = 0;
+	videoFPS = 0;
 }
 
 PipeVideoInput::~PipeVideoInput()
@@ -28,7 +29,7 @@ int PipeVideoInput::Init()
 	inited = true;
 
 	return true;
-} 
+}
 
 int PipeVideoInput::End()
 {
@@ -44,7 +45,7 @@ int PipeVideoInput::End()
 	newPicCond.notify_all();
 
 	return true;
-} 
+}
 
 int PipeVideoInput::StartVideoCapture(int width,int height,int fps)
 {
@@ -59,14 +60,9 @@ int PipeVideoInput::StartVideoCapture(int width,int height,int fps)
 	videoSize = (videoWidth*videoHeight*3)/2;
 	videoFPS = fps;
 
-	//Creamos el buffer
-	imgBuffer[0] = (BYTE *)malloc(videoSize);
-	imgBuffer[1] = (BYTE *)malloc(videoSize);
-
 	//El inicio
-	imgPos = false;
 	imgNew = false;
-	grabPic = 0;
+	last = nullptr;
 
 	//Estamos capturando
 	capturing = true;
@@ -81,29 +77,18 @@ int PipeVideoInput::StopVideoCapture()
 	//Protegemos
 	std::lock_guard<std::mutex> lock(newPicMutex);
 
-	//LIberamos los buffers
-	if (imgBuffer[0])
-		free(imgBuffer[0]);
-	if (imgBuffer[1])
-		free(imgBuffer[1]);
-
-	imgBuffer[0] = NULL;
-	imgBuffer[1] = NULL;
-
 	//Y no estamos capturando
 	capturing = false;
 
 	//Clear flags
-	grabPic = NULL;
-
+	last = nullptr;
+	imgNew = false;
 
 	return true;
 }
 
-BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
-{ 
-	BYTE *pic;
-
+PictPtr PipeVideoInput::GrabFrame(DWORD timeout)
+{
 	//Bloqueamos para ver si hay un nuevo picture
 	std::unique_lock<std::mutex> lock(newPicMutex);
 
@@ -113,9 +98,9 @@ BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
 		//Logeamos
 		Error("PipeVideoInput no inited or not capturing, grab failed\n");
 		//Salimos
-		return NULL;
+		return nullptr;
 	}
-	
+
 	//Miramos a ver si hay un nuevo pict
 	if(imgNew==0)
 	{
@@ -130,7 +115,7 @@ BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
 			{
 				//Timeout
 				Error("PipeVideoInput grab timeout\n");
-				return NULL;
+				return nullptr;
 			}
 		} else {
 			//Wait ad infinitum
@@ -141,10 +126,8 @@ BYTE* PipeVideoInput::GrabFrame(DWORD timeout)
 	//Lo vamos a consumir
 	imgNew=0;
 
-	//Nos quedamos con el puntero antes de que lo cambien
-	pic=grabPic;
-
-	return pic;
+	//Devolvemos la ultima trama (partage refcompté : survit tant que l'encodeur la tient)
+	return last;
 }
 
 void  PipeVideoInput::CancelGrabFrame()
@@ -154,7 +137,7 @@ void  PipeVideoInput::CancelGrabFrame()
 
 	//No image
 	imgNew = false;
-	grabPic = NULL;
+	last = nullptr;
 
 	//Se�alamos
 	newPicCond.notify_all();
@@ -167,27 +150,26 @@ DWORD PipeVideoInput::GetBufferSize()
 	return (videoWidth*videoHeight*3)/2;
 }
 
-int PipeVideoInput::SetFrame(BYTE * buffer, int width, int height)
+int PipeVideoInput::SetFrame(PictPtr pic)
 {
+	if (!pic || !pic->GetAVFrame())
+		return 0;
+
 	//Protegemos
 	std::lock_guard<std::mutex> lock(newPicMutex);
 
 	//Si estamos capturamos
 	if (capturing)
 	{
-		//Actualizamos el grabPic
-		grabPic = imgBuffer[imgPos];
+		// Mise à l'échelle vers la taille de l'encodeur (le rescaler rend une
+		// simple référence si la trame est déjà à la bonne taille). Remplace
+		// FrameScaler ; graphe avfilter persistant.
+		last = resizer.Rescale(pic, videoWidth, videoHeight, false);
 
-		//Pasamos al siguiente
-		imgPos = !imgPos;
-
-		//Copy & Resize
-		resizer.Resize(buffer,width,height,grabPic,videoWidth,videoHeight);
-		
 		//Hay imagen
 		imgNew = true;
 		//Se�alamos
 		newPicCond.notify_all();
-	} 
+	}
 	return 1;
 }

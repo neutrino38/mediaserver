@@ -1,4 +1,4 @@
-/* 
+/*
  * File:   videopipe.h
  * Author: Sergio
  *
@@ -10,7 +10,7 @@
 
 #include <pthread.h>
 #include "video.h"
-#include "framescaler.h"
+#include "videorescaler.h"
 
 class VideoPipe :
 	public VideoOutput,
@@ -22,12 +22,12 @@ public:
 	int Init();
 	/** VideoInput */
 	virtual int   StartVideoCapture(int width,int height,int fps);
-	virtual BYTE* GrabFrame(DWORD timeout);
+	virtual PictPtr GrabFrame(DWORD timeout);
 	virtual void  CancelGrabFrame();
 	virtual DWORD GetBufferSize();
 	virtual int   StopVideoCapture();
 	/** VideoOutput */
-	virtual int NextFrame(BYTE *pic);
+	virtual int NextFrame(PictPtr pic);
 	virtual int SetVideoSize(int width,int height);
 	int End();
         virtual DWORD GetNativeWidth() { return inputWidth; }
@@ -36,23 +36,20 @@ public:
 
 private:
 
-	FrameScaler resizer;
+	PictPtr last;
+	VideoRescaler resizer;
 	int videoWidth;
 	int videoHeight;
 	int inputWidth;
 	int inputHeight;
 	int videoSize;
 	int videoFPS;
-	int imgPos;
 	int imgNew;
 	int inited;
 	int capturing;
-	BYTE *imgBuffer[2];
-	BYTE *grabPic;
 
 	pthread_mutex_t newPicMutex;
 	pthread_cond_t  newPicCond;
 };
 
 #endif	/* VIDEOPIPE_H */
-

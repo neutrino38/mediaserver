@@ -1,7 +1,7 @@
-/* 
+/*
  * File:   videopipe.cpp
  * Author: Sergio
- * 
+ *
  * Created on 19 de marzo de 2013, 16:08
  */
 
@@ -9,7 +9,6 @@
 #include "log.h"
 #include "tools.h"
 #include <stdlib.h>
-#include <string.h>
 
 VideoPipe::VideoPipe()
 {
@@ -20,9 +19,11 @@ VideoPipe::VideoPipe()
 	//No estamos iniciados
 	//inited = false;
 	capturing = false;
-	grabPic = 0;
-	imgBuffer[0] = NULL;
-	imgBuffer[1] = NULL;
+	imgNew = 0;
+	videoWidth = 0;
+	videoHeight = 0;
+	videoSize = 0;
+	videoFPS = 0;
 	inputWidth  = 0;
         inputHeight = 0;
 
@@ -81,14 +82,9 @@ int VideoPipe::StartVideoCapture(int width,int height,int fps)
 	videoSize = (videoWidth*videoHeight*3)/2;
 	videoFPS = fps;
 
-	//Creamos el buffer
-	imgBuffer[0] = (BYTE *)malloc(videoSize);
-	imgBuffer[1] = (BYTE *)malloc(videoSize);
-
 	//El inicio
-	imgPos = false;
 	imgNew = false;
-	grabPic = 0;
+	last = nullptr;
 
 	//Estamos capturando
 	capturing = true;
@@ -106,17 +102,12 @@ int VideoPipe::StopVideoCapture()
 	//Protegemos
 	pthread_mutex_lock(&newPicMutex);
 
-	//LIberamos los buffers
-	if (imgBuffer[0])
-		free(imgBuffer[0]);
-	if (imgBuffer[1])
-		free(imgBuffer[1]);
-
 	//Y no estamos capturando
 	capturing = false;
 
 	//Clear flags
-	grabPic = NULL;
+	last = nullptr;
+	imgNew = false;
 
 	//Desprotegemos
 	pthread_mutex_unlock(&newPicMutex);
@@ -124,9 +115,9 @@ int VideoPipe::StopVideoCapture()
 	return true;
 }
 
-BYTE* VideoPipe::GrabFrame(DWORD timeout)
+PictPtr VideoPipe::GrabFrame(DWORD timeout)
 {
-	BYTE *pic;
+	PictPtr pic;
 
 	//Bloqueamos para ver si hay un nuevo picture
 	pthread_mutex_lock(&newPicMutex);
@@ -139,7 +130,7 @@ BYTE* VideoPipe::GrabFrame(DWORD timeout)
 		//Desbloqueamos
 		pthread_mutex_unlock(&newPicMutex);
 		//Salimos
-		return NULL;
+		return nullptr;
 	}
 
 	//Miramos a ver si hay un nuevo pict
@@ -162,8 +153,8 @@ BYTE* VideoPipe::GrabFrame(DWORD timeout)
 	//Lo vamos a consumir
 	imgNew=0;
 
-	//Nos quedamos con el puntero antes de que lo cambien
-	pic=grabPic;
+	//Nos quedamos con la referencia antes de que la cambien (partage refcompté)
+	pic=last;
 
 	//Y liberamos el mutex
 	pthread_mutex_unlock(&newPicMutex);
@@ -178,7 +169,7 @@ void  VideoPipe::CancelGrabFrame()
 
 	//No image
 	imgNew = false;
-	grabPic = NULL;
+	last = nullptr;
 
 	//Se�alamos
 	pthread_cond_signal(&newPicCond);
@@ -206,22 +197,21 @@ int VideoPipe::SetVideoSize(int width, int height)
 	return 0;
 }
 
-int VideoPipe::NextFrame(BYTE * buffer)
+int VideoPipe::NextFrame(PictPtr pic)
 {
+	if (!pic || !pic->GetAVFrame())
+		return 0;
+
 	//Protegemos
 	pthread_mutex_lock(&newPicMutex);
 
 	//Si estamos capturamos
 	if (capturing)
 	{
-		//Actualizamos el grabPic
-		grabPic = imgBuffer[imgPos];
-
-		//Pasamos al siguiente
-		imgPos = !imgPos;
-
-		//Copy & Resize
-		resizer.Resize(buffer,inputWidth,inputHeight,grabPic,videoWidth,videoHeight);
+		// Mise à l'échelle vers la taille de sortie (le rescaler rend une
+		// référence si la trame est déjà à la bonne taille). Remplace
+		// FrameScaler ; graphe avfilter persistant.
+		last = resizer.Rescale(pic, videoWidth, videoHeight, false);
 
 		//Hay imagen
 		imgNew = true;

@@ -628,7 +628,7 @@ int MediaBridgeSession::RecVideo()
 		}
 
 		//Encode next frame
-		VideoFrame *encoded = encoder->EncodeFrame(decoder->GetFrame(),numpixels);
+		VideoFrame *encoded = encoder->EncodeFrame(decoder->GetFrame());
 
 		//Check
 		if (!encoded)
@@ -1171,7 +1171,7 @@ int MediaBridgeSession::SendVideo()
 		}
 
 		//Encode it
-		VideoFrame *videoFrame = encoder->EncodeFrame(decoder->GetFrame(),numpixels);
+		VideoFrame *videoFrame = encoder->EncodeFrame(decoder->GetFrame());
 
 		//If was failed
 		if (!videoFrame)

@@ -574,7 +574,7 @@ int RTMPParticipant::SendVideo()
 	while(sendingVideo)
 	{
 		//Nos quedamos con el puntero antes de que lo cambien
-		BYTE *pic = videoInput->GrabFrame(frameTime);
+		PictPtr pic = videoInput->GrabFrame(frameTime);
 		//Check picture
 		if (!pic)
 		{
@@ -609,7 +609,7 @@ int RTMPParticipant::SendVideo()
                 }
 		//Encode next frame
 		//Log(">Encoding frame [%lld]\n",getUpdDifTime(&t));
-		VideoFrame *encoded = encoder->EncodeFrame(pic,videoInput->GetBufferSize());
+		VideoFrame *encoded = encoder->EncodeFrame(pic);
 		//Log("<Encoding frame [%lld]\n",getUpdDifTime(&t));
 		
 		//Check
@@ -1059,23 +1059,23 @@ int RTMPParticipant::RecVideo()
 
 		
 		//Get frame
-		BYTE *frame = decoder->GetFrame();
+		PictPtr frame = decoder->GetFrame();
 
 		//If it is muted
 		if (videoMuted)
 		{
-			frame = logo.GetFrame();
+			frame = logo;
 			//Check size
-			if (frame && (logo.GetWidth()!=width || logo.GetHeight()!=height))
+			if (frame && (logo->GetWidth()!=(DWORD)width || logo->GetHeight()!=(DWORD)height))
 			{
 				//Get dimension
-				width = logo.GetWidth();
-				height = logo.GetHeight();
+				width = logo->GetWidth();
+				height = logo->GetHeight();
 
 				//Set them in the encoder
 				videoOutput->SetVideoSize(width,height);
-			}			
-		
+			}
+
 		}
 		else
 		{
@@ -1251,13 +1251,13 @@ int RTMPParticipant::SetMute(MediaFrame::Type media, bool isMuted,MediaFrame::Me
 			return 1;
 		case MediaFrame::Video:
 			{
-				//Set mute and post avatar 
-				BYTE *frame = logo.GetFrame();
+				//Set mute and post avatar
+				PictPtr frame = logo;
 				videoMuted = isMuted;
 				if (videoMuted)
 				{
-					RecVideoWidth	= logo.GetWidth();
-					RecVideoHeight	= logo.GetHeight();
+					RecVideoWidth	= frame ? frame->GetWidth() : 0;
+					RecVideoHeight	= frame ? frame->GetHeight() : 0;
 					if (frame )
 					{
 							//Set them in the encoder

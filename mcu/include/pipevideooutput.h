@@ -10,10 +10,11 @@ public:
 	PipeVideoOutput(pthread_mutex_t* mutex, pthread_cond_t* cond);
 	virtual ~PipeVideoOutput();
 
-	virtual int NextFrame(BYTE *pic);
+	virtual int NextFrame(PictPtr pic);
 	virtual int SetVideoSize(int width,int height);
 
-	BYTE*	GetFrame();
+	// Dernière trame publiée (partage refcompté, plus de memcpy).
+	PictPtr	GetFrame();
 	int	IsChanged(DWORD version);
 	int 	GetWidth()	{ return videoWidth;		};
 	int 	GetHeight()	{ return videoHeight;		};
@@ -23,8 +24,7 @@ public:
 	bool	SizeHasChanged(DWORD version);
 
 private:
-	BYTE*	buffer;
-	int	bufferSize;
+	PictPtr	last;
 	int 	videoWidth;
 	int	videoHeight;
 	bool	isChanged;
