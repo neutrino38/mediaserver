@@ -8,6 +8,7 @@
 #ifndef OVERLAY_H
 #define	OVERLAY_H
 #include "config.h"
+#include "video.h"
 #include <string>
 
 class Overlay
@@ -20,7 +21,7 @@ public:
 	int LoadImage(const char*);
 	int RenderSVG(const char*);
 	int RenderText(const char*,int scriptCode);
-	int Clear() { contentType = NONE; return 0; }
+	int Clear() { contentType = NONE; cachedPict.reset(); return 0; }
 	bool HasContent() { return contentType != NONE; }
 	
 	/**
@@ -54,7 +55,19 @@ public:
 	 **/
 	BYTE* Display(BYTE* frameY, BYTE* frameU, BYTE* frameV, DWORD bitmapWidth, DWORD bitmapHeight, bool changeFrame = false);
 	BYTE* GetOverlay() { return overlay; }
-	
+
+	/**
+	 * Renvoie le contenu rendu enveloppé dans un Pict AV_PIX_FMT_RGBA.
+	 *
+	 * Sert d'entrée « overlay » au graphe avfilter des mosaïques : on fournit le
+	 * RGBA natif d'ImageMagick (pas de ConvertToYUVA ici), la conversion RGBA->YUV
+	 * et l'application de l'alpha sont faites par le graphe. Le Pict est mis en
+	 * cache et régénéré uniquement quand le contenu ou la taille change (LoadImage,
+	 * RenderSVG, RenderText, Clear, Resize l'invalident). Renvoie nullptr si
+	 * l'overlay n'a rien à afficher.
+	 **/
+	PictPtr GetPict();
+
 
 private:
 	BYTE* overlayBuffer;
@@ -63,6 +76,10 @@ private:
 	BYTE* imageBuffer;
 	DWORD imageSize;
 	BYTE* image;
+
+	// Cache du contenu rendu enveloppé en Pict yuva420p (cf. GetPict).
+	// Invalidé (reset) à chaque re-rendu ou redimensionnement.
+	PictPtr cachedPict;
 
 	DWORD width;
 	//DWORD bitmapWidth;

@@ -12,6 +12,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/opt.h>
 #include <libavutil/common.h>
+#include <libavutil/imgutils.h>
 }
 
 using Magick::Quantum;
@@ -157,6 +158,8 @@ bool Overlay::Resize(DWORD width,DWORD height)
     
     if (imageBuffer !=NULL) free(imageBuffer);
     if (overlayBuffer !=NULL) free(overlayBuffer);
+    //Cache invalidé : la taille change (cf. GetPict)
+    cachedPict.reset();
     //Store values
     this->width = width;
     this->height = height;
@@ -265,9 +268,39 @@ end_convert:
     return res;   
 }
 
+// Enveloppe le rendu RGBA d'ImageMagick (octets entrelacés, 4 par pixel) dans un
+// Pict AV_PIX_FMT_RGBA possédé. La conversion RGBA->YUV est laissée au graphe
+// avfilter des mosaïques (cf. GetPict), ce qui évite ici tout ConvertToYUVA.
+static PictPtr RGBABlobToPict(const Magick::Blob& blob, int width, int height)
+{
+	if (width <= 0 || height <= 0)
+		return nullptr;
+	if (blob.length() < (size_t)(4 * width * height))
+		return nullptr;
+
+	AVFrame* f = av_frame_alloc();
+	if (!f)
+		return nullptr;
+	f->format = AV_PIX_FMT_RGBA;
+	f->width  = width;
+	f->height = height;
+	if (av_frame_get_buffer(f, 32) < 0)
+	{
+		av_frame_free(&f);
+		return nullptr;
+	}
+
+	av_image_copy_plane(f->data[0], f->linesize[0],
+			    (const uint8_t*) blob.data(), 4 * width, 4 * width, height);
+
+	return std::make_shared<Pict>(f);
+}
+
 int Overlay::LoadImage(const char* filename)
 {
-	
+	//Cache invalidé : le contenu va être re-rendu (cf. GetPict)
+	cachedPict.reset();
+
 	if ( filename != NULL )
 	{
 	    contentType = PICTURE_BITMAP;
@@ -293,6 +326,8 @@ int Overlay::LoadImage(const char* filename)
 	render.write(&rgbablob);
     
 	int ret =ConvertToYUVA(rgbablob, overlay, width, height);
+	// Pict RGBA pour le graphe (chemin GetPict) — pas de conversion YUV ici.
+	cachedPict = RGBABlobToPict(rgbablob, width, height);
 	contentType = PICTURE_BITMAP;
 	display = true;
 	return ret;
@@ -312,7 +347,10 @@ int Overlay::LoadImage(const char* filename)
 
 int Overlay::RenderSVG(const char* svg)
 {
-    if (svg != NULL) 
+    //Cache invalidé : le contenu va être re-rendu (cf. GetPict)
+    cachedPict.reset();
+
+    if (svg != NULL)
     {
 	content = svg;
 	contentType = PICTURE_VECTOR;
@@ -324,9 +362,12 @@ int Overlay::RenderSVG(const char* svg)
 	render.magick("RGBA");
 	render.write(&rgbablob);
     
-	return ConvertToYUVA(rgbablob, overlay, this->width, this->height);
+	int ret = ConvertToYUVA(rgbablob, overlay, this->width, this->height);
+	// Pict RGBA pour le graphe (chemin GetPict) — pas de conversion YUV ici.
+	cachedPict = RGBABlobToPict(rgbablob, this->width, this->height);
+	return ret;
     }
-    catch ( Magick::Exception &error ) 
+    catch ( Magick::Exception &error )
     {
 	contentType = NONE;
 	return Error("-Overlay: failed to load picture file %s: %s.\n", content.c_str(), error.what() );
@@ -342,7 +383,9 @@ int Overlay::RenderText(const char* msg, int scriptCode)
 {
 //    MagickCore::SetLogEventMask("All");
 
- 
+    //Cache invalidé : le contenu va être re-rendu (cf. GetPict)
+    cachedPict.reset();
+
     if (msg) content = msg;
 
     if (width == 0 || height == 0)
@@ -451,6 +494,8 @@ int Overlay::RenderText(const char* msg, int scriptCode)
         render.write(&bob);
     
 	int ret = ConvertToYUVA(bob, overlay, width, height);
+	// Pict RGBA pour le graphe (chemin GetPict) — pas de conversion YUV ici.
+	cachedPict = RGBABlobToPict(bob, width, height);
 	contentType = TEXT;
 	display = true;
 	return ret;
@@ -733,7 +778,7 @@ BYTE* Overlay::Display(BYTE* frameY, BYTE* frameU, BYTE* frameV, DWORD bitmapWid
 			dstY1 = image + 2*width*j;
 			dstY2 = dstY1 + width;
 			dstU  = image + width*height + (width*j)/2;
-			dstV  = dstU + (width*height)/4; 
+			dstV  = dstU + (width*height)/4;
 
 			memcpy( srcY1, dstY1, width );
 			memcpy( srcY2, dstY2, width );
@@ -744,4 +789,34 @@ BYTE* Overlay::Display(BYTE* frameY, BYTE* frameU, BYTE* frameV, DWORD bitmapWid
 	}
 	else
 		return image;
+}
+
+PictPtr Overlay::GetPict()
+{
+	// Sur cache-miss (contenu/taille invalidés, ou pas encore matérialisé après
+	// operator=/Resize), re-rendre depuis contentType. Les méthodes de rendu
+	// repeuplent cachedPict (RGBA). Aucun contenu => rien à afficher.
+	if (!cachedPict)
+	{
+		switch (contentType)
+		{
+		    case NONE:
+			return nullptr;
+		    case PICTURE_BITMAP:
+			LoadImage(NULL);
+			break;
+		    case PICTURE_VECTOR:
+			RenderSVG(NULL);
+			break;
+		    case TEXT:
+			RenderText(NULL, 0);
+			break;
+		    default:
+			break;
+		}
+	}
+
+	// cachedPict RGBA (ou nullptr si le rendu a échoué). Le graphe avfilter
+	// convertit RGBA->YUV lors de la composition.
+	return cachedPict;
 }
