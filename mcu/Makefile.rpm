@@ -83,7 +83,7 @@ DOCSHARINGOBJ= stunmessage.o crc32calc.o remoteratecontrol.o uploadhandler.o htt
 MOTELIDIR=moteli
 MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 
-OBJS=httpparser.o websocketserver.o websocketconnection.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
+OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
 # libmedkit tirent la classe Logo de l'archive).
@@ -125,9 +125,11 @@ endif
 
 OBJSMCU = $(OBJS) main.o
 OBJSRTMPTEST = $(OBJS) rtmptest.o
+OBJSWSTEST = $(OBJS) wstest.o
 
 BUILDOBJSMCU = $(addprefix $(BUILD)/,$(OBJSMCU))
 BUILDOBJSRTMPTEST= $(addprefix $(BUILD)/,$(OBJSRTMPTEST))
+BUILDOBJSWSTEST= $(addprefix $(BUILD)/,$(OBJSWSTEST))
 BUILDOBJSMEDIAGW= $(addprefix $(BUILD)/,$(OBJS2))
 BUILDOBJSFS= $(addprefix $(BUILD)/,$(OBJSFS)) 
 BUILDOBJSFSCLIENT= $(addprefix $(BUILD)/,$(OBJSFSCLIENT))
@@ -243,6 +245,9 @@ mcu: mkdirs $(OBJSMCU)
 
 rtmptest: $(OBJSRTMPTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS)
+
+wstest: mkdirs $(OBJSWSTEST)
+	$(CXX) -o $(BIN)/$@ $(BUILDOBJSWSTEST) $(LDFLAGS) $(VADLD)
 
 mediagw:  $(OBJS2) maingw.o
 	$(CXX) -o $(BIN)/$@ $(OBJSMEDIAGW) maingw.o $(LDFLAGS)
