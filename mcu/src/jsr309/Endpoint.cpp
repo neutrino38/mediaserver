@@ -540,12 +540,16 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 	for (std::map<int,int>::const_iterator it=result.acceptedMap.begin(); it!=result.acceptedMap.end(); ++it)
 		acceptedOut[(BYTE)it->first] = (BYTE)it->second;
 
-	//Mémorise le fmtp par PT (params seuls, absent si vide — décision E) et les
-	//effectiveProps (réservées à l'encodeur d'émission, phase 5).
+	//Mémorise le fmtp par PT et les effectiveProps (réservées à l'encodeur
+	//d'émission, phase 5). Contrat XML-RPC (§5.2) : TOUT PT accepté est présent,
+	//y compris les codecs SANS fmtp (valeur = chaîne vide "" — PCMU, T140,
+	//telephone-event sans plage…). La présence de la clé signale « accepté » ;
+	//l'absence signale « filtré/non supporté » (result.codecs ne contient que
+	//les codecs retenus). C'est le contrôleur SIP qui déduit les PT acceptés de
+	//cette struct, la distinction accepté-sans-fmtp / rejeté doit donc être nette.
 	for (std::vector<NegotiatedCodec>::const_iterator it=result.codecs.begin(); it!=result.codecs.end(); ++it)
 	{
-		if (!it->fmtp.empty())
-			negotiatedFmtp[it->payloadType] = it->fmtp;
+		negotiatedFmtp[it->payloadType] = it->fmtp;
 		negotiatedProps[it->payloadType] = it->effectiveProps;
 	}
 }

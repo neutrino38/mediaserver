@@ -43,12 +43,13 @@ public:
 	    // (elles continuent vers RTPSession, qui ignore de son côté codec.*).
 	    void StoreCodecProperties(const Properties& properties);
 	    // Filtre la map proposée selon les codecs réellement supportés (décision D)
-	    // et dérive le fmtp local (params seuls, décision E) SANS ouvrir de codec.
-	    // Remplit acceptedOut (sous-ensemble accepté) et mémorise le résultat
-	    // (fmtp par PT + effectiveProps) pour le retour XML-RPC et l'encodeur (ph.5).
+	    // et dérive le fmtp local (params seuls) SANS ouvrir de codec. Remplit
+	    // acceptedOut (sous-ensemble accepté) et mémorise le résultat (fmtp par PT
+	    // + effectiveProps) pour le retour XML-RPC et l'encodeur (ph.5).
 	    void NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut);
-	    // fmtp de la dernière négociation : PT -> paramètres (params seuls). Un codec
-	    // sans fmtp est absent (décision E). Vide tant qu'aucune négociation n'a eu lieu.
+	    // fmtp de la dernière négociation : PT -> paramètres (params seuls). TOUT PT
+	    // accepté est présent ; un codec sans fmtp a une valeur "" (chaîne vide). Un
+	    // PT absent a été filtré (non supporté). Vide tant qu'aucune négociation n'a eu lieu.
 	    const std::map<int,std::string>& GetNegotiatedFmtp() const { return negotiatedFmtp; }
 
 	    virtual int Init() = 0;

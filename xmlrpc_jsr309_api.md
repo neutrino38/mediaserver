@@ -481,14 +481,29 @@ média `media` vers `endpointId`.
 - `EndpointStartReceiving` renvoie (§5.2 de `nego_fmtp.md`, **livré phase 4**) :
   - `returnVal[0]` = **port local** ouvert à publier dans le SDP local (inchangé,
     clients actuels OK) ;
-  - `returnVal[1]` = struct `{ "<pt>": "<paramètres fmtp>" }` par payload type
-    **réellement accepté**. Les PT proposés mais **non supportés sont filtrés** et
-    n'apparaissent pas (décision D) : le contrôleur SIP reconstruit la m-line et
-    les `a=fmtp` à partir de cette struct. La valeur est le corps du `fmtp`
-    **sans** le préfixe `a=fmtp:<pt> ` (décision E) ; un codec sans `fmtp`
-    (PCMU, T140…) est **absent** de la struct.
+  - `returnVal[1]` = struct `{ "<pt>": "<paramètres fmtp>" }` listant **chaque
+    payload type réellement accepté** issu du `rtpMap` d'entrée. Le serveur est
+    **autoritatif** : le contrôleur SIP reconstruit la m-line et les `a=fmtp`
+    directement à partir de cette struct. Règles :
+    - **présence de la clé = PT accepté** ; **absence de la clé = PT filtré**
+      (non supporté par le serveur). C'est ainsi que le contrôleur déduit les
+      PT retenus.
+    - la valeur est le corps du `fmtp` **seul** — exactement ce qui suit
+      `a=fmtp:<pt> ` dans le SDP, **sans** le préfixe `a=fmtp:` ni le numéro de PT.
+    - un codec **sans `fmtp`** (PCMU, PCMA, G722, T140…) est **présent** avec la
+      valeur **chaîne vide `""`**.
+    - un codec **avec `fmtp`** porte la chaîne complète, ex.
+      `"profile-level-id=42801f;packetization-mode=1"` (H264).
+    - cas particuliers : `telephone-event` → sa plage de tonalités (ex. `"0-16"`) ;
+      `red` / T140RED → la liste de redondance référençant le PT T.140 accepté
+      (ex. `"106/106/106"`), cohérente avec la numérotation des PT acceptés.
 - `EndpointRequestUpdate` : force une mise à jour / image clé (FIR) vers ce
   média.
+
+> Compat : historiquement `returnVal` ne contenait que `[ recvPort ]` ; la struct
+> `fmtpByPt` est un ajout **strictement additif**. Un client qui ne lit que
+> `returnVal[0]` (le port) n'est pas impacté ; un client tolérant lit
+> `returnVal[1]` pour construire ses `a=fmtp` et déduire les PT acceptés.
 
 > 🔷 **Négociation entrante (`fmtp` distant) — encore en cours** (phase 5 de
 > `nego_fmtp.md`). Le **canal** existe déjà : `EndpointSetRTPProperties` accepte
@@ -662,8 +677,8 @@ Toutes les opérations média sont **par `media`** (`0`=audio, `1`=video,
 |-------------|------|-----|
 | `m=<media> <port> …` **local** (le nôtre) | ← | `port` = retour de `EndpointStartReceiving` |
 | `c=`/candidat `host` **local** | ← | `GetMediaCandidates(RTP, media)` → `rtp://ip:port` |
-| payload types **locaux** (ce qu'on accepte) | → | `rtpMap` de `EndpointStartReceiving` (PT non supportés **filtrés** du retour) |
-| `a=fmtp:<pt>` **local** (nos paramètres) | ← | `returnVal[1]` de `EndpointStartReceiving` (`{ "<pt>":"<params>" }`) |
+| payload types **locaux** (ce qu'on accepte) | ← | **clés** de `returnVal[1]` de `EndpointStartReceiving` (proposés via `rtpMap`, PT non supportés **filtrés** du retour) |
+| `a=fmtp:<pt>` **local** (nos paramètres) | ← | `returnVal[1]` de `EndpointStartReceiving` (`{ "<pt>":"<params>" }`, valeur `""` = codec accepté **sans** `a=fmtp`) |
 | paramètres codec **locaux** à imposer (ex. `h264.profile-level-id`) | → | `EndpointSetRTPProperties(codec.<x>.<param>)` **avant** `EndpointStartReceiving` |
 | `a=crypto` **local** (SRTP-SDES) | ↔ | clé fournie à `EndpointSetLocalCryptoSDES` = celle publiée dans notre SDP |
 | `a=fingerprint`/`a=setup` **local** (DTLS) | ← | `EndpointGetLocalCryptoDTLSFingerprint(hash)` |
@@ -710,8 +725,10 @@ Pour **chaque média** de l'offre :
    - DTLS : `EndpointGetLocalCryptoDTLSFingerprint(hash)` → fingerprint pour notre SDP
    - ICE : `EndpointSetLocalSTUNCredentials(S, EP, media, ufrag, pwd)` (à publier)
 6. `EndpointStartReceiving(S, EP, media, rtpMap)` → `[recvPort, fmtpByPt]`.
-   `rtpMap` = les PT de l'offre qu'on veut accepter ; le retour ne conserve que
-   les PT **réellement supportés** (`fmtpByPt` donne leurs `a=fmtp`).
+   `rtpMap` = les PT de l'offre qu'on veut accepter ; `fmtpByPt` (`returnVal[1]`)
+   liste **chaque PT réellement accepté** (clé présente, valeur `""` si le codec
+   n'a pas de `fmtp`) et **omet les PT filtrés** — c'est la liste autoritative des
+   PT retenus, avec leurs paramètres `a=fmtp` (§6.7).
 7. `GetMediaCandidates(S, EP, RTP=0, media)` → `rtp://ip:port` (adresse locale)
 8. `EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap)`
    (ip/port pris dans l'offre)
@@ -722,8 +739,10 @@ Puis :
    (`EndpointAttachToEndpoint`), mixers (`…AttachToAudioMixerPort` /
    `…VideoMixerPort`), player, transcoder… (cf. §9.3).
 10. **Construire et envoyer le 200 OK** : `recvPort` (étape 6) + candidat local
-    (étape 7) + crypto locale (étape 5) + payload types acceptés + lignes
-    `a=fmtp:<pt> <params>` reconstruites depuis `fmtpByPt` (`returnVal[1]`, étape 6).
+    (étape 7) + crypto locale (étape 5). Les **payload types de la m-line** =
+    les **clés** de `fmtpByPt` (étape 6) ; pour chaque clé de valeur non vide,
+    ajouter une ligne `a=fmtp:<pt> <valeur>` (une clé à valeur `""` = codec
+    accepté sans `a=fmtp`).
 11. `EndpointStartRTPTimeout(S, EP, media, timeoutMs)` — **après** l'envoi du
     200 OK, pour armer le watchdog (voir §6.7).
 12. Trickle : à chaque candidat distant reçu ensuite,
@@ -755,11 +774,14 @@ Pour **chaque média** offert :
    - DTLS : `EndpointGetLocalCryptoDTLSFingerprint(hash)`
    - ICE : `EndpointSetLocalSTUNCredentials(S, EP, media, ufrag, pwd)`
 4. `EndpointStartReceiving(S, EP, media, rtpMap)` → `[recvPort, fmtpByPt]`.
-   Le `fmtp` local (`fmtpByPt`) exprime nos **capacités brutes** (config +
-   défauts) ; la contrainte du pair n'arrive qu'à l'étape 7 (voir phase 5).
+   `fmtpByPt` (`returnVal[1]`) liste **chaque PT accepté** (clé présente, valeur
+   `""` si sans `fmtp`) et exprime nos **capacités brutes** (config + défauts) ;
+   la contrainte du pair n'arrive qu'à l'étape 7 (voir phase 5).
 5. `GetMediaCandidates(S, EP, RTP=0, media)` → adresse locale
 6. **Construire et envoyer l'INVITE** avec l'offre (recvPort + candidat + crypto
-   locale + payload types offerts + `a=fmtp` reconstruits depuis `fmtpByPt`).
+   locale). Les **payload types de la m-line offerte** = les **clés** de
+   `fmtpByPt` ; pour chaque clé de valeur non vide, une ligne
+   `a=fmtp:<pt> <valeur>` (une clé à valeur `""` = codec offert sans `a=fmtp`).
 
 À réception du **200 OK** (réponse du pair) :
 
@@ -839,10 +861,12 @@ détruire proprement les endpoints d'abord reste préférable.
 
 ### 9.7 Négociation des codecs et des `fmtp` (dynamique cible)
 
-> 🔷 Décrit le comportement **cible** (conception `nego_fmtp.md`), en cours
-> d'implémentation. Tant qu'il n'est pas livré, `EndpointStartReceiving` ne
-> renvoie que `[recvPort]` et la clé `codec.<x>.fmtp` est ignorée — un contrôleur
-> tolérant teste la présence de `returnVal[1]`.
+> 🔷 Le **filtrage des codecs** et la **production du `fmtp` local** (sens
+> réception) sont **livrés** (phases 1-4 de `nego_fmtp.md`) : `EndpointStartReceiving`
+> renvoie `[recvPort, fmtpByPt]` (§6.7). Reste en cours (phase 5) la
+> **négociation entrante** : parsing de la clé `codec.<x>.fmtp` reçue du pair pour
+> **contraindre l'émission**. Un contrôleur tolérant teste la présence de
+> `returnVal[1]`.
 
 **Principe.** Le média serveur devient l'autorité sur les codecs : il **filtre**
 la `rtpMap` proposée par ses codecs réellement supportés et **produit les
@@ -864,9 +888,10 @@ distant est connu dès l'offer → le pousser **avant** `StartReceiving` :
 Par média de l'offre :
 1. EndpointSetRTPProperties(S, EP, media, { "codec.<x>.fmtp": "<fmtp de l'offre>", … })
 2. EndpointStartReceiving(S, EP, media, rtpMap_offre)
-     → returnVal = [ recvPort, { "<pt>": "<fmtp local>" } ]   # PT filtrés + fmtp
-3. Construire l'answer : m-line = PT de returnVal[1], a=fmtp = valeurs de returnVal[1],
-   recvPort + crypto/candidats locaux.
+     → returnVal = [ recvPort, { "<pt>": "<fmtp local>" } ]   # clés = PT acceptés
+3. Construire l'answer : m-line = clés de returnVal[1] ; pour chaque valeur non vide,
+   une ligne a=fmtp:<pt> <valeur> ("" = codec accepté sans a=fmtp) ; + recvPort,
+   crypto/candidats locaux.
 4. Envoyer le 200 OK.
 5. EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap_answer)
      → l'émission respecte d'emblée les contraintes du pair (étape 1).
@@ -880,8 +905,9 @@ distant à `StartReceiving` → l'ingestion vient **avant** `StartSending` :
 Par média offert :
 1. EndpointStartReceiving(S, EP, media, rtpMap_qu_on_veut_offrir)
      → returnVal = [ recvPort, { "<pt>": "<fmtp local = nos capacités>" } ]
-       (H.264 : sprop-parameter-sets best-effort / omis — pas encore encodé)
-2. Construire et envoyer l'INVITE (m-line + a=fmtp depuis returnVal[1]).
+       (clés = PT acceptés ; H.264 : sprop-parameter-sets best-effort / omis — pas encore encodé)
+2. Construire et envoyer l'INVITE : m-line = clés de returnVal[1] ; pour chaque
+   valeur non vide, une ligne a=fmtp:<pt> <valeur> ("" = offert sans a=fmtp).
 À réception du 200 OK :
 3. EndpointSetRTPProperties(S, EP, media, { "codec.<x>.fmtp": "<fmtp de l'answer>", … })
 4. EndpointStartSending(S, EP, media, remoteIp, remotePort, rtpMap_answer)
