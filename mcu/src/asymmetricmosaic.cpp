@@ -204,7 +204,10 @@ int AsymmetricMosaic::Clean(int pos)
 	//Check it's in the mosaic
 	if (pos >= numSlots)
 		return 0;
-	
+
+	//Chemin avfilter : retire la trame du slot (fond visible)
+	ClearSlotFrame(pos);
+
 	//Get positions
 	int left = GetLeft(pos);
 	int top = GetTop(pos);

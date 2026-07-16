@@ -233,6 +233,9 @@ int PartedMosaic::Clean(int pos)
 	if (pos >= numSlots)
 		return 0;
 
+	//Chemin avfilter : retire la trame du slot (fond visible)
+	ClearSlotFrame(pos);
+
 	//Get slot position in mosaic
 	int i = pos / mosaicCols;
 	int j = pos - i*mosaicCols;

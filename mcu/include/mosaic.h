@@ -61,14 +61,14 @@ public:
 	void Reset()		{ mosaicChanged = true; }
 
 	BYTE* GetFrame();
-	// Composite enveloppé dans un Pict (copie du BYTE* contigu en YUV420P). Pont
-	// TEMPORAIRE symétrique de Update(PictPtr) jusqu'à la refonte avfilter (Phase 5).
+	// Composite de la mosaïque. Depuis la Phase 3 : composition par le graphe
+	// avfilter (MosaicCompositor) à partir des trames mémorisées par slot, avec
+	// cache intra-tick et repli sur l'ancien chemin BYTE* si Configure échoue.
 	PictPtr GetPict();
 	virtual int Update(int index,BYTE *frame,int width,int heigth) = 0;
-	// Surcharge AVFrame (migration Pict) : aplatit la trame en YUV420P contigu
-	// (redescente GPU si nécessaire) puis délègue à la surcharge BYTE* ci-dessus.
-	// Pont TEMPORAIRE : les internals mosaïque restent BYTE*/FrameScaler jusqu'à
-	// leur passage en graphe avfilter (Phase 5, cf. avframe.md).
+	// Surcharge AVFrame (migration Pict) : mémorise la trame du slot (redescente
+	// GPU->CPU pour le chemin CPU de Phase 3) et l'aspect du slot. N'écrit plus un
+	// pixel dans le buffer BYTE* : la composition est faite par le graphe avfilter.
 	int Update(int index, const PictPtr& pic);
 	virtual int Clean(int index) = 0;
 
@@ -163,8 +163,24 @@ protected:
 	// letterbox de chaque slot ACTIF). N'écrit aucun pixel. cf. mosaic_avfilter_plan.md §3.
 	MosaicGraphDesc BuildDesc();
 
+	// Fond de la mosaïque (Pict WxH, généré une fois : couleur/taille fixes).
+	// Gris neutre (Y=U=V=128) ou noir si HasBlackBackground() (mosaic1p1).
+	const PictPtr& GetBackground();
+
+	// Retire la trame mémorisée d'un slot (slot vide = pas de branche dans le
+	// graphe, le fond reste visible). À appeler depuis Clean() des dérivées.
+	void ClearSlotFrame(int pos)
+	{
+		if (pos >= 0 && pos < (int) slotFrames.size())
+			slotFrames[pos].reset();
+	}
+
+	// Ancien chemin BYTE* (GetFrame + copie dans un Pict). Repli de mise au point
+	// si la (re)configuration du graphe échoue. Disparaît en Phase 6.
+	PictPtr GetPictLegacy();
+
 protected:
-	void SetChanged()	{ mosaicChanged = true; overlayNeedsUpdate = true; }
+	void SetChanged()	{ mosaicChanged = true; overlayNeedsUpdate = true; compositeValid = false; }
 
 protected:
 	typedef std::map<int,int> Participants;
@@ -211,6 +227,7 @@ protected:
 	std::vector<bool>    slotKeepAspect;
 	PictPtr              background;   // Pict de fond WxH (généré paresseusement)
 	PictPtr              composite;    // cache du dernier composite
+	bool                 compositeValid = false; // composite à jour (invalidé par SetChanged)
 	MosaicCompositor     compositor;   // matérialisation du graphe
 };
 

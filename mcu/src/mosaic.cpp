@@ -17,43 +17,32 @@ extern "C" {
 #include <libavutil/imgutils.h>
 }
 
-// Pont AVFrame -> BYTE* (migration Pict) : aplatit une trame en YUV420P contigu
-// et délègue à la surcharge BYTE* propre à chaque mosaïque. Copie temporaire
-// jusqu'à la refonte des mosaïques en graphe avfilter (Phase 5, cf. avframe.md).
+// Mémorise la trame d'un slot pour la composition par graphe avfilter (Phase 3).
+// N'écrit plus un pixel dans le buffer BYTE* : le composite est produit par
+// MosaicCompositor (cf. GetPict). Redescente GPU->CPU car le chemin de Phase 3
+// est CPU (le graphe GPU natif vient en Phase 5).
 int Mosaic::Update(int index, const PictPtr& pic)
 {
 	if (!pic || !pic->GetAVFrame())
 		return 0;
 
-	// Mosaïque CPU pour l'instant : redescente GPU->CPU si besoin.
-	PictPtr cpu = pic;
+	PictPtr frame = pic;
 	if (pic->IsGPUPict())
 	{
-		cpu = pic->DownloadToCPU();
-		if (!cpu) return 0;
+		frame = pic->DownloadToCPU();
+		if (!frame)
+			return 0;
 	}
 
-	// Mémorise la trame ORIGINALE (GPU comprise) et l'aspect du slot pour le
-	// futur chemin graphe (BuildDesc/Compose). N'affecte pas le rendu actuel.
+	// Mémorise la trame et l'aspect du slot (lus par BuildDesc/GetPict).
 	if (index >= 0 && index < (int) slotFrames.size())
 	{
-		slotFrames[index]     = pic;
+		slotFrames[index]     = frame;
 		slotKeepAspect[index] = keepAspect;
 	}
 
-	AVFrame* f = cpu->GetAVFrame();
-	if (!f || f->format != AV_PIX_FMT_YUV420P)
-		return 0;
-
-	const int w = f->width;
-	const int h = f->height;
-
-	std::vector<BYTE> tmp((size_t) w * h * 3 / 2);
-	av_image_copy_to_buffer(tmp.data(), (int) tmp.size(),
-	                        (const uint8_t* const*) f->data, f->linesize,
-	                        AV_PIX_FMT_YUV420P, w, h, 1);
-
-	return Update(index, tmp.data(), w, h);
+	SetChanged();
+	return 1;
 }
 
 // Calcule la taille effective de la vignette (letterbox/pillarbox) et son décalage
@@ -147,9 +136,64 @@ MosaicGraphDesc Mosaic::BuildDesc()
 	return desc;
 }
 
-// Enveloppe le composite (BYTE* YUV420P contigu) dans un Pict (copie). Pont
-// TEMPORAIRE jusqu'à la refonte avfilter des mosaïques (Phase 5, cf. avframe.md).
+// Composite de la mosaïque via le graphe avfilter (MosaicCompositor). Une seule
+// composition par tick grâce au cache 'compositeValid' (invalidé par SetChanged
+// sur tout Update/Clean) : plusieurs inputs partageant la mosaïque n'entraînent
+// qu'une compo. Repli sur l'ancien chemin BYTE* si la (re)config du graphe échoue
+// (garde-fou de mise au point, cf. mosaic_avfilter_plan.md §3/§4).
 PictPtr Mosaic::GetPict()
+{
+	if (compositeValid && composite)
+		return composite;
+
+	MosaicGraphDesc desc = BuildDesc();
+	if (!compositor.Configure(desc))
+	{
+		Error("-Mosaic: echec Configure du compositor, repli chemin BYTE*\n");
+		PictPtr legacy = GetPictLegacy();
+		if (legacy)
+			composite = legacy;
+		return composite;
+	}
+
+	// Fond (généré une fois : taille et couleur fixes pour cette mosaïque).
+	const PictPtr& bg = GetBackground();
+	if (!bg)
+		return composite;
+
+	// Trames des slots ACTIFS, alignées sur desc.slots (même ordre/positions).
+	std::vector<PictPtr> frames;
+	frames.reserve(desc.slots.size());
+	for (const MosaicSlotDesc& s : desc.slots)
+		frames.push_back(slotFrames[s.pos]);
+
+	// Overlays : Phase 4 (aucun overlay poussé pour l'instant).
+	PictPtr out = compositor.Compose(frames, std::vector<PictPtr>(), bg, nullptr);
+	if (out)
+	{
+		composite      = out;
+		compositeValid = true;
+	}
+	return composite;
+}
+
+// Fond de la mosaïque, généré paresseusement (couleur/taille fixes).
+const PictPtr& Mosaic::GetBackground()
+{
+	if (!background)
+	{
+		if (HasBlackBackground())
+			background = Pict::CreateBlack(mosaicTotalWidth, mosaicTotalHeight);
+		else
+			background = Pict::CreateColor(mosaicTotalWidth, mosaicTotalHeight,
+			                               128, 128, 128);
+	}
+	return background;
+}
+
+// Ancien chemin : enveloppe le composite BYTE* YUV420P contigu dans un Pict
+// (copie). Repli si le graphe avfilter n'a pas pu être configuré. Phase 6 : retrait.
+PictPtr Mosaic::GetPictLegacy()
 {
 	BYTE* buf = GetFrame();
 	if (!buf)
