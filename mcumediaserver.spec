@@ -9,7 +9,7 @@ Group:     Applications/Internet
 License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, webrtc-audio-processing, libsrtp2
+Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, webrtc-audio-processing, libsrtp
 Requires:  openssl-libs >= 3.0, xmlrpc-c
 BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
@@ -17,6 +17,8 @@ BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: gsm-devel
 BuildRequires: webrtc-audio-processing-devel, libsrtp-devel
 BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel
+BuildRequires: systemd-rpm-macros
+%{?systemd_requires}
 
 %description
 Mediaserver controlled by sailfin applications
@@ -44,13 +46,16 @@ cd ..
 %install
 echo "############################# Install"
 mkdir -p $RPM_BUILD_ROOT/opt/ives/bin/
-mkdir -p $RPM_BUILD_ROOT/etc/init.d
+mkdir -p $RPM_BUILD_ROOT%{_unitdir}
+mkdir -p $RPM_BUILD_ROOT/etc/sysconfig
 mkdir -p $RPM_BUILD_ROOT/etc/mediaserver
 cd %_topdir
 cd ..
 cp bin/debug/mcu $RPM_BUILD_ROOT/opt/ives/bin/mediaserver
 chmod 750 $RPM_BUILD_ROOT/opt/ives/bin/mediaserver
-cp mediaserver.init $RPM_BUILD_ROOT/etc/init.d/mediaserver
+# Unite systemd (remplace l'ancien script SysV /etc/init.d/mediaserver).
+cp mediaserver.service $RPM_BUILD_ROOT%{_unitdir}/mediaserver.service
+cp mediaserver.sysconfig $RPM_BUILD_ROOT/etc/sysconfig/mediaserver
 cp type-asian.xml $RPM_BUILD_ROOT/etc/mediaserver
 cp certcommunication.sh $RPM_BUILD_ROOT/etc/mediaserver
 chmod 750 $RPM_BUILD_ROOT/etc/mediaserver/certcommunication.sh
@@ -59,12 +64,15 @@ cp mcu.csr_conf $RPM_BUILD_ROOT/etc/mediaserver
 %files
 %defattr(-,root,root,-)
 /opt/ives/bin
-%attr(0755,root,root) /etc/init.d/mediaserver
+%{_unitdir}/mediaserver.service
+%config(noreplace) /etc/sysconfig/mediaserver
 /etc/mediaserver/type-asian.xml
 %attr(0750,root,root) /etc/mediaserver/certcommunication.sh
 %config(noreplace) /etc/mediaserver/mcu.csr_conf
 
 %post
+# Recharge systemd et applique le preset du service (enable au 1er install).
+%systemd_post mediaserver.service
 if [ ! -r /etc/ImageMagick-7/type.xml ]
 then
     echo "ImageMagick font are not configured. Participant name may not be displayed correctly"
@@ -82,10 +90,27 @@ fi
 echo "Generating DTLS/OpenSSL certificate (ECDSA P-256) if needed"
 /etc/mediaserver/certcommunication.sh
 
-echo "Now restarting mediaserver"
-/etc/init.d/mediaserver restart
+echo "Now (re)starting mediaserver"
+/usr/bin/systemctl restart mediaserver.service || :
+
+%preun
+# Arret + disable du service si desinstallation complete.
+%systemd_preun mediaserver.service
+
+%postun
+# Redemarre le service apres une mise a jour (pas a la desinstallation).
+%systemd_postun_with_restart mediaserver.service
 
 %changelog
+* Wed Jul 16 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- migration du service SysV (/etc/init.d/mediaserver) vers une unite systemd
+  (mediaserver.service, Type=simple). Le binaire tourne desormais en avant-plan
+  (plus de "-f"/fork), l'arret propre passe par SIGTERM (signing_handler) et le
+  PID est gere par systemd. Options via /etc/sysconfig/mediaserver.
+- logs (stdout/stderr) rediriges vers /var/log/mcu.log par systemd
+  (StandardOutput/StandardError), et consultables via "journalctl -u mediaserver".
+- scriptlets %%systemd_post / %%systemd_preun / %%systemd_postun_with_restart,
+  BuildRequires systemd-rpm-macros.
 * Fri Jul 03 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - certcommunication.sh installe dans /etc/mediaserver et appele en %post :
   genere un certificat DTLS/OpenSSL ECDSA P-256 (signe SHA-256, valide 10 ans)

@@ -153,6 +153,10 @@ int main(int argc,char **argv)
 #endif
 	const char *crtfile = "/etc/mediaserver/mcu.crt";
 	const char *keyfile = "/etc/mediaserver/mcu.key";
+	//WebSocket TLS (wss://)
+	bool wsSecure = false;
+	const char *wsCrtFile = NULL;	//NULL → réutilise crtfile
+	const char *wsKeyFile = NULL;	//NULL → réutilise keyfile
 
 	//Get all
 	for(int i=1;i<argc;i++)
@@ -174,6 +178,9 @@ int main(int argc,char **argv)
 				" --max-rtp-port   Set max rtp port\r\n"
 				" --rtmp-port      Set RTMP port\r\n"
 				" --websocket-port Set WebSocket server port \r\n"
+				" --websocket-secure Enable secure WebSocket (wss://)\r\n"
+				" --websocket-cert Certificate file (PEM) for wss:// (default: mcu.crt; implies --websocket-secure)\r\n"
+				" --websocket-key  Private key file (PEM) for wss:// (default: mcu.key; implies --websocket-secure)\r\n"
 				" --vad-period     Set the VAD based conference change period in milliseconds\r\n");
 #ifdef MOTELI
 			printf("usage for rabbit MQ connector:\r\n"
@@ -220,6 +227,15 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--websocket-host")==0 && (i+1<argc))
 			//Get host
 			wsHost = argv[++i];
+		else if (strcmp(argv[i],"--websocket-secure")==0)
+			//Enable secure WebSocket (wss://)
+			wsSecure = true;
+		else if (strcmp(argv[i],"--websocket-cert")==0 && (i+1<argc))
+			//Certificate (PEM) for wss://
+			wsCrtFile = argv[++i];
+		else if (strcmp(argv[i],"--websocket-key")==0 && (i+1<argc))
+			//Private key (PEM) for wss://
+			wsKeyFile = argv[++i];
 #ifdef MOTELI
 		else if (strcmp(argv[i],"--rq-queue")==0 && (i+1<=argc))		
 			queueName = argv[++i];
@@ -419,6 +435,20 @@ int main(int argc,char **argv)
 	
 	//Set default video mixer vad period
 	VideoMixer::SetVADDefaultChangePeriod(vadPeriod);
+
+	//WebSocket TLS : fournir un certificat/clé active automatiquement wss:// ;
+	//défauts sur les mêmes fichiers PEM que DTLS (mcu.crt/mcu.key).
+	if (wsCrtFile || wsKeyFile) wsSecure = true;
+	if (!wsCrtFile) wsCrtFile = crtfile;
+	if (!wsKeyFile) wsKeyFile = keyfile;
+	if (wsSecure)
+	{
+		wsServer.SetSecure(true, wsCrtFile, wsKeyFile);
+		Log("-WebSocket secure (wss://) enabled [crt:\"%s\",key:\"%s\"]\n", wsCrtFile, wsKeyFile);
+	} else {
+		Log("-WebSocket in clear mode (ws://)\n");
+	}
+
 	//Init web socket server
 	if ( ! wsServer.Init(wsPort) ) goto server_init_failed;
 	

@@ -78,17 +78,23 @@ est vert**. Il ne reste que le service systemd, la CI et quelques nettoyages.
 - `Requires`/`BuildRequires` à jour : `libsrtp2`/`libsrtp-devel`,
   `ImageMagick-c++ >= 7`, `xmlrpc-c`/`xmlrpc-c-devel`, `openssl >= 3.0`,
   webrtc-audio-processing.
-- Reste au `.spec` : la migration systemd (§B) et une validation de bout en
-  bout de `install.ksh rpm` en environnement propre.
+- Reste au `.spec` : une validation de bout en bout de `install.ksh rpm` en
+  environnement propre (la migration systemd §B est faite).
 
 ---
 
 ## 2. Reste à faire
 
-### B. Service systemd — **non fait**
-- Toujours `mediaserver.init` (SysV) copié dans `/etc/init.d/` par le `.spec`.
-- Créer `mediaserver.service`, l'installer sous `%{_unitdir}`, ajouter les
-  scriptlets `%post/%preun/%postun` (`systemctl`), retirer l'init SysV.
+### B. Service systemd — **fait**
+- `mediaserver.service` créé (`Type=simple`, avant-plan : plus de `-f`/fork,
+  arrêt propre par `SIGTERM` via `signing_handler`, `Restart=on-failure`,
+  `LimitCORE=infinity`, stdout/stderr → `/var/log/mcu.log` + journal).
+- Le `.spec` l'installe sous `%{_unitdir}`, installe `/etc/sysconfig/mediaserver`
+  (`OPTIONS=`, `config(noreplace)`), utilise les scriptlets standard
+  `%systemd_post`/`%systemd_preun`/`%systemd_postun_with_restart`
+  (`BuildRequires: systemd-rpm-macros`, `%{?systemd_requires}`), et le `%post`
+  génère le certificat DTLS puis redémarre le service.
+- `mediaserver.init` (SysV) supprimé du dépôt.
 
 ### C. `install.ksh local_compile` — **fait** (build speex mort retiré)
 - Le bloc `staticdeps` speex a été supprimé de `local_compile` : le codec Speex
@@ -148,8 +154,6 @@ est vert**. Il ne reste que le service systemd, la CI et quelques nettoyages.
 
 ## 4. Récapitulatif des fichiers à toucher (reste à faire)
 
-- `mediaserver.service` (à créer) + scriptlets `.spec` (`%post/%preun/%postun`),
-  retrait de `mediaserver.init` (§B).
 - `mcu/Makefile.rpm` — détection/nommage `el9` explicite + purge des branches
   legacy `FEWSTATICDEPS`/`el5` (`-lspeex`, `-lvpx`, `-lfdk-aac`…) (cosmétique, §D).
 - CI (à recréer) — cible + dépôts AlmaLinux 9 (l'ancien `Jenkinsfile` a été

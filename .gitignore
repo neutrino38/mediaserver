@@ -10,3 +10,8 @@ mcu/media/
 /sdp/dist/
 /sdp/nbproject/private/
 mcu.key
+
+# Harnais de test WebSocket (log serveur généré)
+test/websocket/wstest.server.log
+test/websocket/wstest.crt
+test/websocket/wstest.key

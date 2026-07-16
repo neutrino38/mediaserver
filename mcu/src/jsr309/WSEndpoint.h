@@ -64,7 +64,10 @@ private:
 	timeval clock;
 	Joinable *joined;
 	
-	WebSocket * _ws;
+	//weak_ptr : le WebSocket est possédé par le WebSocketServer. On le verrouille
+	//avant chaque appel (SendMessage/Close) → sûr même si la connexion est détruite
+	//de façon concurrente par le thread serveur.
+	std::weak_ptr<WebSocket> _ws;
 	bool		useRed;	
 	static int  	wsPort;
 	static char* 	wsHost;

@@ -4,11 +4,14 @@
 #include <sys/poll.h>
 #include <memory>
 #include <mutex>
-#include <thread>
+#include <atomic>
+#include <cstdint>
+#include <list>
 #include <map>
 #include "config.h"
 #include "fifo.h"
 #include "websockets.h"
+#include "websockettransport.h"
 #include "http.h"
 #include "httpparser.h"
 
@@ -231,7 +234,8 @@ private:
 
 class WebSocketConnection :
 	public WebSocket,
-	public HTTPParser::Listener
+	public HTTPParser::Listener,
+	public std::enable_shared_from_this<WebSocketConnection>
 {
 private:
 	class Frame
@@ -281,6 +285,13 @@ private:
 		DWORD length;
 	};
 public:
+	//Borne de sécurité sur la longueur déclarée d'une trame WS (protège le thread
+	//serveur unique d'une allocation démesurée — R2 de websocket-refactor.md).
+	static constexpr QWORD MaxFramePayload = 16*1024*1024; // 16 Mo
+
+	//Le serveur (thread unique) est notifié via ce Listener. Il ne possède plus
+	//de thread par-connexion : la connexion est une machine à état passive pilotée
+	//par la boucle poll() unique du serveur.
 	class Listener
 	{
 	public:
@@ -289,22 +300,25 @@ public:
 	public:
 		//Interface
 		virtual void onUpgradeRequest(WebSocketConnection* conn) = 0;
-		virtual void onDisconnected(WebSocketConnection* conn) = 0;
+		//Réveille le thread serveur (ex. depuis un autre thread après SendMessage/
+		//Close) pour qu'il reconstruise son jeu de poll() et traite la sortie.
+		virtual void onWakeupNeeded() = 0;
 	};
 public:
-	WebSocketConnection(Listener* listener);
+	WebSocketConnection(Listener* listener, uint64_t connId);
 	~WebSocketConnection();
 
-	int Init(int fd);
+	//Le serveur fournit le transport (clair ou TLS) déjà choisi.
+	int Init(int fd, std::unique_ptr<WebSocketTransport> transport);
 	int End();
 
-
-	//Weksocket
+	//Weksocket (appelables depuis n'importe quel thread — thread-safe)
 	virtual void Accept(std::weak_ptr<WebSocket::Listener> wsl);
 	virtual void Reject(const WORD code, const char* reason);
 	virtual void SendMessage(const std::string& message);
 	virtual void SendMessage(const BYTE* data, const DWORD size);
 	virtual void Close();
+	virtual std::weak_ptr<WebSocket> GetWeakPtr();
 
 	//HTTPParser listener
 	virtual int on_url (HTTPParser*, const char *at, DWORD length);
@@ -317,32 +331,42 @@ public:
 	virtual int on_message_complete (HTTPParser*);
 
 	HTTPRequest* GetRequest() { return request; };
-	
-protected:
-	void Start();
-	void Stop();
-	int Run();
+
+	//---- Interface pilotée par le thread serveur (boucle poll() unique) --------
+	uint64_t GetConnId() const	{ return connId;		}
+	int      GetFd()		{ return transport ? transport->GetFd() : FD_INVALID; }
+	short    GetPollEvents();	//Événements poll() souhaités (POLLIN + POLLOUT si sortie en attente)
+	void     OnReadable();		//Données entrantes disponibles
+	void     OnWritable();		//Socket prêt en écriture
+	bool     IsFinished();		//La connexion doit-elle être fermée/détruite ?
+	void     NotifyClose();		//Émet onClose vers le WebSocket::Listener (si upgraded)
+
+private:
 	Frame* GetNextFrame();
-private:
-	static  void* run(void *par);
 	void   ProcessData(BYTE *data,DWORD size);
-	int    WriteData(BYTE *data,const DWORD size);
-	void   SignalWriteNeeded();
+	bool   HasPendingOutput();	//appelant DOIT tenir framesMutex
 
 private:
-	int socket;
-	int wakeup_socket[2]; // write signal
-	pollfd ufds[2];
-	bool inited;
-	bool running;
+	//Le serveur possède la connexion et lui survit → pointeur brut.
+	Listener* listener;
+	uint64_t  connId;
 
-	std::thread thread;
-	std::mutex mutex;
+	std::unique_ptr<WebSocketTransport> transport;
+
+	//framesMutex protège UNIQUEMENT la file `frames` (seul état touché hors thread
+	//serveur, par SendMessage). Tout le reste (parser, request/response, header…)
+	//est exclusivement manipulé par le thread serveur.
+	std::mutex		framesMutex;
+	std::list<Frame*>	frames;
+
+	//Fermeture demandée depuis un autre thread (Close) ou le pair (trame Close).
+	std::atomic<bool>	closeRequested;
+	//Fermeture différée : fermer une fois toute la sortie écoulée (Reject).
+	bool			closeAfterFlush;
+
+	bool inited;
 
 	timeval startTime;
-	//Le serveur possède la connexion et lui survit → pointeur brut (pas de weak_ptr
-	//possible vers l'objet WebSocketServer alloué sur la pile de main).
-	Listener* listener;
 
 	bool upgraded;
 	DWORD recvSize;
@@ -360,13 +384,9 @@ private:
 	WebSocketFrameHeader* header;
 	QWORD framePos;
 
-	QWORD bandIni;
-	DWORD bandSize;
-	DWORD bandCalc;
 	fifo<BYTE,65538> incoming;
 	WORD		 incomingFrameLength;
 
-	std::list<Frame*>  frames;
 	Frame*		   pong;
 };
 

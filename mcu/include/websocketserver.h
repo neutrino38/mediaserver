@@ -1,11 +1,23 @@
 #ifndef _WebSocketServer_H_
 #define _WebSocketServer_H_
 #include "pthread.h"
-#include <list>
+#include <map>
+#include <vector>
+#include <memory>
+#include <string>
+#include <cstdint>
+#include "websocketconnection.h"	//apporte config.h (BYTE/DWORD) avant websockets.h
 #include "websockets.h"
-#include "websocketconnection.h"
 
 
+/**
+ * WebSocketServer
+ *
+ * Un thread unique + un poll() unique gèrent TOUTES les connexions : le socket
+ * d'écoute, un eventfd de réveil inter-thread, et le socket de chaque connexion.
+ * Les WebSocketConnection sont des machines à état passives possédées ici via
+ * shared_ptr (plus de thread ni de poll() par-connexion, plus de liste zombies).
+ */
 class WebSocketServer : public WebSocketConnection::Listener
 {
 public:
@@ -21,35 +33,49 @@ public:
 	~WebSocketServer();
 
 	int Init(int port);
-	int Start();
 	void AddHandler(const std::string base,Handler* hnd);
-	int Stop();
 	int End();
 
+	//Active le mode sécurisé (wss://). À appeler AVANT Init(). Les certificats
+	//(PEM) sont chargés dans Init() via WebSocketTlsTransport::ClassInit().
+	void SetSecure(bool secure, const char* certfile, const char* keyfile);
+
+	//WebSocketConnection::Listener
 	virtual void onUpgradeRequest(WebSocketConnection* conn);
-	virtual void onDisconnected(WebSocketConnection* conn);
-		
+	virtual void onWakeupNeeded();
+
 public:
         int Run();
 
 private:
 	typedef std::map<std::string,Handler *> Handlers;
-	typedef std::list<WebSocketConnection*>	Connections;
+	//Map possédante : connId → connexion. Manipulée UNIQUEMENT par le thread serveur.
+	typedef std::map<uint64_t,std::shared_ptr<WebSocketConnection>> Connections;
 
         static void * run(void *par);
 
 	void CreateConnection(int fd);
-	void CleanZombies();
+	void CloseConnection(uint64_t connId);
+	void DrainWakeup();
 
 private:
 	int inited;
 	int serverPort;
-	int server;
+	int server;		//socket d'écoute
+	int wakeupfd;		//eventfd de réveil inter-thread
+	uint64_t nextConnId;
+
+	bool        secure;	//wss:// activé ?
+	std::string certfile;
+	std::string keyfile;
 
 	Handlers handlers;
-	Connections zombies;
+	Connections connections;
+	//Connexions fermées au tour courant, gardées vivantes un tour de boucle de plus
+	//pour laisser s'écouler d'éventuels appels externes en vol (cf. §3.3 du plan).
+	std::vector<std::shared_ptr<WebSocketConnection>> recentlyClosed;
+
 	pthread_t serverThread;
-	pthread_mutex_t	sessionMutex;
 };
 
 

@@ -1,0 +1,6 @@
+# Options de ligne de commande du mediaserver (unite systemd mediaserver.service).
+#
+# ATTENTION : ne pas ajouter "-f" ici. Sous systemd le processus doit rester
+# en avant-plan (Type=simple) ; "-f" le ferait forker et systemd perdrait le
+# suivi du process. Le PID est gere par systemd, donc pas de --mcu-pid non plus.
+OPTIONS="--http-port 9090 --websocket-port 8100"
