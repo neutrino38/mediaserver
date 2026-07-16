@@ -181,7 +181,7 @@ else
 	# / libvo_amrwbenc lies dynamiquement dans libavcodec.so). Plus de -lopencore-amr*.
 	# x264 : plus de lien direct ; l'encodeur H264 de libmedkit passe par
 	# libavcodec (h264_vaapi si dispo, libx264 en repli).
-	LDFLAGS += -Wl,-Bstatic -lg722_1 -Wl,-Bdynamic  -lsrtp2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz
+	LDFLAGS += -lsrtp2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz
 endif
 	# OpenSSL : libs dynamiques du systeme (AlmaLinux 9) au lieu des .a statiques
 	# (plus de build openssl dans staticdeps).
