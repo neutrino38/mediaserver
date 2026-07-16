@@ -71,7 +71,7 @@ cp mcu.csr_conf $RPM_BUILD_ROOT/etc/mediaserver
 %config(noreplace) /etc/mediaserver/mcu.csr_conf
 
 %post
-# %systemd_post : recharge systemd et applique le preset (enable au 1er install).
+# Recharge systemd et applique le preset du service (enable au 1er install).
 %systemd_post mediaserver.service
 if [ ! -r /etc/ImageMagick-7/type.xml ]
 then
@@ -109,7 +109,7 @@ echo "Now (re)starting mediaserver"
   PID est gere par systemd. Options via /etc/sysconfig/mediaserver.
 - logs (stdout/stderr) rediriges vers /var/log/mcu.log par systemd
   (StandardOutput/StandardError), et consultables via "journalctl -u mediaserver".
-- scriptlets %systemd_post / %systemd_preun / %systemd_postun_with_restart,
+- scriptlets %%systemd_post / %%systemd_preun / %%systemd_postun_with_restart,
   BuildRequires systemd-rpm-macros.
 * Fri Jul 03 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - certcommunication.sh installe dans /etc/mediaserver et appele en %post :
