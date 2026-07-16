@@ -1,11 +1,15 @@
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <arpa/inet.h> 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <sys/poll.h>
+#include <sys/eventfd.h>
 #include <fcntl.h>
+#include <vector>
+#include <set>
 #include "tools.h"
 #include "log.h"
 #include "websocketserver.h"
@@ -20,9 +24,16 @@ WebSocketServer::WebSocketServer()
 	inited = 0;
 	serverPort = 0;
 	server = FD_INVALID;
+	wakeupfd = FD_INVALID;
+	nextConnId = 0;
+	secure = false;
+}
 
-	//Create mutx
-	pthread_mutex_init(&sessionMutex,0);
+void WebSocketServer::SetSecure(bool secure, const char* certfile, const char* keyfile)
+{
+	this->secure   = secure;
+	this->certfile = certfile ? certfile : "";
+	this->keyfile  = keyfile  ? keyfile  : "";
 }
 
 
@@ -36,15 +47,13 @@ WebSocketServer::~WebSocketServer()
 	if (inited)
 		//End it anyway
 		End();
-	//Destroy mutex
-	pthread_mutex_destroy(&sessionMutex);
 }
 
 void WebSocketServer::AddHandler(const std::string base,Handler* hnd)
 {
 	Log("-WebSocket handler on %s\n",base.c_str());
 
-	//A�adimos al map
+	//Add to the map
 	handlers[base] = hnd;
 }
 
@@ -65,6 +74,20 @@ int WebSocketServer::Init(int port)
 
 	//Save server port
 	serverPort = port;
+
+	//Mode sécurisé : initialiser le contexte TLS serveur
+	if (secure)
+	{
+		if (!WebSocketTlsTransport::ClassInit(certfile, keyfile))
+			return Error("-Init: cannot init TLS (cert:\"%s\",key:\"%s\")\n",
+				     certfile.c_str(), keyfile.c_str());
+		Log("-WebSocket Server: secure mode (wss://) enabled\n");
+	}
+
+	//Create the wakeup eventfd (réveil inter-thread, non bloquant)
+	wakeupfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (wakeupfd<0)
+		return Error("Can't create wakeup eventfd. errno = %d.\n", errno);
 
 	//Create socket
 	server = socket(AF_INET, SOCK_STREAM, 0);
@@ -93,14 +116,23 @@ int WebSocketServer::Init(int port)
 	return 1;
 }
 
+/**************************
+ * DrainWakeup
+ * 	Vide le compteur de l'eventfd de réveil
+ **************************/
+void WebSocketServer::DrainWakeup()
+{
+	uint64_t v;
+	//eventfd non bloquant : une lecture remet le compteur à 0
+	while (read(wakeupfd, &v, sizeof(v)) > 0) {}
+}
+
 /***************************
  * Run
- * 	Server running thread 
+ * 	Server running thread : un seul poll() pour toutes les connexions
  ***************************/
 int WebSocketServer::Run()
 {
-	pollfd ufds[1];
-	
 init:
 	//Log
 	Log(">Run WebSocket Server [%p,port:%d]\n",this,serverPort);
@@ -110,85 +142,110 @@ init:
 		//Error
 		return Error("Can't listen on server socket. errno = %d\n", errno);
 
-	//Set values for polling
-	ufds[0].fd = server;
-	ufds[0].events = POLLIN | POLLHUP | POLLERR ;
-
-	//Set non blocking so we can get an error when we are closed by end
+	//Set non blocking so accept() ne bloque pas et on récupère les erreurs
 	int fsflags = fcntl(server,F_GETFL,0);
-	fsflags |= O_NONBLOCK;
-	fcntl(server,F_SETFL,fsflags);
+	fcntl(server,F_SETFL, fsflags | O_NONBLOCK);
 
 	//Run until ended
 	while(inited)
 	{
-		//Log
-		Log("-WebSocket Server accepting connections [fd:%d]\n", ufds[0].fd);
+		//Libère les connexions fermées au tour précédent (grâce d'un tour)
+		recentlyClosed.clear();
 
-		//Clean zombies each time
-		CleanZombies();
+		//Construit le jeu de poll : [écoute, réveil, connexions...]
+		std::vector<pollfd>   ufds;
+		std::vector<uint64_t> ids;   //connId aligné aux entrées « connexion »
+		ufds.reserve(connections.size()+2);
+		ids.reserve(connections.size());
+
+		pollfd lu; lu.fd = server;   lu.events = POLLIN|POLLHUP|POLLERR; lu.revents = 0;
+		ufds.push_back(lu);
+		pollfd wu; wu.fd = wakeupfd; wu.events = POLLIN;                 wu.revents = 0;
+		ufds.push_back(wu);
+
+		for (Connections::iterator it=connections.begin(); it!=connections.end(); ++it)
+		{
+			pollfd cu;
+			cu.fd     = it->second->GetFd();
+			cu.events = it->second->GetPollEvents();
+			cu.revents= 0;
+			ufds.push_back(cu);
+			ids.push_back(it->first);
+		}
 
 		//Wait for events
-		if (poll(ufds,1,-1)<0)
+		int n = poll(ufds.data(), ufds.size(), -1);
+		if (n<0)
 		{
-			//Error
-			Error("WebSocketServer: pool error [fd:%d,errno:%d]\n",ufds[0].fd,errno);
-			//Check if already inited
+			//EINTR n'est pas une erreur dure
+			if (errno==EINTR)
+				continue;
+			Error("WebSocketServer: poll error [errno:%d]\n",errno);
+			//Si on nous a arrêtés, sortir
 			if (!inited)
-				//Exit
 				break;
-			//Close socket just in case
-			close(server);
-			//Invalidate
-			server = FD_INVALID;
-			//Re-init
-			goto init;
+			continue;
 		}
 
-		//Chek events, will fail if closed by End() so we can exit
-		if (ufds[0].revents!=POLLIN)
+		//Réveil inter-thread (SendMessage/Close depuis un autre thread, ou End)
+		if (ufds[1].revents & POLLIN)
+			DrainWakeup();
+
+		//Nouvelles connexions entrantes
+		if (ufds[0].revents & POLLIN)
 		{
-			//Error
-			Error("WebSocketServer: poolin error event [event:%d,fd:%d,errno:%d]\n",ufds[0].revents,ufds[0].fd,errno);
-			//Check if already inited
+			//Accepte toutes les connexions en attente (socket non bloquant)
+			while (true)
+			{
+				int fd = accept(server,NULL,0);
+				if (fd<0)
+					//Plus de connexion en attente (EAGAIN) ou erreur
+					break;
+				CreateConnection(fd);
+			}
+		}
+		if (ufds[0].revents & (POLLHUP|POLLERR|POLLNVAL))
+		{
+			Error("WebSocketServer: listen socket error [revents:%d,errno:%d]\n",ufds[0].revents,errno);
 			if (!inited)
-				//Exit
 				break;
-			//Close socket just in case
-			close(server);
-			//Invalidate
-			server = FD_INVALID;
-			//Re-init
-			goto init;
 		}
 
-		//Accpept incoming connections
-		int fd = accept(server,NULL,0);
-
-		//If error
-		if (fd<0)
+		//Traite chaque connexion
+		std::set<uint64_t> toClose;
+		for (size_t i=2; i<ufds.size(); ++i)
 		{
-			//LOg error
-			Error("WebSocketServer: error accepting new connection [fd:%d,errno:%d]\n",server,errno);
-			//Check if already inited
-			if (!inited)
-				//Exit
-				break;
-			//Close socket just in case
-			close(server);
-			//Invalidate
-			server = FD_INVALID;
-			//Re-init
-			goto init;
+			uint64_t id = ids[i-2];
+			Connections::iterator it = connections.find(id);
+			if (it==connections.end())
+				continue;
+			//Copie du shared_ptr : la connexion reste vivante pendant le dispatch
+			std::shared_ptr<WebSocketConnection> conn = it->second;
+
+			short re = ufds[i].revents;
+			if (re & (POLLNVAL|POLLERR|POLLHUP))
+			{
+				toClose.insert(id);
+				continue;
+			}
+			//Écrire d'abord la sortie en attente, puis lire l'entrée
+			if (re & POLLOUT)
+				conn->OnWritable();
+			if (re & POLLIN)
+				conn->OnReadable();
+			if (conn->IsFinished())
+				toClose.insert(id);
 		}
 
-		//Set non blocking again
-		fsflags = fcntl(fd,F_GETFL,0);
-		fsflags |= O_NONBLOCK;
-		fcntl(fd,F_SETFL,fsflags);
+		//Connexions dont la fermeture a été demandée depuis un autre thread
+		//(Close) sans événement poll associé
+		for (Connections::iterator it=connections.begin(); it!=connections.end(); ++it)
+			if (it->second->IsFinished())
+				toClose.insert(it->first);
 
-		//Create the connection
-		CreateConnection(fd);
+		//Fermetures (après le dispatch, pour ne pas invalider l'itération)
+		for (std::set<uint64_t>::iterator it=toClose.begin(); it!=toClose.end(); ++it)
+			CloseConnection(*it);
 	}
 
 	Log("<Run WebSocket Server\n");
@@ -202,43 +259,63 @@ init:
  *************************/
 void WebSocketServer::CreateConnection(int fd)
 {
-	Log(">Creating connection\n");
+	//Identité stable (pas le fd, réutilisable)
+	uint64_t id = ++nextConnId;
 
-	//Create new WebSocket connection
-	WebSocketConnection* con = new WebSocketConnection(this);
+	//Choix du transport : TLS (wss://) ou clair (ws://)
+	std::unique_ptr<WebSocketTransport> transport;
+	if (secure)
+	{
+		transport = WebSocketTlsTransport::Create();
+		if (!transport)
+		{
+			Error("-CreateConnection: TLS transport unavailable, dropping fd:%d\n",fd);
+			shutdown(fd,SHUT_RDWR);
+			close(fd);
+			return;
+		}
+	}
+	else
+	{
+		transport = std::make_unique<WebSocketPlainTransport>();
+	}
 
-	Log("-Incoming connection [%d,%p]\n",fd,con);
+	//Create new WebSocket connection (possédée par la map)
+	std::shared_ptr<WebSocketConnection> conn = std::make_shared<WebSocketConnection>(this, id);
 
-	//Init connection
-	con->Init(fd);
+	Log("-Incoming connection [fd:%d,id:%llu,%s]\n",fd,(unsigned long long)id,secure?"tls":"plain");
 
-	Log("<Creating connection [0x%x]\n",con);
+	//Init connection (pas de thread : machine à état passive)
+	conn->Init(fd, std::move(transport));
+
+	//Store it
+	connections[id] = conn;
 }
 
 /**************************
- * DeleteConnection
- * 	DeleteConnection
+ * CloseConnection
+ * 	Ferme et retire une connexion de la map
  **************************/
-void WebSocketServer::CleanZombies()
+void WebSocketServer::CloseConnection(uint64_t connId)
 {
-	//Lock list
-	pthread_mutex_lock(&sessionMutex);
+	Connections::iterator it = connections.find(connId);
+	if (it==connections.end())
+		return;
 
-	//Zombie iterator
-	for (Connections::iterator it=zombies.begin();it!=zombies.end();++it)
-	{
-		//Get connection
-		WebSocketConnection *con = *it;
-		//Delete connection
-		delete con;
-	}
+	//Garder vivant pendant la fermeture
+	std::shared_ptr<WebSocketConnection> conn = it->second;
 
-	//Clear zombies
-	zombies.clear();
+	//Notifier le WebSocket::Listener (ex. WSEndpoint remet _ws=NULL)
+	conn->NotifyClose();
 
-	//Unlock list
-	pthread_mutex_unlock(&sessionMutex);
-	
+	//Fermer le socket
+	conn->End();
+
+	//Retirer de la map : plus aucune nouvelle référence ne peut être distribuée
+	connections.erase(it);
+
+	//Garder l'objet vivant un tour de boucle de plus (appels externes en vol)
+	recentlyClosed.push_back(conn);
 }
 
 /***********************
@@ -278,6 +355,10 @@ int WebSocketServer::End()
 	//Stop thread
 	inited = 0;
 
+	//Réveiller le thread serveur pour qu'il constate inited=0 (fiable même si le
+	//close() du socket d'écoute ne fait pas sortir poll())
+	onWakeupNeeded();
+
 	//Close server socket
 	shutdown(server,SHUT_RDWR);
 	//Will cause poll function to exit
@@ -286,9 +367,20 @@ int WebSocketServer::End()
 	server = FD_INVALID;
 
 	//Wait for server thread to close
-        Log("Joining server thread [%d,%d]\n",serverThread,inited);
+        Log("Joining server thread [%lu]\n",(unsigned long)serverThread);
         pthread_join(serverThread,NULL);
-        Log("Joined server thread [%d]\n",serverThread);
+        Log("Joined server thread\n");
+
+	//Fermer l'eventfd de réveil
+	if (wakeupfd!=FD_INVALID)
+	{
+		close(wakeupfd);
+		wakeupfd = FD_INVALID;
+	}
+
+	//Détruire les connexions restantes
+	connections.clear();
+	recentlyClosed.clear();
 
 	Log("<End WebSocket Server\n");
 	return 0;
@@ -300,7 +392,7 @@ void WebSocketServer::onUpgradeRequest(WebSocketConnection* conn)
 	HTTPRequest *request = conn->GetRequest();
 	//Get URL
 	std::string uri = request->GetRequestURI();
-	//Fore each registere handler in reverse order
+	//For each registered handler in reverse order
 	for (Handlers::reverse_iterator it=handlers.rbegin();it!=handlers.rend();it++)
 	{
 		//Si la uri empieza por la base del handler
@@ -316,12 +408,13 @@ void WebSocketServer::onUpgradeRequest(WebSocketConnection* conn)
 	conn->Reject(404,"No handlers for that url found");
 }
 
-void WebSocketServer::onDisconnected(WebSocketConnection* conn)
+void WebSocketServer::onWakeupNeeded()
 {
-	//Lock list
-	pthread_mutex_lock(&sessionMutex);
-	//Add to zombie
-	zombies.push_back(conn);
-	//Unlock list
-	pthread_mutex_unlock(&sessionMutex);
+	//Réveille le thread serveur bloqué dans poll(). Thread-safe (write eventfd).
+	if (wakeupfd==FD_INVALID)
+		return;
+	uint64_t one = 1;
+	//Si le compteur eventfd est saturé (EAGAIN), un réveil est déjà en attente : OK.
+	if (write(wakeupfd, &one, sizeof(one)) < 0 && errno!=EAGAIN)
+		Error("WebSocketServer: wakeup write failed [errno:%d]\n",errno);
 }
