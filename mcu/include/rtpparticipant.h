@@ -7,7 +7,7 @@
 
 #ifndef RTPPARTICIPANT_H
 #define	RTPPARTICIPANT_H
-
+#include <memory>
 #include "config.h"
 #include "participant.h"
 #include "videostream.h"
@@ -18,7 +18,7 @@
 
 #define MAX_VIDEO_STREAM 2
 
-class RTPParticipant : public Participant, public VideoStream::Listener, public AudioStream::Listener
+class RTPParticipant : public Participant, public VideoStream::Listener, public AudioStream::Listener, public std::enable_shared_from_this<RTPParticipant>
 {
 public:
 	RTPParticipant(DWORD partId,const std::wstring &uuid);
@@ -35,11 +35,13 @@ public:
 
 	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{  video[role]->SetVideoInput(input); return 1;	}
 	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) {  video[role]->SetVideoOutput(output); return 1;	}
+	virtual int SetVideoInput(std::shared_ptr<VideoInput> input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{  video[role]->SetVideoInput(std::move(input)); return 1;	}
+	virtual int SetVideoOutput(std::shared_ptr<VideoOutput> output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) {  video[role]->SetVideoOutput(std::move(output)); return 1;	}
 	virtual VideoOutput* GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return video[role]->GetVideoOutput();	}
-	virtual int SetAudioInput(AudioInput* input)	{ audioInput	= input;	}
-	virtual int SetAudioOutput(AudioOutput *output)	{ audioOutput	= output;	}
-	virtual int SetTextInput(TextInput* input)	{ textInput	= input;	}
-	virtual int SetTextOutput(TextOutput* output)	{ textOutput	= output;	}
+	virtual int SetAudioInput(std::shared_ptr<AudioInput> input)	{ audioInput	= std::move(input);	return 0; }
+	virtual int SetAudioOutput(std::shared_ptr<AudioOutput> output)	{ audioOutput	= std::move(output);	return 0; }
+	virtual int SetTextInput(std::shared_ptr<TextInput> input)	{ textInput	= std::move(input);	return 0; }
+	virtual int SetTextOutput(std::shared_ptr<TextOutput> output)	{ textOutput	= std::move(output);	return 0; }
 
 	virtual int SetMute(MediaFrame::Type media, bool isMuted ,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 
@@ -80,11 +82,13 @@ private:
 	RemoteRateEstimator estimator;
 	EvenSource		eventSource;
 
-	AudioInput*	audioInput;
-	AudioOutput*	audioOutput;
-	TextInput*	textInput;
-	TextOutput*	textOutput;
+	std::shared_ptr<AudioInput>	audioInput;
+	std::shared_ptr<AudioOutput>	audioOutput;
+	std::shared_ptr<TextInput>	textInput;
+	std::shared_ptr<TextOutput>	textOutput;
 };
+
+typedef std::shared_ptr<RTPParticipant> RTPParticipantPtr;
 
 #endif	/* RTPPARTICIPANT_H */
 

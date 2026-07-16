@@ -291,6 +291,7 @@ int WebSocketServer::End()
         Log("Joined server thread [%d]\n",serverThread);
 
 	Log("<End WebSocket Server\n");
+	return 0;
 }
 
 void WebSocketServer::onUpgradeRequest(WebSocketConnection* conn)

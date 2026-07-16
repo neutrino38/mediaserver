@@ -1,7 +1,8 @@
 #ifndef _MCU_H_
 #define _MCU_H_
 #include <string>
-#include "pthread.h"
+#include <mutex>
+#include <memory>
 #include "multiconf.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
@@ -40,38 +41,34 @@ public:
 	int End();
 
 	int CreateConference(std::wstring tag,int queueId);
-	int GetConferenceRef(int id,MultiConf **conf);
+	int GetConferenceRef(int id,std::shared_ptr<MultiConf> &conf);
 	int GetConferenceId(const std::wstring& tag);
-	int ReleaseConferenceRef(int id);
 	int DeleteConference(int confId);
 	int GetConferenceList(ConferencesInfo& lst);
 
 	/** Conference events*/
-	virtual void onParticipantRequestFPU(MultiConf *conf,int partId,void *param);
-	virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status,void *param);
-	
+	virtual void onParticipantRequestFPU(MultiConf *conf,int partId);
+	virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status);
+
 	/** RTMP application interface*/
-	virtual RTMPNetConnection* Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
+	virtual std::shared_ptr<RTMPNetConnection> Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
 	/** File uploader event */
 	virtual int onFileUploaded(const char* url, const char *filename);
 private:
 	struct ConferenceEntry
 	{
-		int id;
-		int numRef;
-		int enabled;
 		int queueId;
-		MultiConf* conf;
+		std::shared_ptr<MultiConf> conf;
 	};
 
-	typedef std::map<int,ConferenceEntry*> Conferences;
+	typedef std::map<int,ConferenceEntry> Conferences;
 	typedef std::map<std::wstring,int> ConferenceTags;
 private:
 	XmlStreamingHandler	*eventMngr;
 	Conferences		conferences;
 	ConferenceTags		tags;
 	int			maxId;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	int inited;
 };
 

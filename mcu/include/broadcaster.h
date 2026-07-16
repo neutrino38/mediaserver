@@ -2,6 +2,7 @@
 #define _BROADCASTER_H_
 #include <map>
 #include <string>
+#include <memory>
 #include "pthread.h"
 #include "broadcastsession.h"
 #include "rtmpstream.h"
@@ -37,13 +38,12 @@ public:
 	bool  PublishBroadcast(DWORD id,const std::wstring &pin);
 	bool  AddBroadcastToken(DWORD id,const std::wstring &token);
 	bool  UnPublishBroadcast(DWORD id);
-	bool  GetBroadcastRef(DWORD id,BroadcastSession **broadcast);
-	bool  ReleaseBroadcastRef(DWORD id);
+	bool  GetBroadcastRef(DWORD id,std::shared_ptr<BroadcastSession> &broadcast);
 	bool  DeleteBroadcast(DWORD confId);
 	bool  GetBroadcastPublishedStreams(DWORD id,BroadcastSession::PublishedStreamsInfo &list);
 
 	/** RTMP application interface*/
-	virtual RTMPNetConnection* Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
+	virtual std::shared_ptr<RTMPNetConnection> Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
 
 	/* For RTMPNetConnection */
 	virtual RTMPNetStream* CreateStream(DWORD streamId,DWORD audioCaps,DWORD videoCaps,RTMPNetStream::Listener* listener);
@@ -56,12 +56,10 @@ protected:
 	struct BroadcastEntry
 	{
 		DWORD id;
-		DWORD numRef;
-		DWORD enabled;
 		std::wstring name;
                 std::wstring tag;
 		std::wstring pin;
-		BroadcastSession* session;
+		std::shared_ptr<BroadcastSession> session;
 	};
 	typedef std::map<DWORD,BroadcastEntry> BroadcastEntries;
 	typedef std::map<std::wstring,DWORD> PublishedBroadcasts;

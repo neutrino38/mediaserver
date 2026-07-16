@@ -11,7 +11,7 @@
 
 #include <pthread.h>
 #include "config.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "video.h"
 #include "RTPMultiplexerSmoother.h"
 

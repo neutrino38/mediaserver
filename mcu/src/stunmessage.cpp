@@ -10,7 +10,7 @@
 #include "crc32calc.h"
 #include "log.h"
 #include <openssl/sha.h>
-#include <openssl/hmac.h>
+#include <openssl/evp.h>
 
 static const BYTE MagicCookie[4] = {0x21,0x12,0xA4,0x42};
 
@@ -223,7 +223,13 @@ DWORD STUNMessage::AuthenticatedFingerPrint(BYTE* data,DWORD size,const char* pw
 	set2(data,2,msgSize-20-8);
 
 	//Calculate HMAC and put it in the attibute value
-	HMAC(EVP_sha1(),(BYTE*)pwd, strlen(pwd),data,i,data+i+4,&len);
+	//API EVP_MAC one-shot (remplace HMAC() deprecie en OpenSSL 3.0)
+	size_t hmacLen = 0;
+	EVP_Q_mac(NULL, "HMAC", NULL, "SHA1", NULL,
+		  (BYTE*)pwd, strlen(pwd),
+		  data, i,
+		  data+i+4, SHA_DIGEST_LENGTH, &hmacLen);
+	len = (DWORD)hmacLen;
 
 	//Set message integriti attribute
 	set2(data,i,Attribute::MessageIntegrity);

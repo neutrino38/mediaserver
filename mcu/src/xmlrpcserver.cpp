@@ -232,8 +232,8 @@ int XmlRpcServer::GetBody(TSession *ses,char *body,DWORD bodyLen)
 **************************************/
 int XmlRpcServer::SendResponse(TSession *r, short code, const char *msg, int length)
 {
-	//Chunked output
-	ResponseChunked(r);
+	//Pas de mode chunked : on connait toujours la longueur, et chunked +
+	//Content-Length simultanes est interdit (RFC 7230 3.3.3, rejete par OTP 27)
 
 	//POnemos el codigo
 	ResponseStatus(r,code);

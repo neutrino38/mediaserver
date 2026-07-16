@@ -1,9 +1,13 @@
 #ifndef _PIPEAUDIOINPUT_H_
 #define _PIPEAUDIOINPUT_H_
-#include <pthread.h>
+#include <mutex>
+#include <condition_variable>
 #include <audio.h>
 #include <fifo.h>
-#include "audiotransrater.h"
+
+// Rééchantillonnage via libswresample (remplace l'ancien AudioTransrater/speexdsp).
+// Pointeur opaque : l'en-tête ffmpeg n'est inclus que dans le .cpp.
+struct SwrContext;
 
 
 class PipeAudioInput : 
@@ -11,7 +15,7 @@ class PipeAudioInput :
 {
 public:
 	PipeAudioInput();
-	~PipeAudioInput();
+	virtual ~PipeAudioInput();
 	virtual int RecBuffer(SWORD *buffer,DWORD size);
 	virtual void CancelRecBuffer();
 	virtual int StartRecording(DWORD rate);
@@ -26,8 +30,8 @@ public:
 
 private:
 	//Los mutex y condiciones
-	pthread_mutex_t mutex;
-	pthread_cond_t  cond; 
+	std::mutex		mutex;
+	std::condition_variable	cond;
 
 	//Members
 	fifo<SWORD,4096>	fifoBuffer;
@@ -36,7 +40,7 @@ private:
 	int		canceled;
 	
 	
-	AudioTransrater		transrater;
+	SwrContext		*swr;
 	DWORD			recordRate;
 	DWORD			nativeRate;
 };

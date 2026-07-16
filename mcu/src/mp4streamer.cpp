@@ -2,1169 +2,502 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
+#include <chrono>
+// En-têtes mcu d'abord : ils fixent les gardes d'inclusion (media/audio/video/
+// codecs/avcdescriptor) de sorte que <medkit/ffmp4reader.h>, inclus ensuite,
+// réutilise ces mêmes définitions (désormais partagées avec libmedkit).
 #include "log.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtp.h"
-#include "mp4streamer.h"
-#include "video.h"
+#include "text.h"
 #include "audio.h"
+#include "video.h"
+#include "avcdescriptor.h"
+#include "mp4streamer.h"
+// Lecteur MP4 ffmpeg de libmedkit.
+#include "medkit/ffmp4reader.h"
 
-
-MP4Streamer::MP4Streamer(Listener *listener)
+MP4Streamer::MP4Streamer(Listener *listener) : playing(false)
 {
 	//Save listener
 	this->listener = listener;
-	//NO file
-	mp4 = MP4_INVALID_FILE_HANDLE;
-	//Not playing
-	playing = false;
-	//Not opened
+	//No reader / file yet
+	reader = NULL;
 	opened = false;
-	//No tracks
-	audio = NULL;
-	video = NULL;
-	text = NULL;
-	//No time or seeked
-	seeked = 0;
-	t = 0;
-	//Inciamos lso mutex y la condicion
-	pthread_mutex_init(&mutex,0);
-	pthread_cond_init(&cond,0);
-	//Clean thread
-	thread = 0;
+	//No codecs
+	audioCodec = 0;
+	videoCodec = 0;
+	//No reusable packets
+	audioPacket = NULL;
+	videoPacket = NULL;
+	//Play from the beginning by default
+	startPos = (QWORD)-1;
 }
 
 MP4Streamer::~MP4Streamer()
 {
-	//Check if still opened
-	if (opened)
-		//Close us
-		Close();
-	
-	//Check tracks and delete
-	if (audio)
-		delete (audio);
-	if (video)
-		delete (video);
-	if (text)
-		delete (text);
-	//Liberamos los mutex
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
+	//Close (stops the worker and releases the file)
+	Close();
 }
 
 int MP4Streamer::Open(const char *filename)
 {
-	//LOg
-	Log(">MP4 opening [%s]\n",filename);
+	//Serialize with the rest of the lifecycle
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
-	//Lock
-	pthread_mutex_lock(&mutex);
+	Log(">MP4Streamer opening [%s]\n", filename);
 
 	//If already opened
 	if (opened)
-	{
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-		//Return error
 		return Error("Already opened\n");
-	}
-	
-	// Open mp4 file
-	mp4 = MP4Read(filename);
+
+	//Create the libmedkit ffmpeg reader (it opens the file itself)
+	reader = new Mp4FfReader(filename);
 
 	// If not valid
-	if (mp4 == MP4_INVALID_FILE_HANDLE)
+	if (!reader->IsOpen())
 	{
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-		//Return error
-		return Error("Invalid file handle for %s\n",filename);
+		delete reader;
+		reader = NULL;
+		return Error("Could not open %s\n", filename);
 	}
-	
-	//No tracks
-	audio = NULL;
-	video = NULL;
-	text = NULL;
 
-	//Iterate thougth tracks
-	DWORD i = 0;
-
-	// Get the first hint track
-	MP4TrackId hintId = MP4_INVALID_TRACK_ID;
-
-	// Iterate hint tracks
-	do
+	//Try to open an audio track (native codecs, no transcoding)
+	AudioCodec::Type acodecs[] = {
+		AudioCodec::PCMU, AudioCodec::PCMA, AudioCodec::AMR,
+		AudioCodec::OPUS, AudioCodec::GSM,  AudioCodec::G722
+	};
+	if (reader->OpenTrack(acodecs, sizeof(acodecs)/sizeof(acodecs[0]), AudioCodec::PCMU, false) > 0)
 	{
-		// Get the next hint track
-		hintId = MP4FindTrackId(mp4, i++, MP4_HINT_TRACK_TYPE, 0);
-
-		Log("-Found hint track [hintId:%d]\n", hintId);
-
-		// Get asociated track
-		MP4TrackId trackId = MP4GetHintTrackReferenceTrackId(mp4, hintId);
-
-		// Check it's good
-		if (trackId != MP4_INVALID_TRACK_ID)
-		{
-			// Get track type
-			const char *type = MP4GetTrackType(mp4, trackId);
-
-			// Get rtp track
-			char *name;
-			BYTE payload;
-			MP4GetHintTrackRtpPayload(mp4, hintId, &name, &payload, NULL, NULL);
-
-			Log("-Streaming media [trackId:%d,type:\"%s\",name:\"%s\",payload:%d]\n", trackId, type, name, payload);
-
-			// Check track type
-			if ((strcmp(type, MP4_AUDIO_TRACK_TYPE) == 0) && !audio)
-			{
-				// Depending on the name
-				if (strcmp("PCMU", name) == 0)
-					//Create new audio track
-					audio = new MP4RtpTrack(MediaFrame::Audio,AudioCodec::PCMU,payload);
-				else if (strcmp("PCMA", name) == 0)
-					//Create new audio track
-					audio = new MP4RtpTrack(MediaFrame::Audio,AudioCodec::PCMA,payload);
-				else
-					//Skip
-					continue;
-
-				// Get time scale
-				audio->timeScale = MP4GetTrackTimeScale(mp4, hintId);
-
-				//Store the other values
-				audio->mp4 = mp4;
-				audio->hint = hintId;
-				audio->track = trackId;
-				audio->sampleId = 1;
-				audio->packetIndex = 0;
-
-			} else if ((strcmp(type, MP4_VIDEO_TRACK_TYPE) == 0) && !video) {
-				// Depending on the name
-				if (strcmp("H263", name) == 0)
-					//Create new video track
-					video = new MP4RtpTrack(MediaFrame::Video,VideoCodec::H263_1996,payload);
-				else if (strcmp("H263-1998", name) == 0)
-					//Create new video track
-					video = new MP4RtpTrack(MediaFrame::Video,VideoCodec::H263_1998,payload);
-				else if (strcmp("H263-2000", name) == 0)
-					//Create new video track
-					video = new MP4RtpTrack(MediaFrame::Video,VideoCodec::H263_1998,payload);
-				else if (strcmp("H264", name) == 0)
-					//Create new video track
-					video = new MP4RtpTrack(MediaFrame::Video,VideoCodec::H264,payload);
-				else
-					continue;
-					
-				// Get time scale
-				video->timeScale = MP4GetTrackTimeScale(mp4, hintId);
-				// it's video
-				video->mp4 = mp4;
-				video->hint = hintId;
-				video->track = trackId;
-				video->sampleId = 1;
-				video->packetIndex = 0;
-			}
-		} 
-	} while (hintId != MP4_INVALID_TRACK_ID);
-
-	// Get the first text
-	MP4TrackId textId = MP4FindTrackId(mp4, 0, MP4_TEXT_TRACK_TYPE, 0);
-
-	Log("-Found text track [%d]\n",textId);
-
-	// Iterate hint tracks
-	if (textId != MP4_INVALID_TRACK_ID)
-	{
-		//We have it
-		text = new MP4TextTrack();
-		//Set values
-		text->mp4 = mp4;
-		text->track = textId;
-		text->sampleId = 1;
-		// Get time scale
-		text->timeScale = MP4GetTrackTimeScale(mp4, textId);
+		AudioCodec::Type ac;
+		if (reader->GetCodec(ac))
+			audioCodec = ac;
 	}
+
+	//Try to open a video track (native codecs, no transcoding)
+	VideoCodec::Type vcodecs[] = {
+		VideoCodec::H264, VideoCodec::H263_1998,
+		VideoCodec::H263_1996, VideoCodec::VP8
+	};
+	if (reader->OpenTrack(vcodecs, sizeof(vcodecs)/sizeof(vcodecs[0]), VideoCodec::H264, false, false) > 0)
+	{
+		VideoCodec::Type vc;
+		if (reader->GetVideoCodec(vc))
+			videoCodec = vc;
+	}
+
+	//Try to open a text track (plain T.140, no redundancy)
+	reader->OpenTrack(TextCodec::T140, 0, 1);
+
+	//Pre-create the reusable RTP packets used to republish frames
+	if (reader->HasAudioTrack())
+		audioPacket = new RTPPacket(MediaFrame::Audio, audioCodec, audioCodec);
+	if (reader->HasVideoTrack())
+		videoPacket = new RTPPacket(MediaFrame::Video, videoCodec, videoCodec);
 
 	//We are opened
 	opened = true;
 
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
+	Log("<MP4Streamer opened [%s] audio:%d video:%d text:%d\n", filename,
+		reader->HasAudioTrack(), reader->HasVideoTrack(), reader->HasTextTrack());
+
 	return 1;
+}
+
+bool MP4Streamer::HasAudioCodec(AudioCodec::Type codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+	return reader && reader->HasAudioCodec(codec);
+}
+
+bool MP4Streamer::HasVideoCodec(VideoCodec::Type codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+	return reader && reader->HasVideoCodec(codec);
+}
+
+int MP4Streamer::SetAudioCodec(AudioCodec::Type codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	if (!opened || !reader)
+		return 0;
+	if (playing.load())
+		return Error("MP4Streamer: cannot change audio codec while playing\n");
+
+	//Exact-match selection: single-codec list so only that codec's track opens
+	//(and the current selection is left untouched if the file lacks it).
+	AudioCodec::Type c = codec;
+	if (reader->OpenTrack(&c, 1, c, false) <= 0)
+		return 0;
+
+	AudioCodec::Type ac;
+	if (reader->GetCodec(ac))
+		audioCodec = ac;
+
+	//Recreate the reusable RTP packet with the new codec
+	if (audioPacket)
+	{
+		delete audioPacket;
+		audioPacket = NULL;
+	}
+	audioPacket = new RTPPacket(MediaFrame::Audio, audioCodec, audioCodec);
+
+	Log("MP4Streamer: audio codec re-selected to %s\n", AudioCodec::GetNameFor((AudioCodec::Type)audioCodec));
+	return 1;
+}
+
+int MP4Streamer::SetVideoCodec(VideoCodec::Type codec)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	if (!opened || !reader)
+		return 0;
+	if (playing.load())
+		return Error("MP4Streamer: cannot change video codec while playing\n");
+
+	VideoCodec::Type c = codec;
+	if (reader->OpenTrack(&c, 1, c, false, false) <= 0)
+		return 0;
+
+	VideoCodec::Type vc;
+	if (reader->GetVideoCodec(vc))
+		videoCodec = vc;
+
+	if (videoPacket)
+	{
+		delete videoPacket;
+		videoPacket = NULL;
+	}
+	videoPacket = new RTPPacket(MediaFrame::Video, videoCodec, videoCodec);
+
+	Log("MP4Streamer: video codec re-selected to %s\n", VideoCodec::GetNameFor((VideoCodec::Type)videoCodec));
+	return 1;
+}
+
+int MP4Streamer::SetAudioCodecTranscoded(AudioCodec::Type target)
+{
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	if (!opened || !reader)
+		return 0;
+	if (playing.load())
+		return Error("MP4Streamer: cannot enable transcoding while playing\n");
+
+	if (reader->OpenAudioTranscoded(target) <= 0)
+		return 0;
+
+	AudioCodec::Type ac;
+	if (reader->GetCodec(ac))
+		audioCodec = ac;	// = target
+
+	if (audioPacket)
+	{
+		delete audioPacket;
+		audioPacket = NULL;
+	}
+	audioPacket = new RTPPacket(MediaFrame::Audio, audioCodec, audioCodec);
+
+	Log("MP4Streamer: audio transcoding enabled -> %s\n",
+		AudioCodec::GetNameFor((AudioCodec::Type)audioCodec));
+	return 1;
+}
+
+bool MP4Streamer::HasAudioTrack()	{ return reader && reader->HasAudioTrack();	}
+bool MP4Streamer::HasVideoTrack()	{ return reader && reader->HasVideoTrack();	}
+bool MP4Streamer::HasTextTrack()	{ return reader && reader->HasTextTrack();	}
+
+double MP4Streamer::GetDuration()	{ return reader ? reader->GetDuration()      : 0;	}
+DWORD  MP4Streamer::GetVideoWidth()	{ return reader ? reader->GetVideoWidth()    : 0;	}
+DWORD  MP4Streamer::GetVideoHeight()	{ return reader ? reader->GetVideoHeight()   : 0;	}
+DWORD  MP4Streamer::GetVideoBitrate()	{ return reader ? reader->GetVideoBitrate()  : 0;	}
+double MP4Streamer::GetVideoFramerate()	{ return reader ? reader->GetVideoFramerate(): 0;	}
+
+AVCDescriptor* MP4Streamer::GetAVCDescriptor()
+{
+	return reader ? reader->GetAVCDescriptor() : NULL;
+}
+
+QWORD MP4Streamer::Tell()
+{
+	return reader ? reader->Tell() : 0;
 }
 
 int MP4Streamer::Play()
 {
-	Log(">MP4Streamer Play\n");
-	
-	//Stop just in case
-	Stop();
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
-	//Lock
-	pthread_mutex_lock(&mutex);
+	Log(">MP4Streamer Play\n");
 
 	//Check we are opened
 	if (!opened)
-	{
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-		//Exit
 		return Error("MP4Streamer not opened!\n");
-	}
-	
+
+	//Stop any current playback
+	StopWorkerLocked();
+
+	//From the beginning
+	startPos = (QWORD)-1;
+
 	//We are playing
-	playing = 1;
+	playing.store(true);
 
-	//From the begining
-	seeked = 0;
-	
-	//Arrancamos los procesos
-	createPriorityThread(&thread,play,this,0);
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
+	//Launch the playback thread
+	worker = std::thread(&MP4Streamer::PlayLoop, this);
 
 	Log("<MP4Streamer Play\n");
-
-	return playing;
-}
-
-void * MP4Streamer::play(void *par)
-{
-        Log("-PlayThread [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	MP4Streamer *player = (MP4Streamer *)par;
-
-	//Bloqueamos las se�ales
-	blocksignals();
-
-	//Ejecutamos
-	pthread_exit((void *)player->PlayLoop());
-}
-
-int MP4Streamer::PlayLoop()
-{
-	QWORD audioNext = MP4_INVALID_TIMESTAMP;
-	QWORD videoNext = MP4_INVALID_TIMESTAMP;
-	QWORD textNext  = MP4_INVALID_TIMESTAMP;
-	timeval tv ;
-	timespec ts;
-
-	Log(">MP4Streamer::PlayLoop()\n");
-
-	//If it is from the begining
-	if (!seeked)
-	{
-		// If we have audio
-		if (audio)
-		{
-			//Reset
-			audio->Reset();
-			// Send audio
-			audioNext = audio->GetNextFrameTime();
-		}
-
-		// If we have video
-		if (video)
-		{
-			//Reset
-			video->Reset();
-			// Send video
-			videoNext = video->GetNextFrameTime();
-		}
-
-		// If we have text
-		if (text)
-		{
-			//Reset
-			text->Reset();
-			//Get the next frame time
-			textNext = text->GetNextFrameTime();
-		}
-	} else {
-		//If we have video
-		if (video)
-			//Get nearest i frame
-			videoNext = video->SeekNearestSyncFrame(seeked);
-		//If we have audio
-		if (audio)
-			//Get nearest frame
-			audioNext = audio->Seek(seeked);
-		//If we have text
-		if (text)
-			//Get nearest frame
-			textNext = text->Seek(seeked);
-	}
-
-	//If first text frame is not sent inmediatelly
-	if (text && textNext!=seeked)
-		//send previous text subtitle
-		text->ReadPrevious(seeked,listener);
-
-	// Calculate start time
-	getUpdDifTime(&tv);
-
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//Reset time counter
-	t = 0;
-
-	// Wait control messages or finish of both streams
-	while ( opened && playing && (!(audioNext==MP4_INVALID_TIMESTAMP && videoNext==MP4_INVALID_TIMESTAMP && textNext==MP4_INVALID_TIMESTAMP)))
-	{
-		// Get next time
-		if (audioNext<videoNext)
-		{
-			if (audioNext<textNext)
-				t = audioNext;
-			else
-				t = textNext;
-		} else {
-			if (videoNext<textNext)
-				t = videoNext;
-			else
-				t = textNext;
-		}
-
-		// Wait time diff
-		QWORD now = (QWORD)getDifTime(&tv)/1000+seeked;
-
-		if (t>now)
-		{
-			//Calculate timeout
-			calcAbsTimeout(&ts,&tv,t-seeked);
-
-			//Wait next or stopped
-			pthread_cond_timedwait(&cond,&mutex,&ts);
-			
-			//loop
-			continue;
-		}
-
-		// if we have to send audio
-		if (audioNext<=t)
-			audioNext = audio->Read(listener);
-
-		// or video
-		if (videoNext<=t)
-			videoNext = video->Read(listener);
-
-		// or text
-		if (textNext<=t)
-			textNext = text->Read(listener);
-
-	}
-
-	Log("-MP4Streamer::PlayLoop()\n");
-
-	//Check if we were stoped
-	bool stoped = !opened || !playing;
-
-	//Not playing anymore
-	playing = 0;
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	//Check end of file
-	if (!stoped && listener)
-		//End of file
-		listener->onEnd();
-
-	Log("<MP4Streamer::PlayLoop()\n");
 
 	return 1;
 }
 
 QWORD MP4Streamer::PreSeek(QWORD time)
 {
-	//Get time
-	QWORD seeked = time;
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
-	//Lock
-	pthread_mutex_lock(&mutex);
+	if (!opened || !reader)
+		return time;
 
-	//If we have video
-	if (opened && video)
-		//Get nearest i frame
-		seeked = video->SeekNearestSyncFrame(time);
+	//Reading and seeking share the same demux cursor, so stop the worker
+	//before touching the reader (doSeek() stops right after anyway).
+	StopWorkerLocked();
 
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	return seeked;
+	//Get the nearest sync frame without altering the reader state
+	return reader->PreSeek(time);
 }
 
 int MP4Streamer::Seek(QWORD time)
 {
-	Log(">MP4Streamer seek\n");
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
-	//Stop Playback
-	Stop();
-
-	//Lock
-	pthread_mutex_lock(&mutex);
+	Log(">MP4Streamer seek [%llu]\n", (unsigned long long)time);
 
 	//Check we are opened
 	if (!opened)
-	{
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-		//Exit
 		return Error("MP4Streamer not opened!\n");
-	}
+
+	//Stop any current playback
+	StopWorkerLocked();
+
+	//Start from the requested position
+	startPos = time;
 
 	//We are playing
-	playing = 1;
+	playing.store(true);
 
-	//Seet seeked
-	seeked = time;
+	//Launch the playback thread
+	worker = std::thread(&MP4Streamer::PlayLoop, this);
 
-	//Arrancamos los procesos
-	createPriorityThread(&thread,play,this,0);
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	Log("<MP4Streamer seeked [%lld,%lld]\n",time,seeked);
+	Log("<MP4Streamer seeked [%llu]\n", (unsigned long long)time);
 
 	return 1;
 }
 
 int MP4Streamer::Stop()
 {
-	//Check
-	if (!playing)
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
+
+	//Nothing to do
+	if (!worker.joinable() && !playing.load())
 		return 0;
 
 	Log(">MP4Streamer Stop\n");
 
-	//Lock
-	pthread_mutex_lock(&mutex);
+	StopWorkerLocked();
 
-	//Change playing state
-	playing = 0;
+	Log("<MP4Streamer Stop\n");
 
-	//Get running thread
-	pthread_t running = thread;
-
-	//Clean thread
-	thread = 0;
-
-	//Signal
-	pthread_cond_signal(&cond);
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	//If got thread
-	if (running)
-		//Wait for thread, will return EDEADLK if called from same thread, i.e. in from onEnd
-		pthread_join(running,NULL);
-
-
-	Log("<MP4Streamer stop\n");
-	
-	return !playing;
+	return 1;
 }
-
 
 int MP4Streamer::Close()
 {
-	Log(">MP4 Close\n");
-	
-	//Lock
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
-	//Change  state
+	Log(">MP4Streamer Close\n");
+
+	//Stop playback
+	StopWorkerLocked();
+
+	//Change state
 	opened = false;
 
-	//If we have been opened
-	if (mp4!=MP4_INVALID_FILE_HANDLE)
-		// Close file
-		MP4Close(mp4);
-
-	//Unset handler
-	mp4 = MP4_INVALID_FILE_HANDLE;
-
-	//It it waas playing
-	if (playing)
+	//Release reusable packets
+	if (audioPacket)
 	{
-		//Not playing
-		playing = 0;
-
-		//Signal
-		pthread_cond_signal(&cond);
-
-		//Get running thread
-		pthread_t running = thread;
-
-		//Clean thread
-		thread = 0;
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-
-		//Check thread
-		if (running)
-			//Wait for running thread
-			pthread_join(running,NULL);
-	} else {
-		//Unlock
-		pthread_mutex_unlock(&mutex);
+		delete audioPacket;
+		audioPacket = NULL;
+	}
+	if (videoPacket)
+	{
+		delete videoPacket;
+		videoPacket = NULL;
 	}
 
-	Log("<MP4 Close\n");
+	//Release the reader (closes the file via libavformat)
+	if (reader)
+	{
+		delete reader;
+		reader = NULL;
+	}
+
+	Log("<MP4Streamer Close\n");
 
 	return 1;
 }
 
-int MP4RtpTrack::SendH263SEI(Listener *listener)
+void MP4Streamer::StopWorkerLocked()
 {
-	uint8_t **sequenceHeader;
-	uint8_t **pictureHeader;
-	uint32_t *pictureHeaderSize;
-	uint32_t *sequenceHeaderSize;
-	uint32_t i;
-	uint8_t* data;
-	uint32_t dataLen;
+	//Nothing running
+	if (!worker.joinable())
+		return;
 
-	//Not mark
-	rtp.SetMark(false);
+	//Signal the loop to stop (lock-free flag)
+	playing.store(false);
 
-	// Get SEI information
-	MP4GetTrackH264SeqPictHeaders(mp4, track, &sequenceHeader, &sequenceHeaderSize, &pictureHeader, &pictureHeaderSize);
+	//Wake up the interruptible wait
+	{
+		std::lock_guard<std::mutex> wl(waitMutex);
+	}
+	waitCv.notify_all();
 
-	// Get data pointer
-	data = rtp.GetMediaData();
-	// Reset length
-	dataLen = 0;
+	if (worker.get_id() == std::this_thread::get_id())
+		//Called from within the worker (typically through onEnd()): we cannot
+		//join ourselves, so detach. The thread is finishing anyway.
+		worker.detach();
+	else
+		//Called from another thread: wait for the worker to finish.
+		worker.join();
+}
 
-	// Send sequence headers
-	i=0;
+void MP4Streamer::PlayLoop()
+{
+	Log(">MP4Streamer::PlayLoop()\n");
 
-	// Check we have sequence header
-	if (sequenceHeader)
-		// Loop array
-		while(sequenceHeader[i] && sequenceHeaderSize[i])
+	//Position the reader (this also (re)starts its internal playback clock)
+	if (startPos == (QWORD)-1)
+		reader->Rewind();
+	else
+		reader->Seek(startPos);
+
+	bool completed = false;
+
+	// The reader is self-timed: GetNextFrame() returns the next frame (if its
+	// scheduled time has come) together with the time to wait before the
+	// following one. We only pace the loop and republish the frames.
+	while (playing.load())
+	{
+		int errcode = 0;
+		unsigned long waittime = 0;
+
+		MediaFrame *frame = reader->GetNextFrame(errcode, waittime);
+
+		//End of file
+		if (errcode == -1 || errcode == -2)
 		{
-			// Check if it can be handled in a single packeti
-			if (sequenceHeaderSize[i]<1400)
-			{
-				// If there is not enought length
-				if (dataLen+sequenceHeaderSize[i]>1400)
-				{
-					// Set data length
-					rtp.SetMediaLength(dataLen);
-					//Check listener
-					if (listener)
-						// Write frame
-						listener->onRTPPacket(rtp);
-					// Reset data
-					dataLen = 0;
-				}
-				// Copy data
-				memcpy(data+dataLen,sequenceHeader[i],sequenceHeaderSize[i]);	
-				// Increase pointer
-				dataLen+=sequenceHeaderSize[i];
-			}
-			// Free memory
-			free(sequenceHeader[i]);
-			// Next header
-			i++;
+			completed = true;
+			break;
 		}
 
-	// If there is still data
-	if (dataLen>0)
-	{
-		// Set data length
-		rtp.SetMediaLength(dataLen);
-		//Check listener
-		if (listener)
-			// Write frame
-			listener->onRTPPacket(rtp);
-		// Reset data
-		dataLen = 0;
-	}
+		//Publish the frame if any
+		if (frame)
+			Dispatch(frame);
 
-	// Send picture headers
-	i=0;
+		//Read error on this frame: stop to avoid a busy loop
+		if (errcode < 0)
+			break;
 
-	// Check we have picture header
-	if (pictureHeader)
-		// Loop array
-		while(pictureHeader[i] && pictureHeaderSize[i])
+		//Wait until the next frame is due (interruptible on Stop)
+		if (waittime > 0)
 		{
-			// Check if it can be handled in a single packeti
-			if (pictureHeaderSize[i]<1400)
-			{
-				// If there is not enought length
-				if (dataLen+pictureHeaderSize[i]>1400)
-				{
-					// Set data length
-					rtp.SetMediaLength(dataLen);
-					//Check listener
-					if (listener)
-						// Write frame
-						listener->onRTPPacket(rtp);
-					// Reset data
-					dataLen = 0;
-				}
-				// Copy data
-				memcpy(data+dataLen,pictureHeader[i],pictureHeaderSize[i]);	
-				// Increase pointer
-				dataLen+=pictureHeaderSize[i];
-			}
-			// Free memory
-			free(pictureHeader[i]);
-			// Next header
-			i++;
-		}
-
-	// If there is still data
-	if (dataLen>0)
-	{
-		// Set data length
-		rtp.SetMediaLength(dataLen);
-		//Check listener
-		if (listener)
-			// Write frame
-			listener->onRTPPacket(rtp);
-		// Reset data
-		dataLen = 0;
-	}
-
-	// Free data
-	if (pictureHeader)
-		free(pictureHeader);
-	if (sequenceHeader)
-		free(sequenceHeader);
-	if (sequenceHeaderSize)
-		free(sequenceHeaderSize);
-	if (pictureHeaderSize)
-		free(pictureHeaderSize);
-
-}
-
-int MP4RtpTrack::Reset()
-{
-	sampleId	= 1;
-	numHintSamples	= 0;
-	packetIndex	= 0;
-}
-
-QWORD MP4RtpTrack::Read(Listener *listener)
-{
-	int last = 0;
-	uint8_t* data;
-	bool isSyncSample;
-
-	// If it's first packet of a frame
-	if (!numHintSamples)
-	{
-		// Get number of rtp packets for this sample
-		if (!MP4ReadRtpHint(mp4, hint, sampleId, &numHintSamples))
-		{
-			//Print error
-			Error("Error reading hintt");
-			//Exit
-			return MP4_INVALID_TIMESTAMP;
-		}
-
-		// Get number of samples for this sample
-		frameSamples = MP4GetSampleDuration(mp4, hint, sampleId);
-
-		// Get size of sample
-		frameSize = MP4GetSampleSize(mp4, hint, sampleId);
-
-		// Get sample timestamp
-		frameTime = MP4GetSampleTime(mp4, hint, sampleId);
-		//Convert to miliseconds
-		frameTime = MP4ConvertFromTrackTimestamp(mp4, hint, frameTime, 1000);
-
-		// Check if it is H264 and it is a Sync frame
-		if (codec==VideoCodec::H264 && MP4GetSampleSync(mp4,track,sampleId))
-			// Send SEI info
-			SendH263SEI(listener);
-
-		//Get max data lenght
-		BYTE *data = NULL;
-		DWORD dataLen = 0;
-		MP4Timestamp	startTime;
-		MP4Duration	duration;
-		MP4Duration	renderingOffset;
-
-		//Get values
-		data	= frame->GetData();
-		dataLen = frame->GetMaxMediaLength();
-		
-		// Read next rtp packet
-		if (!MP4ReadSample(
-			mp4,				// MP4FileHandle hFile
-			track,				// MP4TrackId hintTrackId
-			sampleId,			// MP4SampleId sampleId,
-			(u_int8_t **) &data,		// u_int8_t** ppBytes
-			(u_int32_t *) &dataLen,		// u_int32_t* pNumBytes
-			&startTime,			// MP4Timestamp* pStartTime
-			&duration,			// MP4Duration* pDuration
-			&renderingOffset,		// MP4Duration* pRenderingOffset
-			&isSyncSample			// bool* pIsSyncSample
-			))
-		{
-			Error("Error reading sample");
-			//Last
-			return MP4_INVALID_TIMESTAMP;
-		}
-
-		//Check type
-		if (media == MediaFrame::Video)
-		{
-			//Get video frame
-			VideoFrame *video = (VideoFrame*)frame;
-			//Set lenght
-			video->SetLength(dataLen);
-			//Timestamp
-			video->SetTimestamp(startTime*90000/timeScale);
-			//Set intra
-			video->SetIntra(isSyncSample);
-			//Set video duration (informative)
-			video->SetDuration(duration);
-		} else {
-			//Get Audio frame
-			AudioFrame *audio = (AudioFrame*)frame;
-			//Set lenght
-			audio->SetLength(dataLen);
-			//Timestamp
-			audio->SetTimestamp(startTime*8000/timeScale);
-			//Set audio duration (informative)
-			audio->SetDuration(duration);
-		}
-
-		//Check listener
-		if (listener)
-			//Frame callback
-			listener->onMediaFrame(*frame);
-	}
-
-	// if it's the last
-	if (packetIndex + 1 == numHintSamples)
-		//Set last mark
-		last = 1;
-	
-	// Set mark bit
-	rtp.SetMark(last);
-
-	// Get data pointer
-	data = rtp.GetMediaData();
-	//Get max data lenght
-	DWORD dataLen = rtp.GetMaxMediaLength();
-
-	// Read next rtp packet
-	if (!MP4ReadRtpPacket(
-				mp4,				// MP4FileHandle hFile
-				hint,				// MP4TrackId hintTrackId
-				packetIndex++,			// u_int16_t packetIndex
-				(u_int8_t **) &data,		// u_int8_t** ppBytes
-				(u_int32_t *) &dataLen,		// u_int32_t* pNumBytes
-				0,				// u_int32_t ssrc DEFAULT(0)
-				0,				// bool includeHeader DEFAULT(true)
-				1				// bool includePayload DEFAULT(true)
-	))
-	{
-		//Error
-		Error("Error reading packet [%d,%d,%d]\n", hint, track,packetIndex);
-		//Exit
-		return MP4_INVALID_TIMESTAMP;
-	}
-		
-
-	//Check
-	if (dataLen>rtp.GetMaxMediaLength())
-	{
-		//Error
-		Error("RTP packet too big [%u,%u]\n",dataLen,rtp.GetMaxMediaLength());
-		//Exit
-		return MP4_INVALID_TIMESTAMP;
-	}
-	
-	//Set lenght
-	rtp.SetMediaLength(dataLen);
-	// Write frame
-	listener->onRTPPacket(rtp);
-
-	// Are we the last packet in a hint?
-	if (last)
-	{
-		// The first hint
-		packetIndex = 0;
-		// Go for next sample
-		sampleId++;
-		numHintSamples = 0;
-		//Return next frame time
-		return GetNextFrameTime();
-	}
-
-	// This packet is this one
-	return frameTime;
-}
-
-QWORD MP4RtpTrack::GetNextFrameTime()
-{
-	QWORD ts = MP4GetSampleTime(mp4, hint, sampleId);
-	//Check it
-	if (ts==MP4_INVALID_TIMESTAMP)
-		//Return it
-		return ts;
-	//Convert to miliseconds
-	ts = MP4ConvertFromTrackTimestamp(mp4, hint, ts, 1000);
-
-	//Get next timestamp
-	return ts;
-}
-
-
-int MP4TextTrack::Reset()
-{
-	sampleId	= 1;
-}
-
-QWORD MP4TextTrack::ReadPrevious(QWORD time,Listener *listener)
-{
-	//Check it is the first
-	if (sampleId==1)
-	{
-		//Set emtpy frame
-		frame.SetFrame(time,(wchar_t*)NULL,0);
-		//call listener
-		if (listener)
-			//Call it
-			listener->onTextFrame(frame);
-		//Exit
-		return 1;
-	}
-
-	//The previous one
-	MP4SampleId prevId = sampleId-1;
-
-	//If it was not found
-	if (sampleId==MP4_INVALID_SAMPLE_ID)
-		//The latest
-		prevId = MP4GetTrackNumberOfSamples(mp4,track);
-
-	// Get size of sample
-	frameSize = MP4GetSampleSize(mp4, track, prevId);
-
-	// Get data pointer
-	BYTE *data = (BYTE*)malloc(frameSize);
-	//Get max data lenght
-	DWORD dataLen = frameSize;
-
-	MP4Timestamp	startTime;
-	MP4Duration	duration;
-	MP4Duration	renderingOffset;
-
-	// Read next rtp packet
-	if (!MP4ReadSample(
-				mp4,				// MP4FileHandle hFile
-				track,				// MP4TrackId hintTrackId
-				prevId,				// MP4SampleId sampleId,
-				(u_int8_t **) &data,		// u_int8_t** ppBytes
-				(u_int32_t *) &dataLen,		// u_int32_t* pNumBytes
-				&startTime,			// MP4Timestamp* pStartTime
-				&duration,			// MP4Duration* pDuration
-				&renderingOffset,		// MP4Duration* pRenderingOffset
-				NULL				// bool* pIsSyncSample
-	))
-		//Last
-		return MP4_INVALID_TIMESTAMP;
-
-	//Get length
-	if (dataLen>2)
-	{
-		//Get string length
-		DWORD len = data[0]<<8 | data[1];
-		//Set frame
-		frame.SetFrame(time,data+2+renderingOffset,len-renderingOffset-2);
-		//call listener
-		if (listener)
-			//Call it
-			listener->onTextFrame(frame);
-	}
-
-	// exit next send time
-	return 1;
-}
-
-QWORD MP4TextTrack::Read(Listener *listener)
-{
-	int next = 0;
-	int last = 0;
-	int first = 0;
-
-	// Get number of samples for this sample
-	frameSamples = MP4GetSampleDuration(mp4, track, sampleId);
-
-	// Get size of sample
-	frameSize = MP4GetSampleSize(mp4, track, sampleId);
-
-	// Get sample timestamp
-	frameTime = MP4GetSampleTime(mp4, track, sampleId);
-	//Convert to miliseconds
-	frameTime = MP4ConvertFromTrackTimestamp(mp4, track, frameTime, 1000);
-
-	// Get data pointer
-	BYTE *data = (BYTE*)malloc(frameSize);
-	//Get max data lenght
-	DWORD dataLen = frameSize;
-
-	MP4Timestamp	startTime;
-	MP4Duration	duration;
-	MP4Duration	renderingOffset;
-
-	// Read next rtp packet
-	if (!MP4ReadSample(
-				mp4,				// MP4FileHandle hFile
-				track,				// MP4TrackId hintTrackId
-				sampleId++,			// MP4SampleId sampleId,
-				(u_int8_t **) &data,		// u_int8_t** ppBytes
-				(u_int32_t *) &dataLen,		// u_int32_t* pNumBytes
-				&startTime,			// MP4Timestamp* pStartTime
-				&duration,			// MP4Duration* pDuration
-				&renderingOffset,		// MP4Duration* pRenderingOffset
-				NULL				// bool* pIsSyncSample
-	))
-		//Last
-		return MP4_INVALID_TIMESTAMP;
-
-	//Log("Got text frame [time:%d,start:%d,duration:%d,lenght:%d,offset:%d\n",frameTime,startTime,duration,dataLen,renderingOffset);
-	//Dump(data,dataLen);
-	//Get length
-	if (dataLen>2)
-	{
-		//Get string length
-		DWORD len = data[0]<<8 | data[1];
-		//Set frame
-		frame.SetFrame(startTime,data+2+renderingOffset,len-renderingOffset-2);
-		//call listener
-		if (listener)
-			//Call it
-			listener->onTextFrame(frame);
-	}
-	
-	// exit next send time
-	return GetNextFrameTime();
-}
-
-QWORD MP4TextTrack::GetNextFrameTime()
-{
-	//Get next timestamp
-	return  MP4GetSampleTime(mp4, track, sampleId);
-}
-
-double MP4Streamer::GetDuration()
-{
-	return MP4GetDuration(mp4)/MP4GetTimeScale(mp4);
-}
-
-DWORD MP4Streamer::GetVideoWidth()
-{
-	return MP4GetTrackVideoWidth(video->mp4,video->track);
-}
-
-DWORD MP4Streamer::GetVideoHeight()
-{
-	return MP4GetTrackVideoHeight(video->mp4,video->track);
-}
-
-DWORD MP4Streamer::GetVideoBitrate()
-{
-	return MP4GetTrackBitRate(video->mp4,video->track);
-}
-
-double MP4Streamer::GetVideoFramerate()
-{
-	return MP4GetTrackVideoFrameRate(video->mp4,video->track);
-}
-
-AVCDescriptor* MP4Streamer::GetAVCDescriptor()
-{
-	uint8_t **sequenceHeader;
-	uint8_t **pictureHeader;
-	uint32_t *pictureHeaderSize;
-	uint32_t *sequenceHeaderSize;
-	uint32_t i;
-	uint8_t profile, level;
-	uint32_t len;
-	
-	//Check video
-	if (!video || video->codec!=VideoCodec::H264)
-		//Nothing
-		return NULL;
-
-	//Create descriptor
-	AVCDescriptor* desc = new AVCDescriptor();
-
-	//Set them
-	desc->SetConfigurationVersion(0x01);
-	desc->SetAVCProfileIndication(profile);
-	desc->SetProfileCompatibility(0x00);
-	desc->SetAVCLevelIndication(level);
-
-	//Set nalu length
-	MP4GetTrackH264LengthSize(video->mp4, video->track, &len);
-
-	//Set it
-	desc->SetNALUnitLength(len-1);
-
-	// Get SEI informaMP4GetTrackH264SeqPictHeaderstion
-	MP4GetTrackH264SeqPictHeaders(video->mp4, video->track, &sequenceHeader, &sequenceHeaderSize, &pictureHeader, &pictureHeaderSize);
-
-	// Send sequence headers
-	i=0;
-
-	// Check we have sequence header
-	if (sequenceHeader)
-	{
-		// Loop array
-		while(sequenceHeader[i] && sequenceHeaderSize[i])
-		{
-			//Append sequence
-			desc->AddSequenceParameterSet(sequenceHeader[i],sequenceHeaderSize[i]);
-			//Update values based on the ones in SQS
-			desc->SetAVCProfileIndication(sequenceHeader[i][1]);
-			desc->SetProfileCompatibility(sequenceHeader[i][2]);
-			desc->SetAVCLevelIndication(sequenceHeader[i][3]);
-			//inc
-			i++;
+			std::unique_lock<std::mutex> wl(waitMutex);
+			waitCv.wait_for(wl, std::chrono::milliseconds(waittime),
+				[this]{ return !playing.load(); });
 		}
 	}
 
-	// Send picture headers
-	i=0;
+	Log("-MP4Streamer::PlayLoop() end [completed:%d]\n", completed);
 
-	// Check we have picture header
-	if (pictureHeader)
+	//Not playing anymore
+	playing.store(false);
+
+	// IMPORTANT: onEnd() may restart playback (looping players call Play()
+	// from within onEnd(), on THIS very thread). StopWorkerLocked() then
+	// detaches us, so after onEnd() returns we must not touch any shared
+	// state — just let the thread unwind.
+	if (completed && listener)
+		listener->onEnd();
+
+	Log("<MP4Streamer::PlayLoop()\n");
+}
+
+void MP4Streamer::Dispatch(MediaFrame *frame)
+{
+	if (!listener || !frame)
+		return;
+
+	//Text is delivered as-is through onTextFrame
+	if (frame->GetType() == MediaFrame::Text)
 	{
-		// Loop array
-		while(pictureHeader[i] && pictureHeaderSize[i])
-		{
-			//Append sequence
-			desc->AddPictureParameterSet(pictureHeader[i],pictureHeaderSize[i]);
-			//inc
-			i++;
-		}
+		listener->onTextFrame(*(TextFrame *)frame);
+		return;
 	}
 
-	// Free data
-	if (pictureHeader)
-		free(pictureHeader);
-	if (sequenceHeader)
-		free(sequenceHeader);
-	if (sequenceHeaderSize)
-		free(sequenceHeaderSize);
-	if (pictureHeaderSize)
-		free(pictureHeaderSize);
-
-	return desc;
+	//Audio / video: deliver the media frame, then the reconstructed RTP packets
+	listener->onMediaFrame(*frame);
+	DispatchRtp(frame);
 }
 
-
-QWORD MP4RtpTrack::SearchNearestSyncFrame(QWORD time)
+void MP4Streamer::DispatchRtp(MediaFrame *frame)
 {
-	//Get time in track units
-	MP4Duration when = time*timeScale/1000;
-	//Get nearest sample
-	MP4SampleId sampleId = MP4GetSampleIdFromTime(mp4,hint,when,false);
-	//Check
-	if (sampleId == MP4_INVALID_SAMPLE_ID)
-		//Nothing
-		return MP4_INVALID_TIMESTAMP;
-	//Find nearest sync
-	while(sampleId>1)
+	//Nothing to packetize
+	if (!frame->HasRtpPacketizationInfo())
+		return;
+
+	//Pick the reusable packet for this media
+	RTPPacket *packet = NULL;
+	if (frame->GetType() == MediaFrame::Audio)
+		packet = audioPacket;
+	else if (frame->GetType() == MediaFrame::Video)
+		packet = videoPacket;
+
+	if (!packet)
+		return;
+
+	BYTE *frameData = frame->GetData();
+	DWORD frameLen  = frame->GetLength();
+
+	// Each RtpPacketization describes one RTP payload (as it was hinted in the
+	// MP4 file). Rebuild the RTP packets one by one, preserving mark bit and
+	// timestamp, exactly like the former hint-track reader did.
+	MediaFrame::RtpPacketizationInfo &info = frame->GetRtpPacketizationInfo();
+	for (MediaFrame::RtpPacketizationInfo::iterator it = info.begin(); it != info.end(); ++it)
 	{
-		//If it is a sync frame
-		if (MP4GetSampleSync(mp4,hint,sampleId)>0)
-		{
-			//Get sample time
-			when = MP4GetSampleTime(mp4,hint,sampleId);
-			//And convert it to timescale
-			return when*1000/timeScale;
-		}
-		//new one
-		sampleId--;
+		MediaFrame::RtpPacketization *rtp = *it;
+
+		DWORD pos       = rtp->GetPos();
+		DWORD size      = rtp->GetSize();
+		DWORD prefixLen = rtp->GetPrefixLen();
+
+		//Bounds checks
+		if (pos + size > frameLen)
+			continue;
+		if (prefixLen + size > packet->GetMaxMediaLength())
+			continue;
+
+		BYTE *out = packet->GetMediaData();
+
+		//Optional RTP payload prefix (e.g. H.264 headers)
+		if (prefixLen)
+			memcpy(out, rtp->GetPrefixData(), prefixLen);
+
+		//Payload
+		memcpy(out + prefixLen, frameData + pos, size);
+
+		packet->SetMediaLength(prefixLen + size);
+		packet->SetMark(rtp->IsMark());
+		packet->SetTimestamp(frame->GetTimeStamp());
+
+		//Publish it
+		listener->onRTPPacket(*packet);
 	}
-	//Nothing found go to init
-	return MP4_INVALID_TIMESTAMP;
-}
-
-QWORD MP4RtpTrack::SeekNearestSyncFrame(QWORD time)
-{
-	//Reset us
-	Reset();
-	//Get time in track units
-	MP4Duration when = time*timeScale/1000;
-	//Get nearest sample
-	sampleId = MP4GetSampleIdFromTime(mp4,hint,when,false);
-	//Check
-	if (sampleId == MP4_INVALID_SAMPLE_ID)
-		//Nothing
-		return MP4_INVALID_TIMESTAMP;
-	//Find nearest sync
-	while(sampleId>0)
-	{
-		//If it is a sync frame
-		if (MP4GetSampleSync(mp4,hint,sampleId)>0)
-		{
-			//Get sample time
-			when = MP4GetSampleTime(mp4,hint,sampleId);
-			//And convert it to timescale
-			return when*1000/timeScale;
-		}
-		//new one
-		sampleId--;
-	}
-	//Nothing found go to init
-	return MP4_INVALID_TIMESTAMP;
-}
-
-QWORD MP4RtpTrack::Seek(QWORD time)
-{
-	//Reset us
-	Reset();
-	//Get time in track units
-	MP4Duration when = time*timeScale/1000;
-	//Get nearest sample
-	sampleId = MP4GetSampleIdFromTime(mp4,hint,when,false);
-	//Check
-	if (sampleId == MP4_INVALID_SAMPLE_ID)
-		//Nothing
-		return MP4_INVALID_TIMESTAMP;
-	//Get sample time
-	when = MP4GetSampleTime(mp4,hint,sampleId);
-	//And convert it to timescale
-	return when*1000/timeScale;
-}
-
-QWORD MP4TextTrack::Seek(QWORD time)
-{
-	//Reset us
-	Reset();
-	//Get time in track units
-	MP4Duration when = time*timeScale/1000;
-	//Get nearest sample
-	sampleId = MP4GetSampleIdFromTime(mp4,track,when,false);
-	//Check
-	if (sampleId == MP4_INVALID_SAMPLE_ID)
-		//Nothing
-		return MP4_INVALID_TIMESTAMP;
-	//Get sample time
-	when = MP4GetSampleTime(mp4,track,sampleId);
-	//And convert it to timescale
-	return when*1000/timeScale;
 }

@@ -6,7 +6,7 @@
 #include "websocketserver.h"
 #include "websockets.h"
 #include "Endpoint.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "text.h"
 #include "redcodec.h"
 
@@ -22,7 +22,7 @@ public :
 	virtual ~WSEndpoint();
 
 	// Port interface
-	virtual int Init() {};
+	virtual int Init() { return 0; };
 	virtual int End();
 
 	//Joinable interface
@@ -33,6 +33,9 @@ public :
 	virtual void onRTPPacket(RTPPacket &packet);
 	virtual void onResetStream() { SendReplacementChar(true); };
 	virtual void onEndStream() { SendReplacementChar(true); };
+	//Le lien retour Endpoint::Port::joined est désormais un weak_ptr : le
+	//Port::Detach le lock() et ne déréférence jamais une source détruite. Plus
+	//besoin de notification onJoinableEnded (C-13, lien A).
 
 	//Websocket::Listener
 	virtual void onOpen(WebSocket *ws);

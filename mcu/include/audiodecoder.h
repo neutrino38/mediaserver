@@ -7,7 +7,7 @@
 
 #ifndef AUDIODECODER_H
 #define	AUDIODECODER_H
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "audio.h"
 #include "waitqueue.h"
 #include "rtp.h"

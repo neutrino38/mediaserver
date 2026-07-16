@@ -4,6 +4,7 @@
  * 
  * Created on 7 de septiembre de 2011, 12:19
  */
+#include <sys/time.h>
 #include "log.h"
 #include "RTPMultiplexer.h"
 
@@ -11,18 +12,19 @@ RTPMultiplexer::RTPMultiplexer()
 {
 	//Create mutex
 	pthread_mutex_init(&mutex,NULL);
+	//No "no listener" log emitted yet
+	lastNoListenerTs = 0;
+	noListenerCount = 0;
 }
 
 RTPMultiplexer::~RTPMultiplexer()
 {
 	//Lock mutexk
 	pthread_mutex_lock(&mutex);
-	//Iterate
-	/*for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-		//Remove stream
-		(*it)->onEndStream();
-	*/
-	//Clean listeners
+	//C-13 (lien A) : le lien retour `joined` de chaque listener est désormais un
+	//weak_ptr. La destruction de cette source (dernier shared_ptr relâché) fait
+	//expirer ces weak_ptr : le Detach ultérieur du listener lock() dans le vide et
+	//ne déréférence plus cet objet libéré. Plus besoin de notifier onJoinableEnded.
 	listeners.clear();
 	//Unlock
 	pthread_mutex_unlock(&mutex);
@@ -31,32 +33,32 @@ RTPMultiplexer::~RTPMultiplexer()
 }
 int  RTPMultiplexer::TryCodec(int codec)
 {
-    int rez1, rez2;
 	//Lock mutexk
 	pthread_mutex_lock(&mutex);
-	//Iterate
-	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-        {
-		//Update
-		rez1 = (*it)->TryCheckCodec(codec);
-                if (rez1 != codec) break;
-        }
 
-        for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
-        {
-		//Update
-		rez2 = (*it)->TryCheckCodec(codec);
-                if (rez2 != rez1) 
-                {
-                    rez2 = -1;
-                    break;
-                }
-        }
+	//Aucun endpoint attaché : on ne peut rien affirmer sur le codec.
+	if (listeners.empty())
+	{
+		pthread_mutex_unlock(&mutex);
+		return -1;
+	}
+
+	//Le codec est accepté seulement si TOUS les endpoints listeners l'acceptent
+	//(présent dans leur rtpMap de sortie négociée).
+	int result = codec;
+	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
+	{
+		if ((*it)->TryCheckCodec(codec) != codec)
+		{
+			result = -1;
+			break;
+		}
+	}
 
 	//Unlock
 	pthread_mutex_unlock(&mutex);
 
-        return rez2;
+	return result;
 }
 
 void RTPMultiplexer::Multiplex(RTPPacket &packet)
@@ -67,7 +69,20 @@ void RTPMultiplexer::Multiplex(RTPPacket &packet)
 	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
 		//Update
 		(*it)->onRTPPacket(packet);
-	if (listeners.size() == 0) Log("-RTPMultiplexer: no listener.\n");
+	if (listeners.size() == 0)
+	{
+		//Compte les paquets ignorés et limite le log à 1/s pour éviter le flood
+		noListenerCount++;
+		struct timeval tv;
+		gettimeofday(&tv,0);
+		QWORD nowMs = (QWORD)tv.tv_sec*1000 + tv.tv_usec/1000;
+		if (nowMs - lastNoListenerTs >= 1000)
+		{
+			Log("-RTPMultiplexer: no listener (%u packets ignored).\n", noListenerCount);
+			lastNoListenerTs = nowMs;
+			noListenerCount = 0;
+		}
+	}
 	//Unlock
 	pthread_mutex_unlock(&mutex);
 }

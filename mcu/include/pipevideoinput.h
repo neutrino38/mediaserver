@@ -1,16 +1,17 @@
 #ifndef _PIPEVIDEOINPUT_H_
 #define _PIPEVIDEOINPUT_H_
 
+#include <condition_variable>
+#include <mutex>
 #include <video.h>
 #include <framescaler.h>
-#include "pthread.h"
 
 class PipeVideoInput
 	: public VideoInput
 {
 public:
 	PipeVideoInput();
-	~PipeVideoInput();
+	virtual ~PipeVideoInput();
 
 	virtual int   StartVideoCapture(int width,int height,int fps);
 	virtual BYTE* GrabFrame(DWORD timeout);
@@ -36,9 +37,8 @@ private:
 	BYTE *imgBuffer[2];
 	BYTE *grabPic;
 
-	pthread_mutex_t newPicMutex;
-	pthread_cond_t  newPicCond;
-
+	std::mutex newPicMutex;
+	std::condition_variable newPicCond;
 };
 
 #endif

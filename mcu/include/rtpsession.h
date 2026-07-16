@@ -5,10 +5,11 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <mutex>
+#include <memory>
 #include <map>
 #include <string>
 #include <poll.h>
-#include <srtp/srtp.h>
+#include <srtp2/srtp.h>
 #include "config.h"
 #include "use.h"
 #include "rtp.h"
@@ -37,6 +38,10 @@ public:
 		virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate) = 0;
 		virtual void onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD bitrate,DWORD overhead) = 0;
 		virtual void onNewStream( RTPSession *session, DWORD newSsrc, bool receiving ) ;
+		//Watchdog d'inactivité RTP : appelé UNE seule fois lorsqu'aucun paquet n'a
+		//été reçu depuis plus de rtpTimeout ms (gap 5 - EndpointDisconnectedEvent).
+		//Non pur pour ne pas casser les Listener existants.
+		virtual void onRTPTimeout( RTPSession *session ) {}
 	};
 	
 public:
@@ -54,12 +59,29 @@ private:
 public:
 	RTPSession(MediaFrame::Type media,Listener *listener, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	~RTPSession();
+	//M-6 : enregistrement différé d'un listener géré par shared_ptr
+	//(RTPParticipant). Une fois appelé, prend le pas sur le pointeur brut du
+	//constructeur (utilisé tel quel par MediaBridgeSession, non converti).
+	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
 	int Init();
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetLocalPort(int recvPort);
 	int GetLocalPort();
 	int SetRemotePort(char *ip,int sendPort);
 	int 					GetRemotePort();
+	//Configure UNIQUEMENT le seuil d'inactivité RTP en ms (n'arme pas le watchdog).
+	//Le chrono ne démarre qu'à l'armement explicite (ArmRTPTimeout), tenu par le
+	//contrôleur au moment du SDP answer (gap 5).
+	void SetRTPTimeout(DWORD timeout) { rtpTimeout = timeout; }
+	//Arme/désarme le watchdog d'inactivité RTP. À appeler par le contrôleur (elixip)
+	//juste après l'envoi du SDP answer : le chrono part de cet instant, ce qui évite
+	//les timeouts intempestifs pendant la sonnerie ET détecte « répondu mais aucun
+	//média reçu ». timeoutMs>0 : (re)configure le seuil + arme ; timeoutMs==0 : désarme.
+	void ArmRTPTimeout(DWORD timeoutMs);
+	//Trickle ICE Niveau 1 (gap 1) : parse une ligne SDP "candidate:..." et, pour un
+	//candidat host/srflx de priorité supérieure au candidat courant, reconfigure la
+	//cible d'envoi RTP/RTCP. Retourne 1 si accepté/ignoré proprement, 0 sur erreur.
+	int AddICECandidate(const char* candidate);
 	
 	
 	RemoteRateEstimator* 	GetRemoteRateEstimator() 	{	return remoteRateEstimator; };
@@ -269,7 +291,18 @@ private:
 	MediaFrame::MediaRole role;
 	
 	Listener* listener;
-	
+	//M-6 : listener géré par shared_ptr (prioritaire si hasWeakListener).
+	std::weak_ptr<Listener> weakListener;
+	bool hasWeakListener = false;
+	//Résout le listener courant : weak_ptr.lock() si armé, sinon wrapper
+	//non-possédant du pointeur brut (comportement historique inchangé).
+	std::shared_ptr<Listener> LockListener()
+	{
+		if (hasWeakListener)
+			return weakListener.lock();
+		return listener ? std::shared_ptr<Listener>(listener, [](Listener*){}) : nullptr;
+	}
+
 	Streams streams;
 	RTPStream * defaultStream;
 	
@@ -282,6 +315,15 @@ private:
 	pollfd	ufds[2];
 	bool	inited;
 	bool	running;
+
+	//Watchdog d'inactivité (gap 5) : horodatage de la dernière activité (paquet reçu
+	//OU instant d'armement), seuil d'inactivité en ms (0 = désactivé), drapeau
+	//d'armement (le chrono ne court que lorsqu'il est armé — armé au SDP answer) et
+	//drapeau anti-rebond (transition unique actif -> inactif).
+	timeval	lastRecv;
+	DWORD	rtpTimeout;
+	bool	rtpTimeoutArmed;
+	bool	rtpTimedOut;
 
 	DTLSConnection dtls;
 	bool	encript;
@@ -299,6 +341,8 @@ private:
 	char*	iceRemotePwd;
 	char*	iceLocalUsername;
 	char*	iceLocalPwd;
+	//Meilleure priorité de candidat distant retenue (trickle ICE Niveau 1, gap 1)
+	DWORD	iceRemotePriority;
 	pthread_t thread;
 	std::mutex mutex;	
 

@@ -7,7 +7,7 @@
 #include "log.h"
 #include "avcdescriptor.h"
 #include "tools.h"
-#include "h264/h264.h"
+#include <h264/h264.h>
 #include <string.h>
 #include <stdlib.h>
 #include <vector>

@@ -5,7 +5,8 @@
 #include "pipevideoinput.h"
 #include "pipetextinput.h"
 #include "mp4streamer.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
+#include <memory>
 
 
 
@@ -13,7 +14,7 @@ class MP4Player : public MP4Streamer::Listener
 {
 public:
 	MP4Player();
-	~MP4Player();
+	virtual ~MP4Player();
 
 	int Init(AudioOutput *audioOutput,VideoOutput *videoOutput,TextOutput *textOutput);
 	int Play(const char* filename, bool loop);
@@ -27,9 +28,12 @@ public:
 
 private:
 	
+	//streamer déclaré EN PREMIER (donc détruit EN DERNIER) : son thread worker
+	//utilise audioDecoder/videoDecoder ; ~MP4Player appelle Stop() pour joindre
+	//ce worker avant que les unique_ptr des décodeurs ne se détruisent (M-3).
 	MP4Streamer streamer;
-	AudioDecoder *audioDecoder;
-	VideoDecoder *videoDecoder;
+	std::unique_ptr<AudioDecoder> audioDecoder;
+	std::unique_ptr<VideoDecoder> videoDecoder;
 	VideoOutput *videoOutput;
 	AudioOutput *audioOutput;
 	TextOutput  *textOutput;

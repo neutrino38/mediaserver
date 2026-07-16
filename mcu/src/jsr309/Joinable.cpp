@@ -42,5 +42,6 @@ bool Joinable::PostEvent( JSR309Event *event)
 	if (jsrManager != NULL && sessionId >0 && eventContextId > 0)
 		jsrManager->PostEvent(sessionId, eventContextId, event);
 
+	return true;
 }
 

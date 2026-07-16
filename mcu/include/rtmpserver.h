@@ -21,7 +21,7 @@ public:
 	int End();
 	
 	/** Listener for RTMPConnection */
-	RTMPNetConnection* OnConnect(const std::wstring& appName,RTMPNetConnection::Listener *listener);
+	std::shared_ptr<RTMPNetConnection> OnConnect(const std::wstring& appName,RTMPNetConnection::Listener *listener);
 	void onDisconnect(RTMPConnection *con);
 
 protected:

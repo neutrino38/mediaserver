@@ -8,7 +8,6 @@
 #include "log.h"
 #include "FLVEncoder.h"
 #include "flv.h"
-#include "flv1/flv1codec.h"
 #include "audioencoder.h"
 #include "aacconfig.h"
 
@@ -113,7 +112,7 @@ void * FLVEncoder::startEncodingAudio(void *par)
 	FLVEncoder *enc = (FLVEncoder *)par;
 	blocksignals();
 	Log("Encoding FLV audio [%d]\n",getpid());
-	pthread_exit((void *)enc->EncodeAudio());
+	pthread_exit((void *)(intptr_t)enc->EncodeAudio());
 }
 
 /***************************************
@@ -125,13 +124,13 @@ void * FLVEncoder::startEncodingVideo(void *par)
 	FLVEncoder *enc = (FLVEncoder *)par;
 	blocksignals();
 	Log("Encoding FLV video [%d]\n",getpid());
-	pthread_exit((void *)enc->EncodeVideo());
+	pthread_exit((void *)(intptr_t)enc->EncodeVideo());
 }
 
 DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)
 {
 	//Call parent
-	RTMPMediaStream::AddMediaListener(listener);
+	DWORD num = RTMPMediaStream::AddMediaListener(listener);
 	//Init
 	listener->onStreamBegin(RTMPMediaStream::id);
 
@@ -149,6 +148,8 @@ DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)
 		listener->onMediaFrame(RTMPMediaStream::id,aacSpecificConfig);
 	//Send FPU
 	sendFPU = true;
+	//Return number of listeners
+	return num;
 }
 
 DWORD FLVEncoder::AddMediaFrameListener(MediaFrame::Listener* listener)
@@ -464,7 +465,7 @@ int FLVEncoder::EncodeAudio()
 			//Clear rtp
 			frame.ClearRTPPacketizationInfo();
 			//Add rtp packet
-			frame.AddRtpPacket(0,len,NULL,0);
+			frame.AddRtpPacket(0,len,NULL,0,false);
 			//For each listere
 			//For each listener
 			for(MediaFrameListeners::iterator it = mediaListeners.begin(); it!=mediaListeners.end(); ++it)

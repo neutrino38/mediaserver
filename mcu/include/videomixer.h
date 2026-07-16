@@ -7,9 +7,10 @@
 #include "pipevideooutput.h"
 #include "eventstreaminghandler.h"
 #include "mosaic.h"
-#include "logo.h"
+#include "medkit/logo.h"
 #include <map>
 #include <list>
+#include <memory>
 
 class VideoMixer 
 {
@@ -39,6 +40,9 @@ public:
 	int DeleteMixer(int id);
 	VideoInput*  GetInput(int id);
 	VideoOutput* GetOutput(int id);
+	//Co-propriété (Point 1 / C-4) : rendent une copie de shared_ptr sur le pipe.
+	std::shared_ptr<VideoInput>  GetSharedInput(int id);
+	std::shared_ptr<VideoOutput> GetSharedOutput(int id);
 	int SetSlot(int num,int id);
 	int SetCompositionType(Mosaic::Type comp,int size);
 
@@ -69,15 +73,18 @@ private:
 private:
 
 	//Tipos
-	typedef struct 
+	typedef struct
 	{
-		PipeVideoInput  *input;
-		PipeVideoOutput *output;
+		std::shared_ptr<PipeVideoInput>  input;
+		std::shared_ptr<PipeVideoOutput> output;
+		//Observateur non possedant : le Mosaic est detenu par la map mosaics ;
+		//remis a jour/NULL sous lstVideosUse (verrou ecrivain) a chaque
+		//suppression/remplacement, donc valide tant que MixVideo tourne.
 		Mosaic *mosaic;
 	} VideoSource;
 
 	typedef std::map<int,VideoSource *> Videos;
-	typedef std::map<int,Mosaic *> Mosaics;
+	typedef std::map<int,std::shared_ptr<Mosaic>> Mosaics;
 private:
 	static DWORD vadDefaultChangePeriod;
 private:
@@ -91,6 +98,7 @@ private:
 
 	//Las propiedades del mosaico
 	Logo 	logo;
+	//Observateur non possedant sur un Mosaic detenu par la map mosaics.
 	Mosaic	*defaultMosaic;
 
 	//Threads, mutex y condiciones

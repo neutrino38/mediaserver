@@ -1,6 +1,8 @@
 #ifndef _PIPETEXTINPUT_H_
 #define _PIPETEXTINPUT_H_
-#include <pthread.h>
+#include <condition_variable>
+#include <mutex>
+#include <atomic>
 #include "text.h"
 #include <list>
 
@@ -9,7 +11,7 @@ class PipeTextInput :
 {
 public:
 	PipeTextInput();
-	~PipeTextInput();
+	virtual ~PipeTextInput();
 	virtual TextFrame* GetFrame(DWORD timeout);
 	virtual void Cancel();
 	int Init();
@@ -19,12 +21,12 @@ public:
 
 private:
 	//Los mutex y condiciones
-	pthread_mutex_t mutex;
-	pthread_cond_t  cond; 
+	std::mutex mutex;
+	std::condition_variable cond;
 
 	//Members
 	std::list<TextFrame*> frames;
-	int 		inited;
+	std::atomic<bool> inited;
 	timeval		first;
 };
 

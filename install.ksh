@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.8.7"
+VERSION="1.9.0"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
@@ -11,7 +11,7 @@ then
 else
 	DESTDIR_LIB=/usr/lib
 fi
-WEBRTCTAG=0.0.1
+
 #RPepertoire d'installation des fichiers so
 DESTDIR_MOD=$DESTDIR_LIB/asterisk/modules
 #Repertoire d'installation du fichier mp4tool
@@ -58,9 +58,6 @@ function create_rpm
     cd ./rpmbuild/SPECS/
     cp ../../mcumediaserver.spec .
     cd ../../
-    rm -rf $HOME/xmlrpc-c
-    rm -f staticdeps/lib/libxmlrpc*.a
-	
     if [[ -z $2 || $2 -ne nosign ]]
 	then
 		rpmbuild -bb --sign $PWD/rpmbuild/SPECS/mcumediaserver.spec
@@ -85,155 +82,40 @@ function create_rpm
 
 function clean
 {
+	BASESRCDIR=$PWD
+	MEDKITDIR=$BASESRCDIR/third_party/fontventa/libmedikit
+	BFCPDIR=$BASESRCDIR/third_party/libbfcp
+
   	# On efface les liens ainsi que le package precedemment cr.
   	echo Effacement des fichiers et liens gnupg rpmbuild ${PROJET}.rpm ${TEMPDIR}/${PROJET}
   	rm -rf gnupg rpmbuild ${TEMPDIR}/${PROJET}
-	cd mcu 
+
+	# Nettoyage du binaire et des objets du mediaserver.
+	cd mcu
 	make -f Makefile.rpm clean
-	cd -
-}
+	cd "$BASESRCDIR"
 
-function compile_webrtc_from_google
-{
-	MEDIASERVERPATH=$PWD
-	echo "compiling some Webrtc libs used in the mcu"
-	cd $HOME
-	if [ -x /urr/local/bin/python ]
+	# Nettoyage des objets et archives des sous-modules (libmedkit + libbfcp),
+	# pour qu'un "clean" reparte reellement d'un arbre vierge. On garde les memes
+	# options que la construction (compile_libmedkit / compile_libbfcp).
+	if [ -f "$MEDKITDIR/Makefile" ]
 	then
-		hash python /usr/local/bin/python
-		echo "using specific python installlation"
+		echo "Nettoyage libmedkit (in-tree) : objets + libmedkit.a"
+		make -C "$MEDKITDIR" clean ASTERISK=no
+		# Balayage defensif : la cible clean ne retire que les .o de la liste OBJS
+		# courante ; on supprime aussi les .o residuels d'anciennes listes/builds
+		# (aucun .o n'est suivi par git dans le sous-module).
+		find "$MEDKITDIR" -name '*.o' -delete
+		rm -f "$MEDKITDIR/libmedkit.a"
 	fi
-
-	python -V 2> version
-	if [ $? -ne 0 ]
+	if [ -f "$BFCPDIR/Makefile" ]
 	then
-		echo "python doit etre installe en version 2.6 ou superieure"
-		return
+		echo "Nettoyage libbfcp (in-tree) : objets + libbfcp{dbg,rel}.a"
+		make -C "$BFCPDIR" clean DEBUG=yes
+		make -C "$BFCPDIR" clean DEBUG=no
+		find "$BFCPDIR" -name '*.o' -delete
+		rm -f "$BFCPDIR"/lib/libbfcp*.a "$BFCPDIR"/lib/libbfcp*.so
 	fi
-	
-	echo "now checking installed version"
-	egrep "( 2.6| 2.7)" version
-	if [ $? -ne 0 ]
-	then
-		echo "version incorrecte de python :"
-		python -V
-		rm -r version
-		echo " il faut installer une version 2.6 ou 2.7 "
-		return
-	fi
-
-	rm -f version	
-	if [ ! -r depot_tools ]
-	then
-		echo getting chromium depot tools
-		svn co http://src.chromium.org/chrome/trunk/tools/depot_tools
-	fi
-
-	export PATH=$PATH:$HOME/depot_tools
-	if [ ! -r  webrtc/trunk/webrtc/common_audio ]
-	then
-		echo downloading webrtc
-		mkdir webrtc
-		cd webrtc
-		gclient config http://webrtc.googlecode.com/svn/trunk
-		gclient sync --force
-		gclient runhooks --force
-		echo building webrtc
-		cd trunk
-		#sed -e 's/BUILDTYPE ?= Debug/BUILDTYPE ?= Release/g' Makefile > Makefike.new
-		mv Makefile Makefile.sav
-		#mv Makefike.new Makefile
-		cp $MEDIASERVERPATH/media/Makefile.webrtc Makefile
-	else
-		cd webrtc/trunk
-		cp $MEDIASERVERPATH/media/Makefile.webrtc Makefile
-	fi
-
-	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
-	then
-		make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		make out/Release/obj.target/webrtc/common_audio/libvad.a
-	fi
-}
-
-function compile_webrtc_ives
-{
-	MEDIASERVERPATH=$PWD
-	cd $HOME
-	if [ ! -r  webrtc/trunk/webrtc/common_audio ]
-	then
-		echo downloading webrtc
-		mkdir webrtc
-		cd webrtc
-		svn co http://svn.ives.fr/svn-libs-dev/webrtc/tags/$WEBRTCTAG trunk
-		cd trunk
-	else
-		cd webrtc/trunk
-	fi
-
-	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
-	then
-		make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		make out/Release/obj.target/webrtc/common_audio/libvad.a
-	fi
-
-	cd $MEDIASERVERPATH
-}
-
-function compile_webrtc
-{
-	MEDIASERVERPATH=$PWD
-	cd $HOME
-	if [ ! -r  webrtc/trunk/webrtc/common_audio ]
-	then
-		echo downloading webrtc
-		git clone https://github.com/neutrino38/webrtc_stack.git
-		mv webrtc_stack webrtc
-		cd webrtc/trunk
-	else
-		cd webrtc/trunk
-	fi
-
-	if [ ! -r out/Release/obj.target/webrtc/common_audio/libsignal_processing.a ]
-	then
-		echo "Compiling VAD and signal processing from webrtc"
-        make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		git reset --hard
-		make out/Release/obj.target/webrtc/common_audio/libsignal_processing.a
-		make out/Release/obj.target/webrtc/common_audio/libvad.a
-	fi
-
-	cd $MEDIASERVERPATH
-}
-
-function archive_webrtc
-{
-	MEDIASERVERPATH=$PWD
-	if [ "`uname -m`" == "x86_64" ]
-	then
-		if [ ! -r lib/linux-64bits/libvad.a ]
-		then
-			echo "archiving 64 bit lib"
-			mkdir -p lib/linux-64bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libvad.a lib/linux-64bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libsignal_processing.a lib/linux-64bits
-		else
-			echo "libvad was not compiled !!!"
-		fi
-	else
-		if [ ! -r lib/linux-64bits/libvad.a ]
-		then
-			echo "archiving 32 bits lib"
-			mkdir -p lib/linux-32bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libvad.a lib/linux-32bits
-			cp $HOME/webrtc/trunk/out/Release/obj.target/webrtc/common_audio/libsignal_processing.a lib/linux-32bits
-		else
-			echo "libvad was not compiled !!!"
-		fi
-		
-	fi
-	echo "archving headers"
-	# TODO archive headers
 }
 
 function local_compile
@@ -248,33 +130,45 @@ function local_compile
 	fi
 
 	rpm -q ffmpeg-devel
-    	if [ $? != 0 ]
+    if [ $? != 0 ]
 	then
-		echo "installer ffmpeg-devel"
+		echo "installer ffmpeg-free-devel depuis RPMFUSION free et non free"
 		exit 20
 	fi
 
+	rpm -q libtool
+    if [ $? != 0 ]
+	then
+		echo "installer libtool"
+		exit 20
+	fi
+
+	rpm -q webrtc-audio-processing-devel
+    if [ $? != 0 ]
+	then
+		echo "installer webrtc-audio-processing-devel"
+		exit 20
+	fi
+
+	# libsrtp2 (l'ABI utilisee) est fournie par le paquet libsrtp-devel, pas libsrtp2-devel.
+	rpm -q libsrtp-devel
+    if [ $? != 0 ]
+	then
+		echo "installer libsrtp-devel"
+		exit 20
+	fi
+
+	# xmlrpc-c : plus construit depuis les sources, on utilise le paquet systeme.
+	rpm -q xmlrpc-c-devel
+    if [ $? != 0 ]
+	then
+		echo "installer xmlrpc-c-devel (depot crb)"
+		exit 20
+	fi
+
+
 	# compiler openssl en statique
 	BASESRCDIR=$PWD
-	if [ ! -f staticdeps/lib/libssl.a ]
-	then
-		echo "on doit compiler openssl 1.1.1d"
-		if [ ! -r $HOME/openssl ]
-		then
-			cd $HOME
-			rm -f OpenSSL_1_1_1d.tar.gz
-			wget https://github.com/openssl/openssl/archive/OpenSSL_1_1_1d.tar.gz
-
-			tar xzf OpenSSL_1_1_1d.tar.gz
-			mv openssl-OpenSSL_1_1_1d openssl
-			rm -f OpenSSL_1_1_1d.tar.gz
-		fi
-		cd $HOME/openssl
-		./config --prefix=$BASESRCDIR/staticdeps --openssldir=$BASESRCDIR/staticdeps shared zlib
-		make
-		make install
-		cd $BASESRCDIR
-	fi
 
 	# compiler mp4v2 en static 
 	if [ ! -f staticdeps/lib/libmp4v2.a ]
@@ -293,136 +187,35 @@ function local_compile
 		cd $BASESRCDIR
 	fi
 	
-	# compiler speex en statique
-	BASESRCDIR=$PWD
-	if [ ! -f staticdeps/lib/libspeex.a ]
-	then
-		echo "on doit compiler SPEEX 1.2rc1"
-		if [ ! -r $HOME/speex-src ]
-		then
-			#svn export http://svn.ives.fr/svn-libs-dev/asterisk/libsmedia/speex/tags/1.2rc1 $HOME/speex-src
-			cd $HOME
-			rm -f speex-1.2rc2.tar.gz speex-1.2rc2.tar
-			wget http://downloads.xiph.org/releases/speex/speex-1.2rc2.tar.gz
-			tar xzf speex-1.2rc2.tar.gz
-			mv speex-1.2rc2 speex-src
-			cd $HOME/speex-src
-		fi
-		cd $HOME/speex-src
-			./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
+	# speex : plus de build statique. Le codec Speex est fourni par libmedikit
+	# au-dessus de ffmpeg (AV_CODEC_ID_SPEEX, cf. libmedikit/speex/speexcodec.cpp)
+	# et la ligne de lien el9 par defaut ne reference plus -lspeex.
 
-	if [ ! -f staticdeps/lib/libspeexdsp.a ]
-	then
-		echo "on doit compiler SPEEXDSP 1.2rc1"
-		if [ ! -r $HOME/speexdsp-src ]
-		then
-			#svn export http://svn.ives.fr/svn-libs-dev/asterisk/libsmedia/speex/tags/1.2rc1 $HOME/speex-src
-			cd $HOME
-			rm -f speexdsp-1.2rc3.tar.gz
-			wget http://downloads.xiph.org/releases/speex/speexdsp-1.2rc3.tar.gz
-			tar xzf speexdsp-1.2rc3.tar.gz
-			mv speexdsp-1.2rc3 speexdsp-src
-			cd $HOME/speexdsp-src
-		fi
-		cd $HOME/speexdsp-src
-			./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
+	# libspeexdsp : plus utilisee. Le reechantillonnage audio (ex-AudioTransrater)
+	# passe desormais par libswresample (ffmpeg), deja lie via -lswresample.
 
+	# xmlrpc-c : plus construit depuis les sources. On s'appuie desormais sur le
+	# paquet systeme xmlrpc-c-devel (AlmaLinux 9, depot crb) : memes en-tetes,
+	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile.rpm LDXMLFLAGS).
 
-	# http://xmlrpc-c.svn.sourceforge.net/viewvc/xmlrpc-c/super_stable?view=tar
-	if [ ! -f staticdeps/lib/libxmlrpc_abyss.a ]
-	then
-		echo "compilation XMLRPC-C"
-		cd $HOME
-		if [ ! -f xmlrpc-c ]
-		then
-			#svn export svn://svn.code.sf.net/p/xmlrpc-c/code/release_number/01.39.06 xmlrpc-c
-			svn export svn://svn.code.sf.net/p/xmlrpc-c/code/stable xmlrpc-c
-		fi
-		cd xmlrpc-c
-		./configure --disable-abyss-openssl --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
+	# g722_1 / SIREN : plus construit. Le codec G.722.1 a ete retire du
+	# mediaserver et de libmedikit (plus aucune reference a -lg722_1).
 
-	if [ ! -f staticdeps/lib/libsrtp.a ]
-	then
-		echo "compilation SRTP"
-		cd $HOME
-		if [ ! -f srtp ]
-		then
-			 git clone https://github.com/InteractiviteVideoEtSystemes/patchedLibSRTP.git srtp
-		fi
-		cd srtp
-		chmod 755 configure
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make uninstall
-		make install
-		cd $BASESRCDIR
-	fi
-		
-	if [ ! -f staticdeps/lib/libopus.a ]
-	then
-		echo "compilation OPUS"
-		cd $HOME
-		
-		if [ ! -f opus-1.1 ]
-		then
-			wget http://downloads.xiph.org/releases/opus/opus-1.1.tar.gz
-			tar xzf opus-1.1.tar.gz
-			rm -f  opus-1.1.tar.gz  opus-1.1.tar
-		fi
-		cd opus-1.1
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make
-		make install
-		cd $BASESRCDIR
-	fi
-
-	if [ ! -f staticdeps/lib/libg722_1.a ]
-	then
-		echo "compilation SIREN / G.722.1"
-		cd $HOME
-		if [ ! -r libg722_1 ]
-		then
-			#svn export http://svn.ives.fr/svn-libs-dev/libg722_1
-			git clone https://github.com/neutrino38/libg722_1.git
-		fi
-		cd libg722_1
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make clean
-		make
-		make install
-		cd $BASESRCDIR
-	fi
-	
-	if [ ! -r staticdeps/lib/libvpx.a ]
-	then
-    		echo "Compiling VP8 codec"
-		#cd $HOME/webrtc/trunk/third_party/libvpx/source/libvpx
-		cd $HOME
-		rm -rf libvpx
-		git clone https://chromium.googlesource.com/webm/libvpx
-		cd libvpx
-		git checkout v1.7.0
-		chmod 750 configure
-		./configure --disable-shared --enable-static --prefix=$BASESRCDIR/staticdeps  --enable-vp8 --enable-error-concealment  --disable-multithread 
-		make
-		make install
-		cd $BASESRCDIR
-	fi	
-	compile_webrtc;
 	cd $BASESRCDIR
-	
+
+	# Sous-modules (libmedkit = codecs, libbfcp = BFCP) : on les initialise au
+	# besoin puis on construit leurs archives in-tree, pour qu'un seul
+	# "install.ksh localcompile" suffise a produire le binaire.
+	if [ ! -f third_party/fontventa/libmedikit/medkit/media.h ] || [ ! -f third_party/libbfcp/Makefile ]
+	then
+		echo "initialisation des sous-modules (libmedikit, libbfcp)"
+		git submodule update --init --recursive
+	fi
+	compile_libmedkit
+	compile_libbfcp
+
+	cd $BASESRCDIR
+
 	mkdir -p bin/debug
 	cd mcu
 	make -f Makefile.rpm mcu
@@ -466,6 +259,61 @@ function compile_rabbitmq
 	cd $MEDIASERVERPATH
 }
 
+function compile_libmedkit
+{
+	# Construit libmedkit.a DANS l'arbre du sous-module (cible 'all', pas
+	# d'install dans /opt/ives). Le mediaserver s'y lie directement via
+	# MEDKITDIR/USEMEDKIT dans mcu/Makefile.rpm. Voir almalinux9_port_plan.md.
+	MEDIASERVERPATH=$PWD
+	MEDKITDIR=$MEDIASERVERPATH/third_party/fontventa/libmedikit
+	if [ ! -d "$MEDKITDIR" ]
+	then
+		echo "Sous-module libmedikit absent. Lancer : git submodule update --init"
+		exit 20
+	fi
+	echo "Compilation libmedkit (in-tree)"
+	# INCLUDE surcharge :
+	#  - ffmpeg : en-tetes dans /usr/include/ffmpeg (override par FFMPEGINC) ;
+	#  - mp4v2 : pas de paquet natif, en-tetes pris dans staticdeps/include
+	#    (build source IVeS), override par MP4V2INC.
+	# ASTERISK=no : on exclut les objets couples a Asterisk (transcoder, mp4format,
+	# framebuffer, frameutils, astlog), inutilisables hors module Asterisk et qui
+	# exigeraient asterisk-devel. Le mediaserver n'est pas un module Asterisk.
+	# On laisse le Makefile choisir la liste OBJS (source unique de verite : elle
+	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
+	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
+	make -C "$MEDKITDIR" all \
+		ASTERISK=no \
+		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}"
+	cd $MEDIASERVERPATH
+}
+
+function compile_libbfcp
+{
+	# Construit libbfcp DANS l'arbre du sous-module (cible 'all', pas d'install
+	# dans /opt/ives). Le mediaserver s'y lie directement via BFCPDIR dans
+	# mcu/Makefile.rpm. On produit les deux variantes (dbg + rel) pour couvrir
+	# les deux valeurs de DEBUG du build mcu.
+	MEDIASERVERPATH=$PWD
+	BFCPDIR=$MEDIASERVERPATH/third_party/libbfcp
+	if [ ! -f "$BFCPDIR/Makefile" ]
+	then
+		echo "Sous-module libbfcp absent. Lancer : git submodule update --init"
+		exit 20
+	fi
+	if [ ! -f "$BFCPDIR/lib/libbfcpdbg.a" ]
+	then
+		echo "Compilation libbfcp (in-tree, debug)"
+		make -C "$BFCPDIR" all DEBUG=yes
+	fi
+	if [ ! -f "$BFCPDIR/lib/libbfcprel.a" ]
+	then
+		echo "Compilation libbfcp (in-tree, release)"
+		make -C "$BFCPDIR" all DEBUG=no
+	fi
+	cd $MEDIASERVERPATH
+}
+
 function compile_protobuf
 {
 	MEDIASERVERPATH=$PWD
@@ -502,29 +350,30 @@ case $1 in
 	"localcompile")
 		local_compile;;
 
-	"webrtc")
-		compile_webrtc;;
-	
-	"webrtcives")	
-		compile_webrtc_ives;;
-
-        "rabbitmq")
+    "rabbitmq")
 		compile_rabbitmq;;
-		
+
 	"protobuf")
 		compile_protobuf;;
+
+	"libmedkit")
+		compile_libmedkit;;
+
+	"libbfcp")
+		compile_libbfcp;;
 
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel ;;
+		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"
   		echo "  rpm				Generation d'un package rpm"
 		echo "  localcompile	Compilation du logiciel sans creation de paquet rpm"
-		echo "  webrtc          Compilation des libs webrtc"
 		echo "  rabbitmq        Compilation des libs RABBITMQ (projet moteli)"
+		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
+		echo "  libbfcp         Compilation de libbfcp (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"
-  		echo "  clean			Nettoie tous les fichiers cree ce script, liens, tar.gz et rpm";;
+  		echo "  clean			Nettoie les fichiers crees par ce script (liens, rpm) + les objets/archives de mcu et des sous-modules (libmedkit, libbfcp)";;
 esac

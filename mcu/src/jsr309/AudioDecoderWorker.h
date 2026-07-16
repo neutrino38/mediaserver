@@ -7,7 +7,7 @@
 
 #ifndef AUDIODECODERWORKER_H
 #define	AUDIODECODERWORKER_H
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "audio.h"
 #include "pipeaudioinput.h"
 #include "waitqueue.h"
@@ -30,7 +30,7 @@ public:
 	virtual void onEndStream();
 
 	//Attach
-	int Attach(Joinable *join);
+	int Attach(const std::shared_ptr<Joinable> & join);
 	int Dettach();
 	int Start();
 	int Stop();
@@ -47,8 +47,10 @@ private:
 	WaitQueue<RTPPacket*> packets;
 	pthread_t thread;
 	bool decoding;
-	Joinable *joined;
-	
+	// Lien retour NON possédant vers la source (weak_ptr → lock() au site d'usage) :
+	// une source détruite fait échouer le lock() (C-13, lien A).
+	std::weak_ptr<Joinable> joined;
+
 };
 
 #endif	/* AUDIODECODERWORKER_H */

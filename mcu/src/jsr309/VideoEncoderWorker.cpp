@@ -36,6 +36,7 @@ int VideoEncoderMultiplexerWorker::Init(VideoInput *input)
 {
 	//Store it
 	this->input = input;
+	return 0;
 }
 
 int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod, Properties & properties)
@@ -152,6 +153,7 @@ int VideoEncoderMultiplexerWorker::End()
 
 	//Set null
 	input = NULL;
+	return 0;
 }
 
 void VideoEncoderMultiplexerWorker::AddListener(Listener *listener)
@@ -443,4 +445,5 @@ int VideoEncoderMultiplexerWorker::Encode()
 
 	//Salimos
 	Log("<SendVideo [%d]\n",encoding);
+	return 0;
 }

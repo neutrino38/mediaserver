@@ -12,6 +12,8 @@
 #ifndef HTTPSSECONNECTION_H
 #define	HTTPSSECONNECTION_H
 
+#include <mutex>
+#include <thread>
 #include "websockets.h"
 #include "httpparser.h"
 
@@ -66,8 +68,8 @@ private:
 	bool inited;
 	bool running;
 
-	pthread_t thread;
-	pthread_mutex_t mutex;
+	std::thread thread;
+	std::mutex mutex;
 
 	timeval startTime;
 	Listener *listener;

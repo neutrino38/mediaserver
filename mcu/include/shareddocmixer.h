@@ -11,7 +11,7 @@
 #include "config.h"
 #include "media.h"
 #include "video.h"
-#include "logo.h"
+#include "medkit/logo.h"
 #include "participant.h"
 #include "bfcp_server.h"
 
@@ -28,20 +28,20 @@ public:
 	SharedDocMixer();
 	~SharedDocMixer();
 	int Init(VideoOutput *output, Logo *logo,MultiConf *conf);
-	int ShareSecondaryStream(Participant *part);
+	int ShareSecondaryStream(ParticipantPtr part);
 	
-	int initDocSharing( Participant *part,char *sendIp,int sendPort);
-	int AcceptDocSharingRequest(int confId, Participant *part);
-	int RefuseDocSharingRequest(int confId, Participant *part);
+	int initDocSharing( ParticipantPtr part,char *sendIp,int sendPort);
+	int AcceptDocSharingRequest(int confId, ParticipantPtr part);
+	int RefuseDocSharingRequest(int confId, ParticipantPtr part);
 	
 	int StopSharing();
-	int StopSharing(Participant *part);
+	int StopSharing(ParticipantPtr part);
 	virtual int NextFrame(BYTE *pic);
 	virtual int SetVideoSize(int width,int height) ;
 	
-	int addParticipant(int confId, Participant *part,Participant::DocSharingMode docSharingMode, MediaFrame::MediaProtocol proto = MediaFrame::TCP);
-	int removeParticipant(Participant *part);
-	int getServerPort(Participant *part);
+	int addParticipant(int confId, ParticipantPtr part,Participant::DocSharingMode docSharingMode, MediaFrame::MediaProtocol proto = MediaFrame::TCP);
+	int removeParticipant(ParticipantPtr part);
+	int getServerPort(ParticipantPtr part);
 	int getAvailablePort();
 	bool StopBfcpServer();
 	int		GetSharedMosaic(){return sharedMosaic;}
@@ -52,7 +52,7 @@ public:
 private:
 	
 	Logo*			logo;
-	Participant*	part;
+	std::weak_ptr<Participant> part;
 	VideoOutput*	output;
 	MultiConf* 		conf;
 	int				confId;
@@ -75,7 +75,7 @@ private:
 	
 	
 	
-	bool StartBfcpServer(int confId,Participant *part);
+	bool StartBfcpServer(int confId,ParticipantPtr part);
 	
 	bool 	GetBfcpInfo(int partId,struct BFCPInfo &info);
 

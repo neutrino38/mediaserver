@@ -1,6 +1,5 @@
 #ifndef _RTMCLIENTPCONNECTION_H_
 #define _RTMCLIENTPCONNECTION_H_
-#include <pthread.h>
 #include <sys/poll.h>
 #include "config.h"
 #include "rtmp.h"
@@ -8,7 +7,8 @@
 #include "rtmpmessage.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
-#include <pthread.h>
+#include <mutex>
+#include <thread>
 #include <map>
 
 class RTMPClientConnection :
@@ -153,7 +153,8 @@ private:
 	typedef std::map<DWORD,TransInfo> Transactions;
 private:
 	int fd;
-	pollfd ufds[1];
+	int wakeup_socket[2]; // write signal
+	pollfd ufds[2];
 	bool inited;
 	bool running;
 	State state;
@@ -185,8 +186,8 @@ private:
 	DWORD maxChunkSize;
 	DWORD maxOutChunkSize;
 
-	pthread_t thread;
-	pthread_mutex_t mutex;
+	std::thread thread;
+	std::mutex mutex;
 
 	std::wstring	 appName;
 	std::wstring	 tcUrl;

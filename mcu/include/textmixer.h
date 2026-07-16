@@ -10,6 +10,7 @@
 #include "textmixerworker.h"
 #include <map>
 #include <set>
+#include <memory>
 using namespace std;
 
 class TextMixer
@@ -29,6 +30,9 @@ public:
 	int DeleteMixer(int id);
 	TextInput*  GetInput(int id);
 	TextOutput* GetOutput(int id);
+	//Co-propriété (Point 1 / C-4) : copies de shared_ptr sur les pipes.
+	std::shared_ptr<TextInput>  GetSharedInput(int id);
+	std::shared_ptr<TextOutput> GetSharedOutput(int id);
 	int CreatePrivate(int id,int to,std::wstring &name);
 	int InitPrivate(int id);
 	int EndPrivate(int id);
@@ -48,8 +52,8 @@ private:
 	{
 		DWORD id;
 		std::wstring	name;
-		PipeTextInput	*input;
-		PipeTextOutput	*output;
+		std::shared_ptr<PipeTextInput>	input;
+		std::shared_ptr<PipeTextOutput>	output;
 		TextMixerWorker *worker;
 	};
 
@@ -58,7 +62,7 @@ private:
 		DWORD id;
 		DWORD to;
 		std::wstring	name;
-		PipeTextOutput	*output;
+		std::shared_ptr<PipeTextOutput>	output;
 	};
 
 	typedef std::map<DWORD,TextSource*> TextSources;

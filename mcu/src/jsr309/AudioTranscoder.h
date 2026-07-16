@@ -7,7 +7,7 @@
 
 #include "AudioEncoderWorker.h"
 #include "AudioDecoderWorker.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 #ifndef AUDIOTRANSCODER_H
 #define	AUDIOTRANSCODER_H
@@ -43,7 +43,7 @@ public:
 	virtual void onEndStream();
 
 	//Attach
-	int Attach(Joinable *join);
+	int Attach(const std::shared_ptr<Joinable> & join);
 	int Dettach();
 
     

@@ -34,6 +34,9 @@ AudioStream::AudioStream(Listener* listener) : rtp(MediaFrame::Audio,listener)
 ********************************/
 AudioStream::~AudioStream()
 {
+	//Défense en profondeur (H-5) : arrêt/join des threads même sans End()
+	//préalable. End() est idempotent.
+	End();
 	pthread_mutex_destroy(&mutex);
 }
 
@@ -69,18 +72,18 @@ void AudioStream::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
 * Init
 *	Inicializa los devices 
 ***************************************/
-int AudioStream::Init(AudioInput *input, AudioOutput *output)
+int AudioStream::Init(std::shared_ptr<AudioInput> input, std::shared_ptr<AudioOutput> output)
 {
 	Log(">Init audio stream\n");
 
 	//Iniciamos el rtp
 	if(!rtp.Init())
 		return Error("No hemos podido abrir el rtp\n");
-	
 
-	//Nos quedamos con los puntericos
-	audioInput  = input;
-	audioOutput = output;
+
+	//Nos quedamos con los puntericos (co-propriété du pipe, Point 1)
+	audioInput  = std::move(input);
+	audioOutput = std::move(output);
 
 	//Y aun no estamos mandando nada
 	sendingAudio=TaskIdle;
@@ -138,7 +141,7 @@ void * AudioStream::startSendingAudio(void *par)
 	AudioStream *conf = (AudioStream *)par;
 	blocksignals();
 	Log("SendAudioThread [%d]\n",getpid());
-	pthread_exit((void *)conf->SendAudio());
+	pthread_exit((void *)(intptr_t)conf->SendAudio());
 }
 
 /***************************************
@@ -150,7 +153,7 @@ void * AudioStream::startReceivingAudio(void *par)
 	AudioStream *conf = (AudioStream *)par;
 	blocksignals();
 	Log("RecvAudioThread [%d]\n",getpid());
-	pthread_exit((void *)conf->RecAudio());
+	pthread_exit((void *)(intptr_t)conf->RecAudio());
 }
 
 /***************************************
@@ -582,6 +585,7 @@ int AudioStream::SendDTMF(DTMFMessage* dtmf)
 	 pthread_mutex_lock(&mutex);
 	 dtmfBuffer.push_back(dtmf);
 	 pthread_mutex_unlock(&mutex);
+	return 0;
 }
 
 int AudioStream::SetMute(bool isMuted)

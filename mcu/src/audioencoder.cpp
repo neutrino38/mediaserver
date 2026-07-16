@@ -10,8 +10,6 @@
 #include "log.h"
 #include "tools.h"
 #include "audio.h"
-#include "g711/g711codec.h"
-#include "gsm/gsmcodec.h"
 #include "audioencoder.h"
 
 
@@ -91,7 +89,7 @@ void * AudioEncoderWorker::startEncoding(void *par)
 	AudioEncoderWorker *conf = (AudioEncoderWorker *)par;
 	blocksignals();
 	Log("Encoding audio [%d]\n",getpid());
-	pthread_exit((void *)conf->Encode());
+	pthread_exit((void *)(intptr_t)conf->Encode());
 }
 
 
@@ -227,7 +225,7 @@ int AudioEncoderWorker::Encode()
 			frame.ClearRTPPacketizationInfo();
 			
 			//Add rtp packet
-			frame.AddRtpPacket(0,len,NULL,0);
+			frame.AddRtpPacket(0,len,NULL,0,false);
 		 
 			//Lock
 			pthread_mutex_lock(&mutex);

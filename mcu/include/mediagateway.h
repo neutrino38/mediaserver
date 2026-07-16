@@ -9,7 +9,8 @@
 #define	_MEDIAGATEWAY_H_
 #include <map>
 #include <string>
-#include "pthread.h"
+#include <mutex>
+#include <memory>
 #include "mediabridgesession.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
@@ -27,8 +28,7 @@ public:
 	bool  SetMediaBridgeOutputToken(DWORD id,const std::wstring &token);
 	DWORD GetMediaBridgeIdFromInputToken(const std::wstring &token);
 	DWORD GetMediaBridgeIdFromOutputToken(const std::wstring &token);
-	bool  GetMediaBridgeRef(DWORD id,MediaBridgeSession **session);
-	bool  ReleaseMediaBridgeRef(DWORD id);
+	bool  GetMediaBridgeRef(DWORD id,std::shared_ptr<MediaBridgeSession> &session);
 	bool  DeleteMediaBridge(DWORD confId);
 	int CreateEventQueue();
 	int DeleteEventQueue(int id);
@@ -38,16 +38,14 @@ public:
 	bool End();
 
 	/** RTMP application interface*/
-	virtual RTMPNetConnection* Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
+	virtual std::shared_ptr<RTMPNetConnection> Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener);
 protected:
 
 	struct MediaBridgeEntry
 	{
 		DWORD id;
-		DWORD numRef;
-		DWORD enabled;
 		std::wstring name;
-		MediaBridgeSession* session;
+		std::shared_ptr<MediaBridgeSession> session;
 	};
 	typedef std::map<DWORD,MediaBridgeEntry> MediaBridgeEntries;
 private:
@@ -55,7 +53,7 @@ private:
 	int 				queueId;
 	MediaBridgeEntries		bridges;
 	DWORD			maxId;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	bool			inited;
 };
 

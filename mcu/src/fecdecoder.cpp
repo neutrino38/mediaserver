@@ -8,7 +8,7 @@
 #include <set>
 
 #include "fecdecoder.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "bitstream.h"
 
 FECDecoder::FECDecoder()

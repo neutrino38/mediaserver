@@ -10,7 +10,7 @@
 #include <string>
 #include "config.h"
 #include "video.h"
-#include "logo.h"
+#include "medkit/logo.h"
 
 class AppMixer
 {

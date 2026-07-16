@@ -7,10 +7,15 @@
 
 #ifndef ENDPOINT_H
 #define	ENDPOINT_H
+
+#include <memory>
+#include <map>
+#include <string>
 #include "Joinable.h"
 #include "websockets.h"
 #include "RTPMultiplexer.h"
 #include "remoterateestimator.h"
+#include "medkit/negotiator.h"
 
 class RTPEndpoint;
 
@@ -23,14 +28,30 @@ public:
 	    virtual ~Port();
 	    MediaFrame::Type GetMedia() { return type; }
 	    int Detach();
-	    int Attach(Joinable * join);
-		int SwitchJoin(Port *oldPort);
+	    int Attach(const std::shared_ptr<Joinable> & join);
+		int SwitchJoin(std::shared_ptr<Port> oldPort);
 		
 		int GetLocalMediaPort();
 		char* GetLocalMediaHost();
 		
 	    MediaFrame::MediaProtocol GetTransport() const { return proto; }
-	    
+	    bool IsReceiving() const override { return receiving; }
+
+	    // --- Négociation de codecs (phase 4 nego_fmtp) ---
+	    // Route les propriétés codec.* (préfixe « codec. » retiré) vers le stockage
+	    // local consommé par le négociateur. Les clés transport sont ignorées ici
+	    // (elles continuent vers RTPSession, qui ignore de son côté codec.*).
+	    void StoreCodecProperties(const Properties& properties);
+	    // Filtre la map proposée selon les codecs réellement supportés (décision D)
+	    // et dérive le fmtp local (params seuls) SANS ouvrir de codec. Remplit
+	    // acceptedOut (sous-ensemble accepté) et mémorise le résultat (fmtp par PT
+	    // + effectiveProps) pour le retour XML-RPC et l'encodeur (ph.5).
+	    void NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut);
+	    // fmtp de la dernière négociation : PT -> paramètres (params seuls). TOUT PT
+	    // accepté est présent ; un codec sans fmtp a une valeur "" (chaîne vide). Un
+	    // PT absent a été filtré (non supporté). Vide tant qu'aucune négociation n'a eu lieu.
+	    const std::map<int,std::string>& GetNegotiatedFmtp() const { return negotiatedFmtp; }
+
 	    virtual int Init() = 0;
 	    virtual int End() = 0;
 	    
@@ -61,17 +82,26 @@ public:
 
 
 	protected:
-	    Joinable *joined;
+	    // Lien retour NON possédant vers la source : weak_ptr → lock() au site
+	    // d'usage. Si la source est détruite, lock() échoue et le Detach ultérieur
+	    // ne déréférence pas d'objet libéré (C-13, lien A — remplace onJoinableEnded).
+	    std::weak_ptr<Joinable> joined;
 	    MediaFrame::Type type;
 		MediaFrame::MediaProtocol proto;
 	    bool sending;
 	    bool receiving;
 	    bool portinited;
 	    MediaStatistics stats;
+	    // Propriétés locales de codec (clés « <codec>.<param> », préfixe codec.
+	    // retiré) alimentées par EndpointSetRTPProperties, lues par le négociateur.
+	    Properties codecProperties;
+	    // Résultat de la dernière négociation : PT -> params fmtp (décision E).
+	    std::map<int,std::string> negotiatedFmtp;
+	    // effectiveProps par PT retenu, pour brancher l'encodeur d'émission (phase 5).
+	    std::map<int,Properties> negotiatedProps;
 	    // Protected constructir
 	    Port( MediaFrame::Type type, MediaFrame::MediaProtocol transp) : RTPMultiplexer()
 	    {
-	        joined = NULL;
 			this->type = type;
 			this->proto = transp;
 			sending = false;
@@ -93,6 +123,10 @@ public:
 	
 	//Endpoint  functionality
 	int StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//Trickle ICE Niveau 1 (gap 1) : transmet un candidat SDP au flux RTP concerné.
+	int AddICECandidate(MediaFrame::Type media,const char* candidate, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//Watchdog d'inactivité RTP (gap 5) : arme (timeoutMs>0) ou désarme (0) le flux.
+	int ArmRTPTimeout(MediaFrame::Type media,DWORD timeoutMs, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(MediaFrame::Type media, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
 	int StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
 	int StopReceiving(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -107,9 +141,12 @@ public:
 	int SetRTPTsTransparency(MediaFrame::Type media, bool transparency, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
 
 	//Attach
-	int Attach(MediaFrame::Type media, MediaFrame::MediaRole role, Joinable *join);
+	int Attach(MediaFrame::Type media, MediaFrame::MediaRole role, const std::shared_ptr<Joinable> & join);
 	int Detach(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
-	Joinable* GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role  = MediaFrame::VIDEO_MAIN);
+
+	//Récupère le fmtp négocié (PT -> paramètres) du port media/role (phase 4).
+	int GetNegotiatedFmtp(MediaFrame::Type media, MediaFrame::MediaRole role, std::map<int,std::string>& out);
+	std::shared_ptr<Joinable> GetJoinable(MediaFrame::Type media, MediaFrame::MediaRole role  = MediaFrame::VIDEO_MAIN);
 
 	std::wstring& GetName() { return name; }
 	
@@ -130,7 +167,7 @@ public:
 	const Statistics * GetStatistics();
 
 private:
-	inline Port* GetPort(MediaFrame::Type media)
+	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media)
 	{
 		if ( media >= MediaFrame::Audio && media <= MediaFrame::Text )
 		{
@@ -142,7 +179,7 @@ private:
 		}
 	}
 	
-	inline Port* GetPort(MediaFrame::Type media, MediaFrame::MediaRole role)
+	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media, MediaFrame::MediaRole role)
 	{
 		if ( role == MediaFrame::VIDEO_MAIN )
 		{
@@ -163,8 +200,8 @@ private:
 private:
 	std::wstring name;
 	//RTP sessions
-	Port * ports[4];
-	Port * ports2[4];
+	std::shared_ptr<Port> ports[4];
+	std::shared_ptr<Port> ports2[4];
 	
 	RemoteRateEstimator estimator;
 	RemoteRateEstimator estimator2;

@@ -15,12 +15,9 @@
 #include <stdio.h>
 #include "log.h"
 #include "rtmpparticipant.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtpsession.h"
 #include "video.h"
-#include "h263/h263codec.h"
-#include "flv1/flv1codec.h"
-#include "vp6/vp6decoder.h"
 #include "avcdescriptor.h"
 #include "fifo.h"
 #include <wchar.h>
@@ -47,6 +44,7 @@ RTMPParticipant::RTMPParticipant(DWORD partId) :
 	attached = NULL;
 	//Inicializamos los mutex
 	pthread_mutex_init(&mutex,NULL);
+	pthread_mutex_init(&attachedMutex,NULL);
 	pthread_cond_init(&cond,0);
 }
 
@@ -57,6 +55,7 @@ RTMPParticipant::~RTMPParticipant()
 	//Destroy mutex
 	pthread_mutex_destroy(&mutex);
 	pthread_cond_destroy(&cond);
+	pthread_mutex_destroy(&attachedMutex);
 }
 
 int RTMPParticipant::SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties,MediaFrame::MediaRole role )
@@ -84,6 +83,7 @@ int RTMPParticipant::SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int b
   Log("RTMPParticipant SetVideoCodec codec[%d] mode[%d] fps[%d] bitrate[%d] Intra[%d]\n",codec,mode,fps,bitrate,intraPeriod);
 	//Y los fps
 	videoFPS=fps;
+	return 0;
 }
 
 int RTMPParticipant::SetAudioCodec(AudioCodec::Type codec,const Properties &properties)
@@ -92,6 +92,7 @@ int RTMPParticipant::SetAudioCodec(AudioCodec::Type codec,const Properties &prop
 	audioCodec = codec;
 	//Set properties
 	audioProperties = properties;
+	return 0;
 }
 
 int RTMPParticipant::SetTextCodec(TextCodec::Type codec)
@@ -208,12 +209,16 @@ int RTMPParticipant::End()
 
 
 
-		//Check
-		if (attached)
-			//Remove from that listeners
-			attached->RemoveMediaListener(this);
-		//Not attached anymore
+		//Extrait `attached` sous verrou puis déréférence hors verrou (H-6) :
+		//RemoveMediaListener appelle vers un AUTRE objet, jamais sous attachedMutex.
+		RTMPMediaStream *prevAttached;
+		pthread_mutex_lock(&attachedMutex);
+		prevAttached = attached;
 		attached = NULL;
+		pthread_mutex_unlock(&attachedMutex);
+		if (prevAttached)
+			//Remove from that listeners
+			prevAttached->RemoveMediaListener(this);
 
 		//Remove meta
 		if (meta)
@@ -268,6 +273,7 @@ int  RTMPParticipant::StopSendingVideo()
 	}
 
 	Log("<StopSendingVideo\n");
+	return 0;
 }
 
 int  RTMPParticipant::StartReceivingVideo()
@@ -409,7 +415,7 @@ void* RTMPParticipant::startSendingText(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendText());
+	pthread_exit( (void *)(intptr_t)sess->SendText());
 }
 
 int  RTMPParticipant::StartSendingText()
@@ -455,7 +461,7 @@ void* RTMPParticipant::startReceivingVideo(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->RecVideo());
+	pthread_exit( (void *)(intptr_t)sess->RecVideo());
 }
 
 /**************************************
@@ -473,7 +479,7 @@ void* RTMPParticipant::startSendingVideo(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendVideo());
+	pthread_exit( (void *)(intptr_t)sess->SendVideo());
 }
 
 /**************************************
@@ -491,7 +497,7 @@ void* RTMPParticipant::startReceivingAudio(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->RecAudio());
+	pthread_exit( (void *)(intptr_t)sess->RecAudio());
 }
 
 
@@ -510,7 +516,7 @@ void* RTMPParticipant::startSendingAudio(void *par)
 	blocksignals();
 
 	//Y ejecutamos
-	pthread_exit( (void *)sess->SendAudio());
+	pthread_exit( (void *)(intptr_t)sess->SendAudio());
 }
 
 int RTMPParticipant::SendVideo()
@@ -1325,27 +1331,40 @@ void RTMPParticipant::onAttached(RTMPMediaStream *stream)
 {
 	Log("-RTMP participant attached to stream [id:%d]\n",stream?stream->GetStreamId():-1);
 
+	//Extrait/écrit `attached` sous verrou ; RemoveMediaListener (autre objet)
+	//appelé hors verrou (H-6).
+	RTMPMediaStream *prev;
+	pthread_mutex_lock(&attachedMutex);
 	//Check if it is the same
 	if (stream==attached)
 	{
+		pthread_mutex_unlock(&attachedMutex);
 		//Error
 		Error("Already attached to same string\n");
 		//Do nothing
 		return;
 	}
 	//Check if already attached
-	if (attached)
-		//Remove from that listeners
-		attached->RemoveMediaListener(this);
+	prev = attached;
 	//Store stream
 	attached = stream;
-	
+	pthread_mutex_unlock(&attachedMutex);
+
+	if (prev)
+		//Remove from that listeners
+		prev->RemoveMediaListener(this);
+
 	//Start receiving
 	StartReceiving();
 }
 
 bool RTMPParticipant::onMediaFrame(DWORD id,RTMPMediaFrame *frame)
 {
+	//H-6 : sans cette garde, le WaitUnusedAndLock(2000) de
+	//MultiConf::DestroyParticipant ne voit pas cet appel (thread réseau de la
+	//source) en cours et peut détruire les WaitQueue pendant qu'on y écrit.
+	use.IncUse();
+
 	//Depending on the type
 	switch (frame->GetType())
 	{
@@ -1358,6 +1377,8 @@ bool RTMPParticipant::onMediaFrame(DWORD id,RTMPMediaFrame *frame)
 			audioFrames.Add((RTMPAudioFrame*)(frame->Clone()));
 			break;
 	}
+
+	use.DecUse();
 	return true;
 }
 
@@ -1411,12 +1432,18 @@ void RTMPParticipant::onDetached(RTMPMediaStream *stream)
 {
 	Log("-RTMP participant detached from stream [id:%d]\n",stream?stream->GetStreamId():-1);
 
+	//Écriture de `attached` sous verrou (H-6).
+	pthread_mutex_lock(&attachedMutex);
 	//Check if already attached
 	if (attached!=stream)
+	{
 		//Exit
+		pthread_mutex_unlock(&attachedMutex);
 		return;
+	}
 	//Not attached anymore
 	attached = NULL;
+	pthread_mutex_unlock(&attachedMutex);
 	//Start receiving
 	StopReceiving();
 }

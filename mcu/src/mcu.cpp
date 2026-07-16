@@ -12,8 +12,6 @@
 **************************************/
 MCU::MCU()
 {
-	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
 	//No event mngr
 	eventMngr = NULL;
 }
@@ -26,8 +24,6 @@ MCU::~MCU()
 {
 	//End just in case
 	End();
-	//Destruimos el mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 
@@ -40,7 +36,7 @@ int MCU::Init(XmlStreamingHandler *eventMngr)
 	timeval tv;
 	
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Estamos iniciados
 	inited = true;
@@ -54,8 +50,6 @@ int MCU::Init(XmlStreamingHandler *eventMngr)
 	//Store event mngr
 	this->eventMngr = eventMngr;
 
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	//Salimos
 	return 1;
@@ -70,35 +64,18 @@ int MCU::End()
 	Log(">End MCU\n");
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Dejamos de estar iniciados
 	inited = false;
 
 	//Paramos las conferencias
 	for (Conferences::iterator it=conferences.begin(); it!=conferences.end(); ++it)
-	{
-		//Get the entry
-		ConferenceEntry *entry = it->second;
-
-		//Get the conference
-		MultiConf *multi = entry->conf;
-
-		//End it
-		multi->End();
-
-		//Delete conference
-		delete multi;
-
-		//Delete entry
-		delete entry;
-	}
+		//End it (el shared_ptr se encarga de destruir la conferencia)
+		it->second.conf->End();
 
 	//LImpiamos las listas
 	conferences.clear();
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	Log("<End MCU\n");
 
@@ -138,35 +115,27 @@ int MCU::CreateConference(std::wstring tag,int queueId)
 	Log(">CreateConference [tag:%ls,queueId:%d]\n",tag.c_str(),queueId);
 
 	//Create the multiconf
-	MultiConf * conf = new MultiConf(tag);
+	std::shared_ptr<MultiConf> conf = std::make_shared<MultiConf>(tag);
 
-	//Create the entry
-	ConferenceEntry *entry = new ConferenceEntry();
+	//Set us as listeners
+	conf->SetListener(this);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get the id
 	int confId = maxId++;
 
 	//Guardamos los datos
-	entry->id 	= confId;
-	entry->conf 	= conf;
-	entry->enabled 	= 1;
-	entry->numRef	= 0;
-	entry->queueId	= queueId;
+	ConferenceEntry entry;
+	entry.conf 	= conf;
+	entry.queueId	= queueId;
 
 	//a�adimos a la lista
 	conferences[confId] = entry;
 	//Add to tags
 	tags[tag] = confId;
 
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
-
-	//Set us as listeners
-	conf->SetListener(this,(void*)entry);
-		
 	Log("<CreateConference [%d]\n",confId);
 
 	return confId;
@@ -176,12 +145,12 @@ int MCU::CreateConference(std::wstring tag,int queueId)
 * GetConferenceRef
 *	Obtiene una referencia a una conferencia
 **************************************/
-int MCU::GetConferenceRef(int id,MultiConf **conf)
+int MCU::GetConferenceRef(int id,std::shared_ptr<MultiConf> &conf)
 {
 	Log("-GetConferenceRef [%d]\n",id);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Find confernce
 	Conferences::iterator it = conferences.find(id);
@@ -189,32 +158,12 @@ int MCU::GetConferenceRef(int id,MultiConf **conf)
 	//SI no esta
 	if (it==conferences.end())
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Conference not found [%d]\n",id);
 	}
 
-	//Get entry
-	ConferenceEntry *entry = it->second;
-
-	//Check it is enabled
-	if (!entry->enabled)
-	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
-		//Y salimos
-		return Error("Conference not enabled [%d]\n",id);
-	}
-
-	//Aumentamos el contador
-	entry->numRef++;
-
-	//Y obtenemos el puntero a la la conferencia
-	*conf = entry->conf;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
+	//Y obtenemos la referencia compartida a la conferencia
+	conf = it->second.conf;
 
 	return true;
 }
@@ -228,7 +177,7 @@ int MCU::GetConferenceId(const std::wstring& tag)
 	Log("-GetConferenceId [%ls]\n",tag.c_str());
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Find id by tag
 	ConferenceTags::iterator it = tags.find(tag);
@@ -236,56 +185,12 @@ int MCU::GetConferenceId(const std::wstring& tag)
 	//Check if found
 	if (it==tags.end())
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Conference tag not found [%ls]\n",tag.c_str());
 	}
 
 	//Get id
-	int confId = it->second;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-
-	return confId;
-}
-
-/**************************************
-* ReleaseConferenceRef
-*	Libera una referencia a una conferencia
-**************************************/
-int MCU::ReleaseConferenceRef(int id)
-{
-	Log(">ReleaseConferenceRef [%d]\n",id);
-
-	//Bloqueamos
-	pthread_mutex_lock(&mutex);
-
-	//Find confernce
-	Conferences::iterator it = conferences.find(id);
-
-	//SI no esta
-	if (it==conferences.end())
-	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
-		//Y salimos
-		return Error("Conference not found [%d]\n",id);
-	}
-
-	//Get entry
-	ConferenceEntry *entry = it->second;
-
-	//Aumentamos el contador
-	entry->numRef--;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-
-	Log("<ReleaseConferenceRef\n");
-
-	return true;
+	return it->second;
 }
 
 /**************************************
@@ -295,90 +200,37 @@ int MCU::ReleaseConferenceRef(int id)
 int MCU::DeleteConference(int id)
 {
 	Log(">DeleteConference [%d]\n",id);
-	int retry = 0;
 
-	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::shared_ptr<MultiConf> conf;
 
-	//Find conference
-	Conferences::iterator it = conferences.find(id);
-
-	//Check if we found it or not
-	if (it==conferences.end())
+	//Extrae la conferencia bajo lock : una vez fuera de la map, nadie puede obtener
+	//nuevas referencias (remplace el flag enabled + el polling numRef/sleep(2))
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
+		std::lock_guard<std::mutex> lock(mutex);
 
-		//Y salimos
-		return Error("Conference not found [%d]\n",id);
-	}
-
-	//Get entry
-	ConferenceEntry* entry = it->second;
-
-	Log("-Disabling conference [%d] tag=[%s]\n",id, entry->conf->GetTag().c_str());
-
-	//Disable it
-	entry->enabled = 0;
-
-	//Remove tag
-	tags.erase(entry->conf->GetTag());
-
-	//Whait to get free
-	while(entry->numRef>0)
-	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
-		//FIXME: poner una condicion
-		Log("-Conference [%d] is referenced %d times. We will sleep during 2 secs an retry.\n", id, entry->numRef);
-		sleep(2);
-		//Bloqueamos
-		
-		retry++;
-		if (retry > 4)
-		{
-			Error("Conference [%d] id is still referenced after %d tries. We will stop it but leave it disabled in the list.\n",
-			      id, retry);
-			entry->conf->End();
-			return 0;
-		}
-
-                pthread_mutex_lock(&mutex);
 		//Find conference
-		it = conferences.find(id);
+		Conferences::iterator it = conferences.find(id);
+
 		//Check if we found it or not
 		if (it==conferences.end())
-		{
-			//Desbloquamos el mutex
-			pthread_mutex_unlock(&mutex);
 			//Y salimos
 			return Error("Conference not found [%d]\n",id);
-		}
-		//Get entry again
-		entry = it->second;
+
+		Log("-Disabling conference [%d] tag=[%s]\n",id, it->second.conf->GetTag().c_str());
+
+		//Get conference from ref entry
+		conf = std::move(it->second.conf);
+
+		//Remove tag
+		tags.erase(conf->GetTag());
+
+		//Remove from list
+		conferences.erase(it);
 	}
 
-	//Get conference from ref entry
-	MultiConf *conf = entry->conf;
-
-	//Remove from list
-	conferences.erase(it);
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-
-	//End conference
-	if ( conf->End() )
-	{
-		//Delete conference
-		delete conf;
-	}
-	else
-	{
-		Error("Conference [%d] could not be terminated. Memory leak on purpose to avoid crash.\n", id);
-	}
-	//Delete the entry
-	delete entry;
+	//End conference : idempotente, y seguro aunque un handler siga teniendo una
+	//referencia — el ultimo shared_ptr destruira el objeto.
+	conf->End();
 
 	Log("<DeleteConference [%d]\n",id);
 
@@ -386,12 +238,12 @@ int MCU::DeleteConference(int id)
 	return true;
 }
 
-RTMPNetConnection* MCU::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
+std::shared_ptr<RTMPNetConnection> MCU::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
 {
 	int confId = 0;
-	MultiConf *conf = NULL;
+	std::shared_ptr<MultiConf> conf;
 	wchar_t *stopwcs;
-	
+
 	//Skip the mcu part and find the conf Id
 	int i = appName.find(L"/");
 
@@ -401,7 +253,7 @@ RTMPNetConnection* MCU::Connect(const std::wstring& appName,RTMPNetConnection::L
 		//Noting found
 		Error("Wrong format for app name\n");
 		//Exit
-		return NULL;
+		return nullptr;
 	}
 
 	//Get type
@@ -419,21 +271,18 @@ RTMPNetConnection* MCU::Connect(const std::wstring& appName,RTMPNetConnection::L
 		confId = wcstol(arg.c_str(),&stopwcs,10);
 
 	//Get conference
-	if(!GetConferenceRef(confId,&conf))
+	if(!GetConferenceRef(confId,conf))
 	{
 		//No conference found
 		Error("Conference not found [confId:%d]\n",confId);
 		//Exit
-		return NULL;
+		return nullptr;
 	}
 
 	//Connect
 	conf->Connect(listener);
-	
-	//release it
-	ReleaseConferenceRef(confId);
 
-	//Return conf
+	//Return conf : el shared_ptr mantiene la conferencia viva mientras dure la conexion RTMP
 	return conf;
 }
 
@@ -442,57 +291,68 @@ int MCU::GetConferenceList(ConferencesInfo& lst)
 	Log(">GetConferenceList\n");
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//For each conference
 	for (Conferences::iterator it = conferences.begin(); it!=conferences.end(); ++it)
 	{
-		//Get entry
-		ConferenceEntry *entry = it->second;
-		//Check it is enabled
-		if (entry->enabled)
-		{
-			ConferenceInfo info;
-			//Set data
-			info.id = entry->id;
-			info.name = entry->conf->GetTag();
-			info.numPart = entry->conf->GetNumParticipants();
-			//Append new info
-			lst[entry->id] = info;
-		}
+		ConferenceInfo info;
+		//Set data
+		info.id = it->first;
+		info.name = it->second.conf->GetTag();
+		info.numPart = it->second.conf->GetNumParticipants();
+		//Append new info
+		lst[it->first] = info;
 	}
-	
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
 
 	Log("<GetConferenceList\n");
 
 	return true;
 }
 
-void MCU::onParticipantRequestFPU(MultiConf *conf,int partId,void *param)
+void MCU::onParticipantRequestFPU(MultiConf *conf,int partId)
 {
-	ConferenceEntry *entry = (ConferenceEntry *)param;
+	//Bloqueamos
+	std::lock_guard<std::mutex> lock(mutex);
+
+	//Find the conference by tag : si ya no esta, se esta destruyendo, ignoramos el evento
+	ConferenceTags::iterator tit = tags.find(conf->GetTag());
+	if (tit==tags.end())
+		return;
+	Conferences::iterator it = conferences.find(tit->second);
+	if (it==conferences.end())
+		return;
+
 	//Check Event and event queue
-	if (eventMngr && entry->queueId>0)
+	if (eventMngr && it->second.queueId>0)
 		//Send new event
-		eventMngr->AddEvent(entry->queueId, new ::PlayerRequestFPUEvent(entry->id,conf->GetTag(),partId));
+		eventMngr->AddEvent(it->second.queueId, new ::PlayerRequestFPUEvent(it->first,conf->GetTag(),partId));
 }
 
-void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status, void *param)
+void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status)
 {
-	ConferenceEntry *entry = (ConferenceEntry *)param;
+	//Bloqueamos
+	std::lock_guard<std::mutex> lock(mutex);
+
+	//Find the conference by tag : si ya no esta, se esta destruyendo, ignoramos el evento
+	ConferenceTags::iterator tit = tags.find(conf->GetTag());
+	if (tit==tags.end())
+		return;
+	Conferences::iterator it = conferences.find(tit->second);
+	if (it==conferences.end())
+		return;
+
 	//Check Event and event queue
-	if (eventMngr && entry->queueId>0)
+	if (eventMngr && it->second.queueId>0)
 		//Send new event
-		eventMngr->AddEvent(entry->queueId, new ::PlayerRequestDocSharingEvent(entry->id,conf->GetTag(), partId, status ) );
+		eventMngr->AddEvent(it->second.queueId, new ::PlayerRequestDocSharingEvent(it->first,conf->GetTag(), partId, status ) );
 }
 
 int MCU::onFileUploaded(const char* url, const char *filename)
 {
 	Log("-File upload for %s\n",url);
-	
-	MultiConf* conf = NULL;
+
+	std::shared_ptr<MultiConf> conf;
 
 	//Skip the first path
 	const char *sep = url + strlen("/upload/mcu/app/");
@@ -517,7 +377,7 @@ int MCU::onFileUploaded(const char* url, const char *filename)
 	int confId = GetConferenceId(parser.GetWString());
 
 	//Get conference
-	if(!GetConferenceRef(confId,&conf))
+	if(!GetConferenceRef(confId,conf))
 	{
 		//Error
 		Error("Conference does not exist\n");
@@ -527,9 +387,6 @@ int MCU::onFileUploaded(const char* url, const char *filename)
 
 	//Display it
 	int ret = conf->AppMixerDisplayImage(filename) ? 200 : 500;
-
-	//Release it
-	ReleaseConferenceRef(confId);
 
 	//REturn result
 	return ret;

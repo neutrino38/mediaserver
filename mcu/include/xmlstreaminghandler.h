@@ -11,6 +11,7 @@
 class XmlEvent
 {
 public:
+	virtual ~XmlEvent() {}
 	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env) = 0;
 };
 

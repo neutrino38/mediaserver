@@ -214,6 +214,7 @@ int WSEndpoint::End()
     }
 	
 	RedCodec = NULL;
+	return 0;
 }
 
 
@@ -240,5 +241,6 @@ int WSEndpoint::SendFrame(TextFrame &frame)
 	}
 	
     if (_ws) _ws->SendMessage( msg );
+	return 0;
 }
 

@@ -7,10 +7,10 @@ countryName_default             	= FR
 countryName_min                 	= 2
 countryName_max                 	= 2
 
-localityName                   = Grenoble
-organizationalUnitName         = IVeS
-organizationalUnitName_default = IVeS
+localityName                   = Tataouine-Les-Bains
+organizationalUnitName         = MaBoite
+organizationalUnitName_default = MaBoite
 commonName_max                 = 64
-emailAddress                   = support@ives.fr
-emailAddress_default           = support@ives.fr
+emailAddress                   = support@exemple.fr
+emailAddress_default           = support@example.fr
 emailAddress_max               = 40  

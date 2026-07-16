@@ -31,6 +31,9 @@ TextStream::TextStream(RTPSession::Listener* listener) : rtp(MediaFrame::Text,li
 ********************************/
 TextStream::~TextStream()
 {
+	//Défense en profondeur (H-5) : arrêt/join des threads même sans End()
+	//préalable. End() est idempotent.
+	End();
 }
 
 /***************************************
@@ -63,17 +66,38 @@ int TextStream::Init(TextInput *input, TextOutput *output)
 	//Iniciamos el rtp
 	if(!rtp.Init())
 		return Error("No hemos podido abrir el rtp\n");
-	
 
-	//Nos quedamos con los puntericos
-	textInput  = input;
-	textOutput = output;
+
+	//Chemin "emprunté" (MediaBridgeSession) : shared_ptr NON possédant.
+	textInput  = input  ? std::shared_ptr<TextInput>(input,   [](TextInput*){})  : nullptr;
+	textOutput = output ? std::shared_ptr<TextOutput>(output, [](TextOutput*){}) : nullptr;
 
 	//Y aun no estamos mandando nada
 	sendingText=TaskIdle;
 	receivingText=TaskIdle;
 
 	Log("<Init text stream\n");
+
+	return 1;
+}
+
+int TextStream::Init(std::shared_ptr<TextInput> input, std::shared_ptr<TextOutput> output)
+{
+	Log(">Init text stream (shared)\n");
+
+	//Iniciamos el rtp
+	if(!rtp.Init())
+		return Error("No hemos podido abrir el rtp\n");
+
+	//Chemin "possédant" (co-propriété du pipe du mixer, Point 1 / C-4).
+	textInput  = std::move(input);
+	textOutput = std::move(output);
+
+	//Y aun no estamos mandando nada
+	sendingText=TaskIdle;
+	receivingText=TaskIdle;
+
+	Log("<Init text stream (shared)\n");
 
 	return 1;
 }
@@ -116,7 +140,7 @@ void * TextStream::startSendingText(void *par)
 	TextStream *conf = (TextStream *)par;
 	blocksignals();
 	Log("SendTextThread [%d]\n",getpid());
-	pthread_exit((void *)conf->SendText());
+	pthread_exit((void *)(intptr_t)conf->SendText());
 }
 
 /***************************************
@@ -128,7 +152,7 @@ void * TextStream::startReceivingText(void *par)
 	TextStream *conf = (TextStream *)par;
 	blocksignals();
 	Log("RecvTextThread [%d]\n",getpid());
-	pthread_exit((void *)conf->RecText());
+	pthread_exit((void *)(intptr_t)conf->RecText());
 }
 
 /***************************************
@@ -348,7 +372,7 @@ int TextStream::RecText()
 			{
 				//Get redundant packet
 				RTPRedundantPacket* red = (RTPRedundantPacket*) packet;				
-                                redCodec.Decode(red, textOutput);
+                                redCodec.Decode(red, textOutput.get());
 			} 
                         else {
 				//For each lost packet send a mark

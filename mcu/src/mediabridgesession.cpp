@@ -15,11 +15,9 @@
 #include <stdio.h>
 #include "log.h"
 #include "mediabridgesession.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtpsession.h"
 #include "video.h"
-#include "h263/h263codec.h"
-#include "flv1/flv1codec.h"
 #include "avcdescriptor.h"
 #include "fifo.h"
 #include <wchar.h>
@@ -85,17 +83,13 @@ MediaBridgeSession::MediaBridgeSession() :
 	
 	eventMngr = NULL;
 	queueId=0;
-
-	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
 }
 
 MediaBridgeSession::~MediaBridgeSession()
 {
 	//End it just in case
 	End();
-	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
+
 	//Delete codecs
 	if (rtpAudioEncoder)
 		delete(rtpAudioEncoder);
@@ -228,8 +222,7 @@ int  MediaBridgeSession::StartSendingVideo(char *sendVideoIp,int sendVideoPort,R
 	rtpVideo.SetSendingRTPMap(rtpMap);
 
 	//Arrancamos los procesos
-	createPriorityThread(&sendVideoThread,startSendingVideo,this,0);
-
+	sendVideoThread = std::thread(&MediaBridgeSession::SendVideo,this);
 	return sendingVideo;
 }
 
@@ -247,7 +240,7 @@ int  MediaBridgeSession::StopSendingVideo()
 		videoFrames.Cancel();
 
 		//Esperamos
-		pthread_join(sendVideoThread,NULL);
+		sendVideoThread.join();
 	}
 
 	return true;
@@ -280,7 +273,8 @@ int  MediaBridgeSession::StartReceivingVideo(RTPMap& rtpMap)
 	rtpVideo.SetReceivingRTPMap(rtpMap);
 	
 	//Arrancamos los procesos
-	createPriorityThread(&recVideoThread,startReceivingVideo,this,0);
+	recVideoThread = std::thread(&MediaBridgeSession::RecVideo,this);
+
 
 	//Logeamos
 	Log("-StartReceivingVideo Port [%d]\n",recPort);
@@ -302,7 +296,7 @@ int  MediaBridgeSession::StopReceivingVideo()
 		rtpVideo.CancelGetPacket();
 		
 		//Esperamos
-		pthread_join(recVideoThread,NULL);
+		recVideoThread.join();
 	}
 
 	Log("<StopReceivingVideo\n");
@@ -346,7 +340,7 @@ int  MediaBridgeSession::StartSendingAudio(char *sendAudioIp,int sendAudioPort,R
 	rtpAudio.SetSendingCodec(rtpAudioCodec);
 
 	//Arrancamos los procesos
-	createPriorityThread(&sendAudioThread,startSendingAudio,this,0);
+	sendAudioThread = std::thread(&MediaBridgeSession::SendAudio,this);
 
 	return sendingAudio;
 }
@@ -366,7 +360,7 @@ int  MediaBridgeSession::StopSendingAudio()
 		audioInput->CancelRecBuffer();
 
 		//Esperamos
-		pthread_join(sendAudioThread,NULL);
+		sendAudioThread.join();
 	}
 
 	Log("<StopSendingAudio\n");
@@ -400,7 +394,7 @@ int  MediaBridgeSession::StartReceivingAudio(RTPMap& rtpMap)
 	rtpAudio.SetReceivingRTPMap(rtpMap);
 
 	//Arrancamos los procesos
-	createPriorityThread(&recAudioThread,startReceivingAudio,this,0);
+	recAudioThread = std::thread(&MediaBridgeSession::RecAudio,this);
 	
 	//Logeamos
 	Log("-StartReceivingAudio port=[%d]\n",recPort);
@@ -422,7 +416,7 @@ int  MediaBridgeSession::StopReceivingAudio()
 		rtpAudio.CancelGetPacket();
 		
 		//Esperamos
-		pthread_join(recAudioThread,NULL);
+		recAudioThread.join();
 	}
 
 	Log("<StopReceivingAudio\n");
@@ -536,8 +530,8 @@ int  MediaBridgeSession::StopReceivingText()
 	{
 		//Dejamos de recivir
 		receivingText=Stopping;
-                textStream.StopSending();
-                receivingText=Stopped;
+        textStream.StopSending();
+        receivingText=Stopped;
 	}
 
 	Log("<MediaBridgeSession StopReceivingText\n");
@@ -545,77 +539,6 @@ int  MediaBridgeSession::StopReceivingText()
 	return 1;
 }
 
-/**************************************
-* startReceivingVideo
-*	Function helper for thread
-**************************************/
-void* MediaBridgeSession::startReceivingVideo(void *par)
-{
-	Log("RecVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	MediaBridgeSession *sess = (MediaBridgeSession *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)sess->RecVideo());
-}
-
-/**************************************
-* startReceivingAudio
-*	Function helper for thread
-**************************************/
-void* MediaBridgeSession::startReceivingAudio(void *par)
-{
-	Log("RecVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	MediaBridgeSession *sess = (MediaBridgeSession *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)sess->RecAudio());
-}
-
-/**************************************
-* startSendingVideo
-*	Function helper for thread
-**************************************/
-void* MediaBridgeSession::startSendingVideo(void *par)
-{
-	Log("SendVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	MediaBridgeSession *sess = (MediaBridgeSession *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)sess->SendVideo());
-}
-
-/**************************************
-* startSendingAudio
-*	Function helper for thread
-**************************************/
-void* MediaBridgeSession::startSendingAudio(void *par)
-{
-	Log("SendAudioThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	MediaBridgeSession *sess = (MediaBridgeSession *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)sess->SendAudio());
-}
 
 /****************************************
 * RecVideo
@@ -628,13 +551,18 @@ int MediaBridgeSession::RecVideo()
 	VideoEncoder* encoder = VideoCodecFactory::CreateEncoder(VideoCodec::SORENSON);
 	//Create new video frame
 	RTMPVideoFrame  frame(0,65500);
+
+	blocksignals();
+
 	//Set codec
 	frame.SetVideoCodec(RTMPVideoFrame::FLV1);
 
 	int 	width=0;
 	int 	height=0;
 	DWORD	numpixels=0;
-	
+
+	//Bloqueamos las se�a�es
+	blocksignals();
 	Log(">RecVideo\n");
 	receivingVideo = Running;
 	//Mientras tengamos que capturar
@@ -742,9 +670,7 @@ int MediaBridgeSession::RecVideo()
 		delete(encoder);
 
 	Log("<RecVideo\n");
-
-	//Salimos
-	pthread_exit(0);
+	return 0;
 }
 
 /****************************************
@@ -760,10 +686,14 @@ int MediaBridgeSession::RecAudio()
 	DWORD		rawSize = 512;
 	DWORD		rawLen;
 
+	blocksignals();
+
 	//Create new audio frame
 	RTMPAudioFrame  *audio = new RTMPAudioFrame(0,MTU);
 	
 	audioOutput->StartPlaying(rtpAudioDecoder->GetRate());
+	
+
 	Log(">RecAudio\n");
 	receivingAudio = Running;
 	//Mientras tengamos que capturar
@@ -872,9 +802,7 @@ int MediaBridgeSession::RecAudio()
 		delete(audio);
 	
 	Log("<RecAudio\n");
-
-	//Salimos
-	pthread_exit(0);
+	return 0;
 }
 
 
@@ -1078,6 +1006,7 @@ int MediaBridgeSession::SendFrame(TextFrame &frame)
 {
     SendTextToHtmlClient(frame.GetWString());
     SendTextToFlashClient(frame.GetWString());
+	return 0;
 }
 
 int MediaBridgeSession::SetSendingVideoCodec(VideoCodec::Type codec)

@@ -8,10 +8,7 @@
 #include "mediagateway.h"
 
 MediaGateway::MediaGateway()
-{
-	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
-	
+{	
 	//No event mngr
 	eventMngr = NULL;
 	
@@ -20,8 +17,6 @@ MediaGateway::MediaGateway()
 
 MediaGateway::~MediaGateway()
 {
-	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 
@@ -32,7 +27,7 @@ MediaGateway::~MediaGateway()
 bool MediaGateway::Init(XmlStreamingHandler *p_eventMngr)
 {
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Estamos iniciados
 	inited = true;
@@ -42,10 +37,6 @@ bool MediaGateway::Init(XmlStreamingHandler *p_eventMngr)
 	
 	//Store event mngr
 	this->eventMngr = p_eventMngr;
-	
-	
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 	
 	
 	//Salimos
@@ -61,29 +52,18 @@ bool MediaGateway::End()
 	Log(">End MediaGateway\n");
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Dejamos de estar iniciados
 	inited = false;
 
 	//Paramos las sesions
 	for (MediaBridgeEntries::iterator it=bridges.begin(); it!=bridges.end(); it++)
-	{
-		//Obtenemos la sesion
-		MediaBridgeSession *session = it->second.session;
-
-		//La paramos
-		session->End();
-
-		//Y la borramos
-		delete session;
-	}
+		//La paramos (el shared_ptr destruye la sesion al vaciar la map)
+		it->second.session->End();
 
 	//Clear the MediaGateway list
 	bridges.clear();
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	Log("<End MediaGateway\n");
 
@@ -101,13 +81,13 @@ DWORD MediaGateway::CreateMediaBridge(const std::wstring &name)
 
 
 	//Creamos la session
-	MediaBridgeSession * session = new MediaBridgeSession();
+	std::shared_ptr<MediaBridgeSession> session = std::make_shared<MediaBridgeSession>();
 
 	//Obtenemos el id
 	DWORD sessionId = maxId++;
-	
+
 	session->setSessionId(sessionId);
-	
+
 	//Creamos la entrada
 	MediaBridgeEntry entry;
 
@@ -115,17 +95,12 @@ DWORD MediaGateway::CreateMediaBridge(const std::wstring &name)
 	entry.id 	= sessionId;
 	entry.name 	= name;
         entry.session 	= session;
-	entry.enabled 	= 1;
-	entry.numRef	= 0;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//a�adimos a la lista
 	bridges[sessionId] = entry;
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	return sessionId;
 }
@@ -142,7 +117,7 @@ bool MediaGateway::SetMediaBridgeInputToken(DWORD id,const std::wstring &token)
 	bool res = false;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get the MediaGateway session entry
 	MediaBridgeEntries::iterator it = bridges.find(id);
@@ -163,9 +138,6 @@ bool MediaGateway::SetMediaBridgeInputToken(DWORD id,const std::wstring &token)
 	res = true;
 
 end:
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
-
 	Log("<SetMediaBridgeInputToken\n");
 
 	return res;
@@ -183,7 +155,7 @@ bool MediaGateway::SetMediaBridgeOutputToken(DWORD id,const std::wstring &token)
 	bool res = false;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get the MediaGateway session entry
 	MediaBridgeEntries::iterator it = bridges.find(id);
@@ -204,9 +176,6 @@ bool MediaGateway::SetMediaBridgeOutputToken(DWORD id,const std::wstring &token)
 	res = true;
 
 end:
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
-
 	Log("<SetMediaBridgeOutputToken\n");
 
 	return res;
@@ -216,12 +185,12 @@ end:
 * GetMediaBridgeRef
 *	Obtiene una referencia a una sesion
 **************************************/
-bool MediaGateway::GetMediaBridgeRef(DWORD id,MediaBridgeSession **session)
+bool MediaGateway::GetMediaBridgeRef(DWORD id,std::shared_ptr<MediaBridgeSession> &session)
 {
 	Log(">GetMediaBridgeRef [%d]\n",id);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Get it
 	MediaBridgeEntries::iterator it = bridges.find(id);
@@ -229,62 +198,14 @@ bool MediaGateway::GetMediaBridgeRef(DWORD id,MediaBridgeSession **session)
 	//SI no esta
 	if (it==bridges.end())
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
 		//Y salimos
 		return Error("Session no encontrada [%d]\n",id);
 	}
 
-	//Get bridge entry
-	MediaBridgeEntry &entry = it->second;
-
-	//Increase counter reference
-	entry.numRef++;
-
-	//Y obtenemos el puntero a la la sesion
-	*session = entry.session;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
+	//Y obtenemos la referencia compartida a la sesion
+	session = it->second.session;
 
 	Log("<GetMediaBridgeRef \n");
-
-	return true;
-}
-
-/**************************************
-* ReleaseMediaBridgeRef
-*	Libera una referencia a una sesion
-**************************************/
-bool MediaGateway::ReleaseMediaBridgeRef(DWORD id)
-{
-	Log(">ReleaseMediaBridgeRef [%d]\n",id);
-
-	//Bloqueamos
-	pthread_mutex_lock(&mutex);
-
-	//Get it
-	MediaBridgeEntries::iterator it = bridges.find(id);
-
-	//SI no esta
-	if (it==bridges.end())
-	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
-		//Y salimos
-		return Error("Session no encontrada [%d]\n",id);
-	}
-
-	//Get bridge entry
-	MediaBridgeEntry &entry = it->second;
-
-	//Decrease counter
-	entry.numRef--;
-
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-
-	Log("<ReleaseMediaBridgeRef\n");
 
 	return true;
 }
@@ -297,52 +218,45 @@ bool MediaGateway::DeleteMediaBridge(DWORD id)
 {
 	Log(">DeleteMediaBridge [%d]\n",id);
 
-	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::shared_ptr<MediaBridgeSession> session;
 
-	//Find sessionerence
-	MediaBridgeEntries::iterator it = bridges.find(id);
-
-	//Check if we found it or not
-	if (it==bridges.end())
+	//Extrae la sesion bajo lock : una vez fuera de la map, nadie puede obtener
+	//nuevas referencias (remplaza el //TODO numRef == 0 nunca implementado, C-8)
 	{
-		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
+		std::lock_guard<std::mutex> lock(mutex);
 
-		//Y salimos
-		return Error("Session no encontrada [%d]\n",id);
+		//Find sessionerence
+		MediaBridgeEntries::iterator it = bridges.find(id);
+
+		//Check if we found it or not
+		if (it==bridges.end())
+		{
+			//Y salimos
+			return Error("Session no encontrada [%d]\n",id);
+		}
+
+		//Get sessionerence
+		session = std::move(it->second.session);
+
+		//Remove entry from list
+		bridges.erase(it);
 	}
-
-	//TODO: Wait for numref == 0
-
-	//Get entry
-	MediaBridgeEntry &entry = it->second;
-
-	//Get sessionerence
-	MediaBridgeSession *session = entry.session;
-
-	//Remove entry from list
-	bridges.erase(it);
 
 	Log("-Ending session [%d]\n",id);
 
-	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
-	
-	//End session
+	//End session : idempotente, y seguro aunque un handler siga teniendo una
+	//referencia — el ultimo shared_ptr destruira el objeto.
 	session->End();
 
-	//Delete sessionerence
-	delete session;
 	Log("<DeleteMediaBridge [%d]\n",id);
 
 	//Exit
 	return true;
 }
 
-RTMPNetConnection* MediaGateway::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
+std::shared_ptr<RTMPNetConnection> MediaGateway::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
 {
-	MediaBridgeSession *sess = NULL;
+	std::shared_ptr<MediaBridgeSession> sess;
 	wchar_t *stopwcs;
 
 	//Skip the mcu part and find the conf Id
@@ -354,28 +268,25 @@ RTMPNetConnection* MediaGateway::Connect(const std::wstring& appName,RTMPNetConn
 		//Noting found
 		Error("Wrong format for app name\n");
 		//Exit
-		return NULL;
+		return nullptr;
 	}
 
 	//Get conf id
 	int confId = wcstol(appName.substr(i+1).c_str(),&stopwcs,10);
 
 	//Get conference
-	if(!GetMediaBridgeRef(confId,&sess))
+	if(!GetMediaBridgeRef(confId,sess))
 	{
 		//No conference found
 		Error("MediaBridge not found [confId:%d]\n",confId);
 		//Exit
-		return NULL;
+		return nullptr;
 	}
 
 	//Connect
 	sess->Connect(listener);
 
-	//release it
-	ReleaseMediaBridgeRef(confId);
-
-	//Return conf
+	//Return conf : el shared_ptr mantiene la sesion viva mientras dure la conexion RTMP (C-8)
 	return sess;
 }
 

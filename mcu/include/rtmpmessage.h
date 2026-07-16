@@ -27,7 +27,7 @@ public:
 	virtual BYTE*	GetMediaData()			{ return buffer;		}
 	virtual DWORD	GetMediaSize()			{ return mediaSize;		}
 	virtual DWORD	GetMaxMediaSize()		{ return bufferSize;		}
-	virtual bool	SetMediaSize(DWORD mediaSize)	{ this->mediaSize = mediaSize;	}
+	virtual bool	SetMediaSize(DWORD mediaSize)	{ this->mediaSize = mediaSize;	return true; }
 
 	virtual void	Dump();
 
@@ -133,7 +133,7 @@ class RTMPCommandMessage
 public:
 	RTMPCommandMessage();
 	RTMPCommandMessage(const wchar_t* name,QWORD transId,AMFData* params,AMFData *extra);
-	~RTMPCommandMessage();
+	virtual ~RTMPCommandMessage();
 
 	virtual DWORD Parse(BYTE *data,DWORD size);
 	DWORD Serialize(BYTE* buffer,DWORD size);

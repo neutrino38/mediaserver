@@ -1,10 +1,13 @@
 #ifndef _AUDIOOUTPUT_H_
 #define _AUDIOOUTPUT_H_
-#include <pthread.h>
+#include <mutex>
 #include <fifo.h>
 #include <audio.h>
 #include "vad.h"
-#include "audiotransrater.h"
+
+// Rééchantillonnage via libswresample (remplace l'ancien AudioTransrater/speexdsp).
+// Pointeur opaque : l'en-tête ffmpeg n'est inclus que dans le .cpp.
+struct SwrContext;
 
 class PipeAudioOutput :
 	public AudioOutput
@@ -12,7 +15,7 @@ class PipeAudioOutput :
 {
 public:
 	PipeAudioOutput(bool calcVAD);
-	~PipeAudioOutput();
+	virtual ~PipeAudioOutput();
 	virtual int PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime);
 	virtual int StartPlaying(DWORD samplerate);
 	virtual int StopPlaying();
@@ -26,7 +29,7 @@ public:
 	int End();
 private:
 	//Mutex
-	pthread_mutex_t mutex;
+	std::mutex	mutex;
 
 	//Members
 	fifo<SWORD,8192>	fifoBuffer;
@@ -34,7 +37,7 @@ private:
 	VAD			vad;
 	DWORD			acu;
 	bool			calcVAD;
-	AudioTransrater 	transrater;
+	SwrContext		*swr;
 
 	DWORD	playRate;
 	DWORD	nativeRate;

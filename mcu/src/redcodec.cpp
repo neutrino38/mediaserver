@@ -1,5 +1,5 @@
 #include "redcodec.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 static BYTE BOMUTF8[]			= {0xEF,0xBB,0xBF};
 static BYTE LOSTREPLACEMENT[]		= {0xEF,0xBF,0xBD};
@@ -63,6 +63,7 @@ bool RedundentCodec::Decode(RTPRedundantPacket * red, TextOutput * textOutput)
     // Now process the primary data
     TextFrame pframe(timeStamp ,red->GetPrimaryPayloadData(),red->GetPrimaryPayloadSize());
     textOutput->SendFrame(pframe);
+	return true;
 }
 
 RTPRedundantPacket * RedundentCodec::Encode(MediaFrame * frame, BYTE ptype)

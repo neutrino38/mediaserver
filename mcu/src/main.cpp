@@ -60,38 +60,47 @@ void log_ffmpeg(void* ptr, int level, const char* fmt, va_list vl)
 	Log(line);
 }
 
-int lock_ffmpeg(void **param, enum AVLockOp op)
+// ffmpeg >= 4 est nativement thread-safe : le gestionnaire de verrous
+// (av_lockmgr_register / lock_ffmpeg) a ete supprime en ffmpeg 5.
+
+// libmedikit route ses Log()/Debug()/Error() internes via des pointeurs de
+// fonctions (SetLogFunctions, cf. libmedikit/log.c) ; sans branchement, ses
+// Log() et Error() sont perdus (logfile/errfile restent NULL). On ne peut pas
+// inclure <medkit/log.h> ici : ses declarations extern "C" Log/Debug/Error
+// sont en conflit avec les inline de include/log.h. On redeclare donc juste
+// SetLogFunctions et on branche des wrappers au format du mcu ; la sortie
+// suit stdout et donc --mcu-log.
+extern "C" void SetLogFunctions(int (*dbg)(const char*, va_list),
+				int (*log)(const char*, va_list),
+				int (*err)(const char*, va_list));
+
+static int MedkitLogCb(const char *msg, va_list ap)
 {
-	//Get mutex pointer
-	pthread_mutex_t* mutex = (pthread_mutex_t*)(*param);
-	//Depending on the operation
-	switch(op)
-	 {
-		case AV_LOCK_CREATE:
-			//Create mutex
-			mutex = (pthread_mutex_t*)malloc(sizeof(pthread_mutex_t));
-			//Init it
-			pthread_mutex_init(mutex,NULL);
-			//Store it
-			*param = mutex;
-			break;
-		case AV_LOCK_OBTAIN:
-			//Lock
-			pthread_mutex_lock(mutex);
-			break;
-		case AV_LOCK_RELEASE:
-			//Unlock
-			pthread_mutex_unlock(mutex);
-			break;
-		case AV_LOCK_DESTROY:
-			//Destroy mutex
-			pthread_mutex_destroy(mutex);
-			//Free memory
-			free(mutex);
-			//Clean
-			*param = NULL;
-			break;
+	char buf[80];
+	printf("[0x%lx][%s][LOG]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
+	vprintf(msg, ap);
+	fflush(stdout);
+	return 1;
+}
+
+static int MedkitDebugCb(const char *msg, va_list ap)
+{
+	if (Logger::IsDebugEnabled())
+	{
+		struct timeval tv;
+		gettimeofday(&tv, NULL);
+		printf("[0x%lx][%.10ld.%.3ld][DBG]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+		vprintf(msg, ap);
 	}
+	return 1;
+}
+
+static int MedkitErrorCb(const char *msg, va_list ap)
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	printf("[0x%lx][%.10ld.%.3ld][ERR]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+	vprintf(msg, ap);
 	return 0;
 }
 
@@ -110,62 +119,21 @@ void signing_handler(int sig)
 }
 
 
-static pthread_mutex_t *lockarray;
-
-
-static void lock_callback(int mode, int type, char *file, int line)
-{
-  (void)file;
-  (void)line;
-  if (mode & CRYPTO_LOCK) {
-    pthread_mutex_lock(&(lockarray[type]));
-  }
-  else {
-    pthread_mutex_unlock(&(lockarray[type]));
-  }
-}
-
-static unsigned long thread_id(void)
-{
-  unsigned long ret;
-
-  ret=(unsigned long)pthread_self();
-  return(ret);
-}
-
-static void init_locks(void)
-{
-  int i;
-
-  lockarray=(pthread_mutex_t *)OPENSSL_malloc(CRYPTO_num_locks() *
-                                        sizeof(pthread_mutex_t));
-  for (i=0; i<CRYPTO_num_locks(); i++) {
-    pthread_mutex_init(&(lockarray[i]),NULL);
-  }
-
-  CRYPTO_set_id_callback((unsigned long (*)())thread_id);
-  CRYPTO_set_locking_callback((void (*)(int, int, const char*, int))lock_callback);
-}
-
-static void kill_locks(void)
-{
-  int i;
-
-  CRYPTO_set_locking_callback(NULL);
-  for (i=0; i<CRYPTO_num_locks(); i++)
-    pthread_mutex_destroy(&(lockarray[i]));
-
-  OPENSSL_free(lockarray);
-}
+// OpenSSL >= 1.1.0 gere son verrouillage en interne : les callbacks
+// CRYPTO_set_locking_callback / CRYPTO_set_id_callback ont ete supprimes
+// (macros no-op sous OpenSSL 3.x). L'ancien gestionnaire de verrous
+// (init_locks / kill_locks) n'est donc plus necessaire.
 
 int main(int argc,char **argv)
 {
+	//Brancher les logs de libmedikit sur ceux du mcu (stdout -> --mcu-log)
+	SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitErrorCb);
+
 	//Init random
 	srand(time(NULL));
 
 	//Init open ssl lib
         OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
-	init_locks();
 
 	//Set default values
 	bool forking = false;
@@ -332,9 +300,6 @@ int main(int argc,char **argv)
 	//Set new limit
         setrlimit(RLIMIT_CORE, &l);
 
-	//Register mutext for ffmpeg
-	av_lockmgr_register(lock_ffmpeg);
-
 	//Set log level
 	av_log_set_callback(log_ffmpeg);
 
@@ -432,7 +397,7 @@ int main(int argc,char **argv)
 	server.AddHandler("/broadcaster",&xmlrpcbroadcaster);
 	server.AddHandler("/mediagateway",&xmlrpcmediagateway);
 	server.AddHandler("/jsr309",&xmlrpcjsr309);
-	server.AddHandler("/events/jsr309",&xmleventjsr309);
+	server.AddHandler(JSR309_EVENTS_PREFIX,&xmleventjsr309);
 	server.AddHandler("/events/mcu",&xmleventmcu);
 	server.AddHandler("/events/mediagateway",&xmleventmediaGateway);
 
@@ -483,6 +448,5 @@ server_init_failed:
 	mediaGateway.End();
 	//End the jsr309
 	jsr309Manager.End();
-kill_locks();
 }
 

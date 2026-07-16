@@ -6,6 +6,10 @@
 #include <fcntl.h>
 #include <string>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
+extern "C" {
+#include <libavutil/base64.h>
+}
 #include "http.h"
 #include <signal.h>
 #include <errno.h>
@@ -15,7 +19,7 @@
 #include "tools.h"
 #include "websocketconnection.h"
 
-WebSocketConnection::WebSocketConnection(Listener *listener)
+WebSocketConnection::WebSocketConnection(Listener* listener)
 {
 	//Store listener
 	this->listener = listener;
@@ -23,7 +27,7 @@ WebSocketConnection::WebSocketConnection(Listener *listener)
 	inited = false;
 	running = false;
 	socket = FD_INVALID;
-	setZeroThread(&thread);
+
 	//No pong
 	pong = NULL;
 	//Not uypgraded yet
@@ -34,11 +38,9 @@ WebSocketConnection::WebSocketConnection(Listener *listener)
 	request = NULL;
 	response = NULL;
 	header = NULL;
-	wsl = NULL;
+
 	//Set initial time
 	gettimeofday(&startTime,0);
-	//Init mutex
-	pthread_mutex_init(&mutex,0);
 }
 
 WebSocketConnection::~WebSocketConnection()
@@ -59,8 +61,6 @@ WebSocketConnection::~WebSocketConnection()
 	if (header)   delete(header);
 	//Check unsent pong
 	if (pong)     delete(pong);
-	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 int WebSocketConnection::Init(int fd)
@@ -69,6 +69,14 @@ int WebSocketConnection::Init(int fd)
 
 	//Store socket
 	socket = fd;
+
+	// Créer la paire de sockets
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, wakeup_socket) < 0)
+	{
+        // Gérer l'erreur (ex: throw ou log)
+        wakeup_socket[0] = wakeup_socket[1] = FD_INVALID;
+		return Error("Failed to create wakeup socket: %s\n", strerror(errno));
+    }
 
 	//I am inited
 	inited = true;
@@ -90,7 +98,7 @@ void WebSocketConnection::Start()
 	running = true;
 	
 	//Create thread
-	createPriorityThread(&thread,run,this,0);
+	thread = std::thread(&WebSocketConnection::Run,this);
 }
 
 void WebSocketConnection::Stop()
@@ -132,12 +140,10 @@ int WebSocketConnection::End()
 
 	//If running
 	//if (!isZeroThread(thread))
-	if (thread)
+	if (thread.joinable())
 	{
 		//Wait for server thread to close
-		pthread_join(thread,NULL);
-		//No thread
-		setZeroThread(&thread);
+		thread.join();
 	}
 
 	//Ended
@@ -181,6 +187,8 @@ int WebSocketConnection::Run()
 	//Set values for polling
 	ufds[0].fd = socket;
 	ufds[0].events = POLLIN | POLLERR | POLLHUP;
+	ufds[1].fd = wakeup_socket[1];
+	ufds[1].events = POLLIN;
 
 	//Set non blocking so we can get an error when we are closed by end
 	int fsflags = fcntl(socket,F_GETFL,0);
@@ -197,7 +205,7 @@ int WebSocketConnection::Run()
 	while(running)
 	{
 		//Wait for events
-		if(poll(ufds,1,-1)<0)
+		if(poll(ufds,2,-1)<0)
 			//Check again
 			continue;
 
@@ -262,23 +270,27 @@ int WebSocketConnection::Run()
 			//Exit
 			break;
 		}
+
+		if (ufds[1].revents & POLLIN) 
+		{
+			// Write Signal: Read a byte from the wakeup socket to clear the event
+			char dummy;
+			read(wakeup_socket[0], &dummy, 1);
+			// Mettre à jour ufds[0].events si nécessaire
+			ufds[0].events = POLLIN | POLLOUT | POLLERR | POLLHUP;
+		}
 	}
 
 	//If we were opened
 	if (upgraded)
 	{
-		//lock now
-		pthread_mutex_lock(&mutex);
-	
-		if ( wsl != NULL)
+		std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
+		if ( wsl2 )
 		{	
 			//Send close
 			Log("WSL: We receive a new connection , we close the old one\n");
-			wsl->onClose(this);
-		}
-		
-		//unlock now
-		pthread_mutex_unlock(&mutex);
+			wsl2->onClose(this);
+		}	
 	}
 	Log("<Run WebSocket connection\n");
 	
@@ -289,12 +301,13 @@ int WebSocketConnection::Run()
 
 	//Don't send more events
 	listener = NULL;
+	return 0;
 }
 
 void WebSocketConnection::SignalWriteNeeded()
 {
 	//lock now
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Check if there was not anyhting left in the queeue
 	if (!(ufds[0].events & POLLOUT))
@@ -305,17 +318,8 @@ void WebSocketConnection::SignalWriteNeeded()
 		bandSize = 0;
 	}
 
-	//Set to wait also for read events
-	ufds[0].events = POLLIN | POLLOUT | POLLERR | POLLHUP;
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	//Check thred
-	//if (!isZeroThread(thread))
-	if (thread)
-		//Signal the pthread this will cause the poll call to exit
-		pthread_kill(thread,SIGIO);
+	char dummy = 'w';
+	write(wakeup_socket[1], &dummy, 1);
 }
 
 WebSocketConnection::Frame* WebSocketConnection::GetNextFrame()
@@ -324,7 +328,7 @@ WebSocketConnection::Frame* WebSocketConnection::GetNextFrame()
 	Frame* frame = NULL;
 
 	//Lock mutex
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//if there are frames waiting (should always be)
 	if (frames.size())
@@ -364,9 +368,6 @@ WebSocketConnection::Frame* WebSocketConnection::GetNextFrame()
 			bandSize = 0;
 		}
 	}
-		
-	//Un Lock mutex
-	pthread_mutex_unlock(&mutex);
 
 	//Return frame
 	return frame;
@@ -386,6 +387,7 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 		//Parse request
 		parser.Execute((char*)data,size);
 	} else {
+		std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
 		//Process all input
 		while(size)
 		{
@@ -412,11 +414,7 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 							break;
 						case WebSocketFrameHeader::TextFrame:
 							//Start frame
-							//lock now
-							pthread_mutex_lock(&mutex);
-							if (wsl) wsl->onMessageStart(this,WebSocket::Text,header->GetPayloadLength());
-							//unlock now
-							pthread_mutex_unlock(&mutex);
+							if (wsl2) wsl2->onMessageStart(this,WebSocket::Text,header->GetPayloadLength());
 							break;
 						case WebSocketFrameHeader::Close:
 							//Log
@@ -426,12 +424,9 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 							break;
 						case WebSocketFrameHeader::BinaryFrame:
 							//Start frame
-							//lock now
-							pthread_mutex_lock(&mutex);
-							if (wsl) wsl->onMessageStart(this,WebSocket::Binary,header->GetPayloadLength());
-							//unlock now
-							pthread_mutex_unlock(&mutex);
+							if (wsl2) wsl2->onMessageStart(this,WebSocket::Binary,header->GetPayloadLength());
 							break;
+
 						case WebSocketFrameHeader::Ping:
 							//Debug
 							Debug("-Received ping\n");
@@ -467,12 +462,9 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 					case WebSocketFrameHeader::TextFrame:
 					case WebSocketFrameHeader::BinaryFrame:
 						//Send data
-						//lock now
-						pthread_mutex_lock(&mutex);
-						if (wsl) wsl->onMessageData(this,data,len);
-						//unlock now
-						pthread_mutex_unlock(&mutex);
+						if (wsl2) wsl2->onMessageData(this,data,len);
 						break;
+
 					case WebSocketFrameHeader::Ping:
 						//data here to the PONG
 						pong->Append(data,len);
@@ -495,24 +487,21 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 							//Check if it is end frame for message
 							if (header->IsFin())
 								//Send data
-								//lock now
-								pthread_mutex_lock(&mutex);
-								if (wsl) wsl->onMessageEnd(this);
-								//unlock now
-								pthread_mutex_unlock(&mutex);
+								if (wsl2) wsl2->onMessageEnd(this);
+
 								
 							break;
 						case WebSocketFrameHeader::Ping:
 							//Debug
 							Debug("-Sending pong\n");
-							//Lock mutex
-							pthread_mutex_lock(&mutex);
-							//Push pong frame
-							frames.push_back(pong);
-							//NO pong to send
-							pong = NULL;
-							//Un Lock mutex
-							pthread_mutex_unlock(&mutex);
+							{
+								//Lock mutex
+								std::lock_guard<std::mutex> lock(mutex);
+								//Push pong frame
+								frames.push_back(pong);
+								//NO pong to send
+								pong = NULL;
+							}
 							//We need to write data!
 							SignalWriteNeeded();
 							break;
@@ -533,13 +522,10 @@ void  WebSocketConnection::SendMessage(const std::string& message)
 	Frame *frame = new Frame(true,WebSocketFrameHeader::TextFrame,(BYTE*)message.c_str(),message.length());
 		
 	//Lock mutex
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Push frame
 	frames.push_back(frame);
-
-	//Un Lock mutex
-	pthread_mutex_unlock(&mutex);
 
 	//We need to write data!
 	SignalWriteNeeded();
@@ -561,7 +547,7 @@ void WebSocketConnection::SendMessage(const BYTE* data, const DWORD size)
 	DWORD pos = 0;
 
 	//Lock mutex
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Send 1300 byte frames
 	while (!last)
@@ -589,10 +575,6 @@ void WebSocketConnection::SendMessage(const BYTE* data, const DWORD size)
 		//Move pos
 		pos += len;
 	}
-
-	//Un Lock mutex
-	pthread_mutex_unlock(&mutex);
-
 
 	//We need to write data!
 	SignalWriteNeeded();
@@ -657,9 +639,10 @@ int WebSocketConnection::on_message_complete (HTTPParser*)
 	if (listener)
 		//Send event
 		listener->onUpgradeRequest(this);
+	return 0;
 }
 
-void WebSocketConnection::Accept(WebSocket::Listener *wsl)
+void WebSocketConnection::Accept(std::weak_ptr<WebSocket::Listener> wsl)
 {
 	//Store websocket listener
 	this->wsl = wsl;
@@ -692,7 +675,11 @@ void WebSocketConnection::Accept(WebSocket::Listener *wsl)
 	BYTE secWebSocketAccept[SHA_DIGEST_LENGTH];
 	char secWebSocketAccept64[SHA_DIGEST_LENGTH*2];
 	//SHA1 response
-	SHA1((unsigned char*)secWebSocketKey.c_str(),secWebSocketKey.length(), secWebSocketAccept);
+	//API EVP one-shot (remplace SHA1() deprecie en OpenSSL 3.0)
+	size_t secWebSocketAcceptLen = 0;
+	EVP_Q_digest(NULL, "SHA1", NULL,
+		     (unsigned char*)secWebSocketKey.c_str(), secWebSocketKey.length(),
+		     secWebSocketAccept, &secWebSocketAcceptLen);
 	//Calculate base 64
 	av_base64_encode(secWebSocketAccept64,SHA_DIGEST_LENGTH*2,secWebSocketAccept,SHA_DIGEST_LENGTH);
 
@@ -713,11 +700,9 @@ void WebSocketConnection::Accept(WebSocket::Listener *wsl)
 	//We are upgraded
 	upgraded = true;
 	//We are opened
-	//lock now
-	pthread_mutex_lock(&mutex);
-	if (wsl) wsl->onOpen(this);
-	//unlock now
-	pthread_mutex_unlock(&mutex);
+
+	std::shared_ptr<WebSocket::Listener> wsl2 = wsl.lock();
+	if (wsl2) wsl2->onOpen(this);
 	
 }
 

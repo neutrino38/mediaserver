@@ -70,7 +70,7 @@ private:
 	
 public:
 	BroadcastSession(const std::wstring &tag);
-	~BroadcastSession();
+	virtual ~BroadcastSession();
 	bool Init(DWORD maxTransfer,DWORD maxConcurrent);
 	RTMPNetConnection* ConnectPublisher(RTMPNetConnection::Listener* listener);
 	RTMPNetConnection* ConnectWatcher(RTMPNetConnection::Listener* listener);

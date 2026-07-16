@@ -10,7 +10,7 @@
 #include "log.h"
 #include "RTPEndpoint.h"
 #include "rtpsession.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Port(type, MediaFrame::RTP), RTPSession(type,this,role)
 {
@@ -69,6 +69,7 @@ int RTPEndpoint::Init()
 	
 	//Init time
 	getUpdDifTime(&prev);
+	return 0;
 }
 
 int RTPEndpoint::End()
@@ -91,6 +92,7 @@ int RTPEndpoint::End()
 	if (receiving)
 		//Stop it
 		StopReceiving();
+	return 0;
 }
 
 int RTPEndpoint::StartReceiving()
@@ -149,9 +151,9 @@ int RTPEndpoint::StartSending()
 		return Error("Not initied");
 
 	//Check if wer are joined
-	if (joined)
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Rquest a FPU
-		joined->Update();
+		j->Update();
         //Send
 	sending = true;
 
@@ -250,7 +252,7 @@ void RTPEndpoint::onResetStream()
 void RTPEndpoint::onEndStream()
 {
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
 }
 
 int RTPEndpoint::Run()
@@ -304,23 +306,23 @@ void* RTPEndpoint::run(void *par)
 	return NULL;
 }
 
-int RTPEndpoint::Attach(Joinable *join)
+int RTPEndpoint::Attach(const std::shared_ptr<Joinable> & join)
 {
 	//Check if inited
 	if (!portinited)
 		//Error
 		return Error("Not inited");
 
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : source encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
-	//Store new one
+		j->RemoveListener(this);
+	//Store new one (lien retour non possédant)
 	joined = join;
 	//If it is not null
-	if (joined)
+	if (join)
 		//Join to the new one
-		joined->AddListener(this);
+		join->AddListener(this);
 
 	//OK
 	return 1;
@@ -328,37 +330,45 @@ int RTPEndpoint::Attach(Joinable *join)
 
 int RTPEndpoint::Detach()
 {
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : ne déréférence pas si la source a disparu
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
+		j->RemoveListener(this);
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
+	return 0;
 }
 
 void RTPEndpoint::onFPURequested(RTPSession *session)
 {
-	Log("-onFPURequested [joined:%p]\n",joined);
 	//Check if joined
-	if (joined)
+	if (std::shared_ptr<Joinable> j = joined.lock())
 		//Request update
-		joined->Update();
+		j->Update();
 }
 
 void RTPEndpoint::onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD estimation)
 {
 	//Check if joined
-       if (joined)
+       if (std::shared_ptr<Joinable> j = joined.lock())
                //Request update
-               joined->SetREMB(estimation);
+               j->SetREMB(estimation);
 }
 
 void RTPEndpoint::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD estimation,DWORD overhead)
 {
 	//Check if joined
-       if (joined)
+       if (std::shared_ptr<Joinable> j = joined.lock())
                //Request update
-               joined->SetREMB(estimation);
+               j->SetREMB(estimation);
+}
+
+void RTPEndpoint::onRTPTimeout(RTPSession *session)
+{
+	//Inactivité RTP prolongée détectée par le watchdog de RTPSession (appelé une
+	//seule fois grâce à l'anti-rebond côté RTPSession). On notifie le contrôleur.
+	Log("-RTPEndpoint::onRTPTimeout : publication EndpointDisconnectedEvent [%p]\n",this);
+	PostEvent(new ::EndpointDisconnectedEvent());
 }
 
 void RTPEndpoint::Update()
@@ -388,6 +398,7 @@ int RTPEndpoint::RequestUpdate()
 {
 	//Request FIR
 	RequestFPU();
+	return 0;
 }
 
  xmlrpc_value* ExternalFIRRequestedEvent::GetXmlValue(xmlrpc_env *env)
@@ -397,5 +408,15 @@ int RTPEndpoint::RequestUpdate()
 	DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
 	sessTag[sessLen] = 0;
     return xmlrpc_build_value(env,"(isiii)",(int)JSR309Event::ExternalFIRRequestedEvent,sessTag,this->joinableId,(int)this->media,(int)this->role);
+
+}
+
+ xmlrpc_value* EndpointDisconnectedEvent::GetXmlValue(xmlrpc_env *env)
+{
+	BYTE sessTag[1024];
+	UTF8Parser sessTagParser(sessionTag);
+	DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
+	sessTag[sessLen] = 0;
+    return xmlrpc_build_value(env,"(isiii)",(int)JSR309Event::EndpointDisconnectedEvent,sessTag,this->joinableId,(int)this->media,(int)this->role);
 
 }

@@ -35,7 +35,7 @@ public:
 	MediaFrame::Type GetType() { return type; }
 
 	//Attach/Dettach to joinables
-	int Attach(Joinable *join);
+	int Attach(const std::shared_ptr<Joinable> & join);
 	int Detach();
 
 	//Joinable interface
@@ -47,11 +47,13 @@ public:
 	virtual void onResetStream();
 	virtual void onEndStream();
         virtual int  TryCheckCodec(int codec);
-        
+
 	//RTPSession::Listener
 	virtual void onFPURequested(RTPSession *session);
 	virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate);
 	virtual void onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD bitrate,DWORD overhead);
+	//Watchdog d'inactivité RTP (gap 5) : publie EndpointDisconnectedEvent
+	virtual void onRTPTimeout(RTPSession *session);
         void SetTsTransparency(bool transparent)
 	{
 		tsTransparency = transparent;
@@ -80,12 +82,29 @@ class ExternalFIRRequestedEvent: public JSR309Event
 public:
 	ExternalFIRRequestedEvent()
 	{
-	
-	}
-	
-	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env);
-	
 
+	}
+
+	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env);
+
+
+};
+
+/**
+ * Déconnexion d'un endpoint détectée par le watchdog d'inactivité RTP (gap 5).
+ * Sérialisation XML-RPC : (isiii) = {type, sessionTag, joinableId(endpointId),
+ * media, role} — même forme que ExternalFIRRequestedEvent (FillEvent remplit
+ * joinableId/media/role depuis le contexte).
+ */
+class EndpointDisconnectedEvent: public JSR309Event
+{
+public:
+	EndpointDisconnectedEvent()
+	{
+
+	}
+
+	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env);
 };
 
 #endif	/* RTPENDPOINT_H */

@@ -5,7 +5,7 @@
 #include "text.h"
 #include "textencoder.h"
 #include "audio.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtmpstream.h"
 
 class FLVEncoder : public RTMPMediaStream

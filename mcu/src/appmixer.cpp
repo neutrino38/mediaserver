@@ -18,6 +18,7 @@ int AppMixer::Init(VideoOutput* output)
 {
 	//Set output
 	this->output = output;
+	return 0;
 }
 
 int AppMixer::DisplayImage(const char* filename)
@@ -73,4 +74,5 @@ int AppMixer::End()
 {
 	//Reset output
 	output = NULL;
+	return 0;
 }

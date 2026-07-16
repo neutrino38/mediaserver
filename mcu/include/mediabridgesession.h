@@ -7,10 +7,13 @@
 
 #ifndef _MEDIABRIDGESESSION_H_
 #define	_MEDIABRIDGESESSION_H_
+#include <thread>
+#include <atomic>
+#include <mutex>
 #include "rtpsession.h"
 #include "rtmpnetconnection.h"
 #include "rtmpstream.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "mp4recorder.h"
 #include "waitqueue.h"
 #include "RTPSmoother.h"
@@ -174,12 +177,12 @@ private:
 	AudioDecoder *rtmpAudioDecoder;
 
 	//Las threads
-	pthread_t 	recVideoThread;
-	pthread_t 	recAudioThread;
-	pthread_t 	sendVideoThread;
-	pthread_t 	sendAudioThread;
-	pthread_t	decodeAudioThread;
-	pthread_mutex_t	mutex;
+	std::thread 	recVideoThread;
+	std::thread 	recAudioThread;
+	std::thread 	sendVideoThread;
+	std::thread 	sendAudioThread;
+	std::thread	decodeAudioThread;
+	std::mutex	mutex;
 	
 	XmlStreamingHandler	*eventMngr;
 
@@ -189,14 +192,16 @@ private:
 		Stopped = 0,
 		Starting = 1,
 		Running = 2,
-                Stopping = 3
+        Stopping = 3
 	};
-	enum MediaState	sendingVideo;
-	enum MediaState receivingVideo;
-	enum MediaState	sendingAudio;
-	enum MediaState	receivingAudio;
-	enum MediaState	sendingText;
-	enum MediaState receivingText;
+	
+	std::atomic<enum MediaState>	sendingVideo;
+	std::atomic<enum MediaState>	receivingVideo;
+	std::atomic<enum MediaState>	sendingAudio;
+	std::atomic<enum MediaState>	receivingAudio;
+	std::atomic<enum MediaState>	sendingText;
+	std::atomic<enum MediaState>	receivingText;
+
 	bool	inited;
 	bool	waitVideo;
 	bool	sendFPU;

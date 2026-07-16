@@ -1,6 +1,39 @@
 #include "log.h"
 #include "pipeaudiooutput.h"
 
+extern "C" {
+#include <libswresample/swresample.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
+}
+
+// Crée un rééchantillonneur mono S16 inputRate -> outputRate via libswresample
+// (remplace l'ancien AudioTransrater/speexdsp). Retourne NULL si aucun
+// rééchantillonnage n'est nécessaire (taux identiques) ou en cas d'erreur.
+static SwrContext* OpenResampler(DWORD inputRate, DWORD outputRate)
+{
+	if (!inputRate || !outputRate || inputRate==outputRate)
+		return NULL;
+
+	SwrContext *swr = NULL;
+	AVChannelLayout mono;
+	av_channel_layout_default(&mono, 1);
+
+	int err = swr_alloc_set_opts2(&swr,
+		&mono, AV_SAMPLE_FMT_S16, (int)outputRate,	// sortie
+		&mono, AV_SAMPLE_FMT_S16, (int)inputRate,	// entrée
+		0, NULL);
+
+	av_channel_layout_uninit(&mono);
+
+	if (err < 0 || swr_init(swr) < 0)
+	{
+		Error("-PipeAudioOutput: échec configuration resampler %u Hz -> %u Hz\n", inputRate, outputRate);
+		if (swr) swr_free(&swr);
+		return NULL;
+	}
+	return swr;
+}
 
 PipeAudioOutput::PipeAudioOutput(bool calcVAD)
 {
@@ -11,21 +44,24 @@ PipeAudioOutput::PipeAudioOutput(bool calcVAD)
 	//No rates yet
 	nativeRate = 0;
 	playRate = 0;
-	//Creamos el mutex
-	pthread_mutex_init(&mutex,NULL);
+	//No resampler yet
+	swr = NULL;
+	//(le mutex est construit par la std lib)
 }
 
 PipeAudioOutput::~PipeAudioOutput()
 {
-	//Lo destruimos
-	pthread_mutex_destroy(&mutex);
+	//Libère le resampler éventuel
+	if (swr) swr_free(&swr);
 }
 
 int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 {
 	SWORD resampled[4096];
-	DWORD resampledSize = 4096;
 	int v = -1;
+
+	//Bloqueamos (protège aussi swr/playRate contre StartPlaying/StopPlaying concurrents)
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Check if we need to calculate it
 	if (calcVAD && vad.IsRateSupported(playRate))
@@ -33,25 +69,25 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 		v = vad.CalcVad(buffer,size,playRate)*size;
 
 	//Check if we are transtrating
-	if (transrater.IsOpen())
+	if (swr)
 	{
-		//Proccess
-		if (!transrater.ProcessBuffer( buffer, size, resampled, &resampledSize))
+		//Resample (mono S16) via libswresample
+		uint8_t *outp = (uint8_t*)resampled;
+		const uint8_t *inp = (const uint8_t*)buffer;
+		int produced = swr_convert(swr, &outp, 4096, &inp, (int)size);
+		if (produced < 0)
 			//Error
 			return Error("-PipeAudioOutput could not transrate\n");
 
 		//Check if we need to calculate it
 		if (calcVAD && v<0 && vad.IsRateSupported(nativeRate))
 			//Calculate vad
-			v = vad.CalcVad(resampled,resampledSize,nativeRate)*resampledSize;
+			v = vad.CalcVad(resampled,produced,nativeRate)*produced;
 
 		//Update parameters
 		buffer = resampled;
-		size = resampledSize;
+		size = (DWORD)produced;
 	}
-
-	//Bloqueamos
-	pthread_mutex_lock(&mutex);
 
 	//Get left space
 	int left = fifoBuffer.size()-fifoBuffer.length();
@@ -79,9 +115,6 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 	//Metemos en la fifo
 	fifoBuffer.push(buffer,size);
 
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
-
 	return (size <= left) ? size : -2;
 }
 
@@ -90,24 +123,19 @@ int PipeAudioOutput::StartPlaying(DWORD rate)
 	Log("-PipeAudioOutput start playing [rate:%d Hz]\n",rate);
 
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Store play rate
 	playRate = rate;
 
-	//If we already had an open transcoder
-	if (transrater.IsOpen())
+	//If we already had an open resampler
+	if (swr)
 		//Close it
-		transrater.Close();
+		swr_free(&swr);
 
-	//if rates are different
-	if (playRate!=nativeRate)
-		//Open it
-		transrater.Open(playRate,nativeRate);
-	
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
+	//if rates are different (OpenResampler retourne NULL si égaux)
+	swr = OpenResampler(playRate,nativeRate);
+
 	//Exit
 	return true;
 }
@@ -117,12 +145,10 @@ int PipeAudioOutput::StopPlaying()
 	Log("-PipeAudioOutput stop playing\n");
 
 	//Lock
-	pthread_mutex_lock(&mutex);
-	//Close transrater
-	transrater.Close();
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
+	std::lock_guard<std::mutex> lock(mutex);
+	//Close resampler
+	if (swr) swr_free(&swr);
+
 	//Exit
 	return true;
 }
@@ -130,7 +156,7 @@ int PipeAudioOutput::StopPlaying()
 int PipeAudioOutput::GetSamples(SWORD *buffer,DWORD num,bool min_len)
 {
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 
 	//Obtenemos la longitud
 	int len = fifoBuffer.length();
@@ -139,17 +165,11 @@ int PipeAudioOutput::GetSamples(SWORD *buffer,DWORD num,bool min_len)
 	if (len > num)
 		len = num;
 	else if (len < num && !min_len)
-	{
-		//Desbloqueamos
-		pthread_mutex_unlock(&mutex);
+		//Le lock est relâché par le RAII
 		return 0;
-	}
 
 	//OBtenemos las muestras
 	fifoBuffer.pop(buffer,len);
-
-	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
 
 	//Salimos
 	return len;
@@ -159,33 +179,28 @@ int PipeAudioOutput::Init(DWORD rate)
 	Log("-PipeAudioOutput init [rate:%d Hz]\n",rate);
 
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Store play rate
-	nativeRate = rate;
+		//Store play rate
+		nativeRate = rate;
 
-	//Iniciamos
-	inited = true;
-
-	//Protegemos
-	pthread_mutex_unlock(&mutex);
+		//Iniciamos
+		inited = true;
+	}
 
 	return true;
-} 
+}
 
 int PipeAudioOutput::End()
 {
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Terminamos
-	inited = false;
-
-	//Se�alizamos la condicion
-	//pthread_cond_signal(&newPicCond);
-
-	//Protegemos
-	pthread_mutex_unlock(&mutex);
+		//Terminamos
+		inited = false;
+	}
 
 	return true;
 }
@@ -193,7 +208,7 @@ int PipeAudioOutput::End()
 DWORD PipeAudioOutput::GetVAD(DWORD numSamples)
 {
 	//Protegemos
-	pthread_mutex_lock(&mutex);
+	std::lock_guard<std::mutex> lock(mutex);
 	//Get vad value
 	DWORD r = acu;
 	//Check
@@ -203,9 +218,7 @@ DWORD PipeAudioOutput::GetVAD(DWORD numSamples)
 	else
 		//Remove cumulative value
 		acu -= numSamples;
-	//Protegemos
-	pthread_mutex_unlock(&mutex);
-	
+
 	//Return
 	return r;
 }

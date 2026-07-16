@@ -11,6 +11,7 @@
 #include "use.h"
 #include <pthread.h>
 #include <map>
+#include <memory>
 
 
 class RTMPConnection :
@@ -22,12 +23,12 @@ public:
 	class Listener
 	{
 		public: 
-			virtual RTMPNetConnection* OnConnect(const std::wstring& appName,RTMPNetConnection::Listener *listener) = 0;
+			virtual std::shared_ptr<RTMPNetConnection> OnConnect(const std::wstring& appName,RTMPNetConnection::Listener *listener) = 0;
 			virtual void onDisconnect(RTMPConnection *con) = 0;
 	};
 public:
 	RTMPConnection(Listener* listener);
-	~RTMPConnection();
+	virtual ~RTMPConnection();
 
 	int Init(int fd);
 	int End();
@@ -119,7 +120,7 @@ private:
         Use lock;
         pthread_cond_t cond;
 
-	RTMPNetConnection* app;
+	std::shared_ptr<RTMPNetConnection> app;
 	std::wstring	 appName;
 	RTMPNetStreams	 streams;
 	DWORD maxStreamId;

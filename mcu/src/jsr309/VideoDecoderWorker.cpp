@@ -13,7 +13,6 @@ VideoDecoderJoinableWorker::VideoDecoderJoinableWorker(bool useThread)
 {
 	//Nothing
 	output = NULL;
-	joined = NULL;
 	decoding = false;
         this->useThread = useThread;
         videoDecoder = NULL;
@@ -28,6 +27,7 @@ int VideoDecoderJoinableWorker::Init(VideoOutput *output)
 {
 	//Store it
 	this->output = output;
+	return 0;
 }
 
 int VideoDecoderJoinableWorker::End()
@@ -42,6 +42,7 @@ int VideoDecoderJoinableWorker::End()
 
 	//Set null
 	output = NULL;
+	return 0;
 }
 
 int VideoDecoderJoinableWorker::Start()
@@ -146,18 +147,22 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
         if(lostCount>1 || waitIntra)
         {
                 //Check if we got listener and more than two seconds have elapsed from last request
-                if (joined && getDifTime(&lastFPURequest)>1000000)
+                if (getDifTime(&lastFPURequest)>1000000)
                 {
-                        //Debug
-                        Log("-Requesting FPU lost %d\n",lostCount);
-                        //Reset count
-                        lostCount = 0;
-                        //Request also over rtp
-                        joined->Update();
-                        //Update time
-                        getUpdDifTime(&lastFPURequest);
-                        //Waiting for refresh
-                        waitIntra = true;
+                        //lock() : source encore vivante ?
+                        if (std::shared_ptr<Joinable> j = joined.lock())
+                        {
+                                //Debug
+                                Log("-Requesting FPU lost %d\n",lostCount);
+                                //Reset count
+                                lostCount = 0;
+                                //Request also over rtp
+                                j->Update();
+                                //Update time
+                                getUpdDifTime(&lastFPURequest);
+                                //Waiting for refresh
+                                waitIntra = true;
+                        }
                 }
         }
 
@@ -226,18 +231,21 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
         if(!videoDecoder->DecodePacket(buffer,size,lost,packet->GetMark()))
         {
                 //Check if we got listener and more than two seconds have elapsed from last request
-                if (joined && getDifTime(&lastFPURequest)>1000000)
+                if (getDifTime(&lastFPURequest)>1000000)
                 {
+                    if (std::shared_ptr<Joinable> j = joined.lock())
+                    {
                         //Debug
                         Log("-Requesting FPU decoder error\n");
                         //Reset count
                         lostCount = 0;
                         //Request also over rtp
-                        joined->Update();
+                        j->Update();
                         //Update time
                         getUpdDifTime(&lastFPURequest);
                         //Waiting for refresh
                         waitIntra = true;
+                    }
                 }
                 //Delete packet
                 delete(packet);
@@ -337,23 +345,23 @@ void VideoDecoderJoinableWorker::onEndStream()
 	//Stop decoding
 	Stop();
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
 }
 
-int VideoDecoderJoinableWorker::Attach(Joinable *join)
+int VideoDecoderJoinableWorker::Attach(const std::shared_ptr<Joinable> & join)
 {
-	//Detach if joined
-	if (joined)
+	//Detach if joined — lock() : source encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
 		//Stop
 		Stop();
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
+		j->RemoveListener(this);
 	}
-	//Store new one
+	//Store new one (lien retour non possédant)
 	joined = join;
 	//If it is not null
-	if (joined)
+	if (join)
 	{
 		//Start
 		Start();
@@ -366,15 +374,19 @@ int VideoDecoderJoinableWorker::Attach(Joinable *join)
 
 int VideoDecoderJoinableWorker::Dettach()
 {
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : ne déréférence pas si la source a disparu
+	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
 		//Stop decoding
 		Stop();
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
+		j->RemoveListener(this);
 	}
+	else
+		//Stop decoding même si la source est déjà partie
+		Stop();
 
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
+	return 0;
 }

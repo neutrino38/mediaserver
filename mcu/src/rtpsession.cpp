@@ -13,15 +13,17 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
-#include <srtp/srtp.h>
+#include <srtp2/srtp.h>
 #include <time.h>
 #include "log.h"
 #include "tools.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 #include "rtp.h"
 #include "rtpsession.h"
 #include "stunmessage.h"
+extern "C" {
 #include <libavutil/base64.h>
+}
 #include <openssl/ossl_typ.h>
 
 BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
@@ -30,7 +32,8 @@ BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 class SRTPLib
 {
 public:
-	SRTPLib()	{ srtp_init();	}
+	SRTPLib()	{ srtp_init();		}
+	~SRTPLib()	{ srtp_shutdown();	}
 };
 SRTPLib srtp;
 
@@ -127,6 +130,11 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//statistics
 	totalSendBytes = 0;
 	numSendPackets = 0;
+	//Watchdog d'inactivité RTP désactivé par défaut (gap 5) : ni configuré ni armé
+	setZeroTime(&lastRecv);
+	rtpTimeout = 0;
+	rtpTimeoutArmed = false;
+	rtpTimedOut = false;
 	//No reports
 	setZeroTime(&lastSR);
 	setZeroTime(&lastReceivedSR);
@@ -146,6 +154,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	iceLocalPwd = NULL;
 	iceRemoteUsername = NULL;
 	iceRemotePwd = NULL;
+	//Aucun candidat ICE distant retenu (gap 1)
+	iceRemotePriority = 0;
 	//NO FEC
 	useFEC = false;
 	useNACK = false;
@@ -247,7 +257,7 @@ void RTPSession::SetSendingRTPMap(RTPMap &map)
 
 int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWORD len)
 {
-	err_status_t err;
+	srtp_err_status_t err;
 	srtp_policy_t policy;
 
 	Log("-Set local RTP SDES [key:%s,suite:%s]\n",key,suite);
@@ -259,26 +269,26 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	if (strcmp(suite,"AES_CM_128_HMAC_SHA1_80")==0)
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: AES_CM_128_HMAC_SHA1_80\n");
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	}
 	else if (strcmp(suite,"AES_CM_128_HMAC_SHA1_32")==0) 
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: AES_CM_128_HMAC_SHA1_32\n");
-		crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	} 
 	else if (strcmp(suite,"AES_CM_128_NULL_AUTH")==0)
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: AES_CM_128_NULL_AUTH\n");
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
 	}
 	else if (strcmp(suite,"NULL_CIPHER_HMAC_SHA1_80")==0) 
 	{
 		Log("RTPSession::SetLocalCryptoSDES() | suite: NULL_CIPHER_HMAC_SHA1_80\n");
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
 	}
 	else {
 		return Error("Unknown cipher suite");
@@ -292,13 +302,13 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	//Set polciy values
 	policy.ssrc.type	= ssrc_any_outbound;
 	policy.ssrc.value	= 0;
-	//policy.allow_repeat_tx  = 1; <--- Not all srtp libs containts it
+	policy.allow_repeat_tx  = 1; // supporte par libsrtp2 (necessaire pour le RTX)
     policy.key		= (BYTE*)key;
 	policy.next		= NULL;
 	srtp_t session;
 	err = srtp_create(&session,&policy);	
 	//Check error
-	if (err!=err_status_ok)
+	if (err!=srtp_err_status_ok)
 		//Error
 		return Error("Failed to create srtp session (%d)\n", err);
 
@@ -306,9 +316,9 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	sendSRTPSession = session;
 
 	//Request an intra to start clean
-	if (listener)
+	if (auto l = LockListener())
 		//Request a I frame
-		listener->onFPURequested(this);
+		l->onFPURequested(this);
 
 	//Evrything ok
 	return 1;
@@ -388,7 +398,15 @@ int RTPSession::SetProperties(const Properties& properties)
 		else if (it->first.compare("useRtcpFIR")==0) {
 			//Set use of RTCP FIR
 			useRtcpFIR = atoi(it->second.c_str());
-			
+
+		}
+		else if (it->first.compare("rtpTimeout")==0) {
+			//Pré-configure UNIQUEMENT le seuil d'inactivité RTP en ms (gap 5).
+			//N'arme PAS le watchdog : le chrono ne démarre qu'à l'armement explicite
+			//(ArmRTPTimeout, appelé au SDP answer). Cela évite qu'un réglage posé au
+			//setup ne déclenche des timeouts pendant la sonnerie.
+			rtpTimeout = (DWORD)atoi(it->second.c_str());
+			Log("Set rtpTimeout=%u ms (config, non armé) on %s stream %p\n",rtpTimeout,MediaFrame::TypeToString(media),this);
 		}
 		else if (it->first.compare(0, 5, "codec")==0) {
 			// Ignore codec props
@@ -475,7 +493,7 @@ int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const cha
 
 int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank)
 {
-	err_status_t err;
+	srtp_err_status_t err;
 	srtp_policy_t policy;
 
 	Log("-Set remote RTP SDES [suite:%s keyRank=%i]\n",suite,keyRank);
@@ -485,17 +503,17 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 
 	if (strcmp(suite,"AES_CM_128_HMAC_SHA1_80")==0)
 	{
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	} else if (strcmp(suite,"AES_CM_128_HMAC_SHA1_32")==0) {
-		crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
-		crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_32(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_hmac_sha1_80(&policy.rtcp);
 	} else if (strcmp(suite,"AES_CM_128_NULL_AUTH")==0) {
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
-		crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtp);
+		srtp_crypto_policy_set_aes_cm_128_null_auth(&policy.rtcp);
 	} else if (strcmp(suite,"NULL_CIPHER_HMAC_SHA1_80")==0) {
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
-		crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtp);
+		srtp_crypto_policy_set_null_cipher_hmac_sha1_80(&policy.rtcp);
 	} else {
 		return Error("Unknown cipher suite");
 	}
@@ -519,7 +537,7 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 		err = srtp_create(&recvSRTPSession_secondary,&policy);
 		
 	//Check error
-	if (err!=err_status_ok)
+	if (err!=srtp_err_status_ok)
 		//Error
 		return Error("Failed set remote SDES  (%d)\n", err);
 
@@ -530,7 +548,7 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 		err = srtp_create(&recvSRTPSessionRTX_secondary,&policy);
 
 	//Check error
-	if (err!=err_status_ok)
+	if (err!=srtp_err_status_ok)
 		//Error
 		Error("------------------------------------Failed set remote RTX SDES  (%d)\n", err);
 
@@ -598,6 +616,7 @@ int RTPSession::SetLocalPort(int recvPort)
 {
 	//Override
 	simPort = recvPort;
+	return 0;
 }
 
 int RTPSession::GetLocalPort()
@@ -679,6 +698,104 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
 
 	//Y abrimos los sockets	
+	return 1;
+}
+
+void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
+{
+	//Armement du watchdog d'inactivité RTP (gap 5), piloté par le contrôleur au
+	//moment du SDP answer. Le chrono part de MAINTENANT : la sonnerie (avant answer)
+	//n'est jamais surveillée, et « répondu mais aucun média reçu » est détecté après
+	//timeoutMs sans paquet.
+	if (timeoutMs > 0)
+	{
+		mutex.lock();
+		rtpTimeout      = timeoutMs;
+		rtpTimeoutArmed = true;
+		rtpTimedOut     = false;
+		gettimeofday(&lastRecv,NULL);   //démarre le chrono
+		mutex.unlock();
+		Log("-ArmRTPTimeout: watchdog armé à %u ms [%p]\n",timeoutMs,this);
+
+		//Si le thread dort dans poll(-1) (watchdog jusqu'ici désarmé), on le réveille
+		//(SIGIO -> EINTR) pour qu'il reprenne l'attente bornée sans attendre un paquet.
+		if (thread)
+			pthread_kill(thread,SIGIO);
+	}
+	else
+	{
+		//timeoutMs == 0 : désarme (p.ex. mise en attente / sendonly légitime)
+		mutex.lock();
+		rtpTimeoutArmed = false;
+		mutex.unlock();
+		Log("-ArmRTPTimeout: watchdog désarmé [%p]\n",this);
+	}
+}
+
+int RTPSession::AddICECandidate(const char* candidate)
+{
+	//Trickle ICE Niveau 1 pragmatique (gap 1) : on parse la ligne SDP "candidate:"
+	//et, pour un candidat host/srflx dont la priorité dépasse la meilleure connue,
+	//on bascule la cible d'envoi RTP/RTCP. Combiné à l'apprentissage d'adresse par
+	//STUN entrant déjà présent, cela couvre le cas « un candidat gagnant arrive
+	//après le SDP initial » sans agent ICE complet (Niveau 2 hors périmètre).
+	if (!candidate)
+		return Error("-AddICECandidate: candidat nul\n");
+
+	//Saute le préfixe optionnel "candidate:"
+	const char* p = candidate;
+	if (strncmp(p,"candidate:",10)==0)
+		p += 10;
+
+	//candidate:<fnd> <cmp> <transport> <prio> <addr> <port> typ <type> ...
+	char foundation[64], transport[16], address[128], typ[8], candType[32];
+	unsigned int priority = 0;
+	int component = 0, port = 0;
+	int n = sscanf(p,"%63s %d %15s %u %127s %d %7s %31s",
+		foundation,&component,transport,&priority,address,&port,typ,candType);
+	if (n < 8)
+		return Error("-AddICECandidate: format non reconnu [%s]\n",candidate);
+
+	//On ne pilote la cible d'envoi que sur la composante RTP (1) en UDP
+	if (component != 1 || strcasecmp(transport,"UDP")!=0)
+	{
+		Log("-AddICECandidate: ignoré (component=%d transport=%s)\n",component,transport);
+		return 1;
+	}
+
+	//Niveau 1 : seuls les candidats host/srflx sont considérés
+	if (strcasecmp(candType,"host")!=0 && strcasecmp(candType,"srflx")!=0)
+	{
+		Log("-AddICECandidate: type [%s] ignoré (Niveau 1)\n",candType);
+		return 1;
+	}
+
+	//Ne reconfigure que si la priorité dépasse la meilleure déjà retenue
+	if (iceRemotePriority != 0 && priority <= iceRemotePriority)
+	{
+		Log("-AddICECandidate: priorité %u <= courante %u, ignoré\n",priority,iceRemotePriority);
+		return 1;
+	}
+
+	//Résout l'adresse
+	DWORD ipAddr = inet_addr(address);
+	if (ipAddr == INADDR_NONE)
+		return Error("-AddICECandidate: adresse invalide [%s]\n",address);
+
+	Log("-AddICECandidate: bascule cible d'envoi vers [%s:%d] typ %s prio %u\n",address,port,candType,priority);
+
+	//Reconfigure la cible d'envoi RTP/RTCP
+	mutex.lock();
+	sendAddr.sin_addr.s_addr     = ipAddr;
+	sendRtcpAddr.sin_addr.s_addr = ipAddr;
+	sendAddr.sin_port            = htons(port);
+	sendRtcpAddr.sin_port        = htons(muxRTCP ? port : port+1);
+	iceRemotePriority            = priority;
+	mutex.unlock();
+
+	//Amorce le chemin (ouverture NAT ; le STUN entrant confirmera la connectivité)
+	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+
 	return 1;
 }
 
@@ -868,9 +985,9 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 		if (!sendSRTPSession)
 			return Error("-no sendSRTPSession\n");
 		//Protect
-		err_status_t err = srtp_protect_rtcp(sendSRTPSession,data,&len);
+		srtp_err_status_t err = srtp_protect_rtcp(sendSRTPSession,data,&len);
 		//Check error
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 			//Nothing
 			return Error("Error protecting RTCP packet [%d]\n",err);
 	}
@@ -1053,12 +1170,12 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			Debug("-RTPSession: encryption is not yet setup.\n");
 			return 0;
 		}
-		err_status_t err;
+		srtp_err_status_t err;
 		
 		//Encript
 		err = srtp_protect(sendSRTPSession,sendPacket,&len);
 		//Check error
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 		{
 			//Nothing
 			Error("Error protecting RTP packet for %s with recSSRC=%x  and for session=%p : [%d]\n",MediaFrame::TypeToString(media),packet.GetSSRC(),this, err);
@@ -1213,9 +1330,9 @@ int RTPSession::ReadRTCP()
 		if (!recvSRTPSession)
 			return Error("-No recvSRTPSession yet (RTCP)\n");
 		//unprotect
-		err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
+		srtp_err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
 		//Check error
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 			return Error("Error unprotecting rtcp packet [%d]\n",err);
 	}
 	//RTCP mux disabled
@@ -1427,9 +1544,9 @@ int RTPSession::ReadRTP()
 			if (!recvSRTPSession)
 				return Error("-No recvSRTPSession yet (RTCP)\n");
 			//unprotect
-			err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
+			srtp_err_status_t err = srtp_unprotect_rtcp(recvSRTPSession,buffer,&size);
 			//Check error
-			if (err!=err_status_ok)
+			if (err!=srtp_err_status_ok)
 				return Error("Error unprotecting rtcp packet [%d]\n",err);
 		}
 		//RTCP mux enabled
@@ -1490,9 +1607,9 @@ int RTPSession::ReadRTP()
                    inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port),
                    MediaFrame::TypeToString(media));
 		//Check if got listener
-		if (listener)
+		if (auto l = LockListener())
 			//Request a I frame
-			listener->onFPURequested(this);
+			l->onFPURequested(this);
 	}
 
 	//Check minimum size for rtp packet
@@ -1512,7 +1629,7 @@ int RTPSession::ReadRTP()
 	//Check if it is encripted
 	if (decript )
 	{
-		err_status_t err;
+		srtp_err_status_t err;
 		//Check if it is a retransmited packet
 	
 		//Check session
@@ -1543,7 +1660,7 @@ int RTPSession::ReadRTP()
 		}
 		
 		//Check status
-		if (err!=err_status_ok)
+		if (err!=srtp_err_status_ok)
 			//Error
 			return Error("Error unprotecting rtp packet [%d] for RTPSession=%p, ssrc=%x defaultSSRC=%x\n",err,this, RTPPacket::GetSSRC(buffer),defaultSSRC);
 	}
@@ -1648,9 +1765,9 @@ int RTPSession::ReadRTP()
 					Log("-Creating default stream SSRC [new:%x] for RTPSession=%p \n",ssrc,this);
 					SetDefaultStream(true, ssrc);
 				}
-				else if (listener) //call listener
+				else if (auto l = LockListener()) //call listener
 				{
-					listener->onNewStream(this, ssrc, true);
+					l->onNewStream(this, ssrc, true);
 				}
 				else
 				{
@@ -1742,7 +1859,7 @@ void * RTPSession::run(void *par)
         RTPSession *sess = (RTPSession *)par;
 
         //Ejecutamos
-        pthread_exit((void *)sess->Run());
+        pthread_exit((void *)(intptr_t)sess->Run());
 }
 
 /***************************
@@ -1771,31 +1888,75 @@ int RTPSession::Run()
 	//Catch all IO errors
 	signal(SIGIO,EmptyCatch);
 
+	//Le chrono d'inactivité ne court que lorsqu'il est armé (ArmRTPTimeout, au SDP
+	//answer) : rien à amorcer ici.
+
+	//Attente bornée seulement lorsque le watchdog est armé, pour vérifier
+	//périodiquement l'inactivité ; sinon on conserve l'attente infinie d'origine
+	//(aucun réveil superflu pour les sessions n'utilisant pas le watchdog).
+	const int pollTimeout = 1000; //ms
+
 	//Run until ended
 	while(running)
 	{
-		//Wait for events
-		if(poll(ufds,2,-1)<0)
-			//Check again
-			continue;
+		//Wait for events (attente bornée si watchdog armé, sinon infinie)
+		int nready = poll(ufds,2,rtpTimeoutArmed?pollTimeout:-1);
+		if(nready<0)
+		{
+			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler
+			if (errno==EINTR || errno==EAGAIN)
+				continue;
+			//Erreur dure (EBADF, EINVAL, ENOMEM...) : inutile de boucler à vide,
+			//on log et on sort proprement (msleep de garde anti busy-spin)
+			Error("-RTPSession poll error, arret de la boucle: errno=%d (%s) [%p]\n",
+					errno,strerror(errno),this);
+			msleep(10);
+			break;
+		}
 
 		if (ufds[0].revents & POLLIN)
+		{
+			//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
+			//on mémorise l'instant et on réarme l'anti-rebond.
+			gettimeofday(&lastRecv,NULL);
+			rtpTimedOut = false;
 			//Read rtp data
 			ReadRTP();
+		}
 		if (ufds[1].revents & POLLIN)
 			//Read rtcp data
 			ReadRTCP();
 
-		if ((ufds[0].revents & POLLHUP) || (ufds[0].revents & POLLERR) || (ufds[1].revents & POLLHUP) || (ufds[0].revents & POLLERR))
+		//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
+		//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
+		//onRTPTimeout (anti-rebond via rtpTimedOut).
+		if (rtpTimeoutArmed && rtpTimeout>0 && !rtpTimedOut
+				&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
 		{
-			//Error
-			Log("Pool error event [%d]\n",ufds[0].revents);
+			//Marque la transition actif -> inactif
+			rtpTimedOut = true;
+			Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
+			//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
+			if (auto l = LockListener())
+				l->onRTPTimeout(this);
+		}
+
+		//Erreur/fermeture sur l'un des deux sockets : POLLHUP (pair parti),
+		//POLLERR (erreur socket) ou POLLNVAL (fd fermé, ex. via End()).
+		//NB: on teste bien ufds[1] pour le socket RTCP (bug historique corrige).
+		if ((ufds[0].revents & (POLLHUP|POLLERR|POLLNVAL)) ||
+		    (ufds[1].revents & (POLLHUP|POLLERR|POLLNVAL)))
+		{
+			//Error : on sort proprement de la boucle
+			Log("-RTPSession sortie sur evenement socket RTP=0x%x RTCP=0x%x [%p]\n",
+					ufds[0].revents,ufds[1].revents,this);
 			//Exit
 			break;
 		}
 	}
 
 	Log("<RTPSession run\n");
+	return 0;
 }
 
 RTPPacket* RTPSession::GetPacket()
@@ -1811,8 +1972,8 @@ RTPPacket* RTPSession::GetPacket(DWORD & ssrc)
 {
     streamUse.IncUse();
     RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
-    streamUse.DecUse();
     RTPPacket* rtp = (s != NULL && !s->disabled) ? s->Wait() : NULL;
+	streamUse.DecUse();
     if (rtp == NULL) msleep(100);
     return rtp;
 }
@@ -1937,9 +2098,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							//Get field
 							RTCPRTPFeedback::TempMaxMediaStreamBitrateField *field = (RTCPRTPFeedback::TempMaxMediaStreamBitrateField*) fb->GetField(i);
 							//Check if it is for us
-							if (listener && field->GetSSRC()==sendSSRC)
+							if (auto l = LockListener(); l && field->GetSSRC()==sendSSRC)
 								//call listener
-								listener->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+								l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
@@ -1974,9 +2135,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 					case RTCPPayloadFeedback::PictureLossIndication:
 					case RTCPPayloadFeedback::FullIntraRequest:
 						//Chec listener
-						if (listener)
+						if (auto l = LockListener())
 							//Send intra refresh
-							listener->onFPURequested(this);
+							l->onFPURequested(this);
 						break;
 					case RTCPPayloadFeedback::SliceLossIndication:
 						Log("-RTCP SliceLossIndication received\n");
@@ -2012,9 +2173,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 								//Get bitrate
 								DWORD bitrate = mantisa << exp;
 								//Check if it is for us
-								if (listener)
+								if (auto l = LockListener())
 									//call listener
-									listener->onReceiverEstimatedMaxBitrate(this,bitrate);
+									l->onReceiverEstimatedMaxBitrate(this,bitrate);
 							}
 						}
 						break;
@@ -2024,9 +2185,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 			case RTCPPacket::FullIntraRequest:
 				//This is message deprecated and just for H261, but just in case
 				//Check listener
-				if (listener)
+				if (auto l = LockListener())
 					//Send intra refresh
-					listener->onFPURequested(this);
+					l->onFPURequested(this);
 				break;
 			case RTCPPacket::NACK:
 				break;
@@ -2100,6 +2261,7 @@ int RTPSession::RequestFPU(DWORD & ssrc)
 		//Wait for TMBN response to no overflow
 		requestFPU = true;
 	}*/
+	return 0;
 }
 
 void RTPSession::SetRTT(DWORD rtt)
@@ -2235,14 +2397,14 @@ void RTPSession::ReSendPacket(int seq)
 				return;
 			}
                         //Encript
-                        err_status_t err = srtp_protect(sendSRTPSession,data,&len);
+                        srtp_err_status_t err = srtp_protect(sendSRTPSession,data,&len);
                         //Check error
-                        if (err!=err_status_ok)
+                        if (err!=srtp_err_status_ok)
                         {
                                 //Check if got listener
-                                if (listener)
+                                if (auto l = LockListener())
                                         //Request a I frame
-                                        listener->onFPURequested(this);
+                                        l->onFPURequested(this);
                                 //Nothing
                                 Error("-RTPSession::ReSendPacket() | Error protecting RTP packet [%d] sending intra instead\n",err);
 				return;
@@ -2265,9 +2427,9 @@ void RTPSession::ReSendPacket(int seq)
 		Debug("-could not resent necket packet seq %d: not in buffer anymore. first seq = %d, cout = %d, rtpsess=%p useNacl=%d\n", 
 			ext, first, rtxs.size(), this, useNACK);
                                 //Check if got listener
-                if (listener)
+                if (auto l = LockListener())
                         //Request a I frame
-                        listener->onFPURequested(this);
+                        l->onFPURequested(this);
 
 	}
 
@@ -2722,6 +2884,7 @@ bool RTPSession::RTPStream::Add(RTPTimedPacket *packet, DWORD size)
 		//Send it
 		s->SendSenderReport();
 
+	return true;
 }
 
 RTCPReport* RTPSession::RTPStream::CreateReceiverReport()

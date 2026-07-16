@@ -2,13 +2,13 @@
 #include <stdlib.h>
 #include "xmlhandler.h"
 #include "mediagateway.h"
-#include "codecs.h"
+#include "medkit/codecs.h"
 
 xmlrpc_value* MediaGatewayCreateMediaBridge(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser nameParser;
         MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	char *str;
@@ -21,7 +21,7 @@ xmlrpc_value* MediaGatewayCreateMediaBridge(xmlrpc_env *env, xmlrpc_value *param
 	int sessionId = mediaGateway->CreateMediaBridge(nameParser.GetWString());
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"Session deleted before inited\n");
 
 	//Si error
@@ -36,8 +36,6 @@ xmlrpc_value* MediaGatewayCreateMediaBridge(xmlrpc_env *env, xmlrpc_value *param
 	Log(">xmlrpcmediagateway queueId=%i\n",mediaGateway->getQueueId());
 	session->setQueueId(mediaGateway->getQueueId());
 	
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -126,7 +124,7 @@ xmlrpc_value* MediaGatewaySetMediaBridgeOutputToken(xmlrpc_env *env, xmlrpc_valu
 xmlrpc_value* MediaGatewayStartSendingVideo(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -165,14 +163,12 @@ xmlrpc_value* MediaGatewayStartSendingVideo(xmlrpc_env *env, xmlrpc_value *param
 	}
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StartSendingVideo(sendVideoIp,sendVideoPort,map);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -185,7 +181,7 @@ xmlrpc_value* MediaGatewayStartSendingVideo(xmlrpc_env *env, xmlrpc_value *param
 xmlrpc_value* MediaGatewayStopSendingVideo(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -196,14 +192,12 @@ xmlrpc_value* MediaGatewayStopSendingVideo(xmlrpc_env *env, xmlrpc_value *param_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StopSendingVideo();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -216,7 +210,7 @@ xmlrpc_value* MediaGatewayStopSendingVideo(xmlrpc_env *env, xmlrpc_value *param_
 xmlrpc_value* MediaGatewayStartReceivingVideo(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -253,14 +247,12 @@ xmlrpc_value* MediaGatewayStartReceivingVideo(xmlrpc_env *env, xmlrpc_value *par
 	}
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int recVideoPort = session->StartReceivingVideo(map);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!recVideoPort)
@@ -273,7 +265,7 @@ xmlrpc_value* MediaGatewayStartReceivingVideo(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* MediaGatewayStopReceivingVideo(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -284,14 +276,12 @@ xmlrpc_value* MediaGatewayStopReceivingVideo(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StopReceivingVideo();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -304,7 +294,7 @@ xmlrpc_value* MediaGatewayStopReceivingVideo(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* MediaGatewayStartSendingAudio(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -342,14 +332,12 @@ xmlrpc_value* MediaGatewayStartSendingAudio(xmlrpc_env *env, xmlrpc_value *param
 	}
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StartSendingAudio(sendAudioIp,sendAudioPort,map);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -362,7 +350,7 @@ xmlrpc_value* MediaGatewayStartSendingAudio(xmlrpc_env *env, xmlrpc_value *param
 xmlrpc_value* MediaGatewayStopSendingAudio(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -373,14 +361,12 @@ xmlrpc_value* MediaGatewayStopSendingAudio(xmlrpc_env *env, xmlrpc_value *param_
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StopSendingAudio();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -393,7 +379,7 @@ xmlrpc_value* MediaGatewayStopSendingAudio(xmlrpc_env *env, xmlrpc_value *param_
 xmlrpc_value* MediaGatewayStartReceivingAudio(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -429,14 +415,12 @@ xmlrpc_value* MediaGatewayStartReceivingAudio(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int recAudioPort = session->StartReceivingAudio(map);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!recAudioPort)
@@ -449,7 +433,7 @@ xmlrpc_value* MediaGatewayStartReceivingAudio(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* MediaGatewayStopReceivingAudio(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -460,14 +444,12 @@ xmlrpc_value* MediaGatewayStopReceivingAudio(xmlrpc_env *env, xmlrpc_value *para
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StopReceivingAudio();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -480,7 +462,7 @@ xmlrpc_value* MediaGatewayStopReceivingAudio(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* MediaGatewayStartSendingText(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -519,14 +501,12 @@ xmlrpc_value* MediaGatewayStartSendingText(xmlrpc_env *env, xmlrpc_value *param_
 	}
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StartSendingText(sendTextIp,sendTextPort,map);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -539,7 +519,7 @@ xmlrpc_value* MediaGatewayStartSendingText(xmlrpc_env *env, xmlrpc_value *param_
 xmlrpc_value* MediaGatewayStopSendingText(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -550,14 +530,12 @@ xmlrpc_value* MediaGatewayStopSendingText(xmlrpc_env *env, xmlrpc_value *param_a
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StopSendingText();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -570,7 +548,7 @@ xmlrpc_value* MediaGatewayStopSendingText(xmlrpc_env *env, xmlrpc_value *param_a
 xmlrpc_value* MediaGatewayStartReceivingText(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -607,14 +585,12 @@ xmlrpc_value* MediaGatewayStartReceivingText(xmlrpc_env *env, xmlrpc_value *para
 	}
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int recTextPort = session->StartReceivingText(map);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!recTextPort)
@@ -627,7 +603,7 @@ xmlrpc_value* MediaGatewayStartReceivingText(xmlrpc_env *env, xmlrpc_value *para
 xmlrpc_value* MediaGatewayStopReceivingText(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -638,14 +614,12 @@ xmlrpc_value* MediaGatewayStopReceivingText(xmlrpc_env *env, xmlrpc_value *param
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->StopReceivingText();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -658,7 +632,7 @@ xmlrpc_value* MediaGatewayStopReceivingText(xmlrpc_env *env, xmlrpc_value *param
 xmlrpc_value* MediaGatewaySetSendingAudioCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -671,14 +645,12 @@ xmlrpc_value* MediaGatewaySetSendingAudioCodec(xmlrpc_env *env, xmlrpc_value *pa
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->SetSendingAudioCodec( ( AudioCodec::Type) codec);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -691,7 +663,7 @@ xmlrpc_value* MediaGatewaySetSendingAudioCodec(xmlrpc_env *env, xmlrpc_value *pa
 xmlrpc_value* MediaGatewaySetSendingVideoCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -704,14 +676,12 @@ xmlrpc_value* MediaGatewaySetSendingVideoCodec(xmlrpc_env *env, xmlrpc_value *pa
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->SetSendingVideoCodec( (VideoCodec::Type ) codec);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -724,7 +694,7 @@ xmlrpc_value* MediaGatewaySetSendingVideoCodec(xmlrpc_env *env, xmlrpc_value *pa
 xmlrpc_value* MediaGatewaySetSendingTextCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -737,14 +707,12 @@ xmlrpc_value* MediaGatewaySetSendingTextCodec(xmlrpc_env *env, xmlrpc_value *par
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->SetSendingTextCodec( (TextCodec::Type) codec);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -758,7 +726,7 @@ xmlrpc_value* MediaGatewaySetSendingTextCodec(xmlrpc_env *env, xmlrpc_value *par
 xmlrpc_value* MediaGatewaySendFPU(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -769,14 +737,12 @@ xmlrpc_value* MediaGatewaySendFPU(xmlrpc_env *env, xmlrpc_value *param_array, vo
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	int res = session->SendFPU();
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	//Salimos
 	if(!res)
@@ -790,7 +756,7 @@ xmlrpc_value* MediaGatewaySendFPU(xmlrpc_env *env, xmlrpc_value *param_array, vo
 xmlrpc_value* MediaGatewaySendText(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 	UTF8Parser Parser;
 	
 	 //Parseamos
@@ -804,14 +770,12 @@ xmlrpc_value* MediaGatewaySendText(xmlrpc_env *env, xmlrpc_value *param_array, v
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	session->SendTextInput(text);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	
 
@@ -822,7 +786,7 @@ xmlrpc_value* MediaGatewaySendText(xmlrpc_env *env, xmlrpc_value *param_array, v
 xmlrpc_value* MediaGatewaySendSpecial(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MediaGateway *mediaGateway = (MediaGateway *)user_data;
-	MediaBridgeSession *session = NULL;
+	std::shared_ptr<MediaBridgeSession> session;
 
 	 //Parseamos
 	int sessionId;
@@ -845,15 +809,13 @@ xmlrpc_value* MediaGatewaySendSpecial(xmlrpc_env *env, xmlrpc_value *param_array
 		return 0;
 
 	//Obtenemos la referencia
-	if(!mediaGateway->GetMediaBridgeRef(sessionId,&session))
+	if(!mediaGateway->GetMediaBridgeRef(sessionId,session))
 		return xmlerror(env,"La sessionerencia no existe\n");
 
 	//La borramos
 	
 	session->SendSpecial(cmd,nbCmd);
 
-	//Liberamos la referencia
-	mediaGateway->ReleaseMediaBridgeRef(sessionId);
 
 	
 	//Devolvemos el resultado

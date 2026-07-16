@@ -1,10 +1,14 @@
 #ifndef _MULTICONF_H_
 #define _MULTICONF_H_
+
 #include "videomixer.h"
+
 #include "audiomixer.h"
 #include "textmixer.h"
 #include "videomixer.h"
 #include "participant.h"
+#include "rtpparticipant.h"
+#include "rtmpparticipant.h"
 #include "FLVEncoder.h"
 #include "broadcastsession.h"
 #include "mp4player.h"
@@ -50,7 +54,7 @@ public:
 		void Close();
 	private:
 		MultiConf *conf;
-                RTMPParticipant * part;
+                std::weak_ptr<RTMPParticipant> part;
 		bool opened;
 	};
 
@@ -59,8 +63,8 @@ public:
 	public:
 		//Virtual desctructor
 		virtual ~Listener(){};
-		virtual void onParticipantRequestFPU(MultiConf *conf,int partId,void *param) = 0;
-		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status, void *param) = 0;
+		virtual void onParticipantRequestFPU(MultiConf *conf,int partId) = 0;
+		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status) = 0;
 		
 		
 	};
@@ -72,7 +76,7 @@ public:
 	int Init(int vad,DWORD rate);
 	int End();
 
-	void SetListener(Listener *listener,void* param);
+	void SetListener(Listener *listener);
 
 	int CreateMosaic(Mosaic::Type comp,int size);
 	int SetMosaicOverlayImage(int mosaicId,const char* filename);
@@ -144,7 +148,7 @@ public:
 	bool AddParticipantOutputToken(int partId,const std::wstring &token);
 	bool AddBroadcastToken(const std::wstring &token);
 
-	RTMPParticipant* ConsumeParticipantOutputToken(const std::wstring &token);
+	std::weak_ptr<RTMPParticipant> ConsumeParticipantOutputToken(const std::wstring &token);
 	RTMPMediaStream::Listener* ConsumeParticipantInputToken(const std::wstring &token);
 	RTMPMediaStream* ConsumeBroadcastToken(const std::wstring &token);
 
@@ -152,9 +156,9 @@ public:
 	std::wstring& GetTag() { return tag;	}
 
 	/** Participants event */
-	void onRequestFPU(Participant *part);
+	void onRequestFPU(Participant * part);
 	void onRequestDocSharing(int partId, std::wstring status);
-	void onDTMF(Participant *part, DTMFMessage* dtmf);
+	void onDTMF(Participant * part , DTMFMessage* dtmf);
 
 	/** RTMPNetConnection */
 	//virtual void Connect(RTMPNetConnection::Listener* listener); -> Not needed to be overriden yet
@@ -178,22 +182,26 @@ public:
         int DumpMixerInfo(int id, MediaFrame::Type media, std::string & info);
         int DumpInfo(std::string & info); 
 private:
-	Participant *GetParticipant(int partId);
-	Participant *GetParticipant(int partId,Participant::Type type);
-	int DestroyParticipant(int partId,Participant* part);
+	ParticipantPtr GetParticipant(int partId);
+	ParticipantPtr GetParticipant(int partId,Participant::Type type);
+	RTPParticipantPtr GetRTPParticipant(int partId);
+
+	int DestroyParticipant(int partId,ParticipantPtr part);
+
+
 private:
 	struct PublisherInfo
 	{
 		DWORD			id;
 		std::wstring		name;
-		RTMPClientConnection*	conn;
-		RTMPClientConnection::NetStream * stream;
+		std::unique_ptr<RTMPClientConnection>			conn;
+		std::unique_ptr<RTMPClientConnection::NetStream>	stream;
 	};
 private:
-	typedef std::map<int,Participant*> Participants;
+	typedef std::map<int, ParticipantPtr> Participants;
 	typedef std::set<std::wstring> BroadcastTokens;
 	typedef std::map<std::wstring,DWORD> ParticipantTokens;
-	typedef std::map<int, MP4Player*> Players;
+	typedef std::map<int, std::unique_ptr<MP4Player>> Players;
 	typedef std::map<int, PublisherInfo> Publishers;
 
 private:
@@ -206,7 +214,6 @@ private:
 	std::wstring	tag;
 
 	Listener *listener;
-	void* param;
 
 	//Los mixers
 	VideoMixer videoMixer;
@@ -226,11 +233,13 @@ private:
 	AudioEncoderWorker	audioEncoder;
 	TextEncoder		textEncoder;
 	BroadcastSession	broadcast;
-	RecorderControl*	recorder;
+	std::unique_ptr<RecorderControl>	recorder;
 	Publishers		publishers;
 	int			maxPublisherId;
 
 	Use			participantsLock;
+	Use			playersLock;
+	Use			publishersLock;
 };
 
 #endif

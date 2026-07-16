@@ -27,8 +27,6 @@ MultiConf::MultiConf(const std::wstring &tag) : broadcast(tag), sharedDocMixer()
 	//Y no tamos iniciados
 	inited = 0;
 	broadcastId = 0;
-        //No recorder
-        recorder = NULL;
 }
 
 /************************
@@ -40,17 +38,12 @@ MultiConf::~MultiConf()
 	//Pa porsi
 	if (inited)
 		End();
-        //Delete recoreder
-        if (recorder)
-                //Delete
-                delete(recorder);
 }
 
-void MultiConf::SetListener(Listener *listener,void* param)
+void MultiConf::SetListener(Listener *listener)
 {
 	//Store values
 	this->listener = listener;
-	this->param = param;
 }
 
 /************************
@@ -207,22 +200,22 @@ int MultiConf::StartRecordingBroadcaster(const char* filename,int mosaicId, int 
 		//Error
 		return Error("Extension not found for [file:\"%s\"]\n",filename);
 
-	if (recorder != NULL)
+	if (recorder != nullptr)
 	{
 		return Error("Recording is already active.\n");
 	}
-	
+
 	//Check file name
 	if (strncasecmp(ext,".flv",4)==0)
 		//FLV
-		recorder = new FLVRecorder();
+		recorder = std::make_unique<FLVRecorder>();
 	else if (strncasecmp(ext,".mp4",4)==0)
 		//MP4
-		recorder = new MP4Recorder();
+		recorder = std::make_unique<MP4Recorder>();
 	else
 		//Error
 		return Error("Unsupported file type extension [ext:\"%s\"]\n",ext);
-		
+
 	videoMixer.CreateMixer(RecorderId);
 	audioMixer.CreateMixer(RecorderId);
 	textMixer.CreateMixer(RecorderId,name);
@@ -244,23 +237,23 @@ int MultiConf::StartRecordingBroadcaster(const char* filename,int mosaicId, int 
 
 	//And start recording
 	if (!recorder->Record())
-		//Exit
-		return 0;
+		//Fail
+		goto start_recording_failed;
 
 	//Check type
 	switch (recorder->GetType())
 	{
 		case RecorderControl::FLV:
 			//Set RTMP listener
-			recEncoder.AddMediaListener((FLVRecorder*)recorder);
+			recEncoder.AddMediaListener(static_cast<FLVRecorder*>(recorder.get()));
 			break;
 		case RecorderControl::MP4:
 			//Set change codec and add a media listener
 			recEncoder.SetCodec(AudioCodec::PCMA);
-			recEncoder.AddMediaFrameListener((MP4Recorder*)recorder);
+			recEncoder.AddMediaFrameListener(static_cast<MP4Recorder*>(recorder.get()));
 			break;
 	}
-	
+
 	//Start encoding
 	recEncoder.StartEncoding();
 
@@ -274,37 +267,36 @@ start_recording_failed:
 	videoMixer.DeleteMixer(RecorderId);
 	audioMixer.DeleteMixer(RecorderId);
 	textMixer.DeleteMixer(RecorderId);
-	delete recorder;
-	recorder = NULL;
+	recorder.reset();
 	return 0;
 }
 
 int MultiConf::StopRecordingBroadcaster()
 {
-	if (recorder == NULL)
+	if (recorder == nullptr)
 	{
 		return Error("-recorder: recorder is already stopped.\n");
 	}
-	
+
 	Log(">StopRecordingBroadcaster\n");
 	//Stop endoding
 	recEncoder.StopEncoding();
 	recEncoder.End();
-	
+
 	//Close recorder
 	recorder->Stop();
 	recorder->Close();
-		
+
 		//Check type
 	switch (recorder->GetType())
 	{
 		case RecorderControl::FLV:
 			//Set RTMP listener
-			recEncoder.RemoveMediaListener((FLVRecorder*)recorder);
+			recEncoder.RemoveMediaListener(static_cast<FLVRecorder*>(recorder.get()));
 			break;
 		case RecorderControl::MP4:
 			//Set RTMP listener
-			recEncoder.RemoveMediaFrameListener((MP4Recorder*)recorder);
+			recEncoder.RemoveMediaFrameListener(static_cast<MP4Recorder*>(recorder.get()));
 			break;
 	}
 
@@ -314,8 +306,7 @@ int MultiConf::StopRecordingBroadcaster()
 
 
 
-	delete recorder;
-	recorder = NULL;
+	recorder.reset();
 	videoMixer.DeleteMixer(RecorderId);
 	audioMixer.DeleteMixer(RecorderId);
 	textMixer.DeleteMixer(RecorderId);
@@ -359,6 +350,9 @@ int MultiConf::StopBroadcaster()
 	recEncoder.End();
 
 	Log("Ending publishers");
+
+	publishersLock.WaitUnusedAndLock();
+
 	//For each publisher
 	Publishers::iterator it = publishers.begin();
 
@@ -366,7 +360,7 @@ int MultiConf::StopBroadcaster()
 	while (it!=publishers.end())
 	{
 		//Get first publisher info
-		PublisherInfo info = it->second;
+		PublisherInfo& info = it->second;
 		//Check stream
 		if (info.stream)
 		{
@@ -375,17 +369,15 @@ int MultiConf::StopBroadcaster()
 			//And close
 			info.stream->Close();
 			//Remove listener
-			flvEncoder.RemoveMediaListener((RTMPMediaStream::Listener*)info.stream);
-			//Delete it
-			delete(info.stream);
+			flvEncoder.RemoveMediaListener(static_cast<RTMPMediaStream::Listener*>(info.stream.get()));
 		}
 		//Disconnect
 		info.conn->Disconnect();
-		//Delete connection
-		delete(info.conn);
-		//Remove
+		//Remove (stream/conn détruits ici par leurs unique_ptr)
 		publishers.erase(it++);
 	}
+
+	publishersLock.Unlock();
 
 	//Stop broacast
 	broadcast.End();
@@ -539,7 +531,7 @@ int MultiConf::DeleteSidebar(int sidebarId)
 int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type)
 {
 	wchar_t uuid[64];
-	Participant *part = NULL;
+	ParticipantPtr part;
 
 	Log(">CreateParticipant [mosaic:%d]\n",mosaicId);
 
@@ -587,10 +579,10 @@ int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Pa
 	{
 		case Participant::RTP:
 			//Create RTP Participant
-			part = new RTPParticipant(partId,std::wstring(uuid));
+			part = std::make_shared<RTPParticipant>(partId,std::wstring(uuid));
 			break;
 		case Participant::RTMP:
-			part = new RTMPParticipant(partId);
+			part = std::make_shared<RTMPParticipant>(partId);
 			//Create RTP Participant
 			break;
 
@@ -601,14 +593,15 @@ int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Pa
 			return Error("-CreateParticipant: this participant type %d is not supported.\n", type);
 	}
 
-	//Set inputs and outputs
-	part->SetVideoInput(videoMixer.GetInput(partId));
-	part->SetVideoOutput(videoMixer.GetOutput(partId));
-	
-	part->SetAudioInput(audioMixer.GetInput(partId));
-	part->SetAudioOutput(audioMixer.GetOutput(partId));
-	part->SetTextInput(textMixer.GetInput(partId));
-	part->SetTextOutput(textMixer.GetOutput(partId));
+	//Set inputs and outputs (co-propriété des pipes, Point 1 / C-4 : le
+	//participant maintient le pipe vivant tant qu'il l'utilise).
+	part->SetVideoInput(videoMixer.GetSharedInput(partId));
+	part->SetVideoOutput(videoMixer.GetSharedOutput(partId));
+
+	part->SetAudioInput(audioMixer.GetSharedInput(partId));
+	part->SetAudioOutput(audioMixer.GetSharedOutput(partId));
+	part->SetTextInput(textMixer.GetSharedInput(partId));
+	part->SetTextOutput(textMixer.GetSharedOutput(partId));
 	
 	//Init participant
 	if (part->Init() > 0)
@@ -651,7 +644,7 @@ int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Pa
 struct PartDestructionJob
 {
     MultiConf * c;
-    Participant *p;
+    ParticipantPtr p;
 };
 
 int MultiConf::DeleteParticipant(int id)
@@ -681,13 +674,24 @@ int MultiConf::DeleteParticipant(int id)
 	}
 
 	//LO obtenemos
-	Participant *part = it->second;
+	ParticipantPtr part = it->second;
 	participantsLock.Unlock();
 	
 	sharedDocMixer.StopSharing(part);
-        sharedDocMixer.removeParticipant(part);
+    sharedDocMixer.removeParticipant(part);
 
 	participantsLock.WaitUnusedAndLock();
+
+	//Re-cherche par id : l'itérateur a pu être invalidé pendant la fenêtre
+	//déverrouillée, et un DeleteParticipant concurrent a pu déjà le retirer.
+	it = participants.find(id);
+	if (it == participants.end() || it->second != part)
+	{
+		//Unlock
+		participantsLock.Unlock();
+		//Un autre thread a déjà retiré (et détruit) ce participant
+		return Error("Participant already removed [%d]\n",id);
+	}
 
 	//Y lo quitamos del mapa
 	participants.erase(it);
@@ -704,7 +708,7 @@ int MultiConf::DeleteParticipant(int id)
 }
 
 
-int MultiConf::DestroyParticipant(int partId,Participant* part)
+int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 {
 	Log(">DestroyParticipant [%d]\n",partId);
 	bool confEmpty;
@@ -718,13 +722,15 @@ int MultiConf::DestroyParticipant(int partId,Participant* part)
 	audioMixer.EndMixer(partId);
 	textMixer.EndMixer(partId);
 	//End participant video input/output
-	videoMixer.EndMixer(partId);	
+	videoMixer.EndMixer(partId);
 	videoMixer.EndMixer(partId+100000);
 
-        if ( part->use.WaitUnusedAndLock(2000) != 1)
-        {
-            return Error("DestroyParticipant: failed lock participant %d\n", partId);
-        }
+	//Wait for any in-flight participant thread (e.g. RTMPParticipant::onMediaFrame) to be done
+	if ( part->use.WaitUnusedAndLock(2000) != 1)
+	{
+		return Error("DestroyParticipant: failed lock participant %d\n", partId);
+	}
+	part->use.Unlock();
 
 	Log("-DestroyParticipant deleting mixers [%d]\n",partId);
 
@@ -735,9 +741,6 @@ int MultiConf::DestroyParticipant(int partId,Participant* part)
 	audioMixer.DeleteMixer(partId);
 	textMixer.DeleteMixer(partId);
 	
-	part->use.Unlock(); 
-	//Delete participant
-	ret &= Participant::DestroyParticipant(part);
 	
 	participantsLock.IncUse();
 	confEmpty = ( participants.size() == 0);
@@ -748,7 +751,7 @@ int MultiConf::DestroyParticipant(int partId,Participant* part)
 	return ret;
 }
 
-Participant *MultiConf::GetParticipant(int partId)
+ParticipantPtr MultiConf::GetParticipant(int partId)
 {
 	//Find participant
 	Participants::iterator it = participants.find(partId);
@@ -758,33 +761,43 @@ Participant *MultiConf::GetParticipant(int partId)
 	{
 		//Error
 		Error("Participant %d not found\n", partId);
-		return NULL;
+		return std::shared_ptr<Participant>();
 	}
 
 	//Get the participant
 	return it->second;
 }
 
-Participant *MultiConf::GetParticipant(int partId,Participant::Type type)
+ParticipantPtr MultiConf::GetParticipant(int partId,Participant::Type type)
 {
 	//Find participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//If no participant
-	if (!part)
-		//Exit
-		return NULL;
+	if (!part) return part;
 
 	//Ensure it is from the correct type
 	if (part->GetType()!=type)
 	{
 		//Error
 		Error("Participant is not of desired type\n");
-		return NULL;
+		return std::shared_ptr<Participant>();
 	}
 
 	//Return it
 	return part;
+}
+
+RTPParticipantPtr MultiConf::GetRTPParticipant(int partId)
+{
+	//Find participant
+	ParticipantPtr part = GetParticipant(partId, Participant::RTP);
+
+	//If no participant
+	if (!part) return std::shared_ptr<RTPParticipant>();
+
+	//Return it
+	return std::dynamic_pointer_cast<RTPParticipant>(part);
 }
 
 /************************
@@ -819,26 +832,39 @@ int MultiConf::End()
 
 	//Get lock
 	participantsLock.WaitUnusedAndLock();
-	
-	//Destroy all participants
-	for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
-	{
-		//Destroy it
-		if ( DestroyParticipant(it->first,it->second) == 0 ) ret = 0;;
-	}
 
-	//Clear list
-	participants.clear();
-	
+	//Extrait la liste sous verrou : DestroyParticipant reprend participantsLock
+	//(IncUse) et le mutex n'est pas récursif, il doit donc s'exécuter hors verrou.
+	Participants parts;
+	parts.swap(participants);
+
 	//Unlock
 	participantsLock.Unlock();
+
+	//Destroy all participants (hors verrou)
+	for(Participants::iterator it=parts.begin(); it!=parts.end(); it++)
+	{
+		//Destroy it
+		if ( DestroyParticipant(it->first,it->second) == 0 ) ret = 0;
+	}
 	
 	
 	
-	//Remove all players
-	while(players.size()>0)
+	//Remove all players (instantané protégé : DeletePlayer refait sa propre
+	//recherche/lock, on a juste besoin d'un id valide à chaque itération)
+	for(;;)
+	{
+		playersLock.IncUse();
+		bool empty = players.empty();
+		int firstId = empty ? 0 : players.begin()->first;
+		playersLock.DecUse();
+
+		if (empty)
+			break;
+
 		//Delete the first one
-		DeletePlayer(players.begin()->first);
+		DeletePlayer(firstId);
+	}
 		
 	sharedDocMixer.End();
 
@@ -881,7 +907,7 @@ int MultiConf::SetVideoCodec(int id,int codec,int mode,int fps,int bitrate,int i
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -905,7 +931,7 @@ int MultiConf::SetLocalCryptoSDES(int id,MediaFrame::Type media,const char *suit
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*) GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -931,7 +957,7 @@ int MultiConf::SetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *sui
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -956,7 +982,7 @@ int MultiConf::SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *set
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -982,7 +1008,7 @@ int MultiConf::SetLocalSTUNCredentials(int id,MediaFrame::Type media,const char 
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1001,22 +1027,29 @@ int MultiConf::SetRTPProperties(int id,MediaFrame::Type media,const Properties& 
 
 	//Use list
 	participantsLock.IncUse();
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 	
 	if (part)
 	{
 	    switch ( part->GetType() )
 	    {
 		case Participant::RTP:
-			ret = ( (RTPParticipant*) part )->SetRTPProperties(media,properties,role);
+			{
+				RTPParticipantPtr rtpPart = std::dynamic_pointer_cast<RTPParticipant>(part);
+				ret = rtpPart->SetRTPProperties(media,properties,role);
+			}
 			break;
 			
 		case Participant::RTMP:
-			ret = ( (RTMPParticipant*) part )->SetCodecProperties(media,properties);
+			{
+				std::shared_ptr<RTMPParticipant> rtmpPart = std::dynamic_pointer_cast<RTMPParticipant>(part);
+				ret = rtmpPart->SetCodecProperties(media,properties);
+			}
 			break;
 			
 		default:
-			Error("-SetRTPProperties: this participant type does not support properties.\n");
+			Error("-SetRTPProperties: the participant ID %d of type %d  does not support properties.\n", 
+				id, part->GetType());
 			ret = 0;
 			break;
 		}
@@ -1041,7 +1074,7 @@ int MultiConf::SetParticipantBackground(int id, const char * filename)
 	{
 		ret = 0;
 		participantsLock.IncUse();
-		Participant *part = GetParticipant(id);
+		ParticipantPtr part = GetParticipant(id);
 		if (part)
 		{
 			ret = part->LoadLogo(filename);
@@ -1056,11 +1089,11 @@ int MultiConf::SetParticipantOverlay(int mosaicId, int id, const char * filename
 	int ret;
         if (filename != NULL && strlen(filename) > 0)
         {
-	    videoMixer.SetOverlayImage(mosaicId, id, filename);
+	    	videoMixer.SetOverlayImage(mosaicId, id, filename);
         }
         else
         {
-	    videoMixer.ResetOverlayImage(mosaicId, id);
+	    	videoMixer.ResetOverlayImage(mosaicId, id);
         }	
         ret = 1;
 	return ret;
@@ -1077,16 +1110,24 @@ int MultiConf::AcceptDocSharingRequest(int confId, int partId)
 	Log(">AcceptDocSharingRequest  [partId:%d]\n",partId);
 
 	int ret = 0 ;
-	Participant *part = GetParticipant(partId);
-	
+
+	//Use list (protège part contre un DeleteParticipant concurrent)
+	participantsLock.IncUse();
+
+	ParticipantPtr part = GetParticipant(partId);
+
 	if (part)
 	{
 		ret = sharedDocMixer.AcceptDocSharingRequest(confId,part);
-		
+
 		//sharedDocMixer.ShareSecondaryStream(part);
 	}
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	return ret;
-	
+
 }
 
 int MultiConf::RefuseDocSharingRequest(int confId,int partId)
@@ -1094,30 +1135,45 @@ int MultiConf::RefuseDocSharingRequest(int confId,int partId)
 	Log(">RefuseDocSharingRequest  [partId:%d]\n",partId);
 
 	int ret = 0 ;
-	Participant *part = GetParticipant(partId);
-	
+
+	//Use list (protège part contre un DeleteParticipant concurrent)
+	participantsLock.IncUse();
+
+	ParticipantPtr part = GetParticipant(partId);
+
 	if (part)
 	{
 		ret = sharedDocMixer.RefuseDocSharingRequest(confId,part);
-		
+
 		//sharedDocMixer.ShareSecondaryStream(part);
 	}
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	return ret;
-	
+
 }
 
 int  MultiConf::StopDocSharing(int confId,int partId)
 {
 	int ret = 0 ;
-	Participant *part = GetParticipant(partId);
-	
+
+	//Use list (protège part contre un DeleteParticipant concurrent)
+	participantsLock.IncUse();
+
+	ParticipantPtr part = GetParticipant(partId);
+
 	if (part)
 	{
 		ret = sharedDocMixer.StopSharing(part);
 	}
 	//else
 	//	ret = sharedDocMixer.StopSharing();
-		
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	return ret;
 
 }
@@ -1125,29 +1181,38 @@ int  MultiConf::StopDocSharing(int confId,int partId)
 int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 {
 	Log(">SetDocSharingMosaic\n");
-	
+
 	int partId =0;
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+
+	//Use list (protège part contre un DeleteParticipant concurrent ;
+	//les IncUse imbriqués des boucles ci-dessous restent valides)
+	participantsLock.IncUse();
+
 	
+	RTPParticipantPtr part = GetRTPParticipant(id);
+
 	if ( mosaicId == -1 )
 	{
 		participantsLock.IncUse();
-			
+
 			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 			{
 				partId 	= it->first;
-				part  	= (RTPParticipant*) it->second;
-				
-				if (part->GetDocSharingMode() == Participant::BFCP_TCP ||  part->GetDocSharingMode() == Participant::BFCP_UDP)
+
+				RTPParticipantPtr rtpPart = GetRTPParticipant(partId);
+				if (!rtpPart)
+					continue;
+
+				if (rtpPart->GetDocSharingMode() == Participant::BFCP_TCP ||  rtpPart->GetDocSharingMode() == Participant::BFCP_UDP)
 				{
-					part->StopSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
+					rtpPart->StopSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
 				}
-				
+
 			}
-		
+
 			participantsLock.DecUse();
 
-			
+
 	}
 	else
 	{
@@ -1155,36 +1220,43 @@ int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 		{
 			videoMixer.InitMixer(id+100000,mosaicId);
 			part->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-					
+
 		}
 		else
 		{
-		
+
 			participantsLock.IncUse();
-			
+
 			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 			{
 				partId 	= it->first;
-				part  	= (RTPParticipant*) it->second;
-				
-				if (part->GetDocSharingMode() == Participant::BFCP_TCP ||  part->GetDocSharingMode() == Participant::BFCP_UDP )
+
+				RTPParticipantPtr rtpPart = GetRTPParticipant(partId);
+				if (!rtpPart)
+					continue;
+
+				if (rtpPart->GetDocSharingMode() == Participant::BFCP_TCP ||  rtpPart->GetDocSharingMode() == Participant::BFCP_UDP )
 				{
-				
+
 					videoMixer.InitMixer(partId+100000,mosaicId);
-					part->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-			
+					rtpPart->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
+
 				}
-				
+
 			}
-		
+
 			participantsLock.DecUse();
 
-			
+
 		}
 	}
 	sharedDocMixer.SetSharedMosaic(mosaicId);
+
+	//Desprotegemos
+	participantsLock.DecUse();
+
 	Log("<SetDocSharingMosaic\n");
-		
+
 	return 1;
 
 
@@ -1200,7 +1272,7 @@ int MultiConf::SetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1225,7 +1297,7 @@ int MultiConf::StartSending(int id,MediaFrame::Type media,char *sendIp,int sendP
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 	
 	//Check particpant
 	if (part)
@@ -1268,7 +1340,7 @@ int MultiConf::StopSending(int id,MediaFrame::Type media,MediaFrame::MediaRole r
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1293,7 +1365,7 @@ int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,Media
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 	//Unlock
 	participantsLock.DecUse();
 	//Check participant
@@ -1346,7 +1418,7 @@ int MultiConf::StopReceiving(int id,MediaFrame::Type media,MediaFrame::MediaRole
 	participantsLock.IncUse();
 
 	//Get the participant
-	RTPParticipant *part = (RTPParticipant*)GetParticipant(id,Participant::RTP);
+	RTPParticipantPtr part = GetRTPParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1382,7 +1454,7 @@ int MultiConf::SetAudioCodec(int id,int codec,const Properties& properties)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1412,7 +1484,7 @@ int MultiConf::SetTextCodec(int id,int codec)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 
 	//Check particpant
 	if (part)
@@ -1440,7 +1512,7 @@ int MultiConf::SetAppCodec(int confId, int id,int codec)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(id);
+	ParticipantPtr part = GetParticipant(id);
 	//Check participant
 	if (part)
 	{
@@ -1449,7 +1521,7 @@ int MultiConf::SetAppCodec(int confId, int id,int codec)
 			case AppCodec::BFCP:
 				videoMixer.CreateMixer(id+100000);
 				videoMixer.InitMixer(id+100000,-1);
-				part->SetVideoInput(videoMixer.GetInput(id+100000),MediaFrame::VIDEO_SLIDES);
+				part->SetVideoInput(videoMixer.GetSharedInput(id+100000),MediaFrame::VIDEO_SLIDES);
 				
 				
 				break;
@@ -1483,7 +1555,7 @@ int MultiConf::SetParticipantMosaic(int partId,int mosaicId)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check particpant
 	if (part)
@@ -1512,7 +1584,7 @@ int MultiConf::SetParticipantSidebar(int partId,int sidebarId)
 	participantsLock.IncUse();
 
 	//Get the participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check particpant
 	if (part)
@@ -1566,7 +1638,7 @@ int MultiConf::CreatePlayer(int privateId,std::wstring name)
 	}
 
 	//Create player
-	MP4Player *player = new MP4Player();
+	auto player = std::make_unique<MP4Player>();
 
 	//Init
 	player->Init(audioMixer.GetOutput(playerId),videoMixer.GetOutput(playerId),textMixer.GetOutput(playerId));
@@ -1577,7 +1649,9 @@ int MultiConf::CreatePlayer(int privateId,std::wstring name)
 	textMixer.InitPrivate(playerId);
 
 	//Lo insertamos en el map
-	players[playerId] = player;
+	playersLock.WaitUnusedAndLock();
+	players[playerId] = std::move(player);
+	playersLock.Unlock();
 
 	Log("<CreatePlayer [%d]\n",playerId);
 
@@ -1591,16 +1665,25 @@ int MultiConf::StartPlaying(int playerId,const char* filename,bool loop)
 {
 	Log("-Start playing [id:%d,file:\"%s\",loop:%d]\n",playerId,filename,loop);
 
+	playersLock.IncUse();
+
 	//Find it
 	Players::iterator it = players.find(playerId);
 
 	//Si no esta
 	if (it == players.end())
+	{
+		playersLock.DecUse();
 		//Not found
 		return Error("-Player not found\n");
+	}
 
 	//Play
-	return it->second->Play(filename,loop);
+	int ret = it->second->Play(filename,loop);
+
+	playersLock.DecUse();
+
+	return ret;
 }
 /************************
 * StopPlaying
@@ -1610,16 +1693,25 @@ int MultiConf::StopPlaying(int playerId)
 {
 	Log("-Stop playing [id:%d]\n",playerId);
 
+	playersLock.IncUse();
+
 	//Find it
 	Players::iterator it = players.find(playerId);
 
 	//Si no esta
 	if (it == players.end())
+	{
+		playersLock.DecUse();
 		//Not found
 		return Error("-Player not found\n");
+	}
 
 	//Play
-	return it->second->Stop();
+	int ret = it->second->Stop();
+
+	playersLock.DecUse();
+
+	return ret;
 }
 
 /************************
@@ -1630,22 +1722,26 @@ int MultiConf::DeletePlayer(int id)
 {
 	Log(">DeletePlayer [%d]\n",id);
 
+	playersLock.WaitUnusedAndLock();
 
 	//El iterator
 	Players::iterator it = players.find(id);
 
 	//Si no esta
 	if (it == players.end())
+	{
+		playersLock.Unlock();
 		//Not found
 		return Error("-Player not found\n");
+	}
 
-	//LO obtenemos
-	MP4Player *player = (*it).second;
-
-	//Y lo quitamos del mapa
+	//LO obtenemos, y lo quitamos del mapa (bajo lock)
+	std::unique_ptr<MP4Player> player = std::move(it->second);
 	players.erase(it);
 
-	//Terminamos el audio y el video
+	playersLock.Unlock();
+
+	//Terminamos el audio y el video (fuera del lock : puede unir hilos)
 	player->Stop();
 
 	Log("-DeletePlayer ending mixers [%d]\n",id);
@@ -1663,8 +1759,7 @@ int MultiConf::DeletePlayer(int id)
 	audioMixer.DeleteMixer(id);
 	textMixer.DeletePrivate(id);
 
-	//Lo borramos
-	delete player;
+	//player se détruit ici en sortant de portée
 
 	Log("<DeletePlayer [%d]\n",id);
 
@@ -1681,7 +1776,7 @@ int MultiConf::StartRecordingParticipant(int partId,const char* filename)
 	participantsLock.IncUse();
 
 	//Get participant
-	RTPParticipant *rtp = (RTPParticipant*)GetParticipant(partId,Participant::RTP);
+	RTPParticipantPtr rtp = GetRTPParticipant(partId);
 
 	//Check if
 	if (!rtp)
@@ -1726,7 +1821,7 @@ int MultiConf::StopRecordingParticipant(int partId)
 	participantsLock.IncUse();
 
 	//Get rtp participant
-	RTPParticipant* rtp = (RTPParticipant*)GetParticipant(partId,Participant::RTP);
+	RTPParticipantPtr rtp = GetRTPParticipant(partId);
 
 	//Check participant
 	if (rtp)
@@ -1762,7 +1857,7 @@ int MultiConf::SendFPU(int partId)
 	participantsLock.IncUse();
 
 	//Get participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check participant
 	if (part)
@@ -1785,7 +1880,7 @@ MultiConf::ParticipantStatistics* MultiConf::GetParticipantStatistic(int partId)
 	participantsLock.IncUse();
 
 	//Find participant
-	Participant* part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check participant
 	if (part)
@@ -1817,7 +1912,7 @@ int MultiConf::SetMute(int partId,MediaFrame::Type media,bool isMuted)
 	participantsLock.IncUse();
 
 	//Get participant
-	Participant *part = GetParticipant(partId);
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check participant
 	if (part)
@@ -1931,23 +2026,29 @@ RTMPMediaStream::Listener* MultiConf::ConsumeParticipantInputToken(const std::ws
 	//Remove token
 	inputTokens.erase(it);
 
+	participantsLock.IncUse();
+
 	//Get it
 	Participants::iterator itPart = participants.find(partId);
 
 	//Check if not found
 	if (itPart==participants.end())
 	{
+		participantsLock.DecUse();
 		//Error
 		Error("Participant not found\n");
 		//Broadcast not found
 		return NULL;
 	}
-	
-	//Get it
-	Participant* part = itPart->second;
 
-	//Asert correct tipe
-	if (part->GetType()!=Participant::RTMP)
+	//Get it
+	ParticipantPtr part = itPart->second;
+
+	participantsLock.DecUse();
+
+	//Asert correct tipe (dynamic_pointer_cast fait le check ET le cast en un temps)
+	std::shared_ptr<RTMPParticipant> rtmpPart = std::dynamic_pointer_cast<RTMPParticipant>(part);
+	if (!rtmpPart)
 	{
 		//Error
 		Error("Participant type not RTMP");
@@ -1955,12 +2056,16 @@ RTMPMediaStream::Listener* MultiConf::ConsumeParticipantInputToken(const std::ws
 		//Broadcast not found
 		return NULL;
 	}
-	
-	//return it
-	return (RTMPMediaStream::Listener*)(RTMPParticipant*)part;
+
+	//return it : pointeur brut non possédant, consommé de façon synchrone par
+	//doPublish (AddMediaListener) — la durée de vie une fois enregistré comme
+	//listener est déjà couverte par le mécanisme Attach/listeners de
+	//RTMPMediaStream (cf. §1.4 du plan), hors périmètre C-6 (réservé phase 4
+	//pour le passage générique des listeners en weak_ptr).
+	return static_cast<RTMPMediaStream::Listener*>(rtmpPart.get());
 }
 
-RTMPParticipant* MultiConf::ConsumeParticipantOutputToken(const std::wstring &token)
+std::weak_ptr<RTMPParticipant> MultiConf::ConsumeParticipantOutputToken(const std::wstring &token)
 {
 	//Check token
 	ParticipantTokens::iterator it = outputTokens.find(token);
@@ -1971,7 +2076,7 @@ RTMPParticipant* MultiConf::ConsumeParticipantOutputToken(const std::wstring &to
 		//Error
 		Error("Participant token not found\n");
 		//Broadcast not found
-		return NULL;
+		return std::weak_ptr<RTMPParticipant>();
 	}
 
 	//Get participant id
@@ -1980,32 +2085,38 @@ RTMPParticipant* MultiConf::ConsumeParticipantOutputToken(const std::wstring &to
 	//Remove token
 	outputTokens.erase(it);
 
+	participantsLock.IncUse();
+
 	//Get it
 	Participants::iterator itPart = participants.find(partId);
 
 	//Check if not found
 	if (itPart==participants.end())
 	{
+		participantsLock.DecUse();
 		//Error
 		Error("Participant not found\n");
 		//Broadcast not found
-		return NULL;
+		return std::weak_ptr<RTMPParticipant>();
 	}
 
 	//Get it
-	Participant* part = itPart->second;
+	ParticipantPtr part = itPart->second;
+
+	participantsLock.DecUse();
 
 	//Asert correct tipe
-	if (part->GetType()!=Participant::RTMP)
+	std::shared_ptr<RTMPParticipant> rtmpPart = std::dynamic_pointer_cast<RTMPParticipant>(part);
+	if (!rtmpPart)
 	{
 		//Error
 		Error("Participant not RTMP type\n");
 		//Broadcast not found
-		return NULL;
+		return std::weak_ptr<RTMPParticipant>();
 	}
 
-	//return it
-	return (RTMPParticipant*)part;
+	//return it : weak_ptr non possédant, à locker au site d'usage (NetStream::part)
+	return rtmpPart;
 }
 
 /********************************
@@ -2045,7 +2156,6 @@ MultiConf::NetStream::NetStream(DWORD streamId,MultiConf *conf,RTMPNetStream::Li
 	this->conf = conf;
 	//Not opened
 	opened = false;
-	    part = NULL;
 }
 
 MultiConf::NetStream::~NetStream()
@@ -2113,7 +2223,9 @@ void MultiConf::NetStream::doPlay(std::wstring& url,RTMPMediaStream::Listener* l
 	{
 		//Get participant stream
 		part = conf->ConsumeParticipantOutputToken(token);
-		stream = part;
+		//Vérrouille pour s'assurer qu'il est encore vivant et l'utiliser pour Attach()
+		std::shared_ptr<RTMPParticipant> rtmpPart = part.lock();
+		stream = rtmpPart.get();
 		//Wait for intra
 		SetWaitIntra(true);
 		//And rewrite
@@ -2166,9 +2278,10 @@ void MultiConf::NetStream::doSeek(DWORD time)
 void MultiConf::NetStream::doPause()
 {
 	//Send status
-    if (part)
+    std::shared_ptr<RTMPParticipant> rtmpPart = part.lock();
+    if (rtmpPart)
     {
-        part->StopSending();
+        rtmpPart->StopSending();
         fireOnNetStreamStatus(RTMP::Netstream::Pause::Notify,L"Paused");
     }
     else
@@ -2182,7 +2295,8 @@ void MultiConf::NetStream::doCommand(RTMPCommandMessage *cmd)
     if ( cmd->GetName().compare(L"NetStream.Play.InsufficientBW") == 0 )
     {
         Log("-stream [%d] is congested\n",GetStreamId());
-        if (part) part->onCongestion();
+        std::shared_ptr<RTMPParticipant> rtmpPart = part.lock();
+        if (rtmpPart) rtmpPart->onCongestion();
     }
     else
     {
@@ -2193,9 +2307,10 @@ void MultiConf::NetStream::doCommand(RTMPCommandMessage *cmd)
 void MultiConf::NetStream::doResume()
 {
 	//Send status
-    if (part)
+    std::shared_ptr<RTMPParticipant> rtmpPart = part.lock();
+    if (rtmpPart)
     {
-        part->StartSending();
+        rtmpPart->StartSending();
         fireOnNetStreamStatus(RTMP::Netstream::Unpause::Notify,L"Resumed");
     }
     else
@@ -2297,7 +2412,7 @@ void MultiConf::NetStream::Close()
 {
 	Log(">Close multiconf netstream\n");
 
-	part = NULL;
+	part.reset();
 	///Remove listener just in case
 	RemoveAllMediaListeners();
 	//Dettach if playing
@@ -2319,15 +2434,15 @@ void MultiConf::onRequestFPU(Participant *part)
 	//Check listener
 	if (listener)
 		//Send event
-		listener->onParticipantRequestFPU(this,part->GetPartId(),this->param);
+		listener->onParticipantRequestFPU(this,part->GetPartId());
 }
 
-void MultiConf::onDTMF(Participant *part, DTMFMessage* dtmf)
+void MultiConf::onDTMF(Participant * part, DTMFMessage* dtmf)
 {
 	//Get lock
 	participantsLock.WaitUnusedAndLock();
 	
-	//Destroy all participants
+
 	for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
 	{
 		//Destroy it
@@ -2347,7 +2462,7 @@ void MultiConf::onRequestDocSharing(int partId,std::wstring status)
 	//Check listener
 	if (listener)
 		//Send event
-		listener->onParticipantRequestDocSharing(this,partId,status,this->param);
+		listener->onParticipantRequestDocSharing(this,partId,status);
 }
 
 int MultiConf::AppMixerDisplayImage(const char* filename)
@@ -2378,42 +2493,53 @@ int  MultiConf::StartPublishing(const char* server,int port, const char* app,con
 
 	//Store published stream name
 	info.name = parser.GetWString();
-	
-	//Create new publisherf1722
-	info.conn = new RTMPClientConnection(tag);
+
+	//Create new publisher
+	info.conn = std::make_unique<RTMPClientConnection>(tag);
 
 	//Store id as user data
 	info.conn->SetUserData(info.id);
 
 	//No stream
-	info.stream = NULL;
+	info.stream = nullptr;
+
+	//Garder id/pointeur avant de déplacer info dans la map (move-only désormais)
+	int id = info.id;
+	RTMPClientConnection* conn = info.conn.get();
 
 	//Add to map
-	publishers[info.id] = info;
-	
-	//Connect
-	info.conn->Connect(server,port,app,this);
+	publishersLock.WaitUnusedAndLock();
+	publishers[id] = std::move(info);
+	publishersLock.Unlock();
 
-	Log("<StartPublishing broadcast [id%d]\n",info.id);
+	//Connect
+	conn->Connect(server,port,app,this);
+
+	Log("<StartPublishing broadcast [id%d]\n",id);
 
 	//Return id
-	return info.id;
+	return id;
 }
 
 int  MultiConf::StopPublishing(int id)
 {
 	Log("-StopPublishing broadcast [id:%d]\n",id);
-	
+
+	publishersLock.IncUse();
+
 	//Find it
 	Publishers::iterator it = publishers.find(id);
 
 	//If not found
 	if (it==publishers.end())
+	{
+		publishersLock.DecUse();
 		//Exit
 		return Error("-Publisher not found\n");
+	}
 
 	//Get info
-	PublisherInfo info = it->second;
+	PublisherInfo& info = it->second;
 
 	//Check it has an stream opened
 	if (info.stream)
@@ -2425,6 +2551,9 @@ int  MultiConf::StopPublishing(int id)
 	}
 	//Disconnect
 	info.conn->Disconnect();
+
+	publishersLock.DecUse();
+
 	//Exit
 	return 1;
 }
@@ -2435,6 +2564,9 @@ void MultiConf::onConnected(RTMPClientConnection* conn)
 	DWORD id = conn->GetUserData();
 	//Log
 	Log("-RTMPClientConnection connected [id:%d]\n",id);
+
+	publishersLock.IncUse();
+
 	//Find it
 	Publishers::iterator it = publishers.find(id);
 	//If found
@@ -2451,6 +2583,8 @@ void MultiConf::onConnected(RTMPClientConnection* conn)
 	} else {
 		Log("-RTMPClientConnection connection not found\n");
 	}
+
+	publishersLock.DecUse();
 }
 
 void MultiConf::onNetStreamCreated(RTMPClientConnection* conn,RTMPClientConnection::NetStream *stream)
@@ -2459,6 +2593,9 @@ void MultiConf::onNetStreamCreated(RTMPClientConnection* conn,RTMPClientConnecti
 	DWORD id = conn->GetUserData();
 	//Log
 	Log("-RTMPClientConnection onNetStreamCreated [id:%d]\n",id);
+
+	publishersLock.IncUse();
+
 	//Find it
 	Publishers::iterator it = publishers.find(id);
 	//If found
@@ -2466,8 +2603,8 @@ void MultiConf::onNetStreamCreated(RTMPClientConnection* conn,RTMPClientConnecti
 	{
 		//Store sream
 		PublisherInfo& info = it->second;
-		//Store stream
-		info.stream = stream;
+		//Store stream (prend possession)
+		info.stream.reset(stream);
 		//Do publish url
 		stream->Publish(info.name);
 		//Wait for intra
@@ -2475,6 +2612,8 @@ void MultiConf::onNetStreamCreated(RTMPClientConnection* conn,RTMPClientConnecti
 		//Add listener (TODO: move downwards)
 		flvEncoder.AddMediaListener(stream);
 	}
+
+	publishersLock.DecUse();
 }
 
 void MultiConf::onCommandResponse(RTMPClientConnection* conn,DWORD id,bool isError,AMFData* param)
@@ -2492,6 +2631,9 @@ void MultiConf::onDisconnected(RTMPClientConnection* conn)
 	DWORD id = conn->GetUserData();
 	//Log
 	Log("-RTMPClientConnection onDisconnected [id:%d]\n",id);
+
+	publishersLock.WaitUnusedAndLock();
+
 	//Find it
 	Publishers::iterator it = publishers.find(id);
 	//If found
@@ -2503,15 +2645,13 @@ void MultiConf::onDisconnected(RTMPClientConnection* conn)
 		if (info.stream)
 		{
 			//Remove listener
-			flvEncoder.RemoveMediaListener((RTMPMediaStream::Listener*)info.stream);
-			//Delete it
-			delete(info.stream);
+			flvEncoder.RemoveMediaListener(static_cast<RTMPMediaStream::Listener*>(info.stream.get()));
 		}
-		//Delete connection
-		delete(info.conn);
-		//Remove
+		//Remove (stream/conn détruits ici par leurs unique_ptr)
 		publishers.erase(it);
 	}
+
+	publishersLock.Unlock();
 }
 
 int MultiConf::DumpInfo( std::string & info)
@@ -2548,11 +2688,12 @@ void MultiConf::SetVADMode(int mode)
 
 int MultiConf::DumpParticipantInfo(int partId, std::string & info)
 {
-        char partName[80];
-	Participants::iterator itPart = participants.find(partId);
+    char partName[80];
+	
+	ParticipantPtr part = GetParticipant(partId);
 
 	//Check if not found
-	if (itPart==participants.end())
+	if (!part)
 	{
         	sprintf(partName, "Participant %d not found", partId);
 		//Error
@@ -2562,18 +2703,17 @@ int MultiConf::DumpParticipantInfo(int partId, std::string & info)
 	}
 
 	//Get it
-	Participant* part = itPart->second;
-        
-        sprintf(partName, "Participant %d:\n", partId);
-        info = partName;
-        int code = part->DumpInfo(info);
-        if ( code == 200)
-        {
-            sprintf(partName, "  Listening to sidebar %d:\n", audioMixer.GetMixerSidebar(partId));
-            info += partName;
-        }
+	
+	sprintf(partName, "Participant %d:\n", partId);
+	info = partName;
+	int code = part->DumpInfo(info);
+	if ( code == 200)
+	{
+		sprintf(partName, "  Listening to sidebar %d:\n", audioMixer.GetMixerSidebar(partId));
+		info += partName;
+	}
 
-        return code;
+	return code;
 }
 
  int MultiConf::DumpMixerInfo(int id, MediaFrame::Type media, std::string & info)

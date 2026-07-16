@@ -13,7 +13,6 @@ AudioDecoderJoinableWorker::AudioDecoderJoinableWorker()
 	//Nothing
 	output = NULL;
         input = NULL;
-	joined = NULL;
 	decoding = false;
 }
 
@@ -72,6 +71,7 @@ int AudioDecoderJoinableWorker::End()
 
 	//Set null
 	output = NULL;
+	return 0;
 }
 
 int AudioDecoderJoinableWorker::Start()
@@ -235,6 +235,7 @@ int AudioDecoderJoinableWorker::Decode()
 	if (codec!=NULL) delete codec;		
 	
 	Log("<DecodeAudio\n");
+	return 0;
 }
 
 void AudioDecoderJoinableWorker::onRTPPacket(RTPPacket &packet)
@@ -254,23 +255,23 @@ void AudioDecoderJoinableWorker::onEndStream()
 	//Stop decoding
 	Stop();
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
 }
 
-int AudioDecoderJoinableWorker::Attach(Joinable *join)
+int AudioDecoderJoinableWorker::Attach(const std::shared_ptr<Joinable> & join)
 {
-	//Detach if joined
-	if (joined)
+	//Detach if joined — lock() : source encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
 		//Stop
 		Stop();
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
+		j->RemoveListener(this);
 	}
-	//Store new one
+	//Store new one (lien retour non possédant)
 	joined = join;
 	//If it is not null
-	if (joined)
+	if (join)
 	{
 		//Start
 		Start();
@@ -283,15 +284,19 @@ int AudioDecoderJoinableWorker::Attach(Joinable *join)
 
 int AudioDecoderJoinableWorker::Dettach()
 {
-        //Detach if joined
-	if (joined)
+        //Detach if joined — lock() : ne déréférence pas si la source a disparu
+	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
 		//Stop decoding
 		Stop();
 		//Remove ourself as listeners
-		joined->RemoveListener(this);
+		j->RemoveListener(this);
 	}
-	
+	else
+		//Stop decoding même si la source est déjà partie
+		Stop();
+
 	//Not joined anymore
-	joined = NULL;
+	joined.reset();
+	return 0;
 }

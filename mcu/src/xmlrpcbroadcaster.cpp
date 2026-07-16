@@ -7,7 +7,7 @@ xmlrpc_value* BroadcasterCreateBroadcast(xmlrpc_env *env, xmlrpc_value *param_ar
 	UTF8Parser nameParser;
         UTF8Parser tagParser;
 	Broadcaster *broadcaster = (Broadcaster *)user_data;
-	BroadcastSession *session = NULL;
+	std::shared_ptr<BroadcastSession> session;
 
 	 //Parseamos
 	char *str;
@@ -24,7 +24,7 @@ xmlrpc_value* BroadcasterCreateBroadcast(xmlrpc_env *env, xmlrpc_value *param_ar
 	int sessionId = broadcaster->CreateBroadcast(nameParser.GetWString(),tagParser.GetWString());
 	
 	//Obtenemos la referencia
-	if(!broadcaster->GetBroadcastRef(sessionId,&session))
+	if(!broadcaster->GetBroadcastRef(sessionId,session))
 		return xmlerror(env,"Conferencia borrada antes de poder iniciarse\n");
 
 	//Si error
@@ -33,9 +33,6 @@ xmlrpc_value* BroadcasterCreateBroadcast(xmlrpc_env *env, xmlrpc_value *param_ar
 
 	//La iniciamos
 	bool res = session->Init(maxTransfer,maxConcurrent);
-
-	//Liberamos la referencia
-	broadcaster->ReleaseBroadcastRef(sessionId);
 
 	//Salimos
 	if(!res)
