@@ -1,0 +1,38 @@
+[Unit]
+Description=IVeS Mediaserver (MCU / serveur de media)
+Documentation=http://www.ives.fr
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Options passees au binaire (port XML-RPC, WebSocket, etc.).
+# Surchargeables dans /etc/sysconfig/mediaserver ; NE PAS y remettre "-f" :
+# sous systemd le mediaserver doit rester en avant-plan (pas de fork).
+EnvironmentFile=-/etc/sysconfig/mediaserver
+ExecStart=/opt/ives/bin/mediaserver $OPTIONS
+
+# L'ancien init faisait "cd /var/log" avant de lancer le binaire.
+WorkingDirectory=/var/log
+
+# Arret propre : signing_handler() intercepte SIGTERM, vide les files
+# d'evenements et arrete le serveur XML-RPC.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Redemarrage automatique en cas de crash.
+Restart=on-failure
+RestartSec=2
+
+# main.cpp fait un setrlimit(RLIMIT_CORE, RLIM_INFINITY) pour produire un
+# core dump sur fault : autoriser des core dumps de taille illimitee.
+LimitCORE=infinity
+
+# On conserve la convention historique : les logs (stdout/stderr) vont dans
+# /var/log/mcu.log ("tail -f /var/log/mcu.log"). Ils sont aussi consultables
+# via "journalctl -u mediaserver".
+StandardOutput=append:/var/log/mcu.log
+StandardError=append:/var/log/mcu.log
+
+[Install]
+WantedBy=multi-user.target
