@@ -30,7 +30,7 @@ The mediaserver exposes three XML-RPC interfaces
 
 - a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [xmlrpc_jsr309_api.md](xmlrpc_jsr309_api.md).
 
-- A spcialized MCU API
+- a specialized MCU API, oriented around conferences, participants and video mosaics. It is documented in [MCU-API.md](MCU-API.md).
 
 - other APIs are present but unmaintained.
 
