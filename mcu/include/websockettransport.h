@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <memory>
 #include <string>
+#include <vector>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -31,30 +32,25 @@ public:
 	virtual ~WebSocketTransport() {}
 
 	/** Initialise le transport sur le socket accepté (options socket, etc.).
-	 *  Renvoie >0 si OK. */
+	 *  Renvoie >0 si OK. Le handshake TLS éventuel est piloté de façon
+	 *  transparente depuis Recv/Send/Flush (pas de méthode dédiée). */
 	virtual int  Init(int fd) = 0;
-
-	/** Fait progresser le handshake. >0 = terminé, 0 = en cours, <0 = erreur.
-	 *  En clair : rien à faire, renvoie toujours 1. (Le TLS pilote le handshake
-	 *  de façon transparente depuis Recv/Send/Flush ; cette méthode reste au
-	 *  contrat mais n'est pas sollicitée par la connexion.) */
-	virtual int  Handshake() = 0;
 
 	/** Lit des octets applicatifs (déchiffrés).
 	 *  >0 = octets lus ; 0 = rien de disponible maintenant (would-block ou
 	 *  handshake TLS en cours) ; <0 = connexion fermée / erreur. */
 	virtual int  Recv(BYTE* buffer, DWORD size) = 0;
 
-	/** Émet des octets applicatifs. Renvoie le nombre d'octets consommés
-	 *  (les octets chiffrés éventuellement non écrits sur le socket sont
-	 *  conservés en interne et repoussés par Flush()), <0 = erreur. */
+	/** Émet des octets applicatifs. Les octets non encore écrits sur le socket
+	 *  (write() partiel/EAGAIN, ou chiffrement TLS) sont conservés en interne et
+	 *  repoussés par Flush() : l'appelant peut donc libérer son tampon aussitôt.
+	 *  Renvoie le nombre d'octets applicatifs acceptés, <0 = erreur. */
 	virtual int  Send(const BYTE* buffer, DWORD size) = 0;
 
-	/** Pousse vers le socket les octets (chiffrés) en attente. 0 = OK, <0 = erreur.
-	 *  En clair : sans objet, renvoie 0. */
+	/** Pousse vers le socket les octets en attente. 0 = OK, <0 = erreur. */
 	virtual int  Flush() = 0;
 
-	/** Reste-t-il des octets à pousser sur le socket ? (TLS uniquement) */
+	/** Reste-t-il des octets à pousser sur le socket ? */
 	virtual bool WantsWrite() = 0;
 
 	/** Ferme le socket (shutdown + close) et l'invalide. Idempotent. */
@@ -91,8 +87,6 @@ public:
 		return 1;
 	}
 
-	virtual int  Handshake()				{ return 1; }
-
 	virtual int  Recv(BYTE* buffer, DWORD size)
 	{
 		int n = read(fd, buffer, size);
@@ -103,9 +97,37 @@ public:
 		return -1;				//erreur
 	}
 
-	virtual int  Send(const BYTE* buffer, DWORD size)	{ return write(fd, buffer, size); }
-	virtual int  Flush()					{ return 0; }
-	virtual bool WantsWrite()				{ return false; }
+	virtual int  Send(const BYTE* buffer, DWORD size)
+	{
+		//Copie dans le tampon de sortie (l'appelant peut libérer aussitôt), puis
+		//tente d'écouler. Les octets non écrits (write partiel/EAGAIN) restent
+		//dans pendingOut et sont repoussés par Flush() au prochain POLLOUT.
+		pendingOut.insert(pendingOut.end(), buffer, buffer+size);
+		if (Flush() < 0)
+			return -1;
+		return (int)size;
+	}
+
+	virtual int  Flush()
+	{
+		size_t written = 0;
+		while (written < pendingOut.size())
+		{
+			int w = write(fd, pendingOut.data()+written, pendingOut.size()-written);
+			if (w > 0) { written += (size_t)w; continue; }
+			if (w < 0 && (errno==EAGAIN || errno==EWOULDBLOCK || errno==EINTR))
+				break;			//socket plein : on reprendra au prochain POLLOUT
+			//Erreur d'écriture
+			if (written)
+				pendingOut.erase(pendingOut.begin(), pendingOut.begin()+written);
+			return -1;
+		}
+		if (written)
+			pendingOut.erase(pendingOut.begin(), pendingOut.begin()+written);
+		return 0;
+	}
+
+	virtual bool WantsWrite()				{ return !pendingOut.empty(); }
 	virtual int  GetFd()					{ return fd; }
 
 	virtual void Shutdown()
@@ -120,6 +142,7 @@ public:
 
 private:
 	int fd;
+	std::vector<BYTE> pendingOut;	//octets en attente d'écriture socket
 };
 
 /**

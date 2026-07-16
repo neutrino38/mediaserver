@@ -234,7 +234,8 @@ private:
 
 class WebSocketConnection :
 	public WebSocket,
-	public HTTPParser::Listener
+	public HTTPParser::Listener,
+	public std::enable_shared_from_this<WebSocketConnection>
 {
 private:
 	class Frame
@@ -317,6 +318,7 @@ public:
 	virtual void SendMessage(const std::string& message);
 	virtual void SendMessage(const BYTE* data, const DWORD size);
 	virtual void Close();
+	virtual std::weak_ptr<WebSocket> GetWeakPtr();
 
 	//HTTPParser listener
 	virtual int on_url (HTTPParser*, const char *at, DWORD length);

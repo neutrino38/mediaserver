@@ -10,7 +10,7 @@ WSEndpoint::WSEndpoint(MediaFrame::Type type) : Port(type, MediaFrame::WS)
 {
     msgType = WebSocket::Binary;
     joined = NULL;
-	_ws = NULL;
+	//_ws : weak_ptr vide par défaut
 	RedCodec = new RedundentCodec();
 	
     useRed = false;
@@ -29,16 +29,18 @@ WSEndpoint::WSEndpoint(MediaFrame::Type type) : Port(type, MediaFrame::WS)
 
 void WSEndpoint::onOpen(WebSocket *ws)
 {
-    if ( _ws == NULL )
+    std::shared_ptr<WebSocket> old = _ws.lock();
+    if ( !old )
     {
+	//Première association
 	gettimeofday(&clock,NULL);
-	_ws = ws;
     }
     else
     {
-    	_ws->Close();
-	_ws = ws;
+	//Une connexion existait déjà : on ferme l'ancienne
+	old->Close();
     }
+    _ws = ws->GetWeakPtr();
 }
 
 void WSEndpoint::onError(WebSocket *ws)
@@ -100,7 +102,7 @@ void WSEndpoint::onMessageEnd(WebSocket *ws)
 
 void WSEndpoint::onRTPPacket(RTPPacket &packet)
 {
-    if (_ws != NULL)
+    if (!_ws.expired())
     {
         if ( packet.GetMedia() == media->GetType() )
 		{
@@ -155,11 +157,14 @@ void WSEndpoint::onRTPPacket(RTPPacket &packet)
 
 void WSEndpoint::onClose(WebSocket *ws)
 {
-    if ( _ws == ws )
+    //Ne réinitialiser que si c'est bien la connexion courante qui se ferme
+    //(une nouvelle a pu la remplacer entre-temps via onOpen).
+    std::shared_ptr<WebSocket> cur = _ws.lock();
+    if ( cur.get() == ws )
     {
         Log("WSEndpoint: connection associated with endpoint is closing.\n");
-	_ws = 0;
-	
+	_ws.reset();
+
 	// Signal the interription as per
 	SendReplacementChar(false);
     }
@@ -169,7 +174,7 @@ void WSEndpoint::SendReplacementChar(bool toWsSide)
 {
     if (toWsSide)
     {
-        if (_ws != NULL) 
+        if (!_ws.expired())
 		{
 		}
     }
@@ -207,12 +212,12 @@ WSEndpoint::~WSEndpoint()
 
 int WSEndpoint::End()
 {
-    if ( _ws != NULL )
+    if ( std::shared_ptr<WebSocket> ws = _ws.lock() )
     {
-        _ws->Close();
-	_ws = NULL;
+        ws->Close();
     }
-	
+    _ws.reset();
+
 	RedCodec = NULL;
 	return 0;
 }
@@ -240,7 +245,9 @@ int WSEndpoint::SendFrame(TextFrame &frame)
 		Debug("BOM ping pong.\n");
 	}
 	
-    if (_ws) _ws->SendMessage( msg );
+    //Verrouiller la référence le temps de l'envoi (thread-safe vs destruction)
+    if (std::shared_ptr<WebSocket> ws = _ws.lock())
+        ws->SendMessage( msg );
 	return 0;
 }
 

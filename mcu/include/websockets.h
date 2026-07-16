@@ -35,6 +35,12 @@ public:
 	virtual void SendMessage(const BYTE* data, const DWORD size) = 0;
 	virtual void Close() = 0;
 
+	//Renvoie un weak_ptr vers ce WebSocket, pour qu'un consommateur (ex. WSEndpoint,
+	//sur un autre thread) puisse verrouiller la référence avant chaque appel et
+	//éviter tout usage-après-libération. Défaut : vide (surchargé par les
+	//implémentations gérées par shared_ptr, comme WebSocketConnection).
+	virtual std::weak_ptr<WebSocket> GetWeakPtr()	{ return std::weak_ptr<WebSocket>(); }
+
 	virtual void* GetUserData()			{ return userData;		}
 	virtual void  SetUserData(void* userData)	{ this->userData = userData;	}
 	

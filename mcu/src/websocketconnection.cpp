@@ -99,6 +99,14 @@ void WebSocketConnection::Close()
 		listener->onWakeupNeeded();
 }
 
+std::weak_ptr<WebSocket> WebSocketConnection::GetWeakPtr()
+{
+	//La connexion est possédée par un shared_ptr côté serveur (make_shared) : on
+	//peut donc en dériver un weak_ptr. Un consommateur externe (WSEndpoint, thread
+	//RTP) le verrouille avant chaque appel → pas d'usage-après-libération.
+	return shared_from_this();
+}
+
 int WebSocketConnection::End()
 {
 	if (!inited)

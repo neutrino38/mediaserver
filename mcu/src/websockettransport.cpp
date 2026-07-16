@@ -66,8 +66,6 @@ public:
 		return 1;
 	}
 
-	virtual int Handshake() { return handshakeDone ? 1 : 0; }
-
 	virtual int Recv(BYTE* buffer, DWORD size)
 	{
 		//Alimenter le read_bio avec les octets bruts du socket
