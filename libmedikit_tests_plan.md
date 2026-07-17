@@ -202,10 +202,13 @@ par la lib elle-même.
   Le mcu consomme la version libmedikit (`medkit/red.h`). mcu recompilé vert via
   `./install.ksh localcompile` (piège : `make -f mcu/Makefile.rpm` doit tourner
   depuis `mcu/`, pas depuis la racine).
-- **Cible Makefile `ffmp4probe` cassée** : il manque `-L../../../staticdeps/lib`
-  (présent sur `negotest`) → `cannot find -lmp4v2`. Petit fix à faire.
-- **mp4v2 émet `AddDescendantAtoms: assert failure (mp4file.cpp,705)`** à
-  l'écriture du round-trip (non fatal, fichier relisible). À creuser si gênant.
+- **[FAIT 2026-07-17] Cible Makefile `ffmp4probe`** : ajout de
+  `-L../../../staticdeps/lib` (comme `negotest`) → compile de nouveau.
+- **[FAIT 2026-07-17] Assert mp4v2 `AddDescendantAtoms (mp4file.cpp,705)`** :
+  causé par l'ordre `MP4Close(mp4)` **avant** destruction du `mp4writer` (dont le
+  destructeur écrit encore via `MP4TagsStore`). Corrigé dans
+  `test_mp4_roundtrip.cpp` en encadrant le `mp4writer` dans un bloc pour qu'il
+  soit détruit avant `MP4Close`. Plus d'assert.
 
 ## Hors périmètre (assumé)
 
