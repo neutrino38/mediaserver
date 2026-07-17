@@ -173,6 +173,26 @@ opt-in. `clean` retire aussi `tests/runtests` et `tests/*.o`.
   `record.mp4`.
 - **Fins de ligne CRLF** : garder LF (piège documenté du repo).
 
+## Anomalie fixture record.mp4 (lecture vidéo) — INVESTIGUÉE
+
+`Mp4FfReader::GetNextFrame` sur `record.mp4` échoue (`errcode=-5`) dès la 1ʳᵉ
+trame vidéo : `VideoFrame::PacketizeH264` refuse (`false`). Investigation
+(instrumentation temporaire de `PacketizeH264`, retirée depuis) :
+- le flux H264 de `record.mp4` est **incohérent** — SPS/PPS dupliqués (préfixe
+  `videoParamsAvcc` + SPS/PPS déjà présents dans le paquet), puis une taille de
+  NAL aberrante (`00 00 00 01` lu comme longueur AVCC = 1, puis `naluSz` géant) ;
+- **ffmpeg lui-même rejette ce flux** à l'ouverture (« Invalid NAL unit size »,
+  « Error splitting the input into NAL units ») ;
+- les autres MP4 (`titi.mp4`, `toto.mp4`, `OLD_*.mp4`) se lisent correctement
+  (1ʳᵉ intra OK) → le reader et `Packetize` fonctionnent ; `Packetize` **protège
+  correctement** en refusant une taille de NAL invalide.
+
+**Conclusion : ce n'est pas un bug du reader — `record.mp4` a un flux vidéo
+défectueux.** `test_mp4_read.cpp` teste donc les métadonnées (lisibles malgré le
+flux) et le contrat audio AAC, pas la boucle de lecture vidéo. Le round-trip
+(Phase 3) valide la lecture vidéo sur des trames H264 **bien formées** produites
+par la lib elle-même.
+
 ## Dette / nettoyage
 
 - **[FAIT 2026-07-17] Doublon mort `mcu/src/red.cpp` + `mcu/include/red.h`
@@ -182,6 +202,10 @@ opt-in. `clean` retire aussi `tests/runtests` et `tests/*.o`.
   Le mcu consomme la version libmedikit (`medkit/red.h`). mcu recompilé vert via
   `./install.ksh localcompile` (piège : `make -f mcu/Makefile.rpm` doit tourner
   depuis `mcu/`, pas depuis la racine).
+- **Cible Makefile `ffmp4probe` cassée** : il manque `-L../../../staticdeps/lib`
+  (présent sur `negotest`) → `cannot find -lmp4v2`. Petit fix à faire.
+- **mp4v2 émet `AddDescendantAtoms: assert failure (mp4file.cpp,705)`** à
+  l'écriture du round-trip (non fatal, fichier relisible). À creuser si gênant.
 
 ## Hors périmètre (assumé)
 
