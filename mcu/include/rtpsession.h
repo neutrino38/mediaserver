@@ -389,7 +389,11 @@ private:
 	//Transmision
 	sockaddr_in sendAddr;
 	sockaddr_in sendRtcpAddr;
-	BYTE 	sendPacket[MTU];
+	//srtp_protect() chiffre en place ET ajoute le trailer SRTP (jusqu'a
+	//SRTP_MAX_TRAILER_LEN octets au-dela de la charge utile) : le tampon doit
+	//donc reserver MTU + trailer, sinon debordement a l'emission (le memset du
+	//constructeur supposait deja cette taille).
+	BYTE 	sendPacket[MTU+SRTP_MAX_TRAILER_LEN];
 	WORD    sendSeq;
         DWORD   sendExtSeq;
         DWORD   sendCycles;
