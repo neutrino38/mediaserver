@@ -278,6 +278,7 @@ Chaque événement est un tuple dont le **premier entier est le type d'événeme
 | 4 | RecorderStartedEvent | `(int type, string sessionTag, string recorderTag)` |
 | 5 | RecorderStoppedEvent | `(int type, string sessionTag, string recorderTag, int reason)` |
 | 6 | EndpointDisconnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
+| 7 | EndpointConnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
 
 - **PlayerEndOfFileEvent** (1) : un `Player` a atteint la fin du fichier.
   `playerTag` = nom passé à `PlayerCreate`.
@@ -295,9 +296,20 @@ Chaque événement est un tuple dont le **premier entier est le type d'événeme
   reçu de paquet depuis le seuil armé (voir `EndpointStartRTPTimeout`, §6.7).
   `joinableId` = `endpointId`, `media`/`role` selon §4. Émis **une seule fois**
   par transition actif→inactif.
+- **EndpointConnectedEvent** (7) : signal **« média établi »** pour un média d'un
+  endpoint. Émis **une seule fois par média et par cycle de réception**, lorsque
+  **le premier paquet RTP/SRTP est reçu et validé** ET que **le handshake DTLS est
+  terminé** (ou que le média n'utilise pas DTLS — le succès du déchiffrement SRTP
+  garantit intrinsèquement la fin du handshake). `joinableId` = `endpointId`,
+  `media`/`role` selon §4. Contrairement à un événement de connexion « optimiste »
+  synthétisé par le contrôleur, il atteste d'un **flux média réel** : il **ne se
+  déclenche jamais** sans arrivée effective de média. Il est **ré-armé** par un
+  cycle `EndpointStopReceiving` → `EndpointStartReceiving` (un nouveau flux ré-émet
+  l'événement). Complémentaire de `EndpointDisconnectedEvent` (6) : connexion réelle
+  vs perte d'activité.
 
 Réf. : `mcu/src/jsr309/JSR309Event.h`, `MediaSession.h` (events Player/Recorder),
-`RTPEndpoint.cpp` (ExternalFIR / EndpointDisconnected).
+`RTPEndpoint.cpp` (ExternalFIR / EndpointDisconnected / EndpointConnected).
 
 ---
 
@@ -451,6 +463,39 @@ média `media` vers `endpointId`.
   global de certificat DTLS. Renvoie une chaîne fingerprint pour le SDP local.
 - DTLS `setup` : `active` / `passive` / `actpass` ; `hash` : nom d'algo du
   fingerprint distant ; `fingerprint` : empreinte du SDP distant.
+- **`setup` = rôle DTLS du pair** (tel que reçu dans le SDP distant). Le serveur en
+  **déduit son rôle local (inverse)** — cf. RFC 5763 :
+
+  | `setup` distant | rôle local du serveur | comportement |
+  |-----------------|-----------------------|--------------|
+  | `active`  | **passive** (serveur DTLS) | attend le ClientHello du pair (comportement historique, inchangé) |
+  | `passive` | **active** (client DTLS)   | le serveur **émet le ClientHello** dès qu'une destination est connue |
+  | `actpass` | **passive** (serveur DTLS) | défaut serveur ; le contrôleur doit résoudre `actpass` avant l'appel |
+
+  En rôle **client** (`setup=passive`), le handshake démarre dès qu'une destination
+  d'envoi existe : soit à `EndpointStartSending` (adresse du pair), soit — si
+  `SetRemoteCryptoDTLS` arrive après — immédiatement. **Les deux ordres d'appel
+  (`SetRemoteCryptoDTLS` avant/après `StartSending`) sont supportés.** Le ClientHello
+  est retransmis selon le backoff DTLS jusqu'à réponse ; un échec/expiration emprunte
+  le **chemin d'erreur transport** (`EndpointDisconnectedEvent`, type 6). Utile face à
+  un pair **ICE-lite + DTLS-passive** (autre gateway) qui n'initie ni STUN ni DTLS.
+- **SRTP implicite** : appeler `EndpointSetRemoteCryptoDTLS` (comme
+  `EndpointSetLocalCryptoSDES` / `EndpointSetRemoteCryptoSDES`) **arme SRTP de
+  lui-même** (chiffrement + déchiffrement). La propriété RTP `"secure"` **n'est pas
+  requise** et n'est plus consultée : un contrôleur peut l'omettre ; s'il l'envoie
+  encore (legacy), c'est un no-op inoffensif.
+- **`EndpointSetRemoteSTUNCredentials` — checks STUN sortants** : une fois les
+  **credentials distantes** posées **et** `EndpointStartSending` appelé (destination
+  connue), l'endpoint **émet des binding requests STUN** vers la destination
+  d'envoi, avec `USERNAME = "<ufrag distant>:<ufrag local>"`, `MESSAGE-INTEGRITY`
+  clé = mot de passe **distant**, et les attributs `ICE-CONTROLLING` +
+  `USE-CANDIDATE` (nomination agressive). Il **retransmet** (backoff 250 ms → 1,5 s)
+  jusqu'à recevoir une **binding response** valide, qui confirme la connectivité
+  (et fait cesser les émissions). Indispensable face à un pair **ICE-lite** (autre
+  gateway) qui répond aux checks mais n'en initie jamais. Le traitement des checks
+  **entrants** (rôle serveur / navigateur) est inchangé, et un check entrant valide
+  confirme aussi la connectivité (aucune régression ; émission inoffensive vers un
+  pair full qui répond immédiatement).
 
 ### 6.7 Endpoints — média RTP (send / receive)
 
@@ -612,8 +657,15 @@ réponse à un `ExternalFIRRequestedEvent`.
 
 - `protocol` = `MediaFrame::MediaProtocol`, `media` = `MediaFrame::Type`,
   `role` = `MediaFrame::MediaRole` (§4).
-- `GetMediaCandidates` renvoie une chaîne (URL / description de candidats) pour
-  le transport donné (ex. candidats ICE/WS).
+- `GetMediaCandidates` renvoie une chaîne `"<proto>://<ip>:<port>"` (candidat local)
+  pour le transport et le **média** donnés. Le **port est le port de réception réel
+  de ce média** : `GetMediaCandidates` et `EndpointStartReceiving` renvoient la même
+  valeur (tous deux issus de `Port::GetLocalMediaPort()` → `RTPSession::GetLocalPort()`
+  = `simPort`, alloué dès `EndpointCreate`). Le contrôleur peut donc utiliser ce port
+  tel quel — inutile de substituer celui de `EndpointStartReceiving`. La garantie vaut
+  aussi **avant** `StartReceiving` (le port est déjà attribué à la création de
+  l'endpoint). `url` vaut sans port (`"<proto>://<ip>"`) uniquement si le port n'est
+  pas encore attribué (`0`).
 - `ConfigureMediaConnection` : `token` d'association de la connexion,
   `expectedPayload` = payload attendu.
 

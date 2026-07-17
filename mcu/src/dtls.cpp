@@ -418,6 +418,24 @@ int DTLSConnection::Renegotiate()
 	return 1;
 }
 
+bool DTLSConnection::GetTimeout(struct timeval* tv)
+{
+	//Pas de session ou pas de timer armé -> rien à attendre
+	if (!ssl)
+		return false;
+	//DTLSv1_get_timeout renvoie 1 si un délai de retransmission est en cours
+	return DTLSv1_get_timeout(ssl, tv) == 1;
+}
+
+int DTLSConnection::HandleTimeout()
+{
+	if (!ssl)
+		return 0;
+	//DTLSv1_handle_timeout : -1 sur échec (trop de retransmissions), 0 si le délai
+	//n'est pas encore écoulé, 1 si un flight a été re-mis en file (à flusher).
+	return DTLSv1_handle_timeout(ssl);
+}
+
 int DTLSConnection::SetupSRTP()
 {
 /* This is defined in openssl/srtp.h */

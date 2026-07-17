@@ -42,6 +42,10 @@ public:
 		//été reçu depuis plus de rtpTimeout ms (gap 5 - EndpointDisconnectedEvent).
 		//Non pur pour ne pas casser les Listener existants.
 		virtual void onRTPTimeout( RTPSession *session ) {}
+		//P5 : appelé UNE seule fois par cycle de réception, au premier paquet RTP/SRTP
+		//reçu et validé (déchiffrement OK => DTLS terminé, ou pas de crypto). Ré-armé
+		//via ArmRTPReceivedNotification(). Non pur (Listener existants inchangés).
+		virtual void onRTPPacketReceived( RTPSession *session ) {}
 	};
 	
 public:
@@ -78,6 +82,9 @@ public:
 	//les timeouts intempestifs pendant la sonnerie ET détecte « répondu mais aucun
 	//média reçu ». timeoutMs>0 : (re)configure le seuil + arme ; timeoutMs==0 : désarme.
 	void ArmRTPTimeout(DWORD timeoutMs);
+	//P5 : (ré)arme la notification « premier paquet RTP/SRTP reçu » (onRTPPacketReceived).
+	//Appelé à chaque (re)démarrage de la réception pour ré-émettre l'événement de connexion.
+	void ArmRTPReceivedNotification() { rtpReceivedNotified = false; }
 	//Trickle ICE Niveau 1 (gap 1) : parse une ligne SDP "candidate:..." et, pour un
 	//candidat host/srflx de priorité supérieure au candidat courant, reconfigure la
 	//cible d'envoi RTP/RTCP. Retourne 1 si accepté/ignoré proprement, 0 sur erreur.
@@ -194,9 +201,19 @@ private:
 	int  ReadRTCP();
 	void ProcessRTCPPacket(RTCPCompoundPacket *packet, const char * fromAddr);
 	void ReSendPacket(int seq);
-	
+
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
 	int Run();
+
+	//P2 (offreur WebRTC) : pilotage du handshake DTLS en rôle CLIENT
+	void FlushDTLS();                    //vide write_bio DTLS vers sendAddr
+	void RequestDTLSClientHandshake();   //depuis les setters : réveille le thread Run
+	void DriveDTLSClientHandshake();     //depuis Run : émet le ClientHello + retransmet
+
+	//P3 (offreur WebRTC) : binding requests STUN sortants vers un pair ICE-lite
+	void SendICEBindingRequest();               //émet un Binding Request vers sendAddr
+	void DriveICEChecks();                       //depuis Run : émission + retransmission
+	void OnICEConnectivityConfirmed(sockaddr_in* from); //réponse valide reçue -> débloque
 
 private:
 	static  void* run(void *par);
@@ -326,6 +343,13 @@ private:
 	bool	rtpTimedOut;
 
 	DTLSConnection dtls;
+	//P2 : état du handshake DTLS piloté en rôle client (offreur WebRTC).
+	//dtlsClientStarted = ClientHello déjà émis (on pilote alors les retransmissions) ;
+	//dtlsClientStart   = horodatage de la 1re émission (borne globale) ;
+	//dtlsClientFailed  = échec déjà notifié (anti-rebond sur le chemin d'erreur transport).
+	bool	dtlsClientStarted;
+	timeval	dtlsClientStart;
+	bool	dtlsClientFailed;
 	bool	encript;
 	bool	decript;
 	srtp_t	sendSRTPSession;
@@ -343,6 +367,19 @@ private:
 	char*	iceLocalPwd;
 	//Meilleure priorité de candidat distant retenue (trickle ICE Niveau 1, gap 1)
 	DWORD	iceRemotePriority;
+	//P3 : émission de binding requests STUN sortants (pair ICE-lite qui n'initie
+	//jamais). iceConnected = connectivité confirmée (réponse reçue OU check entrant) ;
+	//iceCheckStarted = 1re émission faite ; iceCheckRto = intervalle de retransmission
+	//courant (backoff) ; iceLastCheck = horodatage de la dernière émission ;
+	//iceCheckTransId = transaction id du dernier check émis (corrélation de la réponse).
+	bool	iceConnected;
+	bool	iceCheckStarted;
+	DWORD	iceCheckRto;
+	timeval	iceLastCheck;
+	BYTE	iceCheckTransId[12];
+	//P5 : anti-rebond one-shot de l'événement « média établi » (premier paquet RTP/SRTP
+	//reçu). Remis à false par ArmRTPReceivedNotification() à chaque StartReceiving.
+	bool	rtpReceivedNotified;
 	pthread_t thread;
 	std::mutex mutex;	
 
