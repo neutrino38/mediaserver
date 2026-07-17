@@ -204,20 +204,26 @@ OPTS 	+= -D_UNIX -D__STDC_CONSTANT_MACROS -fPIC
 CFLAGS  += $(INCLUDE) $(OPTS)
 CXXFLAGS+= $(INCLUDE) $(OPTS)
 
+# Auto-dependances (evite les crashs par ABI/layout obsolete quand un .h change) :
+# gcc emet un .d par objet listant TOUS les headers inclus ; -MP ajoute des cibles
+# bidon pour les headers supprimes ; -MT $@ aligne la cible du .d sur le nom nu
+# utilise par make (la sortie reelle va dans $(BUILD)). Les .d sont inclus en bas.
+DEPFLAGS = -MMD -MP -MF $(BUILD)/$(@:.o=.d) -MT $@
+
 mcu.pb.cc: mcu.proto
 	$(PROTOC) --cpp_out=$(PWD) src/moteli/mcu.proto
 
 rabbitmqmcu.o: rabbitmqmcu.cpp rabbitmqmcu.h mcu.pb.cc
-	$(CXX) $(CXXFLAGS) -c $< -o $(BUILD)/$@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
 mcu.pb.o: mcu.pb.cc
-	$(CXX) $(CXXFLAGS) -I$(PWD) -c $< -o $(BUILD)/$@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(PWD) -c $< -o $(BUILD)/$@
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $(BUILD)/$@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $(BUILD)/$@
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
 ############################################
 #Targets
@@ -232,6 +238,7 @@ clean:
 	rm -f $(BUILDOBJSFS)
 	rm -f "$(BIN)/mcu"
 	rm -f "$(BIN)/flashstreamer"
+	rm -f $(BUILD)/*.d
 
 install:
 	cp $(BUILD)/mcu $(TARGET)/mediaserver
@@ -255,3 +262,8 @@ mediagw:  $(OBJS2) maingw.o
 flashstreamer: $(OBJSFS) $(OBJS)
 	g++ $(GNASHLD) -o $(BIN)/$@ $(BUILDOBJSFS) $(BUILDOBJS) $(GNASHBASE)/backend/.libs/libgnashagg.a  /usr/lib/libagg.a  $(LDFLAGS)
 
+
+############################################
+# Dependances generees automatiquement (headers -> objets)
+############################################
+-include $(wildcard $(BUILD)/*.d)
