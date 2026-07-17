@@ -444,7 +444,27 @@ plus tard si le coût de reconstruction se voyait (§8).
 | Rendu image/SVG/texte ImageMagick (`Overlay::LoadImage/RenderText`) | **CONSERVÉ** (le rendu). `Overlay` gagne `PictPtr GetPict()` : enveloppe **directement le RGBA natif d'ImageMagick** dans un `AVFrame` `AV_PIX_FMT_RGBA` (Pict caché, régénéré au changement de contenu/taille) — **pas de `ConvertToYUVA`** sur ce chemin, la conversion RGBA→YUV et l'alpha sont faits par le graphe. `ConvertToYUVA` (buffer `overlay` yuva420p) reste tant que `Display` existe, supprimé en Phase 6. |
 | Blit alpha manuel (`Overlay::Display`, `overlay.cpp:466-747`, ~280 lignes) + `ApplyParticipantOverlay` (`mosaic.cpp:1057`) | **SUPPRIMÉS** (Phase 6) : remplacés par les entrées `overlay` RGBA du graphe (l'alpha du RGBA est appliqué nativement par le filtre) |
 | Overlay mosaïque plein cadre (`Mosaic::GetFrame` + `overlayNeedsUpdate`) | dernière entrée `overlay` du graphe ; `overlayNeedsUpdate` disparaît (le push par tick ressert le Pict caché) |
-| VU-mètre (`Mosaic::DrawVUMeter`, `mosaic.cpp:963-1027` — memset dans le composite, actif uniquement sous `MCUDEBUG`+`VADWEBRTC`, `videomixer.cpp:452-463`) | **hors graphe** : post-passe debug sur le composite CPU (`av_frame_make_writable` + les mêmes memset via les linesize), dans `Mosaic::GetPict()` sous les mêmes `#ifdef`. Un `drawbox` par slot serait 9-16 filtres de plus reconstruits à chaque variation — disproportionné pour du debug. En mode GPU le VU-mètre est simplement inopérant (debug) |
+| VU-mètre (`Mosaic::DrawVUMeter`, `mosaic.cpp:1110`, décl. `mosaic.h:102` — memset dans le composite `BYTE*`, seul appel `videomixer.cpp:452-463` sous `#ifdef MCUDEBUG`) | **SUPPRIMÉ ENTIÈREMENT** (décision 2026-07-16). N'opérait que sur le buffer `BYTE* mosaic` (condamné en Phase 6), uniquement en build `MCUDEBUG`, inopérant sur le chemin GPU. Le réécrire en post-passe AVFrame (`av_frame_make_writable` + memset via linesize) a un coût réel pour un outil de diagnostic marginal. On retire l'appel `videomixer.cpp:452-463`, la méthode `Mosaic::DrawVUMeter` et sa déclaration. Diagnostic VAD éventuel = `Log()` du niveau par slot dans `MixVideo` (2 lignes), pas de VU-mètre pixel. |
+
+**Remplacement éventuel (feature prod, hors périmètre de ce plan)** — si un
+indicateur d'activité de parole *visible par les endpoints* est souhaité, ce
+n'est plus un portage du code debug supprimé mais une feature à part entière,
+côté signalisation plutôt que côté pixels du composite :
+
+- **RFC 6465 — Mixer-to-Client Audio Level Indication** : extension d'en-tête RTP
+  (`urn:ietf:params:rtp-hdrext:csrc-audio-level`) portant, dans le flux audio
+  mixé envoyé au client, le niveau de chaque source (via la liste CSRC). Le
+  client affiche lui-même qui parle. Voie standard, à négocier en SDP ; s'appuie
+  sur les niveaux déjà calculés par l'audiomixer/VAD (mêmes valeurs que celles
+  qui alimentaient `DrawVUMeter`). Nécessite d'émettre les CSRC + l'extension
+  dans `audiostream`/`rtpsession`.
+- **Indicateur d'activité en T.140** : repli pour les endpoints sans RFC 6465 —
+  émettre un marqueur de « participant actif » sur le canal texte temps réel.
+  Solution non standard/ad hoc, à réserver aux cas où l'extension RTP n'est pas
+  négociable.
+
+À traiter comme un chantier signalisation distinct (proche de la négo fmtp /
+extension API JSR309), pas dans la refonte mosaïques.
 
 ---
 
@@ -544,13 +564,36 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   slot vide exclu, keepAspect=false→plein slot, PIP stretch slot 0 plein cadre, fond
   noir 1p1.
 
-### Phase 3 — Bascule du composite sur le graphe (CPU)
+### Phase 3 — Bascule du composite sur le graphe (CPU) — FAIT 2026-07-16
 - `Mosaic::GetPict()` → `Configure(BuildDesc()) + Compose(...)` avec **repli** vers
-  l'ancien chemin BYTE\* si `Configure` échoue (garde-fou de mise au point) ;
-  `Clean(pos)` reset `slotFrames[pos]` ; `Update(PictPtr)` cesse d'appeler le pont
-  d'aplatissement.
+  l'ancien chemin BYTE\* (`GetPictLegacy`) si `Configure` échoue (garde-fou de mise
+  au point) ; `Clean(pos)` reset `slotFrames[pos]` ; `Update(PictPtr)` cesse
+  d'appeler le pont d'aplatissement.
 - Fichiers : `mcu/src/mosaic.cpp`, éventuels ajustements `videomixer.cpp` (aucun
   attendu — API conservée).
+- **Détails d'implémentation** : cache intra-tick par un flag interne
+  `compositeValid` (PAS `mosaicChanged` : `Reset()` le remet à `true` à chaque tick,
+  donc il vaut toujours `true` au moment du `GetPict` en tête de `MixVideo`).
+  `compositeValid` est invalidé par `SetChanged()` — point de passage unique des
+  `Update(BYTE*)`/`Clean` dérivés + du nouveau `Update(PictPtr)`. La sémantique
+  `HasChanged()` vue par `videomixer` est donc **inchangée** (chaque input appelle
+  toujours `GetPict`), seule la composition est dédupliquée. Fond généré une fois
+  (`GetBackground` : `CreateColor(128,128,128)` ou `CreateBlack` si
+  `HasBlackBackground`). `Update(PictPtr)` redescend GPU→CPU (chemin Phase 3 = CPU)
+  et mémorise la trame CPU (le stockage de l'original GPU reviendra en Phase 5).
+  `Clean` des 3 dérivées appelle le helper base `ClearSlotFrame(pos)` ;
+  `PIPMosaic::Clean` (jadis no-op) gagne `ClearSlotFrame`+`SetChanged`. Trames des
+  slots ACTIFS reconstruites dans `GetPict` par `slotFrames[desc.slots[i].pos]`
+  (alignées sur `desc.slots`). Overlays laissés à Phase 4 (Compose reçoit un vecteur
+  vide + `nullptr`). **PIÈGE name-hiding confirmé** : appeler `Update(PictPtr)` via
+  le type dérivé échoue (masqué par `Update(BYTE*)`) — videomixer appelle via
+  `Mosaic*`, OK ; le test passe par une réf `Mosaic&`.
+- **Validation** : build vert (`make -f Makefile.rpm mcu`) ; test autonome
+  `scratchpad/mosaictest.cpp` (via `Mosaic&`, lié aux `.o` mosaïque + libmedkit)
+  18/18 : remplissage 2x2 (luma par quadrant), cache intra-tick (même `PictPtr`),
+  invalidation par `Update`, `Clean`→fond gris, letterbox 16:9 dans slot 4:3 (bandes
+  = fond), 30 ticks consécutifs (30 composites, aucun stall/EAGAIN). Recette conf
+  live (types de composition, VAD, record.mp4) restant à dérouler sur déploiement.
 - **Validation (à dérouler pour CHAQUE phase suivante aussi)** : conférence de test
   et bascule XML-RPC `SetCompositionType` sur **tous les types** — 1x1, 2x2, 3x3,
   4x4, 1p1, 3p4, 1p7, 1p5, 1p4, 2p8, PIP1, PIP3 ; aspect ratio (source 16:9 dans
@@ -559,18 +602,21 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   changement) ; enregistrement `record.mp4` pour inspection visuelle ; `mcu.log`
   sans erreurs avfilter ; CPU mixer comparé avant/après (`top -H`).
 
-### Phase 4 — Overlays et VU-mètre dans le nouveau chemin
+### Phase 4 — Overlays dans le nouveau chemin + suppression du VU-mètre
 - Entrées overlay du graphe : `BuildDesc` renseigne `hasOverlay/ovW/ovH` depuis
   `Mosaic::overlays` (participants, indexés par `mosaicPos[pos]`) et
   `Mosaic::overlay` (mosaïque) ; `Compose` reçoit les `Overlay::GetPict()`.
-- Retirer `ApplyParticipantOverlay`/`GetFrame`-overlay du flux ; `DrawVUMeter`
-  réécrit en post-passe debug sur le composite (mêmes `#ifdef MCUDEBUG/VADWEBRTC`).
-- Fichiers : `mosaic.{h,cpp}`, `mosaiccompositor.cpp`, `videomixer.cpp`
-  (appel `DrawVUMeter` déplacé après `GetPict`).
+- Retirer `ApplyParticipantOverlay`/`GetFrame`-overlay du flux.
+- **Supprimer entièrement le VU-mètre** (cf. §5) : retrait de l'appel
+  `videomixer.cpp:452-463` (`#ifdef MCUDEBUG`), de `Mosaic::DrawVUMeter`
+  (`mosaic.cpp:1110`) et de sa déclaration (`mosaic.h:102`). Pas de post-passe de
+  remplacement. (Indicateur d'activité éventuel = feature signalisation séparée,
+  RFC 6465 / T.140, cf. §5 — hors périmètre.)
+- Fichiers : `mosaic.{h,cpp}`, `mosaiccompositor.cpp`, `videomixer.cpp`.
 - **Validation** : `SetOverlayImage` (mosaïque et participant), `SetDisplayName`
   (texte, y compris re-render au changement de nom → PAS de reconstruction de
-  graphe), `ResetOverlay`, `MoveOverlays` via `SetCompositionType` ; VU-mètre en
-  build debug.
+  graphe), `ResetOverlay`, `MoveOverlays` via `SetCompositionType` ; vérifier que
+  le build `MCUDEBUG` compile sans le VU-mètre.
 
 ### Phase 5 — Chemin GPU (VAAPI)
 - `MosaicCompositor::BuildGraph(gpu=true)` : `scale_vaapi`/`overlay_vaapi`,
