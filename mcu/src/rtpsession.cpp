@@ -28,6 +28,13 @@ extern "C" {
 
 BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 
+//P6 : amorçage NAT symétrique (comedia). Nombre de paquets RTP valides émis en
+//rafale dès que la destination est connue, et intervalle (ms) entre eux. Plusieurs
+//paquets espacés résistent à la perte UDP et fiabilisent le latch d'un pair
+//symétrique (Asterisk nat=yes) qui n'émet qu'après avoir reçu du média.
+#define NAT_PRIMING_BURST	3
+#define NAT_PRIMING_INTERVAL_MS	20
+
 //srtp library initializers
 class SRTPLib
 {
@@ -168,6 +175,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	memset(iceCheckTransId,0,sizeof(iceCheckTransId));
 	//P5 : événement « média établi » pas encore émis
 	rtpReceivedNotified = false;
+	//P6 : aucune rafale d'amorçage NAT en cours
+	natPrimingLeft = 0;
+	setZeroTime(&natPrimingLast);
 	//NO FEC
 	useFEC = false;
 	useNACK = false;
@@ -717,8 +727,15 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 		//One more than rtp
 		sendRtcpAddr.sin_port 	= htons(sendPort+1);
 
-	//Open rtp and rtcp ports
-	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	//Amorçage du chemin d'envoi (ouverture NAT). En chiffré (DTLS/SRTP) on garde
+	//l'ouverture minimale historique : le handshake DTLS et les checks STUN prennent
+	//le relais. En clair (P6), on émet une rafale de paquets RTP valides pour faire
+	//latcher un pair symétrique (comedia) — le simple rtpEmpty de 8 octets ne suffit
+	//pas à un stack RTP strict.
+	if (encript)
+		sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	else
+		ArmNATPriming();
 
 	//P2 : la destination d'envoi est désormais connue -> si on est client DTLS
 	//(SetRemoteCryptoDTLS déjà appelé avec setup=passive), émettre le ClientHello.
@@ -1010,12 +1027,60 @@ int RTPSession::SendEmptyPacket()
 	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
 		//Exit
 		return 0;
-	
+
 	//Open rtp and rtcp ports
 	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
 
 	//ok
 	return 1;
+}
+
+//P6 : construit et émet UN paquet RTP valide (en-tête 12 octets, payload vide) vers
+//la destination, à des fins d'amorçage NAT symétrique. Un en-tête RTPv2 complet (avec
+//SSRC) suffit à faire latcher un pair comedia, contrairement au rtpEmpty tronqué.
+//Décrémente le compteur de rafale. À n'utiliser qu'en clair (voir ArmNATPriming).
+int RTPSession::SendNATPrimingPacket()
+{
+	//Destination inconnue : rien à émettre
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return 0;
+
+	//En-tête RTP minimal mais valide (V=2, P=0, X=0, CC=0, M=0). PT = type d'envoi
+	//négocié si connu, sinon PCMU(0) : le latch comedia ne dépend pas du PT.
+	BYTE packet[12];
+	int pt = (sendType >= 0) ? sendType : 0;
+	packet[0] = 0x80;
+	packet[1] = (BYTE)(pt & 0x7f);
+	set2(packet,2,sendSeq++);
+	set4(packet,4,sendTime);
+	set4(packet,8,sendSSRC);
+
+	sendto(simSocket,packet,sizeof(packet),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+
+	if (natPrimingLeft > 0)
+		natPrimingLeft--;
+
+	return 1;
+}
+
+//P6 : (ré)arme une rafale d'amorçage NAT. Émet immédiatement le premier paquet pour
+//ouvrir le pinhole au plus tôt ; le thread Run cadence les suivants (~20 ms). No-op
+//en chiffré (le WebRTC amorce via STUN/DTLS) ou tant que la destination est inconnue.
+void RTPSession::ArmNATPriming()
+{
+	if (encript)
+		return;
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return;
+
+	natPrimingLeft = NAT_PRIMING_BURST;
+	//Premier paquet tout de suite (SendNATPrimingPacket décrémente le compteur)
+	SendNATPrimingPacket();
+	gettimeofday(&natPrimingLast,NULL);
+
+	//Réveille le thread Run (s'il tourne) pour qu'il cadence la suite de la rafale
+	if (thread)
+		pthread_kill(thread,SIGIO);
 }
 
 void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
@@ -2152,12 +2217,20 @@ int RTPSession::Run()
 		bool iceDriving = !iceConnected && iceLocalUsername && iceRemoteUsername
 				&& iceRemotePwd && sendAddr.sin_addr.s_addr != INADDR_ANY;
 
+		//P6 : reste-t-il des paquets d'amorçage NAT à émettre ? (rafale armée, clair,
+		//destination connue). Cadencés ~20 ms par le poll borné ci-dessous.
+		bool natPriming = natPrimingLeft > 0 && !encript
+				&& sendAddr.sin_addr.s_addr != INADDR_ANY;
+
 		//Attente : infinie par défaut, bornée si watchdog armé et/ou handshake DTLS
 		//client / checks ICE en cours (on prend le plus court des seuils).
 		int waitMs = rtpTimeoutArmed ? pollTimeout : -1;
 		if (dtlsDriving || iceDriving)
 			waitMs = (waitMs < 0) ? dtlsPollTimeout
 					      : (waitMs < dtlsPollTimeout ? waitMs : dtlsPollTimeout);
+		if (natPriming)
+			waitMs = (waitMs < 0) ? NAT_PRIMING_INTERVAL_MS
+					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
 
 		//Wait for events
 		int nready = poll(ufds,2,waitMs);
@@ -2186,6 +2259,15 @@ int RTPSession::Run()
 		if (ufds[1].revents & POLLIN)
 			//Read rtcp data
 			ReadRTCP();
+
+		//P6 : cadence la rafale d'amorçage NAT (~20 ms entre paquets) tant qu'il en
+		//reste. Placé APRÈS ReadRTP : si le pair a déjà latché et répondu, la rafale
+		//continue quand même jusqu'au bout (inoffensif) — elle est courte et bornée.
+		if (natPriming && (getDifTime(&natPrimingLast)/1000) >= NAT_PRIMING_INTERVAL_MS)
+		{
+			SendNATPrimingPacket();
+			gettimeofday(&natPrimingLast,NULL);
+		}
 
 		//P3 : émettre/retransmettre les binding requests STUN sortants tant que la
 		//connectivité n'est pas confirmée (placé APRÈS ReadRTP : un check/réponse

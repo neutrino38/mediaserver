@@ -85,6 +85,13 @@ public:
 	//P5 : (ré)arme la notification « premier paquet RTP/SRTP reçu » (onRTPPacketReceived).
 	//Appelé à chaque (re)démarrage de la réception pour ré-émettre l'événement de connexion.
 	void ArmRTPReceivedNotification() { rtpReceivedNotified = false; }
+	//P6 : amorce le NAT traversal symétrique (comedia). Émet une courte rafale de
+	//paquets RTP valides vers la destination pour ouvrir le pinhole et faire latcher
+	//un pair symétrique (Asterisk nat=yes) qui n'émet qu'après avoir reçu du média.
+	//Réservé au RTP en clair (le WebRTC amorce via STUN/DTLS). Appelé quand la
+	//destination d'envoi devient connue (SetRemotePort) ; le thread Run cadence les
+	//paquets suivants (~20 ms). No-op si chiffré ou destination inconnue.
+	void ArmNATPriming();
 	//Trickle ICE Niveau 1 (gap 1) : parse une ligne SDP "candidate:..." et, pour un
 	//candidat host/srflx de priorité supérieure au candidat courant, reconfigure la
 	//cible d'envoi RTP/RTCP. Retourne 1 si accepté/ignoré proprement, 0 sur erreur.
@@ -380,6 +387,12 @@ private:
 	//P5 : anti-rebond one-shot de l'événement « média établi » (premier paquet RTP/SRTP
 	//reçu). Remis à false par ArmRTPReceivedNotification() à chaque StartReceiving.
 	bool	rtpReceivedNotified;
+	//P6 : amorçage NAT symétrique (comedia). natPrimingLeft = paquets restants dans
+	//la rafale courante (0 = inactif) ; natPrimingLast = horodatage du dernier envoi,
+	//utilisé par le thread Run pour cadencer ~20 ms. Émet un paquet et décrémente.
+	int	natPrimingLeft;
+	timeval	natPrimingLast;
+	int	SendNATPrimingPacket();
 	pthread_t thread;
 	std::mutex mutex;	
 
