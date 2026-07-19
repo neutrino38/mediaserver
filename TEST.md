@@ -48,7 +48,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 | `test_rtmp_chunk.cpp` | `RtmpChunk` | Round-trip de la **couche chunk** : `RTMPChunkOutputStream` → machine à états de dé-chunking (reprise de `rtmptest.cpp`) → `RTMPMessage` réassemblés (découpage multi-chunks, messages consécutifs, commande AMF) | **rtmptest** |
 | `test_websocket_frame.cpp` | `WebSocketFrame` | Round-trip de l'en-tête `WebSocketFrameHeader` (longueurs 7/16/64 bits, masque, opcodes de contrôle, parsing fragmenté) | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **Intégration en-processus** : `WebSocketServer` + `TextEchoWebsocketHandler`, client loopback interne → handshake HTTP Upgrade (101) + écho d'une trame texte masquée | **wstest** |
-| `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp` | **`Rtp`** : round-trips autonomes de l'en-tête `RTPPacket` (build → GetData → re-parse : seq/ts/ssrc/pt/marker/payload, bouclages 16/32 bits). **`RtpRtcp`** : parsing sur **capture réelle** (`fixtures/rtp_rtcp.pcap`) via `RTPPacket` + `RTCPCompoundPacket::Parse` — par paquet (version=2, pt<128, en-tête sain) et par flux (SSRC dominant : payload type constant, séquences en avant ≥90 %, timestamps non décroissants ≥90 %) ; côté RTCP, rapports SR/RR décodés | — (nouveau) |
+| `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp`, `RtpAdversarial`, `RtcpAdversarial` | **`Rtp`** : round-trips autonomes de l'en-tête `RTPPacket` (build → GetData → re-parse : seq/ts/ssrc/pt/marker/payload, bouclages 16/32 bits). **`RtpRtcp`** : parsing sur **capture réelle** (`fixtures/rtp_rtcp.pcap`) via `RTPPacket` + `RTCPCompoundPacket::Parse` — par paquet (version=2, pt<128, en-tête sain) et par flux (SSRC dominant : payload type constant, séquences en avant ≥90 %, timestamps non décroissants ≥90 %) ; côté RTCP, rapports SR/RR décodés. **`RtpAdversarial`/`RtcpAdversarial`** : paquets volontairement cassés (extension/CC surdimensionnés, mauvaise version, RTCP trop court / pt hors plage / length débordante) → parseurs qui ne crashent pas et détectent la malformation | — (nouveau) |
 
 ### Fixtures
 
@@ -78,8 +78,8 @@ il est **SKIPPÉ** (`GTEST_SKIP`) plutôt qu'échoué.
 
 ## Défauts mis au jour par la suite
 
-Les round-trips ont révélé trois bugs latents. **Deux ont été corrigés**, le
-troisième est documenté par un test de caractérisation.
+Les round-trips ont révélé trois bugs latents (deux corrigés, un caractérisé),
+plus une fuite mémoire observée par les tests adverses (point 4).
 
 1. **`AMFNumber::GetNumber` — signe (CORRIGÉ dans `amf.cpp`).** Le facteur de signe
    s'écrivait `(value>>63|1)`, ce qui suppose un décalage *arithmétique*. Or `value`
@@ -103,3 +103,10 @@ troisième est documenté par un test de caractérisation.
    `Amf.NumberZeroDecodeQuirk` : il réussit tant que le bug est présent ; s'il se met
    à échouer, c'est que le décodage de zéro a été corrigé (remplacer alors par un
    `EXPECT_DOUBLE_EQ(decoded, 0.0)`).
+
+4. **`RTCPCompoundPacket::Parse` — fuite mémoire sur entrée malformée (NON corrigé,
+   observé).** Sur le chemin d'erreur « Wrong rtcp packet size » (champ *length*
+   débordant, cf. `RtcpAdversarial.ParseRejectsLengthOverflow`), `Parse` fait
+   `return NULL` sans libérer le `RTCPCompoundPacket` déjà alloué ni le sous-paquet
+   en cours — fuite à chaque paquet RTCP malformé reçu. Le test vérifie seulement
+   l'absence de crash et le retour NULL ; la fuite reste à corriger côté production.

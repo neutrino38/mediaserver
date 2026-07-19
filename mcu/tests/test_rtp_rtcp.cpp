@@ -294,3 +294,120 @@ TEST(Rtp, SeqAndTimestampWrap)
 		EXPECT_EQ(out.GetMediaData()[0], 0xAB);
 	}
 }
+
+// ===========================================================================
+// Tests ADVERSES : paquets RTP/RTCP volontairement cassés. On vérifie que les
+// parseurs ne crashent pas (utile sous ASAN) et exposent de quoi détecter la
+// malformation. Les octets fautifs restent DANS le buffer fourni pour un
+// comportement déterministe (pas de lecture au-delà des données passées).
+// ===========================================================================
+
+namespace {
+
+// En-tête RTP minimal bien formé (12 octets) : V=2, P=0, X=0, CC=0.
+std::vector<BYTE> MakeRtpHeader(BYTE pt, WORD seq, DWORD ts, DWORD ssrc)
+{
+	std::vector<BYTE> b(12, 0);
+	b[0] = 0x80;                       // V=2
+	b[1] = (BYTE)(pt & 0x7F);          // M=0, PT
+	b[2] = (BYTE)(seq >> 8);  b[3] = (BYTE)seq;
+	b[4] = (BYTE)(ts >> 24);  b[5] = (BYTE)(ts >> 16);
+	b[6] = (BYTE)(ts >> 8);   b[7] = (BYTE)ts;
+	b[8] = (BYTE)(ssrc >> 24); b[9]  = (BYTE)(ssrc >> 16);
+	b[10] = (BYTE)(ssrc >> 8); b[11] = (BYTE)ssrc;
+	return b;
+}
+
+} // namespace
+
+// En-tête d'extension annonçant une taille démesurée : l'en-tête RTP calculé
+// déborde du datagramme -> détectable (GetRTPHeaderLen > taille), sans crash.
+TEST(RtpAdversarial, ExtensionLengthOverflow)
+{
+	std::vector<BYTE> b = MakeRtpHeader(96, 1, 2, 3);
+	b[0] |= 0x10;                 // X=1
+	b.push_back(0xBE); b.push_back(0xDE); // ext type
+	b.push_back(0xFF); b.push_back(0xFF); // ext len = 0xFFFF mots (32 bits)
+
+	RTPPacket rtp(MediaFrame::Audio, b.data(), b.size());
+	EXPECT_EQ(rtp.GetVersion(), 2);
+	EXPECT_TRUE(rtp.GetX());
+	EXPECT_GT(rtp.GetRTPHeaderLen(), (DWORD)b.size())
+		<< "en-tête d'extension surdimensionné non détecté";
+}
+
+// CSRC count = 15 dans un paquet trop court : l'en-tête calculé (12 + 60) dépasse
+// le datagramme -> détectable, pas de crash (seul l'octet 0 est lu pour cc).
+TEST(RtpAdversarial, CsrcCountOverflow)
+{
+	std::vector<BYTE> b = MakeRtpHeader(8, 1, 2, 3);
+	b[0] = 0x8F;                 // V=2, CC=15
+
+	RTPPacket rtp(MediaFrame::Audio, b.data(), b.size());
+	EXPECT_EQ(rtp.GetCC(), 15);
+	EXPECT_GT(rtp.GetRTPHeaderLen(), (DWORD)b.size());
+}
+
+// Mauvaise version : détectée par GetVersion (le classifieur du test capture
+// s'appuie dessus pour écarter le paquet).
+TEST(RtpAdversarial, WrongVersionDetectable)
+{
+	std::vector<BYTE> b = MakeRtpHeader(96, 1, 2, 3);
+	b[0] = 0x40;                 // V=1
+
+	RTPPacket rtp(MediaFrame::Audio, b.data(), b.size());
+	EXPECT_NE(rtp.GetVersion(), 2);
+}
+
+// En-tête exact sans payload : cas limite bien formé (longueur média = 0).
+TEST(RtpAdversarial, HeaderOnlyNoPayload)
+{
+	std::vector<BYTE> b = MakeRtpHeader(0, 100, 200, 300);
+	RTPPacket rtp(MediaFrame::Audio, b.data(), b.size());
+	EXPECT_EQ(rtp.GetVersion(), 2);
+	EXPECT_EQ(rtp.GetRTPHeaderLen(), 12u);
+	EXPECT_EQ(rtp.GetMediaLength(), 0u);
+}
+
+// --- RTCP ------------------------------------------------------------------
+
+TEST(RtcpAdversarial, IsRtcpRejectsTooShort)
+{
+	BYTE b[3] = {0x80, 200, 0};  // < sizeof(rtcp_common_t) (4 octets)
+	EXPECT_FALSE(RTCPCompoundPacket::IsRTCP(b, sizeof(b)));
+}
+
+TEST(RtcpAdversarial, IsRtcpRejectsWrongVersion)
+{
+	BYTE b[8] = {0};
+	b[0] = 0x40; b[1] = 200;     // V=1, pt=SR
+	EXPECT_FALSE(RTCPCompoundPacket::IsRTCP(b, sizeof(b)));
+}
+
+TEST(RtcpAdversarial, IsRtcpRejectsPtOutOfRange)
+{
+	BYTE b[8] = {0};
+	b[0] = 0x80;
+	b[1] = 100;  EXPECT_FALSE(RTCPCompoundPacket::IsRTCP(b, sizeof(b))); // < 200
+	b[1] = 207;  EXPECT_FALSE(RTCPCompoundPacket::IsRTCP(b, sizeof(b))); // > 206
+}
+
+TEST(RtcpAdversarial, ParseNonRtcpReturnsNull)
+{
+	BYTE b[8] = {0};
+	b[0] = 0x80; b[1] = 96;      // ressemble à du RTP, pas du RTCP
+	EXPECT_EQ(RTCPCompoundPacket::Parse(b, sizeof(b)), nullptr);
+}
+
+// En-tête RTCP valide (V=2, pt=SR) mais champ length démesuré : Parse doit
+// renvoyer NULL ("Wrong rtcp packet size") sans lire au-delà du buffer.
+TEST(RtcpAdversarial, ParseRejectsLengthOverflow)
+{
+	BYTE b[8] = {0};
+	b[0] = 0x80; b[1] = 200;     // V=2, SenderReport
+	b[2] = 0xFF; b[3] = 0xFF;    // length = 0xFFFF mots -> ~256 Ko annoncés
+	ASSERT_TRUE(RTCPCompoundPacket::IsRTCP(b, sizeof(b)));
+	RTCPCompoundPacket* c = RTCPCompoundPacket::Parse(b, sizeof(b));
+	EXPECT_EQ(c, nullptr) << "longueur RTCP débordante non rejetée";
+	delete c; // no-op si nullptr
+}

@@ -52,4 +52,4 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_rtmp_chunk.cpp` | `RtmpChunk` | **rtmptest** |
 | `test_websocket_frame.cpp` | `WebSocketFrame` | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **wstest** |
-| `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp` | — (round-trips RTP + capture `fixtures/rtp_rtcp.pcap`) |
+| `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp`, `RtpAdversarial`, `RtcpAdversarial` | — (round-trips RTP + capture `fixtures/rtp_rtcp.pcap` + paquets cassés) |
