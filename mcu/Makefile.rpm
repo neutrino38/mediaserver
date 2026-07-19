@@ -264,6 +264,35 @@ flashstreamer: $(OBJSFS) $(OBJS)
 
 
 ############################################
+# Tests automatises (GoogleTest, cf. mcu/tests/README.md)
+############################################
+# Suite gtest liee contre les objets du mcu ($(OBJS), soit tout sauf main.o /
+# rtmptest.o / wstest.o) + gtest systeme. gtest_main fournit main(). REMPLACE les
+# harnais manuels rtmptest.cpp (couche chunk RTMP) et wstest.cpp (serveur d'echo
+# WebSocket) par des tests autonomes et assertifs.
+# Usage : make -f Makefile.rpm check   (build + execution)
+#         make -f Makefile.rpm tests   (build seul -> tests/runtests)
+# NB : PAS de -lgtest_main. La suite fournit son propre main() (tests/test_env.cpp)
+# car libwebrtc_audio_processing.so (VAD) exporte un symbole `main` parasite qui,
+# .so contre .so, l'emportait sur celui de libgtest_main dans la resolution
+# dynamique. Un main() defini dans l'executable est une definition forte.
+GTEST_CFLAGS := $(shell pkg-config --cflags gtest 2>/dev/null)
+GTEST_LIBS   := $(shell pkg-config --libs gtest 2>/dev/null)
+TESTSRCS     := $(wildcard tests/*.cpp)
+BUILDOBJSTEST = $(addprefix $(BUILD)/,$(OBJS))
+
+tests/runtests: mkdirs $(OBJS) $(TESTSRCS)
+	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) $(TESTSRCS) $(BUILDOBJSTEST) \
+		-o tests/runtests $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
+
+tests: tests/runtests
+
+check: tests/runtests
+	./tests/runtests
+
+.PHONY: tests check
+
+############################################
 # Dependances generees automatiquement (headers -> objets)
 ############################################
 -include $(wildcard $(BUILD)/*.d)

@@ -492,7 +492,14 @@ double AMFNumber::GetNumber()
 {
 	if(value+value > 0xFFEULL<<52)
         	return 0.0;
-    	return ldexp(((value&((1LL<<52)-1)) + (1LL<<52)) * (value>>63|1), (value>>52&0x7FF)-1075);
+	// Mantisse (bit implicite 1.xxx + 52 bits de fraction), puis application du
+	// signe et de l'exposant biaise (IEEE-754 double). `value` est un uint64_t :
+	// on porte donc la mantisse dans un int64_t signe avant de la negativer, sinon
+	// `value>>63` (decalage LOGIQUE) ne permet pas de retrouver le signe.
+	int64_t mantissa = (int64_t)((value & ((1ULL<<52)-1)) + (1ULL<<52));
+	if (value>>63)
+		mantissa = -mantissa;
+	return ldexp((double)mantissa, (int)((value>>52&0x7FF)-1075));
 }
 
 void AMFNumber::SetNumber(double d)
