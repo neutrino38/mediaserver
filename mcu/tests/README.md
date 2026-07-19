@@ -52,3 +52,4 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_rtmp_chunk.cpp` | `RtmpChunk` | **rtmptest** |
 | `test_websocket_frame.cpp` | `WebSocketFrame` | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **wstest** |
+| `test_rtp_rtcp.cpp` | `RtpRtcp` | — (capture `fixtures/rtp_rtcp.pcap`) |

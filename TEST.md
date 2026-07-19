@@ -48,6 +48,17 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 | `test_rtmp_chunk.cpp` | `RtmpChunk` | Round-trip de la **couche chunk** : `RTMPChunkOutputStream` → machine à états de dé-chunking (reprise de `rtmptest.cpp`) → `RTMPMessage` réassemblés (découpage multi-chunks, messages consécutifs, commande AMF) | **rtmptest** |
 | `test_websocket_frame.cpp` | `WebSocketFrame` | Round-trip de l'en-tête `WebSocketFrameHeader` (longueurs 7/16/64 bits, masque, opcodes de contrôle, parsing fragmenté) | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **Intégration en-processus** : `WebSocketServer` + `TextEchoWebsocketHandler`, client loopback interne → handshake HTTP Upgrade (101) + écho d'une trame texte masquée | **wstest** |
+| `test_rtp_rtcp.cpp` | `RtpRtcp` | Parsing RTP/RTCP sur **capture réelle** : rejeu de la fixture `fixtures/rtp_rtcp.pcap` à travers `RTPPacket` et `RTCPCompoundPacket::Parse` (version RTP=2, cohérence par SSRC, rapports SR/RR) | — (nouveau) |
+
+### Fixtures
+
+`fixtures/rtp_rtcp.pcap` (pcap classique, link-type Ethernet) est extraite de la
+capture `record.pcap` du dépôt, filtrée pour ne conserver que le trafic RTP/RTCP
+(≈ 1690 paquets RTP + 49 paquets composés RTCP, 4 SSRC). Son chemin absolu est
+injecté au test via `-DTEST_PCAP_FILE` (surchargeable : `make check TEST_PCAP=…`).
+Le test lit le pcap avec un petit walker Ethernet/IPv4/UDP intégré (pas de
+dépendance libpcap) et classe chaque datagramme via `RTCPCompoundPacket::IsRTCP`
+puis la version RTP ; le bruit résiduel est ignoré. Fixture absente → test SKIPPÉ.
 
 ## Conception
 
