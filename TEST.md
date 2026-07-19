@@ -79,7 +79,7 @@ il est **SKIPPÉ** (`GTEST_SKIP`) plutôt qu'échoué.
 ## Défauts mis au jour par la suite
 
 Les round-trips ont révélé trois bugs latents (deux corrigés, un caractérisé),
-plus une fuite mémoire observée par les tests adverses (point 4).
+plus une fuite mémoire trouvée par les tests adverses et corrigée (point 4).
 
 1. **`AMFNumber::GetNumber` — signe (CORRIGÉ dans `amf.cpp`).** Le facteur de signe
    s'écrivait `(value>>63|1)`, ce qui suppose un décalage *arithmétique*. Or `value`
@@ -104,9 +104,11 @@ plus une fuite mémoire observée par les tests adverses (point 4).
    à échouer, c'est que le décodage de zéro a été corrigé (remplacer alors par un
    `EXPECT_DOUBLE_EQ(decoded, 0.0)`).
 
-4. **`RTCPCompoundPacket::Parse` — fuite mémoire sur entrée malformée (NON corrigé,
-   observé).** Sur le chemin d'erreur « Wrong rtcp packet size » (champ *length*
-   débordant, cf. `RtcpAdversarial.ParseRejectsLengthOverflow`), `Parse` fait
+4. **`RTCPCompoundPacket::Parse` — fuite mémoire sur entrée malformée (CORRIGÉE dans
+   `rtp.cpp`).** Sur le chemin d'erreur « Wrong rtcp packet size » (champ *length*
+   débordant, cf. `RtcpAdversarial.ParseRejectsLengthOverflow`), `Parse` faisait
    `return NULL` sans libérer le `RTCPCompoundPacket` déjà alloué ni le sous-paquet
-   en cours — fuite à chaque paquet RTCP malformé reçu. Le test vérifie seulement
-   l'absence de crash et le retour NULL ; la fuite reste à corriger côté production.
+   en cours — fuite à chaque paquet RTCP malformé reçu. Un second cas fuyait aussi le
+   sous-paquet lorsque `packet->Parse` échouait (type connu mais corps invalide).
+   Correctif : `delete packet; delete rtcp;` avant le `return NULL`, et `delete packet`
+   dans la branche « non ajouté au compound » (delete nullptr est sans effet).
