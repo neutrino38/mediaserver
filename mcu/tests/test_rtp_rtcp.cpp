@@ -138,8 +138,11 @@ TEST(RtpRtcp, ParseRealCapture)
 
 	unsigned rtpCount = 0, rtcpCount = 0, otherCount = 0;
 	unsigned srCount = 0, rrCount = 0, rtcpSubPackets = 0;
-	std::map<DWORD, std::pair<DWORD, DWORD>> seqBySsrc; // ssrc -> (seqMin, seqMax)
-	std::map<DWORD, unsigned> pktBySsrc;
+
+	// Enregistrement ORDONNÉ (par ordre d'arrivée) de chaque flux RTP, par SSRC :
+	// on garde seq/timestamp/payload-type pour vérifier la cohérence d'un vrai flux.
+	struct RtpRec { WORD seq; DWORD ts; BYTE pt; };
+	std::map<DWORD, std::vector<RtpRec>> streamBySsrc;
 
 	std::vector<BYTE> frame;
 	while (pcap.Next(frame))
@@ -171,19 +174,20 @@ TEST(RtpRtcp, ParseRealCapture)
 		else if (plen >= 12 && (payload[0] >> 6) == 2 && plen <= 1700)
 		{
 			RTPPacket rtp(MediaFrame::Audio, (BYTE*)payload, plen);
-			EXPECT_EQ(rtp.GetVersion(), 2);
-			EXPECT_LT(rtp.GetType(), 128u); // payload type sur 7 bits
-			DWORD ssrc = rtp.GetSSRC();
-			WORD seq = rtp.GetSeqNum();
-			auto it = seqBySsrc.find(ssrc);
-			if (it == seqBySsrc.end())
-				seqBySsrc[ssrc] = {seq, seq};
-			else
+			// Le filtre « version==2 » attrape quelques faux positifs (paquets non-RTP
+			// dont le 1er octet commence par 0b10) : si l'en-tête calculé (CC/extension)
+			// déborde du datagramme, ce n'est pas du RTP bien formé -> compté à part.
+			if (rtp.GetRTPHeaderLen() > plen)
 			{
-				if (seq < it->second.first) it->second.first = seq;
-				if (seq > it->second.second) it->second.second = seq;
+				++otherCount;
+				continue;
 			}
-			++pktBySsrc[ssrc];
+			// Décodage d'en-tête RTP bien formé : contrôles par paquet.
+			EXPECT_EQ(rtp.GetVersion(), 2);
+			EXPECT_LT(rtp.GetType(), 128u);                  // payload type sur 7 bits
+			EXPECT_GE(rtp.GetRTPHeaderLen(), 12u);           // en-tête RTP fixe minimal
+			streamBySsrc[rtp.GetSSRC()].push_back(
+				{rtp.GetSeqNum(), rtp.GetTimestamp(), (BYTE)rtp.GetType()});
 			++rtpCount;
 		}
 		else
@@ -192,19 +196,101 @@ TEST(RtpRtcp, ParseRealCapture)
 
 	// --- Assertions globales sur la capture ---------------------------------
 	printf("[rtp/rtcp] RTP=%u RTCP=%u (sous-paquets=%u, SR=%u, RR=%u) autres=%u SSRC=%zu\n",
-	       rtpCount, rtcpCount, rtcpSubPackets, srCount, rrCount, otherCount, seqBySsrc.size());
+	       rtpCount, rtcpCount, rtcpSubPackets, srCount, rrCount, otherCount, streamBySsrc.size());
 
 	EXPECT_GT(rtpCount, 100u)  << "trop peu de paquets RTP décodés";
 	EXPECT_GE(rtcpCount, 5u)   << "trop peu de paquets composés RTCP décodés";
 	EXPECT_GT(srCount + rrCount, 0u) << "aucun rapport RTCP (SR/RR) décodé";
-	ASSERT_FALSE(seqBySsrc.empty());
+	ASSERT_FALSE(streamBySsrc.empty());
 
-	// Le SSRC le plus actif doit couvrir une plage de séquence non triviale
-	// (les paquets progressent, ce n'est pas une trame figée).
-	DWORD busiest = 0; unsigned best = 0;
-	for (auto& kv : pktBySsrc)
-		if (kv.second > best) { best = kv.second; busiest = kv.first; }
-	EXPECT_GT(best, 10u);
-	auto& span = seqBySsrc[busiest];
-	EXPECT_GT(span.second, span.first) << "les numéros de séquence RTP ne progressent pas";
+	// --- Cohérence du flux RTP le plus actif --------------------------------
+	// On analyse le SSRC le plus fourni : un vrai flux RTP doit avoir un payload
+	// type constant, des numéros de séquence qui avancent (avec gestion du
+	// bouclage 16 bits) et des timestamps non décroissants dans la grande majorité.
+	DWORD busiest = 0; size_t best = 0;
+	for (auto& kv : streamBySsrc)
+		if (kv.second.size() > best) { best = kv.second.size(); busiest = kv.first; }
+	const std::vector<RtpRec>& s = streamBySsrc[busiest];
+	ASSERT_GT(s.size(), 50u) << "flux RTP dominant trop court pour être analysé";
+
+	// (a) payload type unique sur tout le flux
+	for (const RtpRec& r : s)
+		EXPECT_EQ(r.pt, s[0].pt) << "payload type incohérent dans le flux SSRC dominant";
+
+	// (b) séquences en avant + timestamps non décroissants (majoritaires)
+	unsigned seqForward = 0, tsNonDecr = 0;
+	for (size_t i = 1; i < s.size(); ++i)
+	{
+		WORD d = (WORD)(s[i].seq - s[i - 1].seq); // arithmétique 16 bits (bouclage)
+		if (d >= 1 && d < 1000)
+			++seqForward;
+		if ((DWORD)(s[i].ts - s[i - 1].ts) < 0x80000000u) // pas de recul (mod 2^32)
+			++tsNonDecr;
+	}
+	size_t steps = s.size() - 1;
+	EXPECT_GT(seqForward, steps * 9 / 10)
+		<< "les numéros de séquence RTP ne progressent pas régulièrement";
+	EXPECT_GT(tsNonDecr, steps * 9 / 10)
+		<< "les timestamps RTP reculent trop souvent";
+}
+
+// ===========================================================================
+// Tests RTP AUTONOMES (sans pcap) : round-trip de l'en-tête RTP dans l'esprit
+// des autres suites (build -> GetData/GetSize -> re-parse). Ils exercent
+// directement RTPPacket sans dépendre de la capture.
+// ===========================================================================
+TEST(Rtp, HeaderRoundTrip)
+{
+	BYTE media[64];
+	for (int i = 0; i < 64; ++i) media[i] = (BYTE)(0x30 + i);
+
+	DWORD codec = 0; // variable (pas une constante pointeur nul) -> lève l'ambiguïté
+	RTPPacket in(MediaFrame::Audio, codec, (DWORD)96);
+	in.SetSeqNum(0x1234);
+	in.SetTimestamp(0xDEADBEEF);
+	in.SetSSRC(0xCAFEBABE);
+	in.SetMark(true);
+	ASSERT_TRUE(in.SetPayload(media, sizeof(media)));
+
+	// Sérialisation sur le fil = en-tête (12 o) + payload.
+	EXPECT_EQ(in.GetRTPHeaderLen(), 12u);
+	EXPECT_EQ(in.GetSize(), 12u + sizeof(media));
+
+	// Re-parse depuis les octets bruts.
+	RTPPacket out(MediaFrame::Audio, in.GetData(), in.GetSize());
+	EXPECT_EQ(out.GetVersion(), 2);
+	EXPECT_EQ(out.GetType(), 96u);
+	EXPECT_EQ(out.GetSeqNum(), 0x1234);
+	EXPECT_EQ(out.GetTimestamp(), 0xDEADBEEFu);
+	EXPECT_EQ(out.GetSSRC(), 0xCAFEBABEu);
+	EXPECT_TRUE(out.GetMark());
+	ASSERT_EQ(out.GetMediaLength(), sizeof(media));
+	EXPECT_EQ(0, memcmp(out.GetMediaData(), media, sizeof(media)));
+
+	// Accès statiques sur le buffer brut (utilisés par le démultiplexage RTP).
+	EXPECT_EQ(RTPPacket::GetType(in.GetData()), 96);
+	EXPECT_EQ(RTPPacket::GetSSRC(in.GetData()), 0xCAFEBABEu);
+}
+
+TEST(Rtp, SeqAndTimestampWrap)
+{
+	// Valeurs limites : bouclage 16 bits de la séquence et 32 bits du timestamp.
+	DWORD codec = 0;
+	for (auto pt : {(DWORD)0, (DWORD)8, (DWORD)127})
+	{
+		RTPPacket in(MediaFrame::Video, codec, pt);
+		in.SetSeqNum(0xFFFF);
+		in.SetTimestamp(0xFFFFFFFF);
+		in.SetMark(false);
+		BYTE b = 0xAB;
+		ASSERT_TRUE(in.SetPayload(&b, 1));
+
+		RTPPacket out(MediaFrame::Video, in.GetData(), in.GetSize());
+		EXPECT_EQ(out.GetType(), pt);
+		EXPECT_EQ(out.GetSeqNum(), 0xFFFF);
+		EXPECT_EQ(out.GetTimestamp(), 0xFFFFFFFFu);
+		EXPECT_FALSE(out.GetMark());
+		ASSERT_EQ(out.GetMediaLength(), 1u);
+		EXPECT_EQ(out.GetMediaData()[0], 0xAB);
+	}
 }
