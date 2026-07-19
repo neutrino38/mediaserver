@@ -275,6 +275,10 @@ RTCPCompoundPacket* RTCPCompoundPacket::Parse(BYTE *data,DWORD size)
 		{
 			//error
 			Error("Wrong rtcp packet size\n");
+			//Libere le sous-paquet en cours (nullptr-safe) et le compound
+			//partiellement construit avant de sortir (sinon fuite sur entree malformee).
+			delete packet;
+			delete rtcp;
 			//Exit
 			return NULL;
 		}
@@ -282,6 +286,10 @@ RTCPCompoundPacket* RTCPCompoundPacket::Parse(BYTE *data,DWORD size)
 		if (packet && packet->Parse(buffer,len))
 			//Add packet
 			rtcp->AddRTCPacket(packet);
+		else
+			//Type inconnu (packet==NULL) ou parsing echoue : pas ajoute au compound,
+			//donc a liberer ici pour eviter la fuite (delete nullptr est sans effet).
+			delete packet;
 		//Remove size
 		bufferLen -= len;
 		//Increase pointer
