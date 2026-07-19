@@ -35,7 +35,8 @@ public:
 		PlayerStartedEvent			= 3,
 		RecorderStartedEvent		= 4,
 		RecorderStoppedEvent		= 5,
-		EndpointDisconnectedEvent	= 6	// réservé (Phase 3 - timeout RTP)
+		EndpointDisconnectedEvent	= 6,	// watchdog d'inactivité RTP (gap 5)
+		EndpointConnectedEvent		= 7	// P5 : média établi (DTLS OK + 1er RTP reçu)
 	};
 public:
 	JSR309Event();

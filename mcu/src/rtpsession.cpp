@@ -28,6 +28,13 @@ extern "C" {
 
 BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 
+//P6 : amorçage NAT symétrique (comedia). Nombre de paquets RTP valides émis en
+//rafale dès que la destination est connue, et intervalle (ms) entre eux. Plusieurs
+//paquets espacés résistent à la perte UDP et fiabilisent le latch d'un pair
+//symétrique (Asterisk nat=yes) qui n'émet qu'après avoir reçu du média.
+#define NAT_PRIMING_BURST	3
+#define NAT_PRIMING_INTERVAL_MS	20
+
 //srtp library initializers
 class SRTPLib
 {
@@ -142,6 +149,10 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//No cripto
 	encript = false;
 	decript = false;
+	//P2 : handshake DTLS client non amorcé
+	dtlsClientStarted = false;
+	dtlsClientFailed  = false;
+	setZeroTime(&dtlsClientStart);
 	sendSRTPSession = NULL;
 	recvSRTPSession = NULL;
 	recvSRTPSession_secondary = NULL;
@@ -156,6 +167,17 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	iceRemotePwd = NULL;
 	//Aucun candidat ICE distant retenu (gap 1)
 	iceRemotePriority = 0;
+	//P3 : aucun check STUN sortant émis, connectivité non confirmée
+	iceConnected    = false;
+	iceCheckStarted = false;
+	iceCheckRto     = 0;
+	setZeroTime(&iceLastCheck);
+	memset(iceCheckTransId,0,sizeof(iceCheckTransId));
+	//P5 : événement « média établi » pas encore émis
+	rtpReceivedNotified = false;
+	//P6 : aucune rafale d'amorçage NAT en cours
+	natPrimingLeft = 0;
+	setZeroTime(&natPrimingLast);
 	//NO FEC
 	useFEC = false;
 	useNACK = false;
@@ -455,6 +477,10 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	//Store values
 	iceRemoteUsername = strdup(username);
 	iceRemotePwd = strdup(pwd);
+	//P3 : réveille le thread Run pour (ré)évaluer l'émission de checks STUN sortants
+	//dès que la destination sera connue (pair ICE-lite qui n'initie jamais).
+	if (thread)
+		pthread_kill(thread,SIGIO);
 	//Ok
 	return 1;
 }
@@ -487,8 +513,15 @@ int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const cha
 	encript = true;
 	decript = true;
 
-	//Init DTLS
-	return dtls.Init();
+	//Init DTLS (génère le ClientHello dans write_bio si on est en rôle client)
+	int res = dtls.Init();
+
+	//P2 : si le pair est passive, nous sommes client -> amorcer le handshake dès
+	//maintenant si la destination est déjà connue (StartSending déjà appelé), sinon
+	//SetRemotePort le déclenchera. Les deux ordres d'appel sont ainsi couverts.
+	RequestDTLSClientHandshake();
+
+	return res;
 }
 
 int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank)
@@ -694,10 +727,21 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 		//One more than rtp
 		sendRtcpAddr.sin_port 	= htons(sendPort+1);
 
-	//Open rtp and rtcp ports
-	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	//Amorçage du chemin d'envoi (ouverture NAT). En chiffré (DTLS/SRTP) on garde
+	//l'ouverture minimale historique : le handshake DTLS et les checks STUN prennent
+	//le relais. En clair (P6), on émet une rafale de paquets RTP valides pour faire
+	//latcher un pair symétrique (comedia) — le simple rtpEmpty de 8 octets ne suffit
+	//pas à un stack RTP strict.
+	if (encript)
+		sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	else
+		ArmNATPriming();
 
-	//Y abrimos los sockets	
+	//P2 : la destination d'envoi est désormais connue -> si on est client DTLS
+	//(SetRemoteCryptoDTLS déjà appelé avec setup=passive), émettre le ClientHello.
+	RequestDTLSClientHandshake();
+
+	//Y abrimos los sockets
 	return 1;
 }
 
@@ -729,6 +773,180 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 		rtpTimeoutArmed = false;
 		mutex.unlock();
 		Log("-ArmRTPTimeout: watchdog désarmé [%p]\n",this);
+	}
+}
+
+//Borne globale de sécurité du handshake DTLS client (ms) : au-delà, on bascule
+//sur le chemin d'erreur transport (onRTPTimeout -> EndpointDisconnectedEvent).
+//OpenSSL abandonne en général avant (HandleTimeout renvoie -1), c'est un filet.
+#define DTLS_CLIENT_HANDSHAKE_TIMEOUT 30000
+
+void RTPSession::FlushDTLS()
+{
+	//Rien à émettre tant que la destination n'est pas connue (StartSending /
+	//candidat ICE / latch STUN n'ont pas encore fixé sendAddr).
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return;
+
+	BYTE buffer[MTU];
+	int len;
+	//Vide toutes les données DTLS en attente dans write_bio (ClientHello puis
+	//flights suivants) vers la cible d'envoi, indépendamment du STUN entrant.
+	while ((len = dtls.Read(buffer,MTU)) > 0)
+		sendto(simSocket,buffer,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+}
+
+void RTPSession::RequestDTLSClientHandshake()
+{
+	//No-op si on n'est pas en rôle client DTLS (rôle serveur/passive, SDES, ou DTLS
+	//pas encore initialisé) : aucune régression pour setup=active / navigateurs.
+	if (!dtls.IsInited() || !dtls.IsClientRole())
+		return;
+
+	//Réveille le thread Run (poll -> EINTR via SIGIO) pour qu'il pilote le handshake
+	//sans attendre un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
+	if (thread)
+		pthread_kill(thread,SIGIO);
+}
+
+void RTPSession::DriveDTLSClientHandshake()
+{
+	//Rôle client uniquement, DTLS prêt, handshake pas terminé, destination connue.
+	if (!dtls.IsInited() || !dtls.IsClientRole() || dtls.IsHandshakeCompleted())
+		return;
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return;
+
+	//Première émission : le ClientHello généré par dtls.Init() attend dans write_bio.
+	if (!dtlsClientStarted)
+	{
+		Log("-RTPSession DTLS client: émission du ClientHello vers [%s:%d] [%p]\n",
+			inet_ntoa(sendAddr.sin_addr),ntohs(sendAddr.sin_port),this);
+		dtlsClientStarted = true;
+		dtlsClientFailed  = false;
+		gettimeofday(&dtlsClientStart,NULL);
+		FlushDTLS();
+		return;
+	}
+
+	//Retransmissions pilotées par OpenSSL (backoff exponentiel DTLS).
+	int r = dtls.HandleTimeout();
+	if (r>0)
+		//Un flight a été re-mis en file d'attente : on le pousse sur le fil.
+		FlushDTLS();
+	else if (r<0 && !dtlsClientFailed)
+	{
+		Error("-RTPSession DTLS client: échec du handshake (trop de retransmissions) [%p]\n",this);
+		dtlsClientFailed = true;
+		if (auto l = LockListener())
+			l->onRTPTimeout(this);
+		return;
+	}
+
+	//Filet de sécurité : borne globale même si OpenSSL ne rend pas -1.
+	if (!dtlsClientFailed && (getDifTime(&dtlsClientStart)/1000) > DTLS_CLIENT_HANDSHAKE_TIMEOUT)
+	{
+		Error("-RTPSession DTLS client: timeout global du handshake (%d ms) [%p]\n",
+			DTLS_CLIENT_HANDSHAKE_TIMEOUT,this);
+		dtlsClientFailed = true;
+		if (auto l = LockListener())
+			l->onRTPTimeout(this);
+	}
+}
+
+//P3 : bornes de retransmission des binding requests STUN sortants (backoff)
+#define ICE_CHECK_MIN_RTO 250   //ms : premier intervalle de retransmission
+#define ICE_CHECK_MAX_RTO 1500  //ms : intervalle maximal (doublement borné)
+
+void RTPSession::SendICEBindingRequest()
+{
+	//Il faut les credentials (locales+distantes) et une destination connue.
+	if (!iceLocalUsername || !iceRemoteUsername || !iceRemotePwd)
+		return;
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return;
+
+	//Transaction id (0 | timestamp), mémorisé pour corréler la réponse.
+	set4(iceCheckTransId,0,0);
+	set8(iceCheckTransId,4,getTime());
+
+	//USERNAME = "remoteUfrag:localUfrag" : AddUsernameAttribute(local,remote) produit
+	//bien "remote:local". MESSAGE-INTEGRITY clé = mot de passe DISTANT. Rôle
+	//CONTROLLING + USE-CANDIDATE : nomination agressive, acceptable pour un pair lite.
+	STUNMessage *request = new STUNMessage(STUNMessage::Request,STUNMessage::Binding,iceCheckTransId);
+	request->AddUsernameAttribute(iceLocalUsername,iceRemoteUsername);
+	request->AddAttribute(STUNMessage::Attribute::IceControlling,(QWORD)-1);
+	request->AddAttribute(STUNMessage::Attribute::UseCandidate);
+	request->AddAttribute(STUNMessage::Attribute::Priority,(DWORD)33554431);
+
+	DWORD size = request->GetSize();
+	BYTE* aux = (BYTE*)malloc(size);
+	DWORD len = request->AuthenticatedFingerPrint(aux,size,iceRemotePwd);
+	if (len)
+	{
+		Debug("ICE: envoi Binding Request sortant (user=%s) vers %s:%d [%p]\n",
+			iceRemoteUsername, inet_ntoa(sendAddr.sin_addr), ntohs(sendAddr.sin_port), this);
+		sendto(simSocket,aux,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	}
+	free(aux);
+	delete(request);
+}
+
+void RTPSession::DriveICEChecks()
+{
+	//Actif uniquement si : creds locales+distantes connues, destination connue,
+	//connectivité pas encore confirmée. Constant face à un pair ICE-lite (qui n'initie
+	//jamais) ; inoffensif face à un pair full (il répond -> iceConnected -> on s'arrête).
+	if (iceConnected)
+		return;
+	if (!iceLocalUsername || !iceRemoteUsername || !iceRemotePwd)
+		return;
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return;
+
+	//Première émission immédiate.
+	if (!iceCheckStarted)
+	{
+		iceCheckStarted = true;
+		iceCheckRto     = ICE_CHECK_MIN_RTO;
+		SendICEBindingRequest();
+		gettimeofday(&iceLastCheck,NULL);
+		return;
+	}
+
+	//Retransmission avec backoff exponentiel borné jusqu'à réception d'une réponse.
+	if ((getDifTime(&iceLastCheck)/1000) >= iceCheckRto)
+	{
+		SendICEBindingRequest();
+		gettimeofday(&iceLastCheck,NULL);
+		if (iceCheckRto < ICE_CHECK_MAX_RTO)
+			iceCheckRto *= 2;
+	}
+}
+
+void RTPSession::OnICEConnectivityConfirmed(sockaddr_in* from)
+{
+	//Latch symétrique de l'adresse distante si pas encore fixée.
+	if (recIP == INADDR_ANY)
+	{
+		recIP   = from->sin_addr.s_addr;
+		recPort = ntohs(from->sin_port);
+	}
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	{
+		sendAddr.sin_addr.s_addr = from->sin_addr.s_addr;
+		sendAddr.sin_port        = from->sin_port;
+	}
+
+	if (!iceConnected)
+	{
+		Log("-RTPSession ICE: connectivité confirmée avec [%s:%d] [%p]\n",
+			inet_ntoa(from->sin_addr), ntohs(from->sin_port), this);
+		//Connectivité validée : on cesse d'émettre des checks sortants. Le handshake
+		//DTLS client (P2) et le média ne sont pas gatés par l'ICE dans cette
+		//implémentation (cf. audit P1) : ils sont pilotés indépendamment par la boucle
+		//Run. Marquer iceConnected débloque donc simplement l'arrêt des checks.
+		iceConnected = true;
 	}
 }
 
@@ -796,6 +1014,10 @@ int RTPSession::AddICECandidate(const char* candidate)
 	//Amorce le chemin (ouverture NAT ; le STUN entrant confirmera la connectivité)
 	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
 
+	//P2 : un candidat gagnant fournit une destination -> amorcer le ClientHello si
+	//on est client DTLS et que StartSending n'a pas encore fixé l'adresse.
+	RequestDTLSClientHandshake();
+
 	return 1;
 }
 
@@ -805,12 +1027,60 @@ int RTPSession::SendEmptyPacket()
 	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
 		//Exit
 		return 0;
-	
+
 	//Open rtp and rtcp ports
 	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
 
 	//ok
 	return 1;
+}
+
+//P6 : construit et émet UN paquet RTP valide (en-tête 12 octets, payload vide) vers
+//la destination, à des fins d'amorçage NAT symétrique. Un en-tête RTPv2 complet (avec
+//SSRC) suffit à faire latcher un pair comedia, contrairement au rtpEmpty tronqué.
+//Décrémente le compteur de rafale. À n'utiliser qu'en clair (voir ArmNATPriming).
+int RTPSession::SendNATPrimingPacket()
+{
+	//Destination inconnue : rien à émettre
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return 0;
+
+	//En-tête RTP minimal mais valide (V=2, P=0, X=0, CC=0, M=0). PT = type d'envoi
+	//négocié si connu, sinon PCMU(0) : le latch comedia ne dépend pas du PT.
+	BYTE packet[12];
+	int pt = (sendType >= 0) ? sendType : 0;
+	packet[0] = 0x80;
+	packet[1] = (BYTE)(pt & 0x7f);
+	set2(packet,2,sendSeq++);
+	set4(packet,4,sendTime);
+	set4(packet,8,sendSSRC);
+
+	sendto(simSocket,packet,sizeof(packet),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+
+	if (natPrimingLeft > 0)
+		natPrimingLeft--;
+
+	return 1;
+}
+
+//P6 : (ré)arme une rafale d'amorçage NAT. Émet immédiatement le premier paquet pour
+//ouvrir le pinhole au plus tôt ; le thread Run cadence les suivants (~20 ms). No-op
+//en chiffré (le WebRTC amorce via STUN/DTLS) ou tant que la destination est inconnue.
+void RTPSession::ArmNATPriming()
+{
+	if (encript)
+		return;
+	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+		return;
+
+	natPrimingLeft = NAT_PRIMING_BURST;
+	//Premier paquet tout de suite (SendNATPrimingPacket décrémente le compteur)
+	SendNATPrimingPacket();
+	gettimeofday(&natPrimingLast,NULL);
+
+	//Réveille le thread Run (s'il tourne) pour qu'il cadence la suite de la rafale
+	if (thread)
+		pthread_kill(thread,SIGIO);
 }
 
 void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
@@ -1434,8 +1704,16 @@ int RTPSession::ReadRTP()
 				iceRemoteIP = from_addr.sin_addr.s_addr;
 			}
 
+			//P3 : un check entrant valide prouve la connectivité (rôle serveur /
+			//navigateur) -> on cesse nos éventuels checks sortants (pas de régression).
+			if (!iceConnected && iceRemotePwd)
+			{
+				Log("-RTPSession ICE: connectivité confirmée (check entrant) [%p]\n",this);
+				iceConnected = true;
+			}
+
 			//If set
-			if (stun->HasAttribute(STUNMessage::Attribute::IceControlled) 
+			if (stun->HasAttribute(STUNMessage::Attribute::IceControlled)
 				|| stun->HasAttribute(STUNMessage::Attribute::UseCandidate)
 				|| iceRemoteIP == from_addr.sin_addr.s_addr)
 			{
@@ -1527,6 +1805,21 @@ int RTPSession::ReadRTP()
 				}
 				sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
 			}
+		}
+		//P3 : réponse à un binding request que NOUS avons émis (pair ICE-lite ou full).
+		//Le handler historique n'acceptait que les Request : les Response étaient
+		//ignorées, ce qui empêchait toute validation de connectivité côté offreur.
+		else if (type==STUNMessage::Response && method==STUNMessage::Binding)
+		{
+			Log("ICE: réception Binding Response de %s:%d [%p]\n",
+				inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port), this);
+			//Validation pragmatique (parité avec le niveau ICE existant : pas de
+			//vérif MESSAGE-INTEGRITY sur l'entrant) : une Binding Response provenant du
+			//pair attendu confirme la connectivité.
+			if (iceRemoteIP == INADDR_ANY || iceRemoteIP == from_addr.sin_addr.s_addr)
+				OnICEConnectivityConfirmed(&from_addr);
+			else
+				Debug("ICE: Binding Response d'une source inattendue, ignorée [%p]\n",this);
 		}
 
 		//Delete message
@@ -1663,6 +1956,16 @@ int RTPSession::ReadRTP()
 		if (err!=srtp_err_status_ok)
 			//Error
 			return Error("Error unprotecting rtp packet [%d] for RTPSession=%p, ssrc=%x defaultSSRC=%x\n",err,this, RTPPacket::GetSSRC(buffer),defaultSSRC);
+	}
+
+	//P5 : premier paquet RTP/SRTP reçu ET validé (déchiffrement réussi si SRTP => le
+	//handshake DTLS est terminé ; sinon pas de crypto). On notifie le listener UNE
+	//seule fois par cycle de réception (ré-armé par ArmRTPReceivedNotification).
+	if (!rtpReceivedNotified)
+	{
+		rtpReceivedNotified = true;
+		if (auto l = LockListener())
+			l->onRTPPacketReceived(this);
 	}
 
 	//If it is a retransmission
@@ -1895,12 +2198,42 @@ int RTPSession::Run()
 	//périodiquement l'inactivité ; sinon on conserve l'attente infinie d'origine
 	//(aucun réveil superflu pour les sessions n'utilisant pas le watchdog).
 	const int pollTimeout = 1000; //ms
+	//P2 : lorsqu'on pilote un handshake DTLS client, on borne l'attente plus court
+	//pour cadencer les retransmissions (le backoff réel est décidé par OpenSSL).
+	const int dtlsPollTimeout = 250; //ms
 
 	//Run until ended
 	while(running)
 	{
-		//Wait for events (attente bornée si watchdog armé, sinon infinie)
-		int nready = poll(ufds,2,rtpTimeoutArmed?pollTimeout:-1);
+		//P2 : pilotons-nous un handshake DTLS en rôle client ? (client, DTLS prêt,
+		//non terminé, destination connue). Le cas serveur/passive reste inchangé.
+		bool dtlsDriving = dtls.IsInited() && dtls.IsClientRole()
+				&& !dtls.IsHandshakeCompleted()
+				&& sendAddr.sin_addr.s_addr != INADDR_ANY;
+
+		//P3 : émettons-nous des checks STUN sortants ? (creds connues, destination
+		//connue, connectivité pas encore confirmée). Face à un pair ICE-lite qui
+		//n'initie jamais ; s'arrête dès la 1re réponse/check entrant.
+		bool iceDriving = !iceConnected && iceLocalUsername && iceRemoteUsername
+				&& iceRemotePwd && sendAddr.sin_addr.s_addr != INADDR_ANY;
+
+		//P6 : reste-t-il des paquets d'amorçage NAT à émettre ? (rafale armée, clair,
+		//destination connue). Cadencés ~20 ms par le poll borné ci-dessous.
+		bool natPriming = natPrimingLeft > 0 && !encript
+				&& sendAddr.sin_addr.s_addr != INADDR_ANY;
+
+		//Attente : infinie par défaut, bornée si watchdog armé et/ou handshake DTLS
+		//client / checks ICE en cours (on prend le plus court des seuils).
+		int waitMs = rtpTimeoutArmed ? pollTimeout : -1;
+		if (dtlsDriving || iceDriving)
+			waitMs = (waitMs < 0) ? dtlsPollTimeout
+					      : (waitMs < dtlsPollTimeout ? waitMs : dtlsPollTimeout);
+		if (natPriming)
+			waitMs = (waitMs < 0) ? NAT_PRIMING_INTERVAL_MS
+					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
+
+		//Wait for events
+		int nready = poll(ufds,2,waitMs);
 		if(nready<0)
 		{
 			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler
@@ -1926,6 +2259,27 @@ int RTPSession::Run()
 		if (ufds[1].revents & POLLIN)
 			//Read rtcp data
 			ReadRTCP();
+
+		//P6 : cadence la rafale d'amorçage NAT (~20 ms entre paquets) tant qu'il en
+		//reste. Placé APRÈS ReadRTP : si le pair a déjà latché et répondu, la rafale
+		//continue quand même jusqu'au bout (inoffensif) — elle est courte et bornée.
+		if (natPriming && (getDifTime(&natPrimingLast)/1000) >= NAT_PRIMING_INTERVAL_MS)
+		{
+			SendNATPrimingPacket();
+			gettimeofday(&natPrimingLast,NULL);
+		}
+
+		//P3 : émettre/retransmettre les binding requests STUN sortants tant que la
+		//connectivité n'est pas confirmée (placé APRÈS ReadRTP : un check/réponse
+		//entrant peut avoir mis iceConnected à true et court-circuité l'émission).
+		if (iceDriving)
+			DriveICEChecks();
+
+		//P2 : piloter le handshake DTLS client (émission initiale du ClientHello puis
+		//retransmissions). Placé APRÈS ReadRTP pour que les flights entrants (traités
+		//par la branche DTLS de ReadRTP) fassent d'abord progresser le handshake.
+		if (dtlsDriving)
+			DriveDTLSClientHandshake();
 
 		//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
 		//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois

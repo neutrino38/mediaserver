@@ -110,6 +110,10 @@ int RTPEndpoint::StartReceiving()
         //Inited
         receiving = true;
 
+	//P5 : ré-arme la notification « premier paquet reçu » pour ce cycle de réception
+	//(un nouveau EndpointConnectedEvent sera émis quand le média recommencera à couler).
+	ArmRTPReceivedNotification();
+
         //Create thread
 	createPriorityThread(&thread,run,this,1);
 
@@ -371,6 +375,17 @@ void RTPEndpoint::onRTPTimeout(RTPSession *session)
 	PostEvent(new ::EndpointDisconnectedEvent());
 }
 
+void RTPEndpoint::onRTPPacketReceived(RTPSession *session)
+{
+	//P5 : premier paquet RTP/SRTP reçu et validé pour ce média. Le succès du
+	//déchiffrement (côté RTPSession) garantit que le handshake DTLS est terminé
+	//(cas SRTP/DTLS) ou qu'il n'y a pas de crypto : les deux conditions P5 sont donc
+	//satisfaites. L'anti-rebond one-shot est tenu par RTPSession (ré-armé à
+	//StartReceiving), donc ce callback n'arrive qu'une fois par cycle de réception.
+	Log("-RTPEndpoint::onRTPPacketReceived : publication EndpointConnectedEvent [%p]\n",this);
+	PostEvent(new ::EndpointConnectedEvent());
+}
+
 void RTPEndpoint::Update()
 {
 	//Update	
@@ -418,5 +433,15 @@ int RTPEndpoint::RequestUpdate()
 	DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
 	sessTag[sessLen] = 0;
     return xmlrpc_build_value(env,"(isiii)",(int)JSR309Event::EndpointDisconnectedEvent,sessTag,this->joinableId,(int)this->media,(int)this->role);
+
+}
+
+ xmlrpc_value* EndpointConnectedEvent::GetXmlValue(xmlrpc_env *env)
+{
+	BYTE sessTag[1024];
+	UTF8Parser sessTagParser(sessionTag);
+	DWORD sessLen = sessTagParser.Serialize(sessTag,1024);
+	sessTag[sessLen] = 0;
+    return xmlrpc_build_value(env,"(isiii)",(int)JSR309Event::EndpointConnectedEvent,sessTag,this->joinableId,(int)this->media,(int)this->role);
 
 }

@@ -54,6 +54,9 @@ public:
 	virtual void onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD bitrate,DWORD overhead);
 	//Watchdog d'inactivité RTP (gap 5) : publie EndpointDisconnectedEvent
 	virtual void onRTPTimeout(RTPSession *session);
+	//P5 : premier paquet RTP/SRTP reçu (DTLS terminé ou pas de DTLS) : publie
+	//EndpointConnectedEvent une seule fois par cycle de réception.
+	virtual void onRTPPacketReceived(RTPSession *session);
         void SetTsTransparency(bool transparent)
 	{
 		tsTransparency = transparent;
@@ -100,6 +103,23 @@ class EndpointDisconnectedEvent: public JSR309Event
 {
 public:
 	EndpointDisconnectedEvent()
+	{
+
+	}
+
+	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env);
+};
+
+/**
+ * Média établi sur un endpoint (P5) : émis UNE fois par média/cycle de réception,
+ * lorsque le handshake DTLS est terminé (ou qu'il n'y a pas de DTLS) ET que le
+ * premier paquet RTP/SRTP a été reçu et validé. Même sérialisation que les autres :
+ * (isiii) = {type, sessionTag, joinableId(endpointId), media, role}.
+ */
+class EndpointConnectedEvent: public JSR309Event
+{
+public:
+	EndpointConnectedEvent()
 	{
 
 	}
