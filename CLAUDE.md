@@ -54,7 +54,7 @@ tail -f /var/log/mcu.log                     # follow execution (also: journalct
 
 RPM installs the binary to `/opt/ives/bin/mediaserver`, the systemd unit to `%{_unitdir}/mediaserver.service`, its options to `/etc/sysconfig/mediaserver`, config to `/etc/mediaserver/`. stdout/stderr are appended to `/var/log/mcu.log` by systemd (`StandardOutput`/`StandardError`).
 
-There is no automated test suite. `rtmptest` is a standalone manual test target in `mcu/Makefile.rpm`.
+The `mcu` binary itself has no automated test suite (`rtmptest` is a standalone manual test target in `mcu/Makefile.rpm`). The **`libmedikit` submodule does** have a GoogleTest suite under `third_party/fontventa/libmedikit/tests/` (unit + adversarial tests for the negotiator, codecs, parsers, and MP4 read/round-trip): run it with `make -C third_party/fontventa/libmedikit check` (needs system `gtest`; builds `libmedkit.a` `ASTERISK=no`). See `tests/README.md` there and `libmedikit_tests_plan.md` at the repo root.
 
 ## Architecture
 

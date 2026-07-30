@@ -93,6 +93,17 @@ public:
 	int  Write(BYTE *buffer,int size);
 	int  Renegotiate();
 
+	/* P2 (offreur WebRTC) : pilotage du handshake en rôle CLIENT.
+	 * Le rôle local est calculé par SetRemoteSetup (remote=passive -> local=active),
+	 * mais l'émission effective du ClientHello doit être déclenchée dès qu'une
+	 * destination existe (voir RTPSession), pas seulement sur STUN entrant. */
+	bool IsInited()            const { return inited; }
+	bool IsClientRole()        const { return dtls_setup == SETUP_ACTIVE; }
+	bool IsHandshakeCompleted()const { return ssl && SSL_is_init_finished(ssl); }
+	//Retransmission DTLS pilotée par OpenSSL (backoff exponentiel)
+	bool GetTimeout(struct timeval* tv);   //true si un timer de retransmission est armé
+	int  HandleTimeout();                  //-1 échec, 0 rien à faire, 1 flight re-émis
+
 /* Callbacks fired by OpenSSL events. */
 public:
 	void onSSLInfo(int where, int ret);

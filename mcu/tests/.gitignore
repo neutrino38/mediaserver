@@ -1,0 +1,3 @@
+# Artefacts de build de la suite gtest du mcu (cf. tests/README.md).
+runtests
+*.o
