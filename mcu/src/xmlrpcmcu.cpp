@@ -121,8 +121,17 @@ xmlrpc_value* GetConferences(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	//Process result
 	for (MCU::ConferencesInfo::iterator it = list.begin(); it!=list.end(); ++it)
 	{
+		//Le tag est un std::wstring : le passer tel quel a xmlrpc_build_value("s")
+		//le fait lire comme du char*, donc s'arreter au premier octet nul du
+		//wchar_t — "c-a8592bc0" ressortait tronque a "c". On serialise en UTF-8
+		//avant, comme GetBroadcastPublishedStreams le fait pour ses propres noms.
+		char name[1024];
+		UTF8Parser utf8name(it->second.name);
+		//Serialize
+		int len = utf8name.Serialize((BYTE*)name,sizeof(name)-1);
+		name[len] = 0;
 		//Create array
-		xmlrpc_value* val = xmlrpc_build_value(env,"(isi)",it->second.id,it->second.name.c_str(),it->second.numPart);
+		xmlrpc_value* val = xmlrpc_build_value(env,"(isi)",it->second.id,name,it->second.numPart);
 		//Add it
 		xmlrpc_array_append_item(env,arr,val);
 		//Release
