@@ -666,6 +666,16 @@ réponse à un `ExternalFIRRequestedEvent`.
   aussi **avant** `StartReceiving` (le port est déjà attribué à la création de
   l'endpoint). `url` vaut sans port (`"<proto>://<ip>"`) uniquement si le port n'est
   pas encore attribué (`0`).
+- L'**`ip`** est l'adresse annoncée **globale du serveur** : l'argument
+  `--public-ip`, à défaut le premier IPv4 non loopback du nom d'hôte (l'ancien
+  comportement, qui était le seul). Derrière un NAT, `--public-ip` est obligatoire —
+  sans lui le candidat porte l'adresse privée, injoignable par le pair. Un
+  `Port::GetLocalMediaHost()` non nul (transports WebSocket) reste prioritaire sur
+  cette adresse. La même valeur est renvoyée par le `StartReceiving` de l'API MCU
+  (`MCU-API.md` §4), de sorte que les deux API annoncent nécessairement la même
+  adresse. Le serveur refuse de démarrer si aucune adresse n'est déterminable
+  (`readme.md`, *Adresse média annoncée*), donc `url` ne peut plus être `NULL`
+  faute d'adresse — seulement faute de média/protocole.
 - `ConfigureMediaConnection` : `token` d'association de la connexion,
   `expectedPayload` = payload attendu.
 

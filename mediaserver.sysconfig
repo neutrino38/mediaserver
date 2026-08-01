@@ -3,4 +3,11 @@
 # ATTENTION : ne pas ajouter "-f" ici. Sous systemd le processus doit rester
 # en avant-plan (Type=simple) ; "-f" le ferait forker et systemd perdrait le
 # suivi du process. Le PID est gere par systemd, donc pas de --mcu-pid non plus.
+#
+# --public-ip : adresse IPv4 annoncee dans le SDP (ligne c= et candidats ICE).
+# OBLIGATOIRE derriere un NAT : sans elle le serveur annonce l'adresse de son nom
+# d'hote (donc l'adresse privee) et aucun media ne passe. Sans NAT, l'omettre :
+# elle est auto-detectee au demarrage et ecrite dans le log. Si aucune adresse ne
+# peut etre determinee, le serveur refuse de demarrer.
 OPTIONS="--http-port 9090 --websocket-port 8100"
+#OPTIONS="--http-port 9090 --websocket-port 8100 --public-ip 203.0.113.12"

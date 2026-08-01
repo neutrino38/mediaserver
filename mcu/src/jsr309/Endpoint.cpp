@@ -655,42 +655,13 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFrame::Type media ) 
 {
 	
-	char hostname[HOST_NAME_MAX];
-	//char host[80];
-	char* host;
     char url[50];
-	bool addrfound = false;
-	
-	if (gethostname(hostname, sizeof hostname) == 0)
-        //puts(hostname);
-	
-	if (hostname)
-	{
-		struct hostent *remoteHost = gethostbyname(hostname);
+	//Réglage global du serveur (--public-ip, sinon auto-détectée) : l'adresse
+	//annoncée n'est plus redérivée ici à chaque appel, et elle est désormais
+	//corrigeable derrière un NAT.
+	const char* host = RTPSession::GetAnnouncedIp();
+	bool addrfound = (host && *host);
 
-		if (remoteHost)
-		{
-			struct in_addr addr;	
-			int i = 0;
-			
-			if (remoteHost->h_addrtype == AF_INET) 
-			{
-				while (remoteHost->h_addr_list[i] != 0) 
-				{
-					addr.s_addr = *(u_long *) remoteHost->h_addr_list[i++];
-					//inet_ntoa_r( addr, host, sizeof(host) );
-					host = inet_ntoa(addr);
-					if ( strcmp(host, "127.0.0.1") != 0 )
-					{
-						Log("\tIPv4 Address #%d: %s\n", i, inet_ntoa(addr));
-						addrfound = true;
-						break;
-					}
-				}
-			}
-		}
-	}
-	
 	if (addrfound)
 	{
 		int port = 0;

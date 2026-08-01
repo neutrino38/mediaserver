@@ -168,6 +168,10 @@ OPTIONS="--http-port 9090 --websocket-port 8100"
 > ⚠️ Do **not** put `-f` in `OPTIONS`: under systemd the process must stay in
 > the foreground. `--mcu-pid` is likewise useless (systemd tracks the PID).
 
+> ⚠️ Behind a NAT, `--public-ip <ip>` is **mandatory** — without it the SDP
+> announces the private address and no media flows. See *Adresse média annoncée*
+> below.
+
 After editing the unit or the sysconfig file, reload systemd:
 
 ```sh
@@ -183,6 +187,7 @@ mcu [-h|--help] [-f] [-d]
     [--websocket-port <ws_port>] [--websocket-host hôte]
     [--websocket-secure] [--websocket-cert <pem>] [--websocket-key <pem>]
     [--min-rtp-port <min_port>] [--max-rtp-port port]
+    [--public-ip <ip>]
     [--vad-period <m>]
 ```
 
@@ -206,6 +211,49 @@ mcu [-h|--help] [-f] [-d]
 | `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Non listé dans l'aide `--help`. |
 | `--min-rtp-port port` | `49152` | Borne basse de la plage de ports UDP allouée aux sessions RTP/RTCP. |
 | `--max-rtp-port port` | `65535` | Borne haute de la plage de ports RTP/RTCP. |
+| `--public-ip ip` | *(auto-détectée)* | Adresse IPv4 **annoncée** dans le SDP : ligne `c=` et candidats ICE, pour les deux API de contrôle. **Obligatoire derrière un NAT.** Voir *Adresse média annoncée* ci-dessous. |
+
+### Adresse média annoncée (`--public-ip`)
+
+Les sockets RTP/RTCP sont bindées sur `0.0.0.0` : le serveur n'écoute pas sur une
+interface particulière, seul le *port* est choisi (dans la plage `--min/max-rtp-port`).
+Il n'y a donc pas d'« IP RTP » à configurer côté écoute — il y a l'adresse que le
+serveur **annonce** au pair, et c'est le seul choix à faire.
+
+Cette adresse est un réglage **global** (`RTPSession::SetAnnouncedIp`), partagé par
+les deux API de contrôle, qui ne peuvent donc pas annoncer des adresses différentes :
+
+| Où elle sort | API |
+|---|---|
+| `GetMediaCandidates` → `"rtp://<ip>:<port>"` | JSR-309 (`xmlrpc_jsr309_api.md` §6) |
+| `StartReceiving` → `returnVal[1]` | MCU (`MCU-API.md` §4) |
+
+Sans `--public-ip`, elle est **auto-détectée** au démarrage : `gethostname()`, puis
+`gethostbyname()` sur ce nom, puis la **première** adresse rendue qui n'est pas
+exactement `127.0.0.1`. C'est donc l'adresse du **nom d'hôte** (`/etc/hosts` puis
+DNS), pas celle d'une interface. Trois conséquences :
+
+- **derrière un NAT c'est faux par construction** : le nom résout vers l'adresse
+  privée, injoignable par le pair. Comme la socket écoute sur `0.0.0.0`, il suffit
+  d'annoncer l'adresse publique avec `--public-ip` — rien à re-binder ;
+- seule `127.0.0.1` est écartée, pas `127.0.0.0/8` : un nom d'hôte mappé sur
+  `127.0.1.1` (courant en conteneur) serait annoncé tel quel ;
+- sur un hôte multi-adressé, c'est l'ordre du résolveur qui décide — donc à fixer
+  explicitement.
+
+Une adresse fournie qui n'est pas une IPv4 littérale est **refusée** (log d'erreur)
+et l'auto-détection s'applique. Si aucune adresse ne peut être déterminée, le
+serveur **refuse de démarrer** avec un message indiquant le nom d'hôte en cause et
+les deux corrections possibles : mieux vaut ne pas démarrer que servir des SDP
+injoignables appel après appel.
+
+L'adresse retenue est écrite dans le log de démarrage, ce qui est le premier
+endroit à regarder devant un appel sans média :
+
+```
+-RTPSession announced IP set to "203.0.113.12"              # via --public-ip
+-RTPSession announced IP auto-detected as "172.21.105.71"   # sans l'argument
+```
 
 ### Média
 

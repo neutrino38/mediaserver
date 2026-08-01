@@ -10,6 +10,8 @@
 #include <sys/poll.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
+#include <netdb.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
@@ -94,6 +96,104 @@ bool RTPSession::SetPortRange(int minPort, int maxPort)
 
 	//OK
 	return true;
+}
+
+std::string RTPSession::announcedIp;
+bool RTPSession::announcedIpResolved = false;
+std::mutex RTPSession::announcedIpMutex;
+
+//Auto-détection de l'adresse à annoncer, à défaut de --public-ip : premier IPv4
+//non loopback de l'hôte. Déplacée ici depuis Endpoint::GetMediaCandidates, qui la
+//refaisait — gethostbyname compris, et sans verrou — à chaque appel.
+static std::string DetectAnnouncedIp()
+{
+	char hostname[HOST_NAME_MAX];
+
+	//Nom de l'hôte
+	if (gethostname(hostname, sizeof hostname) != 0)
+	{
+		//Erreur
+		Error("-RTPSession cannot get hostname to detect the announced IP\n");
+		//Rien
+		return std::string();
+	}
+
+	//Résolution
+	struct hostent *localHost = gethostbyname(hostname);
+
+	//Comprobamos
+	if (!localHost || localHost->h_addrtype != AF_INET)
+	{
+		//Erreur
+		Error("-RTPSession cannot resolve \"%s\" to detect the announced IP\n",hostname);
+		//Rien
+		return std::string();
+	}
+
+	//Première adresse qui n'est pas la loopback
+	for (int i=0; localHost->h_addr_list[i]!=0; i++)
+	{
+		struct in_addr addr;
+		//Copie
+		addr.s_addr = *(u_long *) localHost->h_addr_list[i];
+		//En texte
+		const char* host = inet_ntoa(addr);
+
+		//Celle-là fera l'affaire
+		if (host && strcmp(host,"127.0.0.1")!=0)
+			return std::string(host);
+	}
+
+	//Erreur
+	Error("-RTPSession no non-loopback IPv4 address found for \"%s\"\n",hostname);
+
+	//Rien
+	return std::string();
+}
+
+bool RTPSession::SetAnnouncedIp(const char* ip)
+{
+	//Rien de fourni : l'auto-détection de GetAnnouncedIp reste en place
+	if (!ip || !*ip)
+		return false;
+
+	struct in_addr addr;
+
+	//Une adresse annoncée fausse produit un SDP que le pair ne peut pas joindre :
+	//on refuse ce qui n'est pas une IPv4 littérale plutôt que de l'annoncer.
+	if (inet_pton(AF_INET,ip,&addr)!=1)
+		return Error("-RTPSession announced IP \"%s\" is not a valid IPv4 address\n",ip);
+
+	//Verrou
+	std::lock_guard<std::mutex> lock(announcedIpMutex);
+
+	//Set : une adresse explicite dispense de toute auto-détection
+	announcedIp = ip;
+	announcedIpResolved = true;
+
+	//Log
+	Log("-RTPSession announced IP set to \"%s\"\n",announcedIp.c_str());
+
+	//OK
+	return true;
+}
+
+const char* RTPSession::GetAnnouncedIp()
+{
+	//Verrou
+	std::lock_guard<std::mutex> lock(announcedIpMutex);
+
+	//Résolue une fois pour toutes — le pointeur rendu reste donc valide — et
+	//l'échec est mémorisé au même titre que le succès : sans quoi un hôte qui ne
+	//se résout pas relancerait un gethostbyname perdant à chaque appel.
+	if (!announcedIpResolved)
+	{
+		announcedIp = DetectAnnouncedIp();
+		announcedIpResolved = true;
+	}
+
+	//La chaîne, vide si l'hôte ne se résout pas
+	return announcedIp.c_str();
 }
 
 /*************************

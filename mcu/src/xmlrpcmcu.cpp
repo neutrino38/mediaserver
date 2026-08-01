@@ -4,6 +4,7 @@
 
 #include "xmlhandler.h"
 #include "mcu.h"
+#include "rtpsession.h"
 
 //CreateConference
 xmlrpc_value* CreateConference(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
@@ -2065,17 +2066,29 @@ MCU *mcu = (MCU *)user_data;
 		return xmlerror(env,"Conference does not exist");
 
 	//La borramos
-		int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto);
-	
+	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto);
+
 
 	//Salimos
 	if(!recVideoPort)
-		xmlerror(env,"Could not start receiving media.");
-	
-	Log("StartReceiving recVideoPort=%i\n",recVideoPort);	
-						
-	//Devolvemos el resultado
-	return xmlok(env,xmlrpc_build_value(env,"(i)",recVideoPort));
+		return xmlerror(env,"Could not start receiving media.");
+
+	//L'adresse annoncée dans le SDP du contrôleur. L'API de conférence n'a pas
+	//d'équivalent de GetMediaCandidates, si bien que le contrôleur devait la tenir
+	//dans sa propre configuration — dupliquée, et fausse dès que le serveur bougeait.
+	//Elle est ici la même que celle des candidats JSR-309, réglée par --public-ip.
+	const char* announcedIp = RTPSession::GetAnnouncedIp();
+
+	//Garde-fou : main() refuse de démarrer sans adresse annonçable, donc ceci ne
+	//peut arriver que depuis un point d'entrée qui aurait sauté ce contrôle.
+	if (!announcedIp || !*announcedIp)
+		return xmlerror(env,"No announced IP: start the server with --public-ip.");
+
+	Log("StartReceiving recVideoPort=%i ip=%s\n",recVideoPort,announcedIp);
+
+	//Devolvemos el resultado. returnVal[0] reste le port (les clients qui ne lisent
+	//que lui sont inchangés) ; l'IP est ajoutée en returnVal[1].
+	return xmlok(env,xmlrpc_build_value(env,"(is)",recVideoPort,announcedIp));
 }
 
 xmlrpc_value* StopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)

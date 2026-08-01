@@ -30,6 +30,18 @@ Le serveur HTTP interne écoute par défaut sur le port **8080**
 Le média (RTP/SRTP, RTMP, WebSocket, BFCP) circule sur ses propres ports et
 n'est pas décrit ici (voir le `readme.md` pour les options de ligne de commande).
 
+> **Adresse annoncée dans le SDP.** L'adresse que le contrôleur doit mettre dans
+> la ligne `c=` et dans les candidats ICE est celle que `StartReceiving` renvoie
+> (§4, `returnVal[1]`). C'est un réglage **global du serveur** : `--public-ip`,
+> à défaut le premier IPv4 non loopback du nom d'hôte. Derrière un NAT,
+> `--public-ip` est obligatoire — l'adresse bindée n'est alors pas joignable par
+> le pair. La même valeur alimente les candidats de `GetMediaCandidates` sur
+> l'API JSR-309, donc les deux API annoncent forcément la même adresse.
+>
+> Le serveur **refuse de démarrer** si aucune adresse ne peut être déterminée :
+> un serveur qui répond a donc toujours une adresse à annoncer, et le contrôleur
+> n'a pas à prévoir de repli. Voir `readme.md`, *Adresse média annoncée*.
+
 Le `POST /mcu` est un XML-RPC standard :
 
 - `Content-Type: text/xml`
@@ -131,7 +143,7 @@ CreateConference(tag, vad, rate, queueId)  → confId
 CreateMosaic(confId, comp, size)       → mosaicId
 CreateParticipant(confId, name, type, mosaicId, sidebarId) → partId
 SetAudioCodec / SetVideoCodec / SetTextCodec …
-StartReceiving(confId, partId, media, rtpMap, role, proto)  → recvPort
+StartReceiving(confId, partId, media, rtpMap, role, proto)  → recvPort, ip
 StartSending(confId, partId, media, ip, port, rtpMap, role)
 AddMosaicParticipant(confId, mosaicId, partId)
 …                                      (conférence active)
@@ -581,7 +593,18 @@ Ouvre la réception RTP d'un média et alloue un port local.
   `rtpMap` (struct PT→codec), `role` (`MediaRole`), `proto`
   (`MediaFrame::MediaProtocol`).
 - **Params** (sans proto) `(iiiSi)` : idem, `proto` = TCP (3).
-- **Retour** : `(i)` = `recvPort` (port RTP alloué).
+- **Retour** : `(i,s)` = `recvPort` (port RTP alloué) puis `ip` = l'adresse à
+  annoncer dans le SDP (ligne `c=` et candidats ICE) pour ce média : le réglage
+  global `--public-ip` du serveur, à défaut le premier IPv4 non loopback de
+  l'hôte (§1). Le port seul ne suffit pas au contrôleur, et cette adresse n'est
+  pas déductible du canal de contrôle — derrière un NAT elle en diffère.
+- `returnVal[0]` **reste le port** : un client qui ne lit que cet index (le
+  `XmlRpcMcuClient` Java) est inchangé. Les enrichissements futurs (fmtp
+  négocié) s'ajoutent de la même façon, en fin de tableau.
+- `ip` est toujours renseignée : le serveur ne démarre pas sans (§1).
+- Échoue désormais (enveloppe `xmlerror`) quand le serveur n'a pas pu ouvrir la
+  réception — il renvoyait auparavant `returnCode: 1` avec un port `0`, que le
+  contrôleur annonçait tel quel.
 
 #### `StopReceiving`
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
