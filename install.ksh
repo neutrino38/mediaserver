@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.11.0"
+VERSION="1.12.0"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
