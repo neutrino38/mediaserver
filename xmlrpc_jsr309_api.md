@@ -516,8 +516,8 @@ média `media` vers `endpointId`.
   `{ "0": 0, "8": 8, "101": 100 }` (PCMU, PCMA, telephone-event).
 - **`properties`** (`EndpointSetRTPProperties`) : struct XML-RPC clé→valeur, les
   deux **chaînes**. Deux familles de clés cohabitent :
-  - **transport** (rtcp-mux, ssrc, tmmbr, extensions, `rtpTimeout`…) : appliquées
-    à la session RTP ;
+  - **transport** (rtcp-mux, ssrc, tmmbr, extensions, `rtpTimeout`, `natLatch`…) :
+    appliquées à la session RTP ;
   - **codec** (préfixe `codec.`, ex. `codec.h264.profile-level-id`,
     `codec.opus.useinbandfec`) : depuis la phase 4 de `nego_fmtp.md`, elles sont
     **routées vers le stockage local de l'endpoint** et consommées par le

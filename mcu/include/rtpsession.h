@@ -412,6 +412,19 @@ private:
 	int	natPrimingLeft;
 	timeval	natPrimingLast;
 	int	SendNATPrimingPacket();
+	//P7 : rattrapage de la cible d'envoi derrière un NAT symétrique. Le pair annonce
+	//une adresse privée dans son SDP mais son RTP nous arrive d'une tout autre
+	//adresse:port (mapping NAT) : on ré-aiguille l'envoi vers la source réellement
+	//observée. natLatch = correction autorisée — propriété RTP "natLatch", ou 0.0.0.0
+	//passé à SetRemotePort ; désactivée par défaut, c'est au plan de contrôle de
+	//l'activer ; natCorrected / natRtcpCorrected = correction déjà faite (one-shot :
+	//recIP est recalé à chaque paquet de source différente, la cible suivrait sinon
+	//le moindre battement). NatCorrectable() porte la règle commune.
+	bool	natLatch;
+	bool	natCorrected;
+	bool	natRtcpCorrected;
+	bool	NatCorrectable(in_addr_t announced);
+	static bool IsRFC1918(in_addr_t addr);
 	pthread_t thread;
 	std::mutex mutex;	
 

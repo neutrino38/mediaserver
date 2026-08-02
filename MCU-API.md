@@ -569,6 +569,27 @@ Positionne des propriétés RTP (extensions, options) pour un média.
 - **Params** (sans role) `(iiiS)` : idem sans `role` (VIDEO_MAIN).
 - **Retour** : vide.
 
+##### `natLatch` — rattrapage du NAT symétrique
+`"natLatch": "1"` autorise la session RTP à **ré-aiguiller sa cible d'envoi** vers
+l'adresse:port d'où le média arrive réellement, lorsque l'adresse que le contrôleur
+lui a donnée (`StartSending` / `SetRemotePort`) est **privée** (RFC 1918, CGNAT
+100.64/10, link-local) **et** que le pair émet depuis une autre adresse — le
+symptôme exact d'un NAT symétrique, qui réécrit adresse *et* port. Le port est
+corrigé lui aussi, indépendamment par média (audio/vidéo/texte ont chacun leur
+mapping) et pour le RTCP non muxé sur son propre paquet.
+
+- **Désactivé par défaut** : aucun appelant historique n'est affecté. C'est au plan
+  de contrôle — seul à savoir de quel type de jambe il s'agit — de l'activer. Côté
+  SIP, le cas qui le justifie est celui où **c'est le pair qui nous dit où émettre**,
+  c'est-à-dire un INVITE entrant (UAS) dont on répond l'offre.
+- Passer **`0.0.0.0`** comme adresse à `StartSending` vaut la même autorisation : le
+  contrôleur déclare ne pas connaître la cible et s'en remet à la source observée.
+  La différence est qu'on n'émet alors *rien* avant d'avoir reçu (ni amorçage NAT,
+  ni ClientHello DTLS) : à réserver aux pairs qui parlent les premiers.
+- La correction exige une **preuve** (un paquet réellement reçu d'ailleurs), elle est
+  **one-shot** par session — rejouable après un nouveau `StartSending`, donc un
+  re-INVITE — et **ignorée quand ICE est en jeu**, ICE possédant déjà la cible.
+
 #### `GetSupportedCodecs`
 Liste les codecs supportés pour un type de média.
 - **Params** `(i)` : `media` (`MediaFrame::Type`).
