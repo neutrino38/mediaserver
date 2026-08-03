@@ -1,0 +1,446 @@
+/**
+ * test_rtp_latching.cpp — latching RTP symétrique (NAT « comedia ») de RTPSession.
+ *
+ * Le pair annonce une adresse dans son SDP, mais son média nous arrive parfois
+ * d'ailleurs : un NAT symétrique a réécrit l'adresse ET le port. Émettre vers
+ * l'annonce ne mènerait alors nulle part. `RTPSession` sait donc ré-aiguiller sa
+ * cible d'envoi sur la source réellement observée — mais seulement quand c'est
+ * légitime, sinon la cible battrait au gré du moindre paquet égaré. La politique
+ * (cf. `RTPSession::NatCorrectable`) est :
+ *
+ *   - le plan de contrôle doit l'AUTORISER : propriété RTP `natLatch`, ou une
+ *     annonce `0.0.0.0` (le contrôleur déclare ignorer l'adresse du pair) ;
+ *   - l'adresse annoncée doit être PRIVÉE (RFC 1918, CGNAT RFC 6598, link-local) :
+ *     sur une adresse publique, une divergence est plus probablement du routage
+ *     asymétrique légitime qu'un NAT à corriger ;
+ *   - la correction est ONE-SHOT par cible (`natCorrected`), et le droit est
+ *     rouvert par un nouveau `SetRemotePort` (re-INVITE / UPDATE).
+ *
+ * CES TESTS N'INSPECTENT AUCUN ÉTAT INTERNE. `recIP`, `natCorrected` et
+ * `NatCorrectable` sont privés, et l'idiome du pointeur sur membre utilisé pour
+ * `Mosaic::BuildDesc` (protégé) ne s'applique pas au privé. On teste donc ce qui
+ * compte vraiment et ce que voit le pair : **où les paquets atterrissent**. Un
+ * socket sonde en loopback joue le pair NATé — il émet le média, puis vérifie s'il
+ * reçoit celui de la session.
+ *
+ * Adresses de test : `SetRemotePort` déclenche immédiatement une rafale
+ * d'amorçage NAT vers l'adresse annoncée (`ArmNATPriming`). Toutes les adresses
+ * utilisées ici sont donc choisies non routées (192.168.255.254 côté privé,
+ * 240.0.0.1 — classe E réservée — côté « public ») pour ne jamais arroser une
+ * machine réelle du réseau.
+ */
+#include <gtest/gtest.h>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include "log.h"
+#include "rtp.h"
+#include "rtpsession.h"
+
+namespace {
+
+// Adresse privée (RFC 1918) annoncée par un pair NATé : ouvre droit au
+// rattrapage. Choisie hors de tout plan d'adressage plausible.
+const char* const kAnnouncedPrivate = "192.168.255.254";
+// Adresse « publique » du point de vue de la politique (donc PAS de rattrapage).
+// 240.0.0.1 : classe E réservée, jamais routée.
+const char* const kAnnouncedPublic  = "240.0.0.1";
+
+// Charge utile reconnaissable : distingue le média émis par SendPacket des
+// paquets d'amorçage NAT (12 octets d'en-tête nu, sans charge utile).
+const BYTE kMagic[] = { 0xC0, 0xFF, 0xEE, 0x42, 0x13, 0x37 };
+
+// Listener minimal : la session en exige un non nul.
+class StubListener : public RTPSession::Listener
+{
+public:
+	void onFPURequested(RTPSession*) override { fpuRequests++; }
+	void onReceiverEstimatedMaxBitrate(RTPSession*, DWORD) override {}
+	void onTempMaxMediaStreamBitrateRequest(RTPSession*, DWORD, DWORD) override {}
+
+	int fpuRequests = 0;
+};
+
+// Socket UDP en loopback jouant le pair distant.
+class ProbeSocket
+{
+public:
+	// `ip` permet de simuler un pair qui change d'ADRESSE et non seulement de port :
+	// tout 127.0.0.0/8 est local sous Linux, donc 127.0.0.2 fait un second pair
+	// distinct aux yeux de la session.
+	bool Open(const char* ip = "127.0.0.1")
+	{
+		fd = socket(PF_INET, SOCK_DGRAM, 0);
+		if (fd < 0)
+			return false;
+
+		sockaddr_in addr;
+		memset(&addr, 0, sizeof(addr));
+		addr.sin_family      = AF_INET;
+		addr.sin_addr.s_addr = inet_addr(ip);
+		addr.sin_port        = 0;   // port éphémère
+		if (bind(fd, (sockaddr*)&addr, sizeof(addr)) != 0)
+			return false;
+
+		socklen_t len = sizeof(bound);
+		return getsockname(fd, (sockaddr*)&bound, &len) == 0;
+	}
+
+	~ProbeSocket() { if (fd >= 0) close(fd); }
+
+	// Émet un RTP minimal mais valide vers la session (V=2, 12 octets d'en-tête).
+	// C'est la SOURCE observée par la session : le latch se produit sur ce paquet.
+	bool SendRtpTo(int port, BYTE payloadType = 0, DWORD ssrc = 0x1234ABCD)
+	{
+		BYTE packet[12];
+		memset(packet, 0, sizeof(packet));
+		packet[0] = 0x80;                       // version 2
+		packet[1] = (BYTE)(payloadType & 0x7f);
+		packet[2] = 0; packet[3] = 1;           // seq
+		packet[8]  = (BYTE)(ssrc >> 24); packet[9]  = (BYTE)(ssrc >> 16);
+		packet[10] = (BYTE)(ssrc >> 8);  packet[11] = (BYTE)ssrc;
+
+		sockaddr_in to;
+		memset(&to, 0, sizeof(to));
+		to.sin_family      = AF_INET;
+		to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		to.sin_port        = htons(port);
+		return sendto(fd, packet, sizeof(packet), 0, (sockaddr*)&to, sizeof(to)) == (ssize_t)sizeof(packet);
+	}
+
+	// Attend un datagramme portant kMagic (donc issu de SendPacket, pas de
+	// l'amorçage NAT). Retourne false au bout de timeoutMs sans rien de tel.
+	bool WaitForMagic(int timeoutMs)
+	{
+		pollfd pfd = { fd, POLLIN, 0 };
+		while (timeoutMs > 0)
+		{
+			const int slice = timeoutMs < 50 ? timeoutMs : 50;
+			const int ret = poll(&pfd, 1, slice);
+			timeoutMs -= slice;
+			if (ret <= 0)
+				continue;
+
+			BYTE buffer[MTU];
+			const ssize_t size = recv(fd, buffer, sizeof(buffer), 0);
+			if (size < (ssize_t)(12 + sizeof(kMagic)))
+				continue;   // en-tête nu : paquet d'amorçage, on l'ignore
+			if (memcmp(buffer + 12, kMagic, sizeof(kMagic)) == 0)
+				return true;
+		}
+		return false;
+	}
+
+	// Laisse la session traiter ce qu'on vient de lui envoyer, sans rien émettre :
+	// le thread Run relève la source observée en quelques microsecondes. Jette ce
+	// qui arriverait entre-temps.
+	void Drain(int ms)
+	{
+		pollfd pfd = { fd, POLLIN, 0 };
+		while (ms > 0)
+		{
+			const int slice = ms < 25 ? ms : 25;
+			ms -= slice;
+			if (poll(&pfd, 1, slice) > 0)
+			{
+				BYTE buffer[MTU];
+				recv(fd, buffer, sizeof(buffer), 0);
+			}
+		}
+	}
+
+	int Port() const { return ntohs(bound.sin_port); }
+
+private:
+	int         fd = -1;
+	sockaddr_in bound {};
+};
+
+// Session prête à émettre : ports bindés, thread de réception démarré (Init),
+// table d'émission renseignée (SendPacket déréférence rtpMapOut sans garde).
+class Session
+{
+public:
+	explicit Session(bool natLatchProperty = false)
+		: session(MediaFrame::Audio, &listener)
+	{
+		ok = (session.Init() == 1);
+		if (!ok)
+			return;
+
+		RTPMap map;
+		map[kPayloadType] = kCodec;      // type -> codec
+		session.SetSendingRTPMap(map);
+		session.SetReceivingRTPMap(map);
+
+		if (natLatchProperty)
+		{
+			Properties props;
+			props["natLatch"] = "1";
+			session.SetProperties(props);
+		}
+	}
+
+	~Session() { if (ok) session.End(); }
+
+	// Émet un paquet média porteur de kMagic vers la cible courante.
+	void SendMagic()
+	{
+		// PIÈGE connu : RTPPacket(media, codec, type) avec des littéraux 0 est
+		// ambigu (concurrence avec le ctor (media, BYTE*, DWORD)). Passer des DWORD.
+		DWORD codec = kCodec;
+		DWORD type  = kPayloadType;
+		RTPPacket packet(MediaFrame::Audio, codec, type);
+		memcpy(packet.GetMediaData(), kMagic, sizeof(kMagic));
+		packet.SetMediaLength(sizeof(kMagic));
+		session.SendPacket(packet);
+	}
+
+	// Le latch a lieu dans le thread Run, à l'arrivée du paquet de la sonde : on
+	// ré-émet donc périodiquement jusqu'à ce que la sonde reçoive, ou expiration.
+	bool ReachesProbeWithin(ProbeSocket& probe, int timeoutMs)
+	{
+		for (int waited = 0; waited < timeoutMs; waited += 100)
+		{
+			SendMagic();
+			if (probe.WaitForMagic(100))
+				return true;
+		}
+		return false;
+	}
+
+	bool          ok = false;
+	StubListener  listener;
+	RTPSession    session;
+
+	// constexpr : implicitement inline en C++17, donc pas de définition hors classe
+	// à fournir malgré l'usage par référence (RTPMap::operator[]).
+	static constexpr BYTE kPayloadType = 0;   // PCMU
+	static constexpr BYTE kCodec       = 0;   // AudioCodec::PCMU
+};
+
+// Délais : généreux pour ne pas être flaky sous charge, mais bornés. Le cas
+// négatif doit attendre assez longtemps pour être crédible.
+const int kExpectTimeoutMs = 2000;
+const int kDenyTimeoutMs   = 600;
+
+// Loopback UDP indisponible (sandbox réseau) : test SKIPPÉ plutôt qu'échoué,
+// comme WebSocketEcho.
+#define REQUIRE_LOOPBACK(probe, sess)                                          \
+	do {                                                                   \
+		if (!(probe).Open())                                           \
+			GTEST_SKIP() << "socket loopback indisponible";        \
+		if (!(sess).ok)                                                \
+			GTEST_SKIP() << "impossible de binder une paire de ports RTP"; \
+	} while (0)
+
+} // namespace
+
+// Le contrôleur annonce 0.0.0.0 : il déclare ne pas connaître l'adresse du pair
+// et s'en remet à la source observée. La session doit donc émettre vers la sonde.
+TEST(RtpLatching, LatchesOnObservedSourceWhenAnnouncedAddressIsUnknown)
+{
+	ProbeSocket probe;
+	Session sess;
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char any[] = "0.0.0.0";
+	sess.session.SetRemotePort(any, 0);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "annonce 0.0.0.0 : le media doit suivre la source observee";
+}
+
+// Cas du NAT symétrique : annonce privée + autorisation du contrôleur. Le média
+// doit être ré-aiguillé de l'annonce (injoignable) vers la source réelle.
+TEST(RtpLatching, ReAimsFromPrivateAnnouncementToObservedSource)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "annonce privee + natLatch : le media doit suivre la source observee";
+}
+
+// Sans autorisation du plan de contrôle, aucune correction : le média continue
+// vers l'annonce, même si la source observée diffère. C'est le comportement par
+// défaut, et il est délibéré.
+TEST(RtpLatching, DoesNotReAimWhenLatchingIsNotAuthorised)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/false);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "sans natLatch, la cible d'envoi ne doit pas bouger";
+}
+
+// Annonce PUBLIQUE : même autorisé, pas de rattrapage. Une divergence sur une
+// adresse publique est plus probablement du routage asymétrique légitime.
+TEST(RtpLatching, DoesNotReAimFromAPublicAnnouncement)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char announced[] = "240.0.0.1";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "annonce publique : pas de rattrapage (routage asymetrique legitime)";
+}
+
+// Un nouveau SetRemotePort (re-INVITE, UPDATE) rouvre le droit au rattrapage :
+// sinon un pair qui change de mapping resterait coincé sur l'ancienne cible.
+// Ici le pair déplacé se manifeste AVANT toute nouvelle émission — le mécanisme
+// de réouverture fonctionne alors comme prévu (cas d'un émetteur au repos :
+// participant muet, média en pause).
+TEST(RtpLatching, NewRemotePortReopensTheRightToReAim)
+{
+	ProbeSocket first;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(first, sess);
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(first.SendRtpTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(first, kExpectTimeoutMs));
+
+	// Le plan de contrôle repose une cible : la correction précédente est caduque.
+	char reannounced[] = "192.168.255.253";
+	sess.session.SetRemotePort(reannounced, 5002);
+
+	// Le pair déplacé se manifeste depuis une AUTRE adresse (un changement de
+	// port seul ne serait pas relevé, cf. PortOnlyMappingChangeIsNotFollowed),
+	// et AVANT que nous n'ayons ré-émis quoi que ce soit.
+	ProbeSocket second;
+	if (!second.Open("127.0.0.2"))
+		GTEST_SKIP() << "adresse loopback secondaire indisponible";
+	ASSERT_TRUE(second.SendRtpTo(sess.session.GetLocalPort()));
+	second.Drain(150);   // laisse la session relever la nouvelle source
+
+	EXPECT_TRUE(sess.ReachesProbeWithin(second, kExpectTimeoutMs))
+		<< "apres un nouveau SetRemotePort, le rattrapage doit pouvoir rejouer";
+}
+
+// CARACTÉRISATION D'UN DÉFAUT (pas d'un choix de conception) : ce test décrit le
+// comportement actuel, qui CONTREDIT l'intention écrite dans `SetRemotePort`
+// (« On rouvre le droit au rattrapage, sinon un pair qui change de mapping
+// resterait coincé sur l'ancien »).
+//
+// `SetRemotePort` remet `natCorrected` à false mais laisse l'OBSERVATION
+// précédente (`recIP`/`recPort`) en place. Or le média coule en continu : le
+// premier paquet sortant après le re-INVITE arrive avant que le pair déplacé ne
+// se soit manifesté, et `SendPacket` ré-aiguille alors sur l'observation
+// PÉRIMÉE — ce qui reconsomme le one-shot. Quand le nouveau pair se manifeste
+// enfin, `natCorrected` vaut déjà true : plus aucune correction n'est possible
+// et la session reste bloquée sur l'ancien pair, en journalisant en boucle
+// « WARNING Trying to send packet from different ip address than receiving one ».
+//
+// En production la course est quasiment toujours perdue (audio émis toutes les
+// 20 ms contre un pair qui ne parle qu'après son answer).
+//
+// Ce test RÉUSSIT tant que le défaut existe. Correction probable : oublier
+// l'observation (`recIP`/`recPort`) quand le plan de contrôle pose une nouvelle
+// cible. Il faudra alors inverser les deux attentes ci-dessous.
+TEST(RtpLatching, StaleObservationBurnsTheOneShotWhenSendingContinues)
+{
+	ProbeSocket first;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(first, sess);
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(first.SendRtpTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(first, kExpectTimeoutMs));
+
+	char reannounced[] = "192.168.255.253";
+	sess.session.SetRemotePort(reannounced, 5002);
+
+	// L'émission continue AVANT que le pair déplacé ne se manifeste : le
+	// rattrapage se rejoue sur l'ancienne source et brûle le one-shot.
+	sess.SendMagic();
+
+	ProbeSocket second;
+	if (!second.Open("127.0.0.2"))
+		GTEST_SKIP() << "adresse loopback secondaire indisponible";
+	ASSERT_TRUE(second.SendRtpTo(sess.session.GetLocalPort()));
+	second.Drain(150);
+
+	EXPECT_FALSE(sess.ReachesProbeWithin(second, kDenyTimeoutMs))
+		<< "defaut caracterise : le nouveau pair n'est jamais suivi";
+	EXPECT_TRUE(sess.ReachesProbeWithin(first, kExpectTimeoutMs))
+		<< "le media reste bloque sur l'ancien pair";
+}
+
+// CARACTÉRISATION d'une limite du latching, sur le modèle d'`Amf.NumberZeroDecodeQuirk`.
+//
+// La source observée n'est relevée que lorsque l'ADRESSE change
+// (`rtpsession.cpp:2097` compare `recIP` seul) : `recPort` n'est donc jamais
+// rafraîchi quand le pair garde son IP et change de PORT — ce qu'un NAT
+// symétrique fait pourtant couramment en rebindant son mapping. Le média
+// continue alors vers l'ancien port. Le commentaire de `SendPacket`
+// (« recIP est recalé sur *chaque* paquet de source différente ») décrit
+// l'intention, pas le code.
+//
+// Ce test RÉUSSIT tant que la limite existe. S'il se met à échouer, c'est
+// qu'elle a été corrigée : remplacer alors les deux attentes (le média doit
+// suivre le nouveau port, donc `second` reçoit et `first` non).
+TEST(RtpLatching, PortOnlyMappingChangeIsNotFollowed)
+{
+	ProbeSocket first;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(first, sess);
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(first.SendRtpTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(first, kExpectTimeoutMs));
+
+	// Même adresse, port source différent : le nouveau mapping du NAT.
+	ProbeSocket second;
+	if (!second.Open())
+		GTEST_SKIP() << "socket loopback indisponible";
+	ASSERT_TRUE(second.SendRtpTo(sess.session.GetLocalPort()));
+
+	EXPECT_FALSE(sess.ReachesProbeWithin(second, kDenyTimeoutMs))
+		<< "limite caracterisee : le changement de port seul n'est pas suivi";
+	EXPECT_TRUE(sess.ReachesProbeWithin(first, kExpectTimeoutMs))
+		<< "le media reste dirige vers l'ancien port";
+}
+
+// La réception d'un paquet d'une source inattendue doit demander une image clé
+// (le décodeur d'en face repart de zéro après un changement de chemin).
+TEST(RtpLatching, RequestsAKeyFrameOnSourceChange)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs));
+	EXPECT_GT(sess.listener.fpuRequests, 0)
+		<< "un changement de source observee doit declencher onFPURequested";
+}

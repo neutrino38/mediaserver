@@ -50,6 +50,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **Intégration en-processus** : `WebSocketServer` + `TextEchoWebsocketHandler`, client loopback interne → handshake HTTP Upgrade (101) + écho d'une trame texte masquée | **wstest** |
 | `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | **`MosaicGeometry`** : la géométrie décidée par `Mosaic::BuildDesc()` (quelles vignettes, quelle taille, quelle position), sans produire un pixel — 1+1 pleine hauteur (4:3 → 640x480) et son invariance pour une source 16:9, placements historiques des grilles 1x1/2x2/3x3/1p7, étirement du slot principal PIP, `keepAspect=false`, exclusion des slots vides, **invariant de non-débordement sur les 12 dispositions × 4 ratios de source**, stabilité de la description à contenu changeant (clé de reconstruction du graphe). **`MosaicComposition`** : la composition réelle par `MosaicCompositor` (graphe avfilter), vérifiée **pixel à pixel** — quadrants d'un 2x2, bandes de letterbox laissant voir le fond, cache intra-tick, `Clean()` qui rend le fond, 30 ticks consécutifs sans blocage du framesync, changement de résolution d'entrée, et composition effective des 12 types | — (nouveau) |
 | `test_codec_type.cpp` | `CodecType` | Le membre `type` d'un codec doit être lisible **à travers un pointeur de base** (`VideoDecoder*`/`VideoEncoder*`/`AudioDecoder*`/`AudioEncoder*`), pour tous les codecs que la machine déclare supportés, + reproduction du prédicat de recréation de `VideoStream::RecVideo` | — (nouveau) |
+| `test_rtp_latching.cpp` | `RtpLatching` | Latching RTP symétrique (NAT « comedia ») de `RTPSession`, testé **uniquement par le comportement observable** : un socket sonde en loopback joue le pair NATé, émet du média puis vérifie si celui de la session lui revient. Couvre l'annonce `0.0.0.0`, l'annonce privée autorisée (rattrapage), l'absence d'autorisation, l'annonce publique (pas de rattrapage), la réouverture du droit par un nouveau `SetRemotePort`, la demande d'image clé sur changement de source, **+ 2 tests de caractérisation** de limites/défauts (voir plus bas) | — (nouveau) |
 | `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp`, `RtpAdversarial`, `RtcpAdversarial` | **`Rtp`** : round-trips autonomes de l'en-tête `RTPPacket` (build → GetData → re-parse : seq/ts/ssrc/pt/marker/payload, bouclages 16/32 bits). **`RtpRtcp`** : parsing sur **capture réelle** (`fixtures/rtp_rtcp.pcap`) via `RTPPacket` + `RTCPCompoundPacket::Parse` — par paquet (version=2, pt<128, en-tête sain) et par flux (SSRC dominant : payload type constant, séquences en avant ≥90 %, timestamps non décroissants ≥90 %) ; côté RTCP, rapports SR/RR décodés. **`RtpAdversarial`/`RtcpAdversarial`** : paquets volontairement cassés (extension/CC surdimensionnés, mauvaise version, RTCP trop court / pt hors plage / length débordante) → parseurs qui ne crashent pas et détectent la malformation | — (nouveau) |
 
 ### Fixtures
@@ -102,6 +103,7 @@ bug et en constatant l'échec :
 |---|---|
 | `mosaic1p1` bridé à la moitié de la hauteur (`GetHeight` `rows=4,size=2`, `GetTop` `mosaicTotalHeight/4`) | `MosaicGeometry.Mosaic1p1UsesFullHeightFor4x3Source` |
 | letterbox calculé sur le ratio GLOBAL de la mosaïque au lieu du ratio du slot | `Mosaic1p1UsesFullHeightFor4x3Source`, `Mosaic1p1UnchangedFor16x9Source`, `SlotsAlwaysFitInsideTheComposite`, `MosaicComposition.LetterboxBandsShowTheBackground` |
+| `RTPSession::NatCorrectable` neutralisé (`return false`) | 5 des 8 `RtpLatching.*` ; survivent exactement les 3 qui doivent survivre — le chemin `0.0.0.0` (qui ne passe pas par la politique) et les 2 tests attendant justement l'absence de rattrapage |
 
 Un test qui n'échoue pas quand le bug revient ne garde rien : refaire cette
 vérification pour tout nouveau garde-fou ajouté ici.
@@ -176,3 +178,37 @@ pas revenir.
 6. **`mosaic1p1` bridé à la moitié de la hauteur + letterbox calculé sur le ratio
    global (CORRIGÉS dans `asymmetricmosaic.cpp` / `mosaic.cpp`).** Voir « Vérification
    par mutation des garde-fous » ci-dessus pour le détail et les tests concernés.
+
+## Défauts mis au jour par les tests de latching (NON corrigés, caractérisés)
+
+Ces deux-là ont été trouvés en écrivant `test_rtp_latching.cpp` : le test attendu
+échouait, et l'analyse a montré que le code — non le test — était en tort. Ils sont
+**épinglés par des tests de caractérisation** qui décrivent le comportement actuel,
+sur le modèle d'`Amf.NumberZeroDecodeQuirk`. Chacun réussit **tant que le défaut
+existe** ; il devient rouge dès qu'on le corrige, ce qui est le signal d'inverser
+ses attentes.
+
+7. **Un changement de PORT source seul n'est pas relevé**
+   (`RtpLatching.PortOnlyMappingChangeIsNotFollowed`). La source observée n'est
+   relevée que si l'ADRESSE change : `rtpsession.cpp:2097` teste `recIP` seul, donc
+   `recPort` n'est jamais rafraîchi quand le pair garde son IP et rebinde son
+   mapping — ce qu'un NAT symétrique fait couramment. Le média continue vers
+   l'ancien port. Le commentaire de `SendPacket` (« recIP est recalé sur *chaque*
+   paquet de source différente ») décrit l'intention, pas le code.
+
+8. **L'observation périmée brûle le one-shot après un re-INVITE**
+   (`RtpLatching.StaleObservationBurnsTheOneShotWhenSendingContinues`).
+   `SetRemotePort` remet `natCorrected` à false — l'intention explicite étant
+   qu'« un pair qui change de mapping ne reste pas coincé sur l'ancien » — mais
+   laisse `recIP`/`recPort` pointer sur l'observation précédente. Or le média coule
+   en continu : le premier paquet sortant après le re-INVITE précède la première
+   trame du pair déplacé, `SendPacket` ré-aiguille donc sur l'observation périmée et
+   **reconsomme le one-shot**. Quand le nouveau pair se manifeste, `natCorrected`
+   vaut déjà true : plus aucune correction n'est possible, la session reste bloquée
+   sur l'ancien pair en journalisant en boucle « WARNING Trying to send packet from
+   different ip address than receiving one ». En production la course est presque
+   toujours perdue (audio émis toutes les 20 ms contre un pair qui ne parle qu'après
+   son answer). Le mécanisme de réouverture ne fonctionne que si le pair déplacé se
+   manifeste avant toute ré-émission (`NewRemotePortReopensTheRightToReAim`, cas
+   d'un émetteur au repos). Correction probable : oublier l'observation
+   (`recIP`/`recPort`) quand le plan de contrôle pose une nouvelle cible.
