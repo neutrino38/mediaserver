@@ -18,25 +18,19 @@ extern "C" {
 
 // Mémorise la trame d'un slot pour la composition par graphe avfilter (Phase 3).
 // N'écrit plus un pixel dans le buffer BYTE* : le composite est produit par
-// MosaicCompositor (cf. GetPict). Redescente GPU->CPU car le chemin de Phase 3
-// est CPU (le graphe GPU natif vient en Phase 5).
+// MosaicCompositor (cf. GetPict). Les trames GPU (VAAPI) sont conservées TELLES
+// QUELLES depuis la Phase 5 : c'est le graphe qui décide (scale_vaapi en mode
+// GPU, hwdownload intégré à la branche en mode CPU) — plus aucune redescente
+// hors graphe.
 int Mosaic::Update(int index, const PictPtr& pic)
 {
 	if (!pic || !pic->GetAVFrame())
 		return 0;
 
-	PictPtr frame = pic;
-	if (pic->IsGPUPict())
-	{
-		frame = pic->DownloadToCPU();
-		if (!frame)
-			return 0;
-	}
-
 	// Mémorise la trame et l'aspect du slot (lus par BuildDesc/GetPict).
 	if (index >= 0 && index < (int) slotFrames.size())
 	{
-		slotFrames[index]     = frame;
+		slotFrames[index]     = pic;
 		slotKeepAspect[index] = keepAspect;
 	}
 
@@ -136,11 +130,13 @@ MosaicGraphDesc Mosaic::BuildDesc()
 	MosaicGraphDesc desc;
 	desc.width           = mosaicTotalWidth;
 	desc.height          = mosaicTotalHeight;
-	desc.wantGPU         = false;   // chemin GPU : Phase 5
+	desc.wantGPU         = false;   // décidé après la boucle (politique §2.1)
 	desc.hasMosaicOverlay = false;
 	desc.blackBackground = HasBlackBackground();
 
 	slotOverlayPicts.clear();
+
+	bool anyGPUInput = false;
 
 	for (int pos = 0; pos < numSlots && pos < (int) slotFrames.size(); pos++)
 	{
@@ -157,6 +153,8 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		s.inH    = f->height;
 		s.inFmt  = f->format;
 		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU (clé de reconfig)
+		if (pic->IsGPUPict())
+			anyGPUInput = true;
 
 		int dx, dy;
 		ComputeSlotPlacement(pos, f->width, f->height, slotKeepAspect[pos],
@@ -209,6 +207,13 @@ MosaicGraphDesc Mosaic::BuildDesc()
 			mosaicOverlayPict = mp;
 		}
 	}
+
+	// Politique GPU (§2.1 du plan) : composer sur GPU seulement si le device
+	// VAAPI partagé existe ET qu'au moins une entrée est déjà une surface GPU —
+	// sans entrée GPU, tout monter en VRAM serait une pure perte (uploads puis
+	// probable redescente côté encodeur logiciel). Le compositor peut encore
+	// replier en CPU (échec de config, slots superposés type PIP).
+	desc.wantGPU = anyGPUInput && Pict::GetVAAPIDevice() != nullptr;
 
 	return desc;
 }

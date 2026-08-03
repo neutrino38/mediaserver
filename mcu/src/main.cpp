@@ -26,6 +26,7 @@
 #include <sys/wait.h>
 #include "amf.h"
 #include "dtls.h"
+#include "video.h"
 #include <openssl/crypto.h>
 
 #ifdef MOTELI
@@ -345,6 +346,16 @@ int main(int argc,char **argv)
 	//Log version
 	Log("-MCU Version %s %s\r\n",MCUVERSION,MCUDATE);
         gserver = &server;
+
+	//Accélération matérielle : sonde (et crée si possible) le device VAAPI
+	//partagé une bonne fois au démarrage — le même device que les décodeurs,
+	//les encodeurs et le graphe de composition des mosaïques utiliseront.
+	//Le verdict est ainsi visible en tête de log plutôt que découvert au
+	//premier appel.
+	if (Pict::GetVAAPIDevice())
+		Log("-Acceleration materielle VAAPI DISPONIBLE : decodage/encodage/composition video sur GPU actives (repli CPU automatique au cas par cas)\n");
+	else
+		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 
 	//Adresse annoncée dans le SDP (ligne c= et candidats ICE des deux API de
 	//contrôle). Résolue ici, avant toute initialisation de serveur : sans elle
