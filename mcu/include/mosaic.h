@@ -20,6 +20,11 @@ public:
 	static const int SlotLocked   = -1;
 	static const int SlotVAD      = -2;
 	static const int SlotReset    = -3; // For internal use only
+
+	// Liseré noir (px) réservé autour de l'image de chaque slot : le slot utile
+	// est rétréci d'autant de chaque côté et le graphe pad l'image en noir.
+	// (constexpr : implicitement inline en C++17, gtest la lie par référence.)
+	static constexpr int SlotBorder = 2;
 	
 	typedef enum
 	{
@@ -152,9 +157,15 @@ protected:
 	// l'étirement historique du slot principal PIP).
 	virtual bool StretchSlot(int pos) const { return false; }
 
-	// Calcule la taille effective de la vignette (letterbox/pillarbox) et son
-	// décalage dans le slot, d'après ComputeAspectRatio et keepAspect. Factorise
-	// l'arithmétique dupliquée des Update(BYTE*) (partedmosaic / asymmetricmosaic).
+	// Liseré effectif du slot : SlotBorder, ou 0 si le slot est trop petit pour
+	// en réserver un (garde-fou ; tous les slots réels font >= ~180 px).
+	int GetSlotBorder(int pos);
+
+	// Calcule la taille effective de l'image (letterbox/pillarbox) et son
+	// décalage dans le slot, d'après ComputeAspectRatio et keepAspect. Le
+	// placement se fait dans le slot UTILE (liseré déduit de chaque côté) ;
+	// dx/dy incluent le liseré. Factorise l'arithmétique dupliquée des
+	// Update(BYTE*) (partedmosaic / asymmetricmosaic).
 	void ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 	                          int& outW, int& outH, int& dx, int& dy);
 

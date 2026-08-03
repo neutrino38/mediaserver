@@ -15,23 +15,26 @@ extern "C"
 struct MosaicSlotDesc
 {
 	int  pos       = 0;      // index de slot (traçage/logs)
-	int  x         = 0;      // position de la vignette (GetLeft + décalage letterbox)
-	int  y         = 0;      // position de la vignette (GetTop + décalage letterbox)
-	int  w         = 0;      // largeur effective de la vignette (rzWidth)
-	int  h         = 0;      // hauteur effective de la vignette (rzHeight)
+	int  x         = 0;      // position de l'IMAGE (GetLeft + liseré + décalage letterbox)
+	int  y         = 0;      // position de l'IMAGE (GetTop + liseré + décalage letterbox)
+	int  w         = 0;      // largeur effective de l'image (hors liseré)
+	int  h         = 0;      // hauteur effective de l'image (hors liseré)
+	int  border    = 0;      // liseré noir (px) rendu par pad autour de l'image ;
+	                         // la vignette totale fait (w+2b)x(h+2b) en (x-b,y-b)
 	int  inW       = 0;      // largeur de la trame d'entrée (clé de reconfig)
 	int  inH       = 0;      // hauteur de la trame d'entrée (clé de reconfig)
 	int  inFmt     = 0;      // format de la trame d'entrée (AVPixelFormat, clé de reconfig)
 	AVBufferRef* hwFramesCtx = nullptr; // ctx trames VAAPI de l'entrée (non possédé), clé de reconfig
 	bool hasOverlay = false; // overlay participant à empiler sur ce slot
-	int  ovX       = 0;      // position de l'overlay participant (= GetLeft du slot)
-	int  ovY       = 0;      // position de l'overlay participant (= GetTop du slot)
-	int  ovW       = 0;      // largeur de l'overlay rgba (== largeur du slot)
-	int  ovH       = 0;      // hauteur de l'overlay rgba (== hauteur du slot)
+	int  ovX       = 0;      // position de l'overlay participant (slot utile, liseré déduit)
+	int  ovY       = 0;      // position de l'overlay participant (slot utile, liseré déduit)
+	int  ovW       = 0;      // largeur de l'overlay rgba (== slot utile)
+	int  ovH       = 0;      // hauteur de l'overlay rgba (== slot utile)
 
 	bool operator==(const MosaicSlotDesc& o) const
 	{
 		return pos == o.pos && x == o.x && y == o.y && w == o.w && h == o.h &&
+		       border == o.border &&
 		       inW == o.inW && inH == o.inH && inFmt == o.inFmt &&
 		       hwFramesCtx == o.hwFramesCtx && hasOverlay == o.hasOverlay &&
 		       ovX == o.ovX && ovY == o.ovY && ovW == o.ovW && ovH == o.ovH;

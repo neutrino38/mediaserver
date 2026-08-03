@@ -142,16 +142,28 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	std::string desc;
 	char frag[256];
 
-	// scale par slot : [inK] scale=w:h,format=yuv420p [sK]
+	// scale par slot : [inK] scale=w:h,format=yuv420p[,pad liseré noir] [sK].
+	// Le pad ajoute 'border' px de noir autour de l'IMAGE mise à l'échelle : le
+	// liseré est garanti noir quel que soit le fond de la mosaïque (gris/noir).
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
 		const MosaicSlotDesc& s = cur.slots[i];
-		snprintf(frag, sizeof(frag),
-		         "[in%zu] scale=%d:%d,format=yuv420p [s%zu];", i, s.w, s.h, i);
+		if (s.border > 0)
+			snprintf(frag, sizeof(frag),
+			         "[in%zu] scale=%d:%d,format=yuv420p,"
+			         "pad=%d:%d:%d:%d:black [s%zu];",
+			         i, s.w, s.h,
+			         s.w + 2*s.border, s.h + 2*s.border,
+			         s.border, s.border, i);
+		else
+			snprintf(frag, sizeof(frag),
+			         "[in%zu] scale=%d:%d,format=yuv420p [s%zu];", i, s.w, s.h, i);
 		desc += frag;
 	}
 
 	// cascade overlay des vignettes : [prev][sK] overlay=x:y [cK]
+	// (x,y) désignent l'IMAGE ; la vignette paddée est donc posée liseré compris,
+	// décalée du liseré vers le haut/gauche.
 	std::string prev = "bg";
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
@@ -159,7 +171,7 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 		std::string next = "c" + std::to_string(i);
 		snprintf(frag, sizeof(frag),
 		         "[%s][s%zu] overlay=x=%d:y=%d:" SYNC_OPTS " [%s];",
-		         prev.c_str(), i, s.x, s.y, next.c_str());
+		         prev.c_str(), i, s.x - s.border, s.y - s.border, next.c_str());
 		desc += frag;
 		prev = next;
 	}
@@ -267,9 +279,9 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
 		const MosaicSlotDesc& s = cur.slots[i];
-		snprintf(frag, sizeof(frag), "%spos%d %dx%d(fmt%d)->%dx%d@%d,%d%s",
+		snprintf(frag, sizeof(frag), "%spos%d %dx%d(fmt%d)->%dx%d@%d,%d(b%d)%s",
 		         i ? " " : "", s.pos, s.inW, s.inH, s.inFmt,
-		         s.w, s.h, s.x, s.y, s.hasOverlay ? "+ovr" : "");
+		         s.w, s.h, s.x, s.y, s.border, s.hasOverlay ? "+ovr" : "");
 		slotsInfo += frag;
 	}
 	Log("-MosaicCompositor: graphe #%d construit [%s %dx%d, fond %s, %d slot(s): %s%s] desc=[%s]\n",

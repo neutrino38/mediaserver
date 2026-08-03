@@ -332,7 +332,14 @@ int Overlay::LoadImage(const char* filename)
 	if (height == 0 || width == 0)
 	    return Error("-Overlay: no slot size. Cannot render image.\n");
 
-	render.zoom( Magick::Geometry( width, height) );
+	//Taille EXACTE demandée ('!') : tout l'aval (ConvertToYUVA, RGBABlobToPict,
+	//le buffersrc du graphe) suppose un blob de width x height pixels. Sans le
+	//flag, zoom conserve l'aspect et rend plus petit dès que l'image n'a pas le
+	//ratio du slot (slot utile hors 16:9 depuis le liseré) : blob trop court,
+	//overlay silencieusement abandonné.
+	Magick::Geometry exact( width, height );
+	exact.aspect(true);
+	render.zoom( exact );
 	Magick::Blob rgbablob;
 	//Forcer 8 bits/canal AVANT l'export brut : ImageMagick abaisse la profondeur
 	//au minimum (1 bit pour une image unie) et l'export "RGBA" la respecte, ce qui

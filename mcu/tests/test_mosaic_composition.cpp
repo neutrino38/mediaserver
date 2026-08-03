@@ -11,9 +11,11 @@
  *     pousse des trames de luma uniforme dans les slots et on relit les pixels du
  *     composite rendu par le graphe avfilter.
  *
- * Les valeurs attendues des dispositions en grille sont celles du code historique
- * (blits BYTE* de partedmosaic/asymmetricmosaic) : elles constituent le garde-fou
- * de non-régression du passage au graphe avfilter.
+ * Les valeurs attendues des dispositions en grille dérivent du code historique
+ * (blits BYTE* de partedmosaic/asymmetricmosaic), CORRIGÉES du liseré noir :
+ * chaque slot réserve Mosaic::SlotBorder (2 px) de chaque côté, l'image se place
+ * dans le slot utile ainsi réduit et le graphe la borde de noir (pad). La
+ * géométrie d'un slot vaut donc l'historique décalé de +2 et rétréci de 4.
  *
  * Deux régressions vécues sont explicitement gardées ici :
  *  - `EmptySlotsAreExcludedFromGraph` : une description à **0 slot** est la
@@ -84,8 +86,8 @@ void FillSlots(Mosaic& m, int n, int inW, int inH, BYTE firstLuma = 40)
 
 // Écrit un PNG uni (opaque) et rend son chemin. Sert de contenu d'overlay
 // déterministe : pas de dépendance aux fontes du système comme RenderText.
-// Taille 16:9 pour que le zoom d'ImageMagick (qui conserve l'aspect) remplisse
-// exactement le slot/la toile 16:9 demandés par Overlay::Resize.
+// La taille source importe peu : LoadImage étire à la taille EXACTE de
+// l'overlay (Geometry.aspect), le slot utile n'étant plus 16:9 avec le liseré.
 std::string WriteSolidPng(const char* name, int w, int h,
                           double r, double g, double b)
 {
@@ -203,18 +205,19 @@ TEST(MosaicGeometry, Mosaic1p1UsesFullHeightFor4x3Source)
 	MosaicGraphDesc d = MosaicProbe::Desc(*m);
 	EXPECT_EQ(1280, d.width);
 	EXPECT_EQ(720,  d.height);
-	// Letterbox vertical dans un slot de 640x720 : 640x480 centré (dy=120).
-	ExpectSlots(d, { {640, 480, 0, 120}, {640, 480, 640, 120} });
+	// Letterbox vertical dans un slot utile de 636x716 : 636x477 centré.
+	ExpectSlots(d, { {636, 477, 2, 120}, {636, 477, 642, 120} });
 }
 
-// Contrepartie du test précédent : une source 16:9 rend EXACTEMENT comme avant
-// le passage aux slots pleine hauteur (aucune régression pour les endpoints HD).
+// Contrepartie du test précédent : une source 16:9 rend comme avant le passage
+// aux slots pleine hauteur, au liseré près (aucune régression pour les
+// endpoints HD).
 TEST(MosaicGeometry, Mosaic1p1UnchangedFor16x9Source)
 {
 	auto m = MakeMosaic(Mosaic::mosaic1p1);
 	FillSlots(*m, 2, 1280, 720);
 
-	ExpectSlots(MosaicProbe::Desc(*m), { {640, 360, 0, 180}, {640, 360, 640, 180} });
+	ExpectSlots(MosaicProbe::Desc(*m), { {636, 357, 2, 180}, {636, 357, 642, 180} });
 }
 
 // Le 1+1 a un fond NOIR (et non le gris neutre) : c'est la seule disposition
@@ -231,7 +234,7 @@ TEST(MosaicGeometry, Grid1x1PillarboxesA4x3Source)
 	auto m = MakeMosaic(Mosaic::mosaic1x1);
 	FillSlots(*m, 1, 640, 480);
 
-	ExpectSlots(MosaicProbe::Desc(*m), { {959, 720, 160, 0} });
+	ExpectSlots(MosaicProbe::Desc(*m), { {954, 716, 162, 2} });
 }
 
 // Non-régression des grilles : valeurs du chemin BYTE* historique.
@@ -240,15 +243,16 @@ TEST(MosaicGeometry, Grid2x2MatchesLegacyPlacement)
 	auto m43 = MakeMosaic(Mosaic::mosaic2x2);
 	FillSlots(*m43, 4, 640, 480);
 	ExpectSlots(MosaicProbe::Desc(*m43), {
-		{479, 360,  80,   0}, {479, 360, 720,   0},
-		{479, 360,  80, 360}, {479, 360, 720, 360} });
+		{474, 356,  82,   2}, {474, 356, 722,   2},
+		{474, 356,  82, 362}, {474, 356, 722, 362} });
 
-	// Source 16:9 : la cellule est remplie, aucune bande.
+	// Source 16:9 : la cellule utile est remplie, aucune bande (le ratio du slot
+	// utile 636x356 reste à ~1% du 16:9, la tolérance du letterbox l'absorbe).
 	auto m169 = MakeMosaic(Mosaic::mosaic2x2);
 	FillSlots(*m169, 4, 1280, 720);
 	ExpectSlots(MosaicProbe::Desc(*m169), {
-		{640, 360,   0,   0}, {640, 360, 640,   0},
-		{640, 360,   0, 360}, {640, 360, 640, 360} });
+		{636, 356,   2,   2}, {636, 356, 642,   2},
+		{636, 356,   2, 362}, {636, 356, 642, 362} });
 }
 
 TEST(MosaicGeometry, Grid3x3MatchesLegacyPlacement)
@@ -260,13 +264,13 @@ TEST(MosaicGeometry, Grid3x3MatchesLegacyPlacement)
 	ASSERT_EQ(9u, d.slots.size());
 	for (const MosaicSlotDesc& s : d.slots)
 	{
-		EXPECT_EQ(319, s.w);
-		EXPECT_EQ(240, s.h);
+		EXPECT_EQ(314, s.w);
+		EXPECT_EQ(236, s.h);
 	}
-	EXPECT_EQ(53,  d.slots[0].x);
-	EXPECT_EQ(0,   d.slots[0].y);
-	EXPECT_EQ(905, d.slots[2].x);
-	EXPECT_EQ(480, d.slots[8].y);
+	EXPECT_EQ(56,  d.slots[0].x);
+	EXPECT_EQ(2,   d.slots[0].y);
+	EXPECT_EQ(908, d.slots[2].x);
+	EXPECT_EQ(482, d.slots[8].y);
 }
 
 // Disposition asymétrique : un grand slot + 7 vignettes.
@@ -277,13 +281,13 @@ TEST(MosaicGeometry, Asymmetric1p7MatchesLegacyPlacement)
 
 	MosaicGraphDesc d = MosaicProbe::Desc(*m);
 	ASSERT_EQ(8u, d.slots.size());
-	EXPECT_EQ(719, d.slots[0].w);
-	EXPECT_EQ(540, d.slots[0].h);
-	EXPECT_EQ(120, d.slots[0].x);
+	EXPECT_EQ(714, d.slots[0].w);
+	EXPECT_EQ(536, d.slots[0].h);
+	EXPECT_EQ(122, d.slots[0].x);
 	for (size_t i = 1; i < d.slots.size(); i++)
 	{
-		EXPECT_EQ(239, d.slots[i].w) << "vignette " << i;
-		EXPECT_EQ(180, d.slots[i].h) << "vignette " << i;
+		EXPECT_EQ(234, d.slots[i].w) << "vignette " << i;
+		EXPECT_EQ(176, d.slots[i].h) << "vignette " << i;
 	}
 }
 
@@ -296,17 +300,18 @@ TEST(MosaicGeometry, PIPMainSlotIsStretchedFullFrame)
 
 	MosaicGraphDesc d = MosaicProbe::Desc(*m);
 	ASSERT_EQ(2u, d.slots.size());
-	ExpectSlots(d, { {1280, 720, 0, 0}, {239, 180, 168, 504} });
+	ExpectSlots(d, { {1276, 716, 2, 2}, {234, 176, 170, 506} });
 }
 
-// keepAspect=false : la vignette remplit le slot, sans bande.
+// keepAspect=false : l'image remplit le slot utile, sans bande (chemin du LOGO,
+// posé par CleanSlot avec KeepAspectRatio(false) : il hérite du liseré).
 TEST(MosaicGeometry, KeepAspectRatioFalseFillsTheSlot)
 {
 	auto m = MakeMosaic(Mosaic::mosaic2x2);
 	m->KeepAspectRatio(false);
 	FillSlots(*m, 1, 640, 480);
 
-	ExpectSlots(MosaicProbe::Desc(*m), { {640, 360, 0, 0} });
+	ExpectSlots(MosaicProbe::Desc(*m), { {636, 356, 2, 2} });
 }
 
 // Un slot sans trame n'a AUCUNE branche dans le graphe : le fond reste visible.
@@ -355,12 +360,16 @@ TEST(MosaicGeometry, SlotsAlwaysFitInsideTheComposite)
 			EXPECT_EQ((size_t)n, d.slots.size());
 			for (const MosaicSlotDesc& s : d.slots)
 			{
+				// L'encombrement inclut le liseré : (x-b,y-b)+(w+2b,h+2b).
+				EXPECT_EQ(Mosaic::SlotBorder, s.border);
 				EXPECT_GT(s.w, 0);
 				EXPECT_GT(s.h, 0);
-				EXPECT_GE(s.x, 0);
-				EXPECT_GE(s.y, 0);
-				EXPECT_LE(s.x + s.w, d.width)  << "debordement horizontal, slot " << s.pos;
-				EXPECT_LE(s.y + s.h, d.height) << "debordement vertical, slot " << s.pos;
+				EXPECT_GE(s.x, s.border);
+				EXPECT_GE(s.y, s.border);
+				EXPECT_LE(s.x + s.w + s.border, d.width)
+					<< "debordement horizontal, slot " << s.pos;
+				EXPECT_LE(s.y + s.h + s.border, d.height)
+					<< "debordement vertical, slot " << s.pos;
 			}
 		}
 }
@@ -398,14 +407,39 @@ TEST(MosaicComposition, ComposesEachQuadrantOf2x2)
 	ASSERT_EQ(1280u, out->GetWidth());
 	ASSERT_EQ(720u,  out->GetHeight());
 
-	// Centre de chaque vignette (479x360 en 80,0 / 720,0 / 80,360 / 720,360).
+	// Centre de chaque image (474x356 en 82,2 / 722,2 / 82,362 / 722,362).
 	EXPECT_NEAR(luma[0], LumaAt(out, 320, 180), 2);
 	EXPECT_NEAR(luma[1], LumaAt(out, 960, 180), 2);
 	EXPECT_NEAR(luma[2], LumaAt(out, 320, 540), 2);
 	EXPECT_NEAR(luma[3], LumaAt(out, 960, 540), 2);
 
-	// Bande gauche du premier quadrant (x<80) : le fond gris neutre reste visible.
+	// Bande gauche du premier quadrant (x<81) : le fond gris neutre reste visible.
 	EXPECT_NEAR(128, LumaAt(out, 20, 180), 2);
+}
+
+// Le liseré : SlotBorder px de NOIR autour de chaque image, rendus par le pad
+// du graphe — garanti noir même sur le fond gris neutre. C'est du noir vidéo
+// (Y~16, limited range), on vérifie « sombre » (<=24) pour distinguer sans
+// ambiguïté du fond (128) et de l'image, sans dépendre de la matrice exacte.
+TEST(MosaicComposition, BlackBorderSurroundsEachImage)
+{
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	FillSlots(*m, 4, 640, 480, 200);
+
+	PictPtr out = m->GetPict();
+	ASSERT_TRUE(out != nullptr);
+
+	// Image du slot 0 : 474x356 en (82,2) -> liseré sur (80,0)-(557,359).
+	EXPECT_NEAR(200, LumaAt(out, 320, 180), 2);   // l'image elle-même
+	EXPECT_LE(LumaAt(out,  81, 180), 24);         // liseré gauche
+	EXPECT_LE(LumaAt(out, 556, 180), 24);         // liseré droit
+	EXPECT_NEAR(128, LumaAt(out,  40, 180), 2);   // fond avant le liseré
+	// Verticalement l'image+liseré remplissent le slot : la frontière entre les
+	// quadrants (y=358..361 = liseré bas du slot 0 + liseré haut du slot 2) est
+	// entièrement noire, d'où le trait qui sépare visuellement les vignettes.
+	EXPECT_LE(LumaAt(out, 320,   0), 24);
+	EXPECT_LE(LumaAt(out, 320, 359), 24);
+	EXPECT_LE(LumaAt(out, 320, 360), 24);
 }
 
 // Le letterbox laisse voir le FOND (pas de pad noir ajouté) : sur le 1+1, dont
@@ -417,7 +451,7 @@ TEST(MosaicComposition, LetterboxBandsShowTheBackground)
 
 	PictPtr out = m->GetPict();
 	ASSERT_TRUE(out != nullptr);
-	// Vignette 640x480 posée en (0,120) : au-dessus c'est le fond noir.
+	// Image 636x477 posée en (2,120) : au-dessus (hors liseré) c'est le fond noir.
 	EXPECT_NEAR(0,   LumaAt(out, 320,  60), 2);
 	EXPECT_NEAR(200, LumaAt(out, 320, 300), 2);
 	EXPECT_NEAR(0,   LumaAt(out, 320, 660), 2);
@@ -486,7 +520,8 @@ TEST(MosaicComposition, SurvivesInputResolutionChange)
 	m->Update(0, SolidPict(1280, 720, 210));
 	PictPtr out = m->GetPict();
 	ASSERT_TRUE(out != nullptr);
-	// Source 16:9 : la cellule est desormais remplie, y compris son bord gauche.
+	// Source 16:9 : la cellule utile est désormais remplie, y compris près du
+	// bord gauche (l'image commence à x=2, après le liseré).
 	EXPECT_NEAR(210, LumaAt(out, 320, 180), 2);
 	EXPECT_NEAR(210, LumaAt(out,  10, 180), 2);
 }
@@ -543,11 +578,12 @@ TEST(MosaicOverlay, ParticipantOverlayCoversItsSlot)
 	ASSERT_EQ(2u, d.slots.size());
 	EXPECT_TRUE(d.slots[0].hasOverlay);
 	EXPECT_FALSE(d.slots[1].hasOverlay);
-	// L'overlay couvre le SLOT 0 entier (640x360 en 0,0), pas la vignette letterbox.
-	EXPECT_EQ(0,   d.slots[0].ovX);
-	EXPECT_EQ(0,   d.slots[0].ovY);
-	EXPECT_EQ(640, d.slots[0].ovW);
-	EXPECT_EQ(360, d.slots[0].ovH);
+	// L'overlay couvre le slot 0 UTILE (636x356 en 2,2 : liseré déduit), pas la
+	// vignette letterbox ni le liseré.
+	EXPECT_EQ(2,   d.slots[0].ovX);
+	EXPECT_EQ(2,   d.slots[0].ovY);
+	EXPECT_EQ(636, d.slots[0].ovW);
+	EXPECT_EQ(356, d.slots[0].ovH);
 
 	PictPtr out = m->GetPict();
 	ASSERT_TRUE(out != nullptr);

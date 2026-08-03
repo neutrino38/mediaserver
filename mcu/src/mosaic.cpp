@@ -52,22 +52,36 @@ int Mosaic::Update(int index, const PictPtr& pic)
 // juste par coïncidence — toutes les dispositions en grille ont des cellules au
 // ratio de la toile — mais débordait du slot dès qu'une cellule s'en écartait, ce
 // qui interdisait toute disposition non homothétique (cf. mosaic1p1 pleine hauteur).
-void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
-                                  int& outW, int& outH, int& dx, int& dy)
+// Liseré effectif d'un slot : SlotBorder px de chaque côté, sauf slot trop
+// petit (aucun type réel n'est concerné, pure défense).
+int Mosaic::GetSlotBorder(int pos)
 {
 	const int slotW = GetWidth(pos);
 	const int slotH = GetHeight(pos);
+	if (slotW > 4 * SlotBorder && slotH > 4 * SlotBorder)
+		return SlotBorder;
+	return 0;
+}
 
-	//Par défaut : remplit le slot, aucun décalage.
+void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
+                                  int& outW, int& outH, int& dx, int& dy)
+{
+	// Slot UTILE : le liseré noir est réservé sur les quatre côtés ; l'image
+	// (et son letterbox) se placent dedans, le pad du graphe remplit le liseré.
+	const int b     = GetSlotBorder(pos);
+	const int slotW = GetWidth(pos)  - 2 * b;
+	const int slotH = GetHeight(pos) - 2 * b;
+
+	//Par défaut : remplit le slot utile, décalé du liseré.
 	outW = slotW;
 	outH = slotH;
-	dx   = 0;
-	dy   = 0;
+	dx   = b;
+	dy   = b;
 
 	if (inW <= 0 || inH <= 0)
 		return;
 
-	// StretchSlot force l'étirement plein slot (PIP pos==0).
+	// StretchSlot force l'étirement plein slot utile (PIP pos==0).
 	if (StretchSlot(pos))
 		return;
 
@@ -81,7 +95,7 @@ void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 
 	if ((picRatio / 100) == (slotRatio / 100) || !keepAspect)
 	{
-		// Même ratio (à ~1% près) ou ancien comportement : remplit le slot.
+		// Même ratio (à ~1% près) ou ancien comportement : remplit le slot utile.
 		return;
 	}
 	else if (picRatio > slotRatio)
@@ -92,8 +106,8 @@ void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 		int diff = (slotH - outH) / 2;
 		// diff pair sinon offset U/V incorrect (cf. code historique).
 		if (diff > 0 && (diff % 2) != 0) diff--;
-		dx = 0;
-		dy = diff;
+		dx = b;
+		dy = b + diff;
 	}
 	else // picRatio < slotRatio
 	{
@@ -101,8 +115,12 @@ void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 		outH = slotH;
 		outW = (int) ((slotH * picRatio) / 1000);
 		int diff = (slotW - outW) / 2;
-		dx = diff;
-		dy = 0;
+		// diff pair comme en vertical : l'origine de la vignette (x-liseré)
+		// reste paire, donc l'offset du filtre overlay aussi — un offset impair
+		// serait arrondi par le chroma 4:2:0 et décalerait l'image d'un pixel.
+		if (diff > 0 && (diff % 2) != 0) diff--;
+		dx = b + diff;
+		dy = b;
 	}
 }
 
@@ -133,10 +151,11 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		AVFrame* f = pic->GetAVFrame();
 
 		MosaicSlotDesc s;
-		s.pos   = pos;
-		s.inW   = f->width;
-		s.inH   = f->height;
-		s.inFmt = f->format;
+		s.pos    = pos;
+		s.border = GetSlotBorder(pos);
+		s.inW    = f->width;
+		s.inH    = f->height;
+		s.inFmt  = f->format;
 		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU (clé de reconfig)
 
 		int dx, dy;
@@ -145,11 +164,12 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		s.x = GetLeft(pos) + dx;
 		s.y = GetTop(pos)  + dy;
 
-		// Overlay participant : dimensionné au slot (pas à la vignette letterbox,
-		// fidèle à l'historique ApplyParticipantOverlay qui couvrait le slot).
-		// ovW/ovH repris du Pict effectivement rendu (source de vérité du
-		// buffersrc) ; un rendu indisponible (nullptr) désactive l'overlay du
-		// slot pour ce tick plutôt que de faire échouer Compose.
+		// Overlay participant : dimensionné au slot UTILE (liseré déduit, pour
+		// ne jamais recouvrir le liseré ni le slot voisin ; historiquement il
+		// couvrait le slot entier). ovW/ovH repris du Pict effectivement rendu
+		// (source de vérité du buffersrc) ; un rendu indisponible (nullptr)
+		// désactive l'overlay du slot pour ce tick plutôt que de faire échouer
+		// Compose.
 		PictPtr ovPict;
 		const int partId = mosaicPos[pos];
 		if (partId > 0)
@@ -157,13 +177,14 @@ MosaicGraphDesc Mosaic::BuildDesc()
 			auto ito = overlays.find(partId);
 			if (ito != overlays.end() && ito->second && ito->second->HasContent())
 			{
-				ito->second->Resize(GetWidth(pos), GetHeight(pos));
+				ito->second->Resize(GetWidth(pos)  - 2 * s.border,
+				                    GetHeight(pos) - 2 * s.border);
 				ovPict = ito->second->GetPict();
 				if (ovPict && ovPict->GetAVFrame())
 				{
 					s.hasOverlay = true;
-					s.ovX = GetLeft(pos);
-					s.ovY = GetTop(pos);
+					s.ovX = GetLeft(pos) + s.border;
+					s.ovY = GetTop(pos)  + s.border;
 					s.ovW = ovPict->GetAVFrame()->width;
 					s.ovH = ovPict->GetAVFrame()->height;
 				}
@@ -1020,10 +1041,15 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
 
 	    if ( o == NULL ) o = new Overlay();
 
-	    //Dimensionner au slot AVANT le rendu (comme SetOverlayTXT) : un Overlay
-	    //neuf est en 0x0 et LoadImage refuserait de rendre (« no slot size »).
+	    //Dimensionner au slot UTILE (liseré déduit, comme BuildDesc) AVANT le
+	    //rendu : un Overlay neuf est en 0x0 et LoadImage refuserait de rendre
+	    //(« no slot size »).
 	    if (it->second >= 0 && it->second < numSlots)
-		o->Resize( this->GetWidth(it->second), this->GetHeight(it->second));
+	    {
+		const int b = GetSlotBorder(it->second);
+		o->Resize( this->GetWidth(it->second)  - 2*b,
+		           this->GetHeight(it->second) - 2*b );
+	    }
 
 	    if (filename != NULL && strlen(filename) > 0)
 		ret = o->LoadImage(filename);
@@ -1108,7 +1134,10 @@ int Mosaic::SetOverlayTXT(int id, const char* msg,int scriptCode)
 	
         if (it->second >= 0 && it->second < numSlots )
 	{
-	    o->Resize( this->GetWidth(it->second), this->GetHeight(it->second));
+	    //Slot utile (liseré déduit), cohérent avec BuildDesc.
+	    const int b = GetSlotBorder(it->second);
+	    o->Resize( this->GetWidth(it->second)  - 2*b,
+	               this->GetHeight(it->second) - 2*b );
 	}
 	if (msg != NULL)
 		res =	o->RenderText(msg,scriptCode);
