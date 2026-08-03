@@ -323,7 +323,35 @@ int FLVEncoder::EncodeAudio()
 {
 	Log(">Encode Audio\n");
 	use.IncUse();
-	
+
+	//L'encodeur AAC S'OUVRE DANS SON CONSTRUCTEUR, à la fréquence portée par
+	//"aac.samplerate" : le TrySetRate() plus bas ne peut plus rien changer
+	//(ffmpeg fige le contexte à avcodec_open2 et TrySetRate rend alors la
+	//fréquence réelle). Il faut donc régler la propriété AVANT CreateEncoder,
+	//sur la fréquence native de l'entrée (celle du mixeur audio), sinon la
+	//conférence 8 kHz est ré-échantillonnée sans profit vers les 48 kHz du
+	//défaut, et le débit de 128 kb/s dépasse la limite AAC (6 bits/échantillon)
+	//pour les basses fréquences.
+	//NB : Properties::SetProperty utilise map::insert, qui N'ÉCRASE PAS une clé
+	//existante — le constructeur a déjà posé ces deux clés, on passe donc par
+	//operator[].
+	if (audioCodec==AudioCodec::AAC && audioInput)
+	{
+		DWORD nativeRate = audioInput->GetNativeRate();
+		//Débit mono raisonnable, plafonné au réglage historique : 24 kb/s à
+		//8 kHz, 48 kb/s à 16 kHz, 128 kb/s à 48 kHz.
+		DWORD aacBitrate = nativeRate*3;
+		if (aacBitrate > 128000) aacBitrate = 128000;
+
+		char value[16];
+		snprintf(value,sizeof(value),"%u",nativeRate);
+		audioProperties["aac.samplerate"] = value;
+		snprintf(value,sizeof(value),"%u",aacBitrate);
+		audioProperties["aac.bitrate"] = value;
+
+		Log("-FLV audio encoded to AAC [rate:%u,bitrate:%u]\n",nativeRate,aacBitrate);
+	}
+
 	//Create encoder
 	AudioEncoder *encoder = AudioCodecFactory::CreateEncoder(audioCodec,audioProperties);
 
@@ -450,6 +478,30 @@ int FLVEncoder::EncodeAudio()
 					audio.SetTimestamp(ini+samples*1000/encoder->GetClockRate());
 					//Increase samples
 					samples += encoder->numFrameSamples;
+					break;
+				case AudioCodec::PCMA:
+				case AudioCodec::PCMU:
+					//G.711 : codecs FLV 7 (A-law) et 8 (mu-law), 8 kHz mono.
+					audio.SetAudioCodec(encoder->type==AudioCodec::PCMA ?
+							    RTMPAudioFrame::G711A : RTMPAudioFrame::G711U);
+					audio.SetSoundRate(RTMPAudioFrame::RATE11khz);
+					audio.SetSamples16Bits(1);
+					audio.SetStereo(0);
+					audio.SetTimestamp(ini+samples*1000/encoder->GetClockRate());
+					samples += encoder->numFrameSamples;
+					break;
+				default:
+					// Tout autre codec (G722, GSM, Opus...) : au minimum HORODATER.
+					// Sans ce defaut, un codec absent du switch sortait avec un
+					// timestamp JAMAIS positionne et un compteur 'samples' jamais
+					// avance : les trames remises au MP4Recorder portaient toutes le
+					// meme horodatage, donc des durees d'echantillon nulles et un
+					// fichier illisible. C'est exactement ce que subissait
+					// l'enregistrement de conference, force en PCMA par
+					// MultiConf::StartRecordingBroadcaster.
+					audio.SetTimestamp(ini+samples*1000/encoder->GetClockRate());
+					samples += encoder->numFrameSamples;
+					break;
 			}
 
 			//Lock

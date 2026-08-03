@@ -52,6 +52,10 @@ public:
 	int AddMosaicParticipant(int mosaicId,int partId);
 	int RemoveMosaicParticipant(int mosaicId,int partId);
 	int GetMosaicPositions(int mosaicId,std::list<int> &positions);
+	// Taille du composite d'une mosaïque (celle que produit GetPict). Permet à un
+	// consommateur — l'encodeur d'enregistrement notamment — de se caler dessus au
+	// lieu d'imposer sa propre résolution. 0 si la mosaïque n'existe pas.
+	int GetMosaicSize(int mosaicId,int &width,int &height);
 	int SetSlot(int mosaicId,int num,int id);
 	int SetCompositionType(int mosaicId,Mosaic::Type comp,int size);
 	int DeleteMosaic(int mosaicId);

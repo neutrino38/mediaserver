@@ -143,9 +143,6 @@ int TextEncoder::StopEncoding()
 *******************************************/
 int TextEncoder::Encode()
 {
-	std::list<std::wstring> scroll;
-	std::wstring line;
-
 	//Mientras tengamos que capturar
 	while(encodingText)
 	{
@@ -160,109 +157,30 @@ int TextEncoder::Encode()
 		//If it has content
 		if (frame->GetWLength())
 		{
-			//Get text
-			std::wstring text = frame->GetWString();
-
-			//Search each character
-			for (int i=0;i<text.length();i++)
-			{
-				//Get char
-				wchar_t ch = text.at(i);
-				//Depending on the char
-				switch (ch)
-				{
-					//MEssage delimiter
-					case 0x0A:
-					case 0x2028:
-					case 0x2029:
-						//Append an end line
-						line.push_back(0x0A);
-						//push the line
-						scroll.push_back(line);
-						//Empty it
-						line.clear();
-						break;
-					//Check backspace
-					case 0x08:
-						//If not empty
-						if (line.size())
-							//Remove last
-							line.erase(line.length()-1,1);
-						break;
-					//BOM
-					case 0xFEFF:
-						//Do nothing
-						break;
-					//Replacement
-					case 0xFFFD:
-						//Append .
-						line.push_back('.');
-						break;
-					//Any other
-					case ' ':
-						if (line.size() > 40 )
-						{
-							line.push_back(0x0A);
-							//push the line
-							scroll.push_back(line);
-							//Empty it
-							line.clear();
-						}
-						else
-						{
-							line.push_back(ch);
-						}
-						break;
-
-					case '-':
-						line.push_back(ch);
-						if (line.size() > 40 )
-						{
-							line.push_back(0x0A);
-							//push the line
-							scroll.push_back(line);
-							//Empty it
-							line.clear();
-						}
-						break;
-
-					default:
-						//Append it
-						line.push_back(ch);
-				}
-			}
-
-			//Create text to send
-			std::wstring send;
-
-			//Append lines in scroll
-			for (std::list<std::wstring>::iterator it=scroll.begin();it!=scroll.end();it++)
-				//Append
-				send += (*it);
-
-			//Append line also
-			send += line;
-
-			//Create new frame
-			TextFrame f(frame->GetTimeStamp(),send);
-
-			//Lock
+			//RELAIS BRUT du T.140 : on transmet la trame telle que le mixeur
+			//texte l'a produite, c'est-a-dire le FLUX INCREMENTAL (caracteres
+			//frappes depuis la derniere trame, retours arriere 0x08 compris).
+			//
+			//Cette boucle accumulait auparavant le texte (scroll + line) et
+			//emettait a chaque fois la CHAINE COMPLETE depuis le debut. Or le
+			//seul consommateur de ces trames est MP4Recorder, dont la piste de
+			//sous-titres (Text2Subtitle, dans libmedkit) est DEJA un
+			//accumulateur : le texte etait donc accumule deux fois et le
+			//fichier MP4 contenait "[nom] tw[nom] tws[nom] twst..." au lieu de
+			//"[nom] test". Text2Subtitle traite par ailleurs exactement les
+			//memes cas particuliers (BOM 0xFEFF, retour arriere, 0xFFFD,
+			//delimiteurs de ligne) que l'accumulation supprimee ici.
 			pthread_mutex_lock(&mutex);
 			//For each listener
 			for (Listeners::iterator it=listeners.begin(); it!=listeners.end(); ++it)
 				//Call listener
-				(*it)->onMediaFrame(f);
+				(*it)->onMediaFrame(*frame);
 			//unlock
 			pthread_mutex_unlock(&mutex);
-
-			//Check number of lines in scroll
-			if (scroll.size()>2)
-				//Remove first
-				scroll.pop_front();
-
-			//Delete frame
-			delete(frame);
 		}
+
+		//Delete frame -- y compris les trames vides, qui fuyaient jusqu'ici
+		delete(frame);
 	}
 
 	//Salimos

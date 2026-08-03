@@ -503,6 +503,32 @@ int VideoMixer::CreateMosaic(Mosaic::Type comp, int size)
 }
 
 /*******************************
+ * GetMosaicSize
+ *	Taille du composite d'une mosaique
+ **************************************/
+int VideoMixer::GetMosaicSize(int mosaicId,int &width,int &height)
+{
+	//Protege l'acces a la map (meme discipline que les autres accesseurs)
+	lstVideosUse.IncUse();
+
+	int res = 0;
+	Mosaics::iterator it = mosaics.find(mosaicId);
+	if (it!=mosaics.end() && it->second)
+	{
+		width  = it->second->GetWidth();
+		height = it->second->GetHeight();
+		res = 1;
+	}
+
+	lstVideosUse.DecUse();
+
+	if (!res)
+		return Error("-GetMosaicSize: mosaic not found [id:%d]\n",mosaicId);
+
+	return res;
+}
+
+/*******************************
  * SetMosaicOverlayImage
  *	Set an overlay image in mosaic
  **************************************/

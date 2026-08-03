@@ -134,6 +134,28 @@ void MP4Recorder::onMediaFrame(MediaFrame &frame)
 			}
 		}
 
+		// FRONTIERE D'HORLOGE mcu <-> libmedkit.
+		// Le mcu horodate TOUTES ses trames en millisecondes (getDifTime()/1000
+		// dans FLVEncoder, VideoStream, TextEncoder...). libmedkit attend des ms
+		// sur les pistes audio et texte, mais l'HORLOGE VIDEO 90 kHz sur la piste
+		// video : la piste MP4 est declaree a 90000 et le prologue de mp4writer
+		// cadence ses trames noires en unites 90 kHz (PROLOGUE_FRAME_MS * 90).
+		// Sans cette conversion, les trames reelles (ms) et le prologue (90 kHz)
+		// vivaient sur deux echelles differentes : les 5 trames noires de 40 ms
+		// du prologue s'etalaient sur 18 s et la video reelle ne demarrait qu'a
+		// ce moment-la ("la video n'arrive qu'au milieu du fichier").
+		// On restaure l'horodatage d'origine : la trame appartient au producteur,
+		// qui la remet ensuite aux autres auditeurs (et, pour VideoStream, a
+		// RTPSmoother qui attend des ms).
+		if (frame.GetType()==MediaFrame::Video)
+		{
+			DWORD tsMs = frame.GetTimeStamp();
+			frame.SetTimestamp(tsMs*90);
+			writer->ProcessFrame(&frame);
+			frame.SetTimestamp(tsMs);
+			return;
+		}
+
 		//libmedkit gere waitVideo, le timing, les pistes et les hint tracks
 		writer->ProcessFrame(&frame);
 	}
