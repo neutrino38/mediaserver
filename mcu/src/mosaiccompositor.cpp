@@ -257,6 +257,26 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 		Error("-MosaicCompositor: graph config failed (%d) [%s]\n", ret, desc.c_str());
 		return false;   // Configure fera le Release
 	}
+
+	// Trace de (re)construction. Une reconstruction est NORMALE au changement de
+	// topologie (slots, type de mosaïque, VAD) ou de géométrie d'entrée ; en
+	// rafale (compteur qui grimpe à chaque tick) elle signale une résolution
+	// d'entrée qui oscille — la clé de reconfig inclut inW/inH/inFmt par slot.
+	builds++;
+	std::string slotsInfo;
+	for (size_t i = 0; i < cur.slots.size(); i++)
+	{
+		const MosaicSlotDesc& s = cur.slots[i];
+		snprintf(frag, sizeof(frag), "%spos%d %dx%d(fmt%d)->%dx%d@%d,%d%s",
+		         i ? " " : "", s.pos, s.inW, s.inH, s.inFmt,
+		         s.w, s.h, s.x, s.y, s.hasOverlay ? "+ovr" : "");
+		slotsInfo += frag;
+	}
+	Log("-MosaicCompositor: graphe #%d construit [%s %dx%d, fond %s, %d slot(s): %s%s] desc=[%s]\n",
+	    builds, gpu ? "GPU" : "CPU", cur.width, cur.height,
+	    cur.blackBackground ? "noir" : "gris",
+	    (int)cur.slots.size(), slotsInfo.c_str(),
+	    cur.hasMosaicOverlay ? ", overlay mosaique" : "", desc.c_str());
 	return true;
 }
 

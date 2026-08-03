@@ -46,9 +46,13 @@ int Mosaic::Update(int index, const PictPtr& pic)
 }
 
 // Calcule la taille effective de la vignette (letterbox/pillarbox) et son décalage
-// dans le slot. Copie fidèle de l'arithmétique des Update(BYTE*) historiques
-// (partedmosaic.cpp / asymmetricmosaic.cpp) : compare le ratio de l'image au ratio
-// GLOBAL de la mosaïque (membre 'ratio'), diff vertical rendu pair (offset U/V).
+// dans le slot. Reprend l'arithmétique des Update(BYTE*) historiques
+// (partedmosaic.cpp / asymmetricmosaic.cpp), diff vertical rendu pair (offset U/V),
+// à une correction près : la comparaison se fait contre le ratio du SLOT et non
+// contre le ratio GLOBAL de la mosaïque (membre 'ratio'). Le code historique était
+// juste par coïncidence — toutes les dispositions en grille ont des cellules au
+// ratio de la toile — mais débordait du slot dès qu'une cellule s'en écartait, ce
+// qui interdisait toute disposition non homothétique (cf. mosaic1p1 pleine hauteur).
 void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
                                   int& outW, int& outH, int& dx, int& dy)
 {
@@ -70,12 +74,18 @@ void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 
 	DWORD picRatio = ComputeAspectRatio(inW, inH);
 
-	if ((picRatio / 100) == (ratio / 100) || !keepAspect)
+	// Ratio du slot lui-même (brut : ce n'est pas une résolution de caméra, donc
+	// pas de passage par ComputeAspectRatio et sa normalisation CIF/SIF/VGA).
+	if (slotH <= 0)
+		return;
+	DWORD slotRatio = (DWORD) ((slotW * 1000) / slotH);
+
+	if ((picRatio / 100) == (slotRatio / 100) || !keepAspect)
 	{
 		// Même ratio (à ~1% près) ou ancien comportement : remplit le slot.
 		return;
 	}
-	else if (picRatio > ratio)
+	else if (picRatio > slotRatio)
 	{
 		// Bandes haut/bas : conserve la largeur, réduit la hauteur.
 		outW = slotW;
@@ -86,7 +96,7 @@ void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 		dx = 0;
 		dy = diff;
 	}
-	else // picRatio < ratio
+	else // picRatio < slotRatio
 	{
 		// Bandes gauche/droite : conserve la hauteur, réduit la largeur.
 		outH = slotH;

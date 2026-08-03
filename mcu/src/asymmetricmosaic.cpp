@@ -471,8 +471,13 @@ int AsymmetricMosaic::GetHeight(int pos)
 			*      |      	        |
 			*	----------------
 			***********************************************/
-			rows = 4;
-			size = 2;
+			// Les deux slots occupent TOUTE la hauteur (une seule rangée) : le
+			// letterbox de ComputeSlotPlacement, calculé sur le ratio du slot,
+			// centre l'image dedans. Avant, rows=4/size=2 bridait le slot à la
+			// moitié de la hauteur, ce qui rapetissait inutilement les vignettes
+			// (source 4:3 -> 479x360 au lieu de 640x480 sur une toile 1280x720).
+			rows = 1;
+			size = 1;
 			break;
 		case mosaic2p8:
 			/**********************************************
@@ -708,8 +713,10 @@ int AsymmetricMosaic::GetTop(int pos)
 			*      |      	        |
 			*	----------------
 			***********************************************/
-			//Alling vertically
-			return mosaicTotalHeight/4;
+			// Slots pleine hauteur (cf. GetHeight) : le centrage vertical de
+			// l'image est assuré par le letterbox du slot, plus par un décalage
+			// en dur de la mosaïque.
+			return 0;
 	}
 	//Get row
 	int i = index/rows;

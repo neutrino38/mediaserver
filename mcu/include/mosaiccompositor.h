@@ -109,6 +109,7 @@ private:
 	bool             curGPU    = false;        // mode effectif du graphe courant
 	bool             gpuBroken  = false;       // échec GPU mémorisé (ne pas retenter)
 	int64_t          tick      = 0;            // pts monotone (time_base 1/1000)
+	int              builds    = 0;            // nb de (re)constructions du graphe (diagnostic, jamais remis à zéro)
 };
 
 #endif
