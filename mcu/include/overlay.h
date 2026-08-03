@@ -25,36 +25,16 @@ public:
 	bool HasContent() { return contentType != NONE; }
 	
 	/**
-	 * Resize overlay to the size of the mosaic picture (the mosaic slot)
+	 * Resize overlay to the size of the useful mosaic slot (liseré déduit).
+	 * Invalide le rendu en cache si la taille change ; le re-rendu est
+	 * paresseux (GetPict).
 	 *
-	 * @param width size of the overlay. It MUST be exactly the same size as the mosaic slot width
-	 * @param height height of the overlay. It MUST be exactly the same size as the mosaic slot height
+	 * @param width largeur de l'overlay (= slot utile)
+	 * @param height hauteur de l'overlay (= slot utile)
 	 * @return true if the overlay could be resized, false otherwise.
 	 *
 	 **/
 	bool  Resize(DWORD width,DWORD height);
-	
-	/**
-	 * Apply an overlay in a larger bitmap (a mosaic) coded in YUV.
-	 *
-	 * @param frameY pointer on the original picture Y plane on which the overlay will be applied. This picture may be larger
-	 * than the overlay size,
-	 * @param frameU pointer on U plane of the picutre
-	 * @param frameV
-	 * @param offset offset to apply to find the overlay position in the Y plane of the bitmap
-	 *
-	 * @param bitmapWidth width of the bitmap.
-	 * @param bitmapHeight height of the bitmap.
-	 * @param if true, the overlay is applied on the original picture (the original bitmap is changed)
-	 * if false, the original bitmap is left unchanged.
-	 *
-	 * @return the portion of the picture on which the overlay has been applied. This is a bitmap
-	 * coded in YUV that is of the size of the overlay (NOT of the size of the original bitmap).
-	 * memory buffer is managed by the overlay so caller MUST NOT free the memory after usage.
-	 *
-	 **/
-	BYTE* Display(BYTE* frameY, BYTE* frameU, BYTE* frameV, DWORD bitmapWidth, DWORD bitmapHeight, bool changeFrame = false);
-	BYTE* GetOverlay() { return overlay; }
 
 	/**
 	 * Renvoie le contenu rendu enveloppé dans un Pict AV_PIX_FMT_RGBA.
@@ -70,21 +50,13 @@ public:
 
 
 private:
-	BYTE* overlayBuffer;
-	DWORD overlaySize;
-	BYTE* overlay;
-	BYTE* imageBuffer;
-	DWORD imageSize;
-	BYTE* image;
-
-	// Cache du contenu rendu enveloppé en Pict yuva420p (cf. GetPict).
-	// Invalidé (reset) à chaque re-rendu ou redimensionnement.
+	// Cache du contenu rendu enveloppé en Pict RGBA (cf. GetPict).
+	// Invalidé (reset) à chaque re-rendu ou redimensionnement. Seul rendu
+	// depuis la Phase 6 : les buffers YUVA du blit BYTE* ont disparu.
 	PictPtr cachedPict;
 
 	DWORD width;
-	//DWORD bitmapWidth;
 	DWORD height;
-	bool display;
 	std::string content;
 	enum ContentType
 	{

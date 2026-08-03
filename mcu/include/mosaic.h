@@ -2,7 +2,6 @@
 #define _MOSAIC_H_
 #include "config.h"
 #include "video.h"
-#include "framescaler.h"
 #include "overlay.h"
 #include "mosaiccompositor.h"
 #include "vad.h"
@@ -65,17 +64,20 @@ public:
 	int HasChanged()	{ return mosaicChanged; }
 	void Reset()		{ mosaicChanged = true; }
 
-	BYTE* GetFrame();
-	// Composite de la mosaïque. Depuis la Phase 3 : composition par le graphe
-	// avfilter (MosaicCompositor) à partir des trames mémorisées par slot, avec
-	// cache intra-tick et repli sur l'ancien chemin BYTE* si Configure échoue.
+	// Composite de la mosaïque : composition par le graphe avfilter
+	// (MosaicCompositor) à partir des trames mémorisées par slot, avec cache
+	// intra-tick. Le chemin BYTE* historique a disparu en Phase 6.
 	PictPtr GetPict();
-	virtual int Update(int index,BYTE *frame,int width,int heigth) = 0;
-	// Surcharge AVFrame (migration Pict) : mémorise la trame du slot (redescente
-	// GPU->CPU pour le chemin CPU de Phase 3) et l'aspect du slot. N'écrit plus un
-	// pixel dans le buffer BYTE* : la composition est faite par le graphe avfilter.
+	// Mémorise la trame du slot (GPU conservée telle quelle depuis la Phase 5)
+	// et l'aspect du slot ; la composition est faite par le graphe avfilter.
 	int Update(int index, const PictPtr& pic);
-	virtual int Clean(int index) = 0;
+	// Slot vidé : plus de trame mémorisée, le fond redevient visible.
+	int Clean(int index)
+	{
+		ClearSlotFrame(index);
+		SetChanged();
+		return 1;
+	}
 
 	int AddParticipant(int id);
 	int HasParticipant(int id);
@@ -126,24 +128,6 @@ public:
          */
 	void MoveOverlays(Mosaic *other);
 
-	/**
-	 * Apply the participant overlay to inside the mosaic
-	 *
-	 * @param pos position of the participant inside the mosaic.
-	 * @param pic base pointer of the mosaic
-	 * @param offsetY offset in bytes to add to place the overlay inside the Y plane
-	 * @param offsetUV offset in bytes to add to place the overlay inside the U and V planes
-	 * @param imgWidth width of the participant slot.
-	 * @param imgHeight height of the participant slot
-	 * @param changeFrame whether or not the overlay should be directly applied to the mosaic's bitmap.
-	 *
-	 * @return a copy of the slot with the particpant picture combined with the overlay.
-	 * this bitmap has teh size of a participant slot and is coded in YUV. Memory buffer
-	 * is managed by the overlay instance and is reused every call of this method.
-	 */
-	BYTE *ApplyParticipantOverlay(int pos, BYTE *picY, BYTE *picU, BYTE *picV,
-				      int imgWidth, int imgHeight, bool changeFrame = false);
-	
 protected:
 	virtual int GetWidth(int pos) = 0;
 	virtual int GetHeight(int pos) = 0;
@@ -188,12 +172,8 @@ protected:
 			slotFrames[pos].reset();
 	}
 
-	// Ancien chemin BYTE* (GetFrame + copie dans un Pict). Repli de mise au point
-	// si la (re)configuration du graphe échoue. Disparaît en Phase 6.
-	PictPtr GetPictLegacy();
-
 protected:
-	void SetChanged()	{ mosaicChanged = true; overlayNeedsUpdate = true; compositeValid = false; }
+	void SetChanged()	{ mosaicChanged = true; compositeValid = false; }
 
 protected:
 	typedef std::map<int,int> Participants;
@@ -215,16 +195,11 @@ protected:
 	int numSlots;
 	int vadParticipant;
 
-	FrameScaler** resizer;
-	BYTE* 	mosaic;
-	BYTE*	mosaicBuffer;
 	int 	mosaicTotalWidth;
 	int 	mosaicTotalHeight;
 	Type	mosaicType;
-	int     mosaicSize;
 
 	std::unique_ptr<Overlay> overlay;
-	bool	 overlayNeedsUpdate;
 
 	bool  keepAspect;
 	DWORD ratio; /* ratio * 1000 */

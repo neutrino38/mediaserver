@@ -2,8 +2,10 @@
 #define _ASYMMETRICMOSAIC_H_
 
 #include "mosaic.h"
-#include "framescaler.h"
 
+// Dispositions asymétriques (1p1, 3p4, 1p7, 1p5, 1p4, 2p8). Depuis la Phase 6
+// (avfilter), les dérivées de Mosaic ne portent plus que la GÉOMÉTRIE des
+// slots : la composition est faite par MosaicCompositor via BuildDesc().
 class AsymmetricMosaic:
 	public Mosaic
 {
@@ -11,8 +13,6 @@ public:
 	AsymmetricMosaic(Type type, DWORD size);
 	virtual ~AsymmetricMosaic();
 
-	virtual int Update(int index,BYTE *frame,int width,int heigth);
-	virtual int Clean(int index);
 protected:
 	// mosaic1p1 est peint en noir (cf. constructeur).
 	virtual bool HasBlackBackground() const { return mosaicType == mosaic1p1; }

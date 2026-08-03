@@ -652,6 +652,22 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   (chemin transcoder) + `grep -rn FrameScaler` vide ; mise à jour `avframe.md`
   (§8 = fait) et de la mémoire projet.
 
+**FAIT 2026-08-03 (branche feat/hw-mcu), avec deux écarts assumés au plan :**
+- `libmedikit/transcoder.cpp` n'est PAS porté sur `VideoRescaler` : il n'est
+  compilé qu'en `ASTERISK=yes` (en-têtes Asterisk absents ici, port invérifiable).
+  En conséquence `framescaler.{h,cpp}` ne sont pas supprimés de libmedikit mais
+  `framescaler.o` est déplacé dans `ASTOBJ` (objets Asterisk-only) : plus AUCUNE
+  copie compilée dans nos binaires, une seule copie source au total (ODR réglé).
+  Le port + la suppression définitive se feront lors d'une campagne Asterisk.
+- `Mosaic::GetPictLegacy()` (repli BYTE*) supprimé aussi : sur échec de
+  (re)configuration du graphe, `GetPict()` ressert le dernier composite connu.
+Le reste est conforme : Update(BYTE*)/Clean virtuels supprimés (Clean devient
+concret dans la base : ClearSlotFrame+SetChanged), GetFrame/ApplyParticipantOverlay/
+DrawVUMeter/mosaic/mosaicBuffer/resizer/under* retirés, Overlay::Display +
+ConvertToYUVA + buffers YUVA retirés (le Pict RGBA en cache est le seul rendu),
+VideoRescaler déplacé dans libmedikit (`medkit/videorescaler.h`, shim mcu),
+includes framescaler purgés. Bilan : ~1 500 lignes nettes supprimées, 85 tests PASS.
+
 Chaque phase est **additive** (l'ancien chemin reste le repli jusqu'à la Phase 6),
 sur le modèle des migrations smart-pointers et VideoRescaler précédentes.
 
