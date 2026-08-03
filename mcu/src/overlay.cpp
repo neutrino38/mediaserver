@@ -150,8 +150,13 @@ bool Overlay::Resize(DWORD width,DWORD height)
     {
         return false;
     }
-    
-    if ( width == this->width && height == this->height )
+
+    //Sortie anticipée seulement si les buffers existent VRAIMENT : le
+    //constructeur Overlay(w,h) et operator= posent width/height AVANT d'appeler
+    //Resize, qui ne doit alors pas conclure « rien à faire » et laisser
+    //overlay/image indéterminés (écriture sauvage dans ConvertToYUVA vécue).
+    if ( width == this->width && height == this->height
+         && overlayBuffer != NULL && imageBuffer != NULL )
     {
         return true; // has not changed
     }
@@ -195,9 +200,16 @@ static int ConvertToYUVA(Magick::Blob & imgRGBA, BYTE *yuvaData, int width, int 
 {
     AVFrame* rgbaFrame = NULL;
 
+    //Le blob doit contenir du RGBA 8 bits entrelacé (4 octets/pixel). Un export
+    //ImageMagick à une autre profondeur (ex. depth 1 pour une image unie) rendrait
+    //un blob plus court : sws_scale lirait hors bornes (segfault vécu en test).
+    if (imgRGBA.length() < (size_t)(4 * width * height))
+	return Error("-Overlay: blob RGBA trop court (%zu < %d), profondeur inattendue\n",
+	             imgRGBA.length(), 4 * width * height);
+
     rgbaFrame = av_frame_alloc();
     int numpixels = width*height;
-    
+
     rgbaFrame->data[0] = (BYTE *) imgRGBA.data();
     
      //Set size for planes
@@ -322,6 +334,10 @@ int Overlay::LoadImage(const char* filename)
 
 	render.zoom( Magick::Geometry( width, height) );
 	Magick::Blob rgbablob;
+	//Forcer 8 bits/canal AVANT l'export brut : ImageMagick abaisse la profondeur
+	//au minimum (1 bit pour une image unie) et l'export "RGBA" la respecte, ce qui
+	//produirait un blob plus court que 4 octets/pixel (cf. RenderText qui le fait déjà).
+	render.depth(8);
 	render.magick("RGBA");
 	render.write(&rgbablob);
     
@@ -359,6 +375,9 @@ int Overlay::RenderSVG(const char* svg)
     {
 	Magick::Image render( Magick::Geometry(width, height) );
 	Magick::Blob rgbablob( content.c_str(), content.length() );
+	//8 bits/canal forcés avant export brut (même piège que LoadImage : la
+	//profondeur minimale d'ImageMagick raccourcirait le blob).
+	render.depth(8);
 	render.magick("RGBA");
 	render.write(&rgbablob);
     

@@ -99,7 +99,6 @@ public:
 	int SetOverlaySVG(int id, const char* svg);
 	int SetOverlayTXT(int id, const char *msg,int scriptCode);
 	int ResetOverlay(int id);
-	int DrawVUMeter(int pos,DWORD val,DWORD size);
 
 	int UpdateParticipantInfo(int id, int vadLevel);
 	int CalculatePositions();
@@ -160,7 +159,10 @@ protected:
 	                          int& outW, int& outH, int& dx, int& dy);
 
 	// Construit la description du graphe de composition (géométrie + placement
-	// letterbox de chaque slot ACTIF). N'écrit aucun pixel. cf. mosaic_avfilter_plan.md §3.
+	// letterbox de chaque slot ACTIF, overlays participant/mosaïque). Matérialise
+	// au passage les Pict RGBA des overlays dans slotOverlayPicts/mosaicOverlayPict
+	// (rendu Overlay mis en cache, re-rendu seulement si contenu/taille changent).
+	// cf. mosaic_avfilter_plan.md §3.
 	MosaicGraphDesc BuildDesc();
 
 	// Fond de la mosaïque (Pict WxH, généré une fois : couleur/taille fixes).
@@ -229,6 +231,10 @@ protected:
 	PictPtr              composite;    // cache du dernier composite
 	bool                 compositeValid = false; // composite à jour (invalidé par SetChanged)
 	MosaicCompositor     compositor;   // matérialisation du graphe
+	// Pict RGBA des overlays, remplis par BuildDesc (alignés sur desc.slots ;
+	// nullptr si le slot n'a pas d'overlay), consommés par GetPict -> Compose.
+	std::vector<PictPtr> slotOverlayPicts;
+	PictPtr              mosaicOverlayPict;
 };
 
 #endif

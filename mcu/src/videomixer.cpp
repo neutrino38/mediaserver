@@ -448,19 +448,6 @@ int VideoMixer::MixVideo()
 						mosaic->Update(pos,output->GetFrame());
 					}
 				}
-				
-#ifdef MCUDEBUG
-#ifdef VADWEBRTC
-				//Check it is on the mosaic and it is vad
-				if (pos>=0 && proxy)
-				{
-					//Get vad
-					DWORD vad = proxy->GetVAD(id);
-					//Set VU meter
-					mosaic->DrawVUMeter(pos,vad,48000);
-				}
-#endif
-#endif
 			}
 		}
 

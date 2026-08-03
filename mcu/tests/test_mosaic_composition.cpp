@@ -30,7 +30,10 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <string>
 #include <vector>
+
+#include <Magick++.h>
 
 #include "log.h"
 #include "mosaic.h"
@@ -78,6 +81,22 @@ void FillSlots(Mosaic& m, int n, int inW, int inH, BYTE firstLuma = 40)
 	for (int i = 0; i < n; i++)
 		m.Update(i, SolidPict(inW, inH, (BYTE)(firstLuma + i * 10)));
 }
+
+// Écrit un PNG uni (opaque) et rend son chemin. Sert de contenu d'overlay
+// déterministe : pas de dépendance aux fontes du système comme RenderText.
+// Taille 16:9 pour que le zoom d'ImageMagick (qui conserve l'aspect) remplisse
+// exactement le slot/la toile 16:9 demandés par Overlay::Resize.
+std::string WriteSolidPng(const char* name, int w, int h,
+                          double r, double g, double b)
+{
+	std::string path = ::testing::TempDir() + name;
+	Magick::Image img(Magick::Geometry(w, h), Magick::ColorRGB(r, g, b));
+	img.write(path);
+	return path;
+}
+
+// Luma attendue (BT.601 limité, conversion RGB->YUV du graphe) du rouge pur.
+const int kRedLuma = 81;
 
 // Rectangle attendu pour un slot : taille de la vignette et position.
 struct Rect { int w, h, x, y; };
@@ -495,4 +514,169 @@ TEST(MosaicComposition, EveryCompositionTypeComposes)
 		EXPECT_EQ(AV_PIX_FMT_YUV420P, out->GetAVFrame()->format)
 			<< "le sink doit contraindre le composite en yuv420p";
 	}
+}
+
+// ===========================================================================
+// Overlays (Phase 4) — participant et mosaïque composés par le graphe
+// ===========================================================================
+// L'overlay participant couvre son SLOT (fidèle à l'historique
+// ApplyParticipantOverlay), l'overlay mosaïque couvre la toile entière et passe
+// par-dessus toutes les vignettes. Le contenu est un PNG rouge opaque : sa luma
+// dans le composite est vérifiable au pixel près.
+
+// L'overlay participant est déclaré dans la description (clé de reconfig) et
+// réellement composé par-dessus la vignette de son slot.
+TEST(MosaicOverlay, ParticipantOverlayCoversItsSlot)
+{
+	const std::string png = WriteSolidPng("ovr_red_slot.png", 64, 36, 1.0, 0.0, 0.0);
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	// Participant 7 -> slot 0 (mosaicPos[0]=7), participant 8 -> slot 1.
+	ASSERT_EQ(0, m->AddParticipant(7));
+	ASSERT_EQ(1, m->AddParticipant(8));
+	m->Update(0, SolidPict(640, 480, 60));
+	m->Update(1, SolidPict(640, 480, 200));
+
+	ASSERT_EQ(1, m->SetOverlayImage(7, png.c_str()));
+
+	MosaicGraphDesc d = MosaicProbe::Desc(*m);
+	ASSERT_EQ(2u, d.slots.size());
+	EXPECT_TRUE(d.slots[0].hasOverlay);
+	EXPECT_FALSE(d.slots[1].hasOverlay);
+	// L'overlay couvre le SLOT 0 entier (640x360 en 0,0), pas la vignette letterbox.
+	EXPECT_EQ(0,   d.slots[0].ovX);
+	EXPECT_EQ(0,   d.slots[0].ovY);
+	EXPECT_EQ(640, d.slots[0].ovW);
+	EXPECT_EQ(360, d.slots[0].ovH);
+
+	PictPtr out = m->GetPict();
+	ASSERT_TRUE(out != nullptr);
+	// Slot 0 : rouge opaque par-dessus la vignette (y compris ses bandes).
+	EXPECT_NEAR(kRedLuma, LumaAt(out, 320, 180), 6);
+	EXPECT_NEAR(kRedLuma, LumaAt(out,  20, 180), 6);
+	// Slot 1 : intact.
+	EXPECT_NEAR(200, LumaAt(out, 960, 180), 6);
+}
+
+// SetOverlayImage/ResetOverlay doivent invalider le composite en cache
+// (SetChanged) : l'effet est visible dès le GetPict suivant, et le retrait
+// rend la vignette d'origine.
+TEST(MosaicOverlay, SetAndResetInvalidateTheCachedComposite)
+{
+	const std::string png = WriteSolidPng("ovr_red_cache.png", 64, 36, 1.0, 0.0, 0.0);
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	ASSERT_EQ(0, m->AddParticipant(7));
+	m->Update(0, SolidPict(640, 480, 60));
+
+	PictPtr before = m->GetPict();
+	ASSERT_TRUE(before != nullptr);
+	EXPECT_NEAR(60, LumaAt(before, 320, 180), 2);
+
+	// Pose : le composite suivant doit être NOUVEAU et rouge.
+	ASSERT_EQ(1, m->SetOverlayImage(7, png.c_str()));
+	PictPtr with = m->GetPict();
+	ASSERT_TRUE(with != nullptr);
+	EXPECT_NE(before.get(), with.get()) << "SetOverlayImage doit invalider le cache";
+	EXPECT_NEAR(kRedLuma, LumaAt(with, 320, 180), 6);
+
+	// Retrait : nouveau composite, vignette d'origine restaurée.
+	ASSERT_EQ(1, m->ResetOverlay(7));
+	PictPtr without = m->GetPict();
+	ASSERT_TRUE(without != nullptr);
+	EXPECT_NE(with.get(), without.get()) << "ResetOverlay doit invalider le cache";
+	EXPECT_NEAR(60, LumaAt(without, 320, 180), 2);
+	EXPECT_FALSE(MosaicProbe::Desc(*m).slots[0].hasOverlay);
+}
+
+// Re-rendu d'un overlay À TAILLE CONSTANTE (ex. changement de nom affiché) :
+// la description du graphe ne change pas, donc pas de reconstruction — seule
+// la recomposition a lieu. C'est la clé de reconfig exigée par la Phase 4.
+TEST(MosaicOverlay, SameSizeReRenderKeepsTheGraphDescription)
+{
+	const std::string png = WriteSolidPng("ovr_red_stable.png", 64, 36, 1.0, 0.0, 0.0);
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	ASSERT_EQ(0, m->AddParticipant(7));
+	m->Update(0, SolidPict(640, 480, 60));
+
+	ASSERT_EQ(1, m->SetOverlayImage(7, png.c_str()));
+	const MosaicGraphDesc before = MosaicProbe::Desc(*m);
+	ASSERT_TRUE(before.slots[0].hasOverlay);
+
+	// Nouveau contenu, même taille : description STRICTEMENT identique.
+	ASSERT_EQ(1, m->SetOverlayImage(7, png.c_str()));
+	EXPECT_TRUE(before == MosaicProbe::Desc(*m));
+}
+
+// L'overlay mosaïque couvre la toile entière, par-dessus toutes les vignettes.
+TEST(MosaicOverlay, MosaicOverlayCoversTheWholeComposite)
+{
+	const std::string png = WriteSolidPng("ovr_red_full.png", 128, 72, 1.0, 0.0, 0.0);
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	FillSlots(*m, 4, 640, 480);
+
+	// id<=0 = overlay de la mosaïque elle-même (convention VideoMixer).
+	ASSERT_EQ(1, m->SetOverlayImage(0, png.c_str()));
+	EXPECT_TRUE(MosaicProbe::Desc(*m).hasMosaicOverlay);
+
+	PictPtr out = m->GetPict();
+	ASSERT_TRUE(out != nullptr);
+	// Rouge partout : centre des vignettes ET fond.
+	EXPECT_NEAR(kRedLuma, LumaAt(out, 320, 180), 6);
+	EXPECT_NEAR(kRedLuma, LumaAt(out, 960, 540), 6);
+	EXPECT_NEAR(kRedLuma, LumaAt(out,  20, 180), 6);
+
+	// Retrait : la composition d'origine réapparaît.
+	ASSERT_EQ(1, m->ResetOverlay(0));
+	EXPECT_FALSE(MosaicProbe::Desc(*m).hasMosaicOverlay);
+	PictPtr without = m->GetPict();
+	ASSERT_TRUE(without != nullptr);
+	EXPECT_NEAR(40, LumaAt(without, 320, 180), 2);
+}
+
+// MoveOverlays (SetCompositionType) : les overlays suivent les participants
+// vers la nouvelle mosaïque et y sont composés sans nouvel appel SetOverlay.
+TEST(MosaicOverlay, MoveOverlaysCarriesThemToTheNewMosaic)
+{
+	const std::string png = WriteSolidPng("ovr_red_move.png", 64, 36, 1.0, 0.0, 0.0);
+
+	auto oldM = MakeMosaic(Mosaic::mosaic2x2);
+	ASSERT_EQ(0, oldM->AddParticipant(7));
+	ASSERT_EQ(1, oldM->SetOverlayImage(7, png.c_str()));
+
+	auto newM = MakeMosaic(Mosaic::mosaic2x2);
+	ASSERT_EQ(0, newM->AddParticipant(7));
+	newM->Update(0, SolidPict(640, 480, 60));
+	newM->MoveOverlays(oldM.get());
+
+	MosaicGraphDesc d = MosaicProbe::Desc(*newM);
+	ASSERT_EQ(1u, d.slots.size());
+	EXPECT_TRUE(d.slots[0].hasOverlay);
+
+	PictPtr out = newM->GetPict();
+	ASSERT_TRUE(out != nullptr);
+	EXPECT_NEAR(kRedLuma, LumaAt(out, 320, 180), 6);
+}
+
+// Un overlay posé sur un participant ABSENT ne touche à rien et ne casse pas
+// la composition (SetOverlayImage participant inconnu = no-op journalisé).
+TEST(MosaicOverlay, OverlayForUnknownParticipantIsIgnored)
+{
+	const std::string png = WriteSolidPng("ovr_red_unknown.png", 64, 36, 1.0, 0.0, 0.0);
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	ASSERT_EQ(0, m->AddParticipant(7));
+	m->Update(0, SolidPict(640, 480, 60));
+
+	m->SetOverlayImage(999, png.c_str());
+
+	MosaicGraphDesc d = MosaicProbe::Desc(*m);
+	ASSERT_EQ(1u, d.slots.size());
+	EXPECT_FALSE(d.slots[0].hasOverlay);
+
+	PictPtr out = m->GetPict();
+	ASSERT_TRUE(out != nullptr);
+	EXPECT_NEAR(60, LumaAt(out, 320, 180), 2);
 }

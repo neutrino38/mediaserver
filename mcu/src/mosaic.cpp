@@ -3,7 +3,6 @@
 #include "partedmosaic.h"
 #include "asymmetricmosaic.h"
 #include "pipmosaic.h"
-#include <stdexcept>
 #include <vector>
 #include <map>
 #include <string.h>
@@ -109,15 +108,21 @@ void Mosaic::ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
 
 // Construit la description du graphe de composition d'après l'état courant des
 // slots (trames mémorisées). Slots ACTIFS uniquement (trame non nulle), ordre =
-// ordre Z (pos croissant). N'écrit aucun pixel. Overlays renseignés en Phase 4.
+// ordre Z (pos croissant). Matérialise aussi les Pict RGBA des overlays
+// (participant par slot + mosaïque plein cadre) dans slotOverlayPicts /
+// mosaicOverlayPict — rendu Overlay en cache : un re-rendu même taille (ex.
+// changement de nom) change le Pict mais PAS la desc, donc pas de reconstruction
+// de graphe, juste une recomposition.
 MosaicGraphDesc Mosaic::BuildDesc()
 {
 	MosaicGraphDesc desc;
 	desc.width           = mosaicTotalWidth;
 	desc.height          = mosaicTotalHeight;
 	desc.wantGPU         = false;   // chemin GPU : Phase 5
+	desc.hasMosaicOverlay = false;
 	desc.blackBackground = HasBlackBackground();
-	desc.hasMosaicOverlay = false;  // overlays : Phase 4
+
+	slotOverlayPicts.clear();
 
 	for (int pos = 0; pos < numSlots && pos < (int) slotFrames.size(); pos++)
 	{
@@ -140,7 +145,48 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		s.x = GetLeft(pos) + dx;
 		s.y = GetTop(pos)  + dy;
 
+		// Overlay participant : dimensionné au slot (pas à la vignette letterbox,
+		// fidèle à l'historique ApplyParticipantOverlay qui couvrait le slot).
+		// ovW/ovH repris du Pict effectivement rendu (source de vérité du
+		// buffersrc) ; un rendu indisponible (nullptr) désactive l'overlay du
+		// slot pour ce tick plutôt que de faire échouer Compose.
+		PictPtr ovPict;
+		const int partId = mosaicPos[pos];
+		if (partId > 0)
+		{
+			auto ito = overlays.find(partId);
+			if (ito != overlays.end() && ito->second && ito->second->HasContent())
+			{
+				ito->second->Resize(GetWidth(pos), GetHeight(pos));
+				ovPict = ito->second->GetPict();
+				if (ovPict && ovPict->GetAVFrame())
+				{
+					s.hasOverlay = true;
+					s.ovX = GetLeft(pos);
+					s.ovY = GetTop(pos);
+					s.ovW = ovPict->GetAVFrame()->width;
+					s.ovH = ovPict->GetAVFrame()->height;
+				}
+				else
+					ovPict.reset();   // rendu indisponible : slot sans overlay ce tick
+			}
+		}
+
 		desc.slots.push_back(s);
+		slotOverlayPicts.push_back(ovPict);   // aligné sur desc.slots
+	}
+
+	// Overlay mosaïque plein cadre (par-dessus toutes les vignettes).
+	mosaicOverlayPict.reset();
+	if (overlay && overlay->HasContent())
+	{
+		overlay->Resize(mosaicTotalWidth, mosaicTotalHeight);
+		PictPtr mp = overlay->GetPict();
+		if (mp && mp->GetAVFrame())
+		{
+			desc.hasMosaicOverlay = true;
+			mosaicOverlayPict = mp;
+		}
 	}
 
 	return desc;
@@ -177,8 +223,8 @@ PictPtr Mosaic::GetPict()
 	for (const MosaicSlotDesc& s : desc.slots)
 		frames.push_back(slotFrames[s.pos]);
 
-	// Overlays : Phase 4 (aucun overlay poussé pour l'instant).
-	PictPtr out = compositor.Compose(frames, std::vector<PictPtr>(), bg, nullptr);
+	// Overlays matérialisés par BuildDesc (alignés sur desc.slots).
+	PictPtr out = compositor.Compose(frames, slotOverlayPicts, bg, mosaicOverlayPict);
 	if (out)
 	{
 		composite      = out;
@@ -953,8 +999,8 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
 	if(!overlay->LoadImage(filename))
 		//Error
 		return Error("Error loading picture image");
-	//Display it
-	overlayNeedsUpdate = true;
+	//Display it (SetChanged invalide aussi le composite avfilter)
+	SetChanged();
 	return 1;
     }
     else
@@ -974,6 +1020,11 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
 
 	    if ( o == NULL ) o = new Overlay();
 
+	    //Dimensionner au slot AVANT le rendu (comme SetOverlayTXT) : un Overlay
+	    //neuf est en 0x0 et LoadImage refuserait de rendre (« no slot size »).
+	    if (it->second >= 0 && it->second < numSlots)
+		o->Resize( this->GetWidth(it->second), this->GetHeight(it->second));
+
 	    if (filename != NULL && strlen(filename) > 0)
 		ret = o->LoadImage(filename);
 	    else
@@ -986,6 +1037,8 @@ int Mosaic::SetOverlayImage(int id,const char* filename)
 	    {
 		overlays[id] = std::unique_ptr<Overlay>(o);
 	    }
+	    //Recomposer avec (ou sans) le nouvel overlay
+	    SetChanged();
 	}
 	else
 	{
@@ -1008,6 +1061,8 @@ int Mosaic::ResetOverlay(int id)
 	Log("-Reset mosaic overlay\n");
 	//Reset any previous one (le unique_ptr detruit l'Overlay)
 	overlay.reset();
+	//Recomposer sans l'overlay
+	SetChanged();
 	//OK
 	return 1;
     }
@@ -1022,6 +1077,8 @@ int Mosaic::ResetOverlay(int id)
 	    if ( ito != overlays.end() )
 	    {
 		ito->second->Clear();
+		//Recomposer sans l'overlay
+		SetChanged();
 		return 1;
 	    }
 	}
@@ -1062,6 +1119,8 @@ int Mosaic::SetOverlayTXT(int id, const char* msg,int scriptCode)
 	{
 	   overlays[id] = std::unique_ptr<Overlay>(o);
 	}
+	//Recomposer avec le texte (re-rendu même taille = pas de rebuild de graphe)
+	SetChanged();
    }
    return res;
 }
@@ -1124,72 +1183,6 @@ bool Mosaic::IsFixed(DWORD pos)
 	return pos>=0 && pos<numSlots ? mosaicSlots[pos]>0 : false;
 }
 
-int Mosaic::DrawVUMeter(int pos,DWORD val,DWORD size)
-{
-	//Get dimensions for slot
-	DWORD width = GetWidth(pos);
-	DWORD height = GetHeight(pos);
-	//Get mosaic dimension
-	DWORD totalWidth = GetWidth();
-	DWORD totalHeight = GetHeight();
-	//Get initial pos
-	DWORD top = GetTop(pos);
-	DWORD left = GetLeft(pos);
-	//Calculate total pixels
-	DWORD numPixels = totalWidth*totalHeight;
-	//Get data planes
-	BYTE *y = mosaic;
-	BYTE *u = y+numPixels;
-	BYTE *v = u+numPixels/4;
-
-	//Get init of xVU meter
-	int i = (left+9) & 0xFFFFFFF8;
-	int j = (top+height-10) & 0xFFFFFFFE;
-	//Set dimensions
-	int w = (width-16) & 0xFFFFFFF0;
-	int m = ((w-4)*val)/size & 0xFFFFFFFC;
-
-	//Write top border
-	for (int k=0;k<1;k++,j+=2)
-	{
-		memset(y+j*totalWidth+i			,0,w);
-		memset(y+(j+1)*totalWidth+i		,0,w);
-		memset(u+(j*totalWidth)/4+i/2		,-64,w/2);
-		memset(v+(j*totalWidth)/4+i/2		,-64,w/2);
-	}
-
-	//Write VU
-	for (int k=0;k<2;k++,j+=2)
-	{
-		//Left border
-		memset(y+j*totalWidth+i			,0,2);
-		memset(y+(j+1)*totalWidth+i		,0,2);
-		memset(u+(j*totalWidth)/4+i/2		,-64,1);
-		memset(v+(j*totalWidth)/4+i/2		,-64,1);
-		//VU
-		memset(y+j*totalWidth+i+2		,160,m);
-		memset(y+(j+1)*totalWidth+i+2		,160,m);
-		memset(u+(j*totalWidth)/4+i/2+2		,160,m/2);
-		memset(v+(j*totalWidth)/4+i/2+2		,160,m/2);
-		//VU
-		memset(y+j*totalWidth+i+m+2		,0,w-m-2);
-		memset(y+(j+1)*totalWidth+i+m+2		,0,w-m-2);
-		memset(u+(j*totalWidth)/4+(m+i+2)/2	,-64,(w-m)/2-1);
-		memset(v+(j*totalWidth)/4+(m+i+2)/2	,-64,(w-m)/2-1);
-	}
-
-	//Write bottom border
-	for (int k=0;k<1;k++,j+=2)
-	{
-		memset(y+j*totalWidth+i			,0,w);
-		memset(y+(j+1)*totalWidth+i		,0,w);
-		memset(u+(j*totalWidth)/4+i/2		,-64,w/2);
-		memset(v+(j*totalWidth)/4+i/2		,-64,w/2);
-	}
-
-	return 1;
-}
-
 void Mosaic::Dump()
 {
 	char p[16];
@@ -1250,5 +1243,8 @@ void Mosaic::MoveOverlays(Mosaic *other)
 
     if (other->overlay)
 	this->overlay = std::move(other->overlay);
+
+    //Recomposer avec les overlays déplacés
+    SetChanged();
 }
 
