@@ -284,6 +284,15 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | -2 | SlotVAD | slot piloté par la détection d'activité vocale |
 | -3 | SlotReset | réinitialise le slot |
 
+### Modes VAD — paramètre `vad` de `CreateConference`/`UpdateConference`
+(`VideoMixer::VADMode`, `mcu/include/videomixer.h`)
+
+| Valeur | Nom | Comportement |
+|--------|-----|--------------|
+| 0 | NoVAD | détection d'activité vocale désactivée |
+| 1 | BasicVAD | le locuteur actif est affiché dans le slot `SlotVAD`, remplacé immédiatement (sans hystérésis) ; le slot se vide dans le silence ; les autres slots ne bougent pas |
+| 2 | FullVAD | comme BasicVAD, plus : hystérésis (le locuteur élu garde le slot ~5 s, `vadDefaultChangePeriod`), le dernier locuteur reste affiché dans le silence, et la mosaïque est réorganisée quand le locuteur élu occupait déjà un autre slot |
+
 ---
 
 ## 5. Événements asynchrones (file d'événements)
@@ -357,7 +366,7 @@ Détruit une file d'événements (ferme le flux HTTP associé).
 
 #### `CreateConference`
 Crée et initialise une conférence.
-- **Params** `(siii)` : `tag` (nom UTF-8), `vad` (mode VAD, 0..2), `rate`
+- **Params** `(siii)` : `tag` (nom UTF-8), `vad` (mode VAD, 0..2, §4), `rate`
   (fréquence d'échantillonnage audio en Hz, défaut 16000), `queueId` (file
   d'événements).
 - **Params** (ancienne API) `(sii)` : `tag`, `vad`, `queueId` ; `rate` = 16000.
@@ -365,7 +374,7 @@ Crée et initialise une conférence.
 
 #### `UpdateConference`
 Met à jour le mode VAD d'une conférence.
-- **Params** `(iii)` : `confId`, `vad` (mode VAD, appliqué seulement si dans
+- **Params** `(iii)` : `confId`, `vad` (mode VAD, §4, appliqué seulement si dans
   [0,2]), `rate` (accepté mais ignoré).
 - **Retour** : vide.
 
