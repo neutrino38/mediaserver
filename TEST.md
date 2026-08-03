@@ -48,6 +48,8 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 | `test_rtmp_chunk.cpp` | `RtmpChunk` | Round-trip de la **couche chunk** : `RTMPChunkOutputStream` → machine à états de dé-chunking (reprise de `rtmptest.cpp`) → `RTMPMessage` réassemblés (découpage multi-chunks, messages consécutifs, commande AMF) | **rtmptest** |
 | `test_websocket_frame.cpp` | `WebSocketFrame` | Round-trip de l'en-tête `WebSocketFrameHeader` (longueurs 7/16/64 bits, masque, opcodes de contrôle, parsing fragmenté) | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **Intégration en-processus** : `WebSocketServer` + `TextEchoWebsocketHandler`, client loopback interne → handshake HTTP Upgrade (101) + écho d'une trame texte masquée | **wstest** |
+| `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | **`MosaicGeometry`** : la géométrie décidée par `Mosaic::BuildDesc()` (quelles vignettes, quelle taille, quelle position), sans produire un pixel — 1+1 pleine hauteur (4:3 → 640x480) et son invariance pour une source 16:9, placements historiques des grilles 1x1/2x2/3x3/1p7, étirement du slot principal PIP, `keepAspect=false`, exclusion des slots vides, **invariant de non-débordement sur les 12 dispositions × 4 ratios de source**, stabilité de la description à contenu changeant (clé de reconstruction du graphe). **`MosaicComposition`** : la composition réelle par `MosaicCompositor` (graphe avfilter), vérifiée **pixel à pixel** — quadrants d'un 2x2, bandes de letterbox laissant voir le fond, cache intra-tick, `Clean()` qui rend le fond, 30 ticks consécutifs sans blocage du framesync, changement de résolution d'entrée, et composition effective des 12 types | — (nouveau) |
+| `test_codec_type.cpp` | `CodecType` | Le membre `type` d'un codec doit être lisible **à travers un pointeur de base** (`VideoDecoder*`/`VideoEncoder*`/`AudioDecoder*`/`AudioEncoder*`), pour tous les codecs que la machine déclare supportés, + reproduction du prédicat de recréation de `VideoStream::RecVideo` | — (nouveau) |
 | `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp`, `RtpAdversarial`, `RtcpAdversarial` | **`Rtp`** : round-trips autonomes de l'en-tête `RTPPacket` (build → GetData → re-parse : seq/ts/ssrc/pt/marker/payload, bouclages 16/32 bits). **`RtpRtcp`** : parsing sur **capture réelle** (`fixtures/rtp_rtcp.pcap`) via `RTPPacket` + `RTCPCompoundPacket::Parse` — par paquet (version=2, pt<128, en-tête sain) et par flux (SSRC dominant : payload type constant, séquences en avant ≥90 %, timestamps non décroissants ≥90 %) ; côté RTCP, rapports SR/RR décodés. **`RtpAdversarial`/`RtcpAdversarial`** : paquets volontairement cassés (extension/CC surdimensionnés, mauvaise version, RTCP trop court / pt hors plage / length débordante) → parseurs qui ne crashent pas et détectent la malformation | — (nouveau) |
 
 ### Fixtures
@@ -69,6 +71,40 @@ sens du même contrat sans dépendre de captures externes. Le seul test qui sort
 de ce cadre est l'écho WebSocket, volontairement conservé comme test
 d'intégration (sockets + threads réels) pour couvrir fidèlement ce que faisait
 `wstest.cpp` + le client Python.
+
+### Tests de composition vidéo : deux étages séparés
+
+`test_mosaic_composition.cpp` sépare volontairement la **décision** de géométrie
+et la **production** de pixels, parce que les deux échouent différemment :
+
+- la géométrie (`BuildDesc`) est pure arithmétique : on peut donc couvrir les
+  **12 types de composition × plusieurs ratios de source** pour quelques
+  millisecondes, là où composer autant de graphes coûte une seconde ;
+- la composition (`MosaicCompositor`) exige de vrais pixels. On pousse des trames
+  de **luma uniforme** (`Pict::CreateColor`) : la mise à l'échelle d'une surface
+  unie laisse la luma inchangée, donc un simple relevé de pixel au centre d'une
+  vignette suffit à prouver que la bonne entrée a atterri au bon endroit — sans
+  fixture d'image ni comparaison approximative.
+
+`BuildDesc()` étant `protected`, il est atteint via l'**idiome du pointeur sur
+membre** pris dans le contexte d'une classe dérivée (`MosaicProbe`), bien défini
+par le standard, plutôt qu'un cast de type. `MosaicProbe` reste abstraite et
+n'est jamais instanciée.
+
+### Vérification par mutation des garde-fous
+
+Les suites `MosaicGeometry`/`MosaicComposition` gardent deux corrections
+apportées après des tests en appel réel (cf. `mosaic_avfilter_plan.md`). Leur
+pouvoir de détection a été vérifié en **réintroduisant temporairement** chaque
+bug et en constatant l'échec :
+
+| Bug réintroduit | Tests qui échouent |
+|---|---|
+| `mosaic1p1` bridé à la moitié de la hauteur (`GetHeight` `rows=4,size=2`, `GetTop` `mosaicTotalHeight/4`) | `MosaicGeometry.Mosaic1p1UsesFullHeightFor4x3Source` |
+| letterbox calculé sur le ratio GLOBAL de la mosaïque au lieu du ratio du slot | `Mosaic1p1UsesFullHeightFor4x3Source`, `Mosaic1p1UnchangedFor16x9Source`, `SlotsAlwaysFitInsideTheComposite`, `MosaicComposition.LetterboxBandsShowTheBackground` |
+
+Un test qui n'échoue pas quand le bug revient ne garde rien : refaire cette
+vérification pour tout nouveau garde-fou ajouté ici.
 
 ### Tests tolérants à l'environnement
 
@@ -112,3 +148,31 @@ plus une fuite mémoire trouvée par les tests adverses et corrigée (point 4).
    sous-paquet lorsque `packet->Parse` échouait (type connu mais corps invalide).
    Correctif : `delete packet; delete rtcp;` avant le `return NULL`, et `delete packet`
    dans la branche « non ajouté au compound » (delete nullptr est sans effet).
+
+## Défauts trouvés en appel réel, désormais gardés par la suite
+
+Ceux-ci n'ont **pas** été mis au jour par les tests : ils ont été diagnostiqués sur
+des conférences réelles, et la suite a été étendue ensuite pour qu'ils ne puissent
+pas revenir.
+
+5. **Membre `type` masqué dans les codecs vidéo ffmpeg (CORRIGÉ dans
+   `libmedikit/ffvideocodec.h`).** `FfVideoEncoder` et `FfVideoDecoder` redéclaraient
+   chacun un `VideoCodec::Type type`, masquant celui, public, de leurs bases
+   `VideoEncoder`/`VideoDecoder`. Les constructeurs renseignaient le membre **dérivé**,
+   celui de la base restait **non initialisé** — or tout le mcu lit `->type` via un
+   pointeur de base (`videostream.cpp:810`, `jsr309/VideoDecoderWorker.cpp:190`,
+   `mediabridgesession.cpp:583/1122`, `rtmpparticipant.cpp:949/961/973`,
+   `FLVEncoder.cpp:404`). Le prédicat « recréer le codec si le type a changé » était
+   donc toujours vrai : **le décodeur H264 était détruit et recréé à chaque paquet
+   RTP**, le tampon de dépaquetisation ne survivait jamais jusqu'à une trame complète
+   et aucune image n'était décodée (mosaïque vide → surface unie chez les endpoints).
+   L'audio était épargné, `ffaudiocodec.h` ne masquant pas `type` — c'est l'indice qui
+   a orienté le diagnostic. Garde-fou : suite `CodecType`.
+   *Limite assumée* : un membre non initialisé peut fortuitement contenir la bonne
+   valeur, donc ce garde-fou détecte la régression avec une probabilité élevée mais
+   pas certaine ; il ne remplace pas l'interdiction de redéclarer `type`, rappelée par
+   un commentaire à l'endroit exact des anciennes déclarations.
+
+6. **`mosaic1p1` bridé à la moitié de la hauteur + letterbox calculé sur le ratio
+   global (CORRIGÉS dans `asymmetricmosaic.cpp` / `mosaic.cpp`).** Voir « Vérification
+   par mutation des garde-fous » ci-dessus pour le détail et les tests concernés.

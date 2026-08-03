@@ -53,3 +53,5 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_websocket_frame.cpp` | `WebSocketFrame` | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **wstest** |
 | `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp`, `RtpAdversarial`, `RtcpAdversarial` | — (round-trips RTP + capture `fixtures/rtp_rtcp.pcap` + paquets cassés) |
+| `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | — (géométrie des 12 dispositions + composition avfilter vérifiée pixel à pixel) |
+| `test_codec_type.cpp` | `CodecType` | — (le membre `type` d'un codec doit être lisible via un pointeur de base) |
