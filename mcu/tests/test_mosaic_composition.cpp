@@ -27,11 +27,14 @@
  */
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <future>
 #include <memory>
 #include <vector>
 
 #include "log.h"
 #include "mosaic.h"
+#include "videomixer.h"
 
 namespace {
 
@@ -94,6 +97,77 @@ void ExpectSlots(const MosaicGraphDesc& d, const std::vector<Rect>& expected)
 }
 
 } // namespace
+
+// ===========================================================================
+// Fabrique : robustesse face à un type de composition invalide
+// ===========================================================================
+// Les deux API de contrôle (XML-RPC MCU `SetCompositionType`/`CreateMosaic` et
+// JSR-309 `VideoMixerMosaicCreate`) castent un entier brut venu du réseau en
+// `Mosaic::Type` sans le valider. `Mosaic::CreateMosaic` levait alors
+// `throw new std::runtime_error` — un POINTEUR, qu'aucun `catch` ne peut
+// intercepter — depuis un code exécuté sous le verrou de `VideoMixer` : un seul
+// type erroné envoyé par le contrôleur terminait le mediaserver ENTIER, toutes
+// conférences confondues.
+
+TEST(MosaicFactory, AcceptsEveryDocumentedType)
+{
+	const Mosaic::Type types[] = {
+		Mosaic::mosaic1x1, Mosaic::mosaic2x2, Mosaic::mosaic3x3,
+		Mosaic::mosaic3p4, Mosaic::mosaic1p7, Mosaic::mosaic1p5,
+		Mosaic::mosaic1p1, Mosaic::mosaicPIP1, Mosaic::mosaicPIP3,
+		Mosaic::mosaic4x4, Mosaic::mosaic1p4,  Mosaic::mosaic2p8 };
+
+	for (Mosaic::Type type : types)
+	{
+		Mosaic* m = nullptr;
+		ASSERT_NO_THROW(m = Mosaic::CreateMosaic(type, HD720P));
+		EXPECT_NE(nullptr, m) << "type documente refuse : " << (int)type;
+		delete m;
+	}
+}
+
+TEST(MosaicFactory, RejectsUnknownTypeWithoutThrowing)
+{
+	// Valeurs hors énumération : juste au-delà du dernier type, négative, absurde.
+	const int invalid[] = { 12, 13, 99, -1, 1000000 };
+
+	for (int type : invalid)
+	{
+		Mosaic* m = nullptr;
+		ASSERT_NO_THROW(m = Mosaic::CreateMosaic((Mosaic::Type)type, HD720P))
+			<< "type " << type << " : la fabrique ne doit jamais lever";
+		EXPECT_EQ(nullptr, m) << "type " << type << " : doit etre refuse";
+		delete m;
+	}
+}
+
+TEST(MosaicFactory, GetNumSlotsForUnknownTypeIsZero)
+{
+	EXPECT_EQ(0, Mosaic::GetNumSlotsForType((Mosaic::Type)999));
+}
+
+// Le mixer doit refuser le type invalide ET RESTER UTILISABLE : l'ancien chemin
+// levait sous `lstVideosUse.WaitUnusedAndLock()`, laissant le verrou pris. Ici on
+// vérifie qu'une composition valide passe ensuite — dans un thread borné dans le
+// temps, car un verrou fuité ferait PENDRE la suite au lieu de l'échouer.
+TEST(MosaicFactory, MixerRejectsUnknownCompositionAndStaysUsable)
+{
+	VideoMixer mixer(L"test");
+
+	EXPECT_EQ(0, mixer.SetCompositionType(0, (Mosaic::Type)999, HD720P))
+		<< "un type invalide doit etre refuse proprement";
+	EXPECT_LT(mixer.CreateMosaic((Mosaic::Type)999, HD720P), 0)
+		<< "CreateMosaic doit signaler l'echec par un id negatif";
+
+	// Le verrou a-t-il été relâché ? Si non, cet appel ne rendra jamais la main.
+	std::future<int> valid = std::async(std::launch::async, [&mixer] {
+		return mixer.SetCompositionType(0, Mosaic::mosaic2x2, HD720P);
+	});
+
+	ASSERT_EQ(std::future_status::ready, valid.wait_for(std::chrono::seconds(5)))
+		<< "verrou du mixer non relache : le mixer est fige";
+	EXPECT_EQ(1, valid.get());
+}
 
 // ===========================================================================
 // Géométrie (BuildDesc) — aucun pixel produit

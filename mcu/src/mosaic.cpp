@@ -910,8 +910,15 @@ Mosaic* Mosaic::CreateMosaic(Type type,DWORD size)
 		case mosaicPIP3:
 			return new PIPMosaic(type,size);
 	}
-	//Exit
-	throw new std::runtime_error("Unknown mosaic type\n");
+
+	//Type inconnu : les deux API de contrôle (XML-RPC MCU et JSR-309) transmettent
+	//un entier brut du réseau casté en Mosaic::Type, sans validation. Rendre NULL
+	//plutôt que lever : ce code s'exécute sous le verrou de VideoMixer, et l'ancien
+	//`throw new std::runtime_error` (un POINTEUR) n'était attrapable par personne —
+	//un simple type erroné du contrôleur terminait le mediaserver entier, toutes
+	//conférences confondues. Les appelants testent le retour (cf. VideoMixer).
+	Error("-CreateMosaic: type de composition inconnu [%d]\n",type);
+	return NULL;
 }
 
 BYTE* Mosaic::GetFrame()

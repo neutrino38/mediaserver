@@ -165,8 +165,9 @@ xmlrpc_value* CreateMosaic(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	//La borramos
 	int mosaicId = conf->CreateMosaic((Mosaic::Type)comp,size);
 
-	//Salimos
-	if(!mosaicId)
+	//Salimos. L'id 0 est celui, legitime, de la mosaique par defaut : seul un id
+	//negatif signale l'echec (type de composition invalide, cf. VideoMixer).
+	if(mosaicId < 0)
 		return xmlerror(env,"Could not create mosaic");
 
 	//Devolvemos el resultado

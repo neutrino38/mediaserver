@@ -485,8 +485,16 @@ int VideoMixer::CreateMosaic(Mosaic::Type comp, int size)
 	//Get the new id
 	int mosaicId = maxMosaics++;
 
-	//Create mosaic
-	SetCompositionType(mosaicId, comp, size);
+	//Create mosaic. Un type invalide ne crée RIEN : propager l'échec par -1 (et non
+	//par 0, qui est l'id légitime de la mosaïque par défaut) plutôt que de rendre un
+	//id auquel aucune mosaïque ne correspond — les appelants s'en serviraient pour
+	//indexer 'mosaics' et y trouveraient un shared_ptr vide.
+	if (!SetCompositionType(mosaicId, comp, size))
+	{
+		//Error() rend 0, or 0 est l'id de la mosaïque par défaut : renvoyer -1.
+		Error("<Create mosaic : echec pour le type de composition [%d]\n",comp);
+		return -1;
+	}
 
 	Log("<Create mosaic  [id:%d]\n",mosaicId);
 
@@ -591,6 +599,12 @@ int VideoMixer::Init(Mosaic::Type comp,int size, const char * logoFile)
 
 	//Create default misxer
 	int id = CreateMosaic(comp,size);
+
+	//Type de composition invalide passé à la création de la conférence : refuser
+	//l'initialisation. Sans ce test, mosaics[id] insérait un shared_ptr VIDE et
+	//defaultMosaic devenait nul — le mixer partait avec une mosaïque fantôme.
+	if (id < 0)
+		return Error("-VideoMixer::Init: type de composition invalide [%d]\n",comp);
 
 	//Set default
 	defaultMosaic = mosaics[id].get();
@@ -1115,6 +1129,15 @@ int VideoMixer::SetCompositionType(int mosaicId,Mosaic::Type comp, int size)
 	//New mosaic (propriedad en shared_ptr ; mosaic = observador crudo para la logica local)
 	std::shared_ptr<Mosaic> mosaicPtr(Mosaic::CreateMosaic(comp,size));
 	Mosaic *mosaic = mosaicPtr.get();
+
+	//Type de composition invalide : ne RIEN toucher (la mosaïque en place reste
+	//valide et la conférence continue), et surtout RELÂCHER le verrou avant de
+	//sortir — sans quoi le mixer se figerait sur la première requête erronée.
+	if (!mosaic)
+	{
+		lstVideosUse.Unlock();
+		return Error("-SetCompositionType: type de composition invalide [%d]\n",comp);
+	}
 
 	//If we had a previus mosaic
 	if (oldMosaic)

@@ -48,7 +48,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 | `test_rtmp_chunk.cpp` | `RtmpChunk` | Round-trip de la **couche chunk** : `RTMPChunkOutputStream` → machine à états de dé-chunking (reprise de `rtmptest.cpp`) → `RTMPMessage` réassemblés (découpage multi-chunks, messages consécutifs, commande AMF) | **rtmptest** |
 | `test_websocket_frame.cpp` | `WebSocketFrame` | Round-trip de l'en-tête `WebSocketFrameHeader` (longueurs 7/16/64 bits, masque, opcodes de contrôle, parsing fragmenté) | wstest |
 | `test_websocket_echo.cpp` | `WebSocketEcho` | **Intégration en-processus** : `WebSocketServer` + `TextEchoWebsocketHandler`, client loopback interne → handshake HTTP Upgrade (101) + écho d'une trame texte masquée | **wstest** |
-| `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | **`MosaicGeometry`** : la géométrie décidée par `Mosaic::BuildDesc()` (quelles vignettes, quelle taille, quelle position), sans produire un pixel — 1+1 pleine hauteur (4:3 → 640x480) et son invariance pour une source 16:9, placements historiques des grilles 1x1/2x2/3x3/1p7, étirement du slot principal PIP, `keepAspect=false`, exclusion des slots vides, **invariant de non-débordement sur les 12 dispositions × 4 ratios de source**, stabilité de la description à contenu changeant (clé de reconstruction du graphe). **`MosaicComposition`** : la composition réelle par `MosaicCompositor` (graphe avfilter), vérifiée **pixel à pixel** — quadrants d'un 2x2, bandes de letterbox laissant voir le fond, cache intra-tick, `Clean()` qui rend le fond, 30 ticks consécutifs sans blocage du framesync, changement de résolution d'entrée, et composition effective des 12 types | — (nouveau) |
+| `test_mosaic_composition.cpp` | `MosaicFactory`, `MosaicGeometry`, `MosaicComposition` | **`MosaicFactory`** : robustesse de `Mosaic::CreateMosaic` face à un type de composition invalide (les 12 types documentés acceptés, tout le reste refusé sans lever) et refus propre côté `VideoMixer`, mixer restant utilisable ensuite — la vérification passe par un thread borné dans le temps, car un verrou fuité ferait *pendre* la suite au lieu de l'échouer. **`MosaicGeometry`** : la géométrie décidée par `Mosaic::BuildDesc()` (quelles vignettes, quelle taille, quelle position), sans produire un pixel — 1+1 pleine hauteur (4:3 → 640x480) et son invariance pour une source 16:9, placements historiques des grilles 1x1/2x2/3x3/1p7, étirement du slot principal PIP, `keepAspect=false`, exclusion des slots vides, **invariant de non-débordement sur les 12 dispositions × 4 ratios de source**, stabilité de la description à contenu changeant (clé de reconstruction du graphe). **`MosaicComposition`** : la composition réelle par `MosaicCompositor` (graphe avfilter), vérifiée **pixel à pixel** — quadrants d'un 2x2, bandes de letterbox laissant voir le fond, cache intra-tick, `Clean()` qui rend le fond, 30 ticks consécutifs sans blocage du framesync, changement de résolution d'entrée, et composition effective des 12 types | — (nouveau) |
 | `test_codec_type.cpp` | `CodecType` | Le membre `type` d'un codec doit être lisible **à travers un pointeur de base** (`VideoDecoder*`/`VideoEncoder*`/`AudioDecoder*`/`AudioEncoder*`), pour tous les codecs que la machine déclare supportés, + reproduction du prédicat de recréation de `VideoStream::RecVideo` | — (nouveau) |
 | `test_rtp_latching.cpp` | `RtpLatching` | Latching RTP symétrique (NAT « comedia ») de `RTPSession`, testé **uniquement par le comportement observable** : un socket sonde en loopback joue le pair NATé, émet du média puis vérifie si celui de la session lui revient. Couvre l'annonce `0.0.0.0`, l'annonce privée autorisée (rattrapage), l'absence d'autorisation, l'annonce publique (pas de rattrapage), la réouverture du droit par un nouveau `SetRemotePort`, la demande d'image clé sur changement de source, **+ 2 tests de caractérisation** de limites/défauts (voir plus bas) | — (nouveau) |
 | `test_rtp_rtcp.cpp` | `Rtp`, `RtpRtcp`, `RtpAdversarial`, `RtcpAdversarial` | **`Rtp`** : round-trips autonomes de l'en-tête `RTPPacket` (build → GetData → re-parse : seq/ts/ssrc/pt/marker/payload, bouclages 16/32 bits). **`RtpRtcp`** : parsing sur **capture réelle** (`fixtures/rtp_rtcp.pcap`) via `RTPPacket` + `RTCPCompoundPacket::Parse` — par paquet (version=2, pt<128, en-tête sain) et par flux (SSRC dominant : payload type constant, séquences en avant ≥90 %, timestamps non décroissants ≥90 %) ; côté RTCP, rapports SR/RR décodés. **`RtpAdversarial`/`RtcpAdversarial`** : paquets volontairement cassés (extension/CC surdimensionnés, mauvaise version, RTCP trop court / pt hors plage / length débordante) → parseurs qui ne crashent pas et détectent la malformation | — (nouveau) |
@@ -103,6 +103,7 @@ bug et en constatant l'échec :
 |---|---|
 | `mosaic1p1` bridé à la moitié de la hauteur (`GetHeight` `rows=4,size=2`, `GetTop` `mosaicTotalHeight/4`) | `MosaicGeometry.Mosaic1p1UsesFullHeightFor4x3Source` |
 | letterbox calculé sur le ratio GLOBAL de la mosaïque au lieu du ratio du slot | `Mosaic1p1UsesFullHeightFor4x3Source`, `Mosaic1p1UnchangedFor16x9Source`, `SlotsAlwaysFitInsideTheComposite`, `MosaicComposition.LetterboxBandsShowTheBackground` |
+| `throw new std::runtime_error` rétabli dans `Mosaic::CreateMosaic` | `MosaicFactory.RejectsUnknownTypeWithoutThrowing`, `MosaicFactory.MixerRejectsUnknownCompositionAndStaysUsable` (« Unknown C++ exception thrown in the test body ») |
 | `RTPSession::NatCorrectable` neutralisé (`return false`) | 5 des 8 `RtpLatching.*` ; survivent exactement les 3 qui doivent survivre — le chemin `0.0.0.0` (qui ne passe pas par la politique) et les 2 tests attendant justement l'absence de rattrapage |
 
 Un test qui n'échoue pas quand le bug revient ne garde rien : refaire cette
@@ -178,6 +179,25 @@ pas revenir.
 6. **`mosaic1p1` bridé à la moitié de la hauteur + letterbox calculé sur le ratio
    global (CORRIGÉS dans `asymmetricmosaic.cpp` / `mosaic.cpp`).** Voir « Vérification
    par mutation des garde-fous » ci-dessus pour le détail et les tests concernés.
+
+9. **Type de composition inconnu = mort du mediaserver entier (CORRIGÉ dans
+   `mosaic.cpp` / `videomixer.cpp`).** Les deux API de contrôle (XML-RPC
+   `SetCompositionType`/`CreateMosaic`, JSR-309 `VideoMixerMosaicCreate`) castent un
+   entier brut venu du réseau en `Mosaic::Type` **sans le valider**.
+   `Mosaic::CreateMosaic` levait alors `throw new std::runtime_error` — un
+   **pointeur**, qu'aucun `catch (const std::exception&)` ne peut intercepter — depuis
+   un code exécuté sous `lstVideosUse.WaitUnusedAndLock()`. Résultat : `std::terminate`,
+   donc **toutes les conférences tombaient** sur une seule valeur erronée du
+   contrôleur ; et même attrapée, l'exception aurait laissé le verrou du mixer pris.
+   Correctif en trois points : `CreateMosaic` journalise et rend `NULL` (style d'erreur
+   du reste du code, et rien ne traverse plus le verrou) ; `VideoMixer::SetCompositionType`
+   teste le retour, **relâche le verrou** et sort en erreur, la mosaïque en place restant
+   valide ; `VideoMixer::CreateMosaic` propage l'échec par **-1** (et non 0, qui est l'id
+   légitime de la mosaïque par défaut) et `VideoMixer::Init` refuse de démarrer sur un
+   type invalide au lieu d'installer une `defaultMosaic` nulle. Le handler XML-RPC
+   `CreateMosaic` teste désormais `< 0`, ce que le handler JSR-309 faisait déjà.
+   Garde-fou : suite `MosaicFactory`. Le `throw new` jumeau de `PartedMosaic` (devenu
+   inatteignable) lève au moins **par valeur**.
 
 ## Défauts mis au jour par les tests de latching (NON corrigés, caractérisés)
 

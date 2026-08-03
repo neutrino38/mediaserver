@@ -35,7 +35,11 @@ PartedMosaic::PartedMosaic(Type type, DWORD size) : Mosaic(type,size)
 			mosaicRows = 4;
 			break;
 		default:
-			throw new std::runtime_error("Unknown mosaic type\n");
+			//Inatteignable : Mosaic::CreateMosaic filtre les types en amont et rend
+			//NULL. Lever PAR VALEUR malgré tout (et non `throw new`, un pointeur que
+			//nul ne peut attraper) pour qu'un appel direct au constructeur reste
+			//diagnosticable au lieu de terminer le processus.
+			throw std::runtime_error("Unknown parted mosaic type\n");
 
 	}
 	
