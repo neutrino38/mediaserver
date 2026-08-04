@@ -34,6 +34,9 @@ private:
 	int imgNew;
 	int inited;
 	int capturing;
+	//Détection de gel du flux amont : un seul log par épisode (stopped/resumed)
+	bool stalled;
+	int  okStreak;
 
 	std::mutex newPicMutex;
 	std::condition_variable newPicCond;

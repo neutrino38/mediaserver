@@ -12,6 +12,8 @@ PipeVideoInput::PipeVideoInput()
 	videoHeight = 0;
 	videoSize = 0;
 	videoFPS = 0;
+	stalled = false;
+	okStreak = 0;
 }
 
 PipeVideoInput::~PipeVideoInput()
@@ -63,6 +65,8 @@ int PipeVideoInput::StartVideoCapture(int width,int height,int fps)
 	//El inicio
 	imgNew = false;
 	last = nullptr;
+	stalled = false;
+	okStreak = 0;
 
 	//Estamos capturando
 	capturing = true;
@@ -113,8 +117,15 @@ PictPtr PipeVideoInput::GrabFrame(DWORD timeout)
 			//wait
 			if (newPicCond.wait_until(lock, std::chrono::system_clock::from_time_t(ts.tv_sec) + std::chrono::nanoseconds(ts.tv_nsec)) == std::cv_status::timeout)
 			{
-				//Timeout
-				Error("PipeVideoInput grab timeout\n");
+				//Flux amont gelé (mosaïque statique) : situation normale en
+				//appel mono ou sans vidéo entrante — un seul log par épisode
+				//au lieu d'une ligne par trame manquée
+				okStreak = 0;
+				if (!stalled)
+				{
+					stalled = true;
+					Log("-PipeVideoInput: video stream stopped (no new frame from mixer)\n");
+				}
 				return nullptr;
 			}
 		} else {
@@ -125,6 +136,19 @@ PictPtr PipeVideoInput::GrabFrame(DWORD timeout)
 
 	//Lo vamos a consumir
 	imgNew=0;
+
+	//Reprise après gel : annoncée seulement après une vraie série de trames,
+	//pour que le rafraîchissement forcé (500 ms) du mixeur ne fasse pas
+	//osciller le log stopped/resumed pendant un gel
+	if (stalled && last)
+	{
+		if (++okStreak >= 5)
+		{
+			stalled = false;
+			okStreak = 0;
+			Log("-PipeVideoInput: video stream resumed\n");
+		}
+	}
 
 	//Devolvemos la ultima trama (partage refcompté : survit tant que l'encodeur la tient)
 	return last;
