@@ -96,8 +96,20 @@ public:
 	void Release();
 
 private:
-	// Matérialise cur -> AVFilterGraph. gpu=true : chaîne VAAPI (Phase 5).
+	// Matérialise cur -> AVFilterGraph. gpu=true : chaîne VAAPI (scale_vaapi +
+	// overlay_vaapi, hwupload des entrées CPU et du fond ; overlays RGBA en
+	// queue CPU après hwdownload). Le liseré noir, rendu par pad en CPU, est en
+	// mode GPU PEINT dans le fond (BuildGpuBackground) — d'où le refus des
+	// dispositions à slots superposés (PIP) : leur liseré devrait passer
+	// par-dessus l'image principale, ce que le fond ne peut pas faire.
 	bool BuildGraph(bool gpu);
+	// Vrai si deux vignettes (liseré compris) se chevauchent (PIP) : le mode GPU
+	// replie alors en CPU (le liseré du fond serait masqué par l'image du bas).
+	bool SlotsOverlap() const;
+	// Fond du mode GPU : couleur de base + rectangles noirs (Y=16, le noir vidéo
+	// du pad CPU) sous l'emprise liseré de chaque vignette. Poussé à la place du
+	// fond de l'appelant quand curGPU.
+	bool BuildGpuBackground();
 	// Pousse une référence de 'pic' (conteneur éphémère au pts donné) dans src.
 	bool PushInput(AVFilterContext* src, const PictPtr& pic, int64_t pts);
 
@@ -111,6 +123,7 @@ private:
 	MosaicGraphDesc  cur;                      // description du graphe courant
 	bool             curGPU    = false;        // mode effectif du graphe courant
 	bool             gpuBroken  = false;       // échec GPU mémorisé (ne pas retenter)
+	PictPtr          gpuBackground;            // fond du mode GPU (liseré peint, cf. BuildGpuBackground)
 	int64_t          tick      = 0;            // pts monotone (time_base 1/1000)
 	int              builds    = 0;            // nb de (re)constructions du graphe (diagnostic, jamais remis à zéro)
 };

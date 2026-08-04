@@ -2,8 +2,10 @@
 #define _PARTEDMOSAIC_H_
 
 #include "mosaic.h"
-#include "framescaler.h"
 
+// Grilles régulières (1x1, 2x2, 3x3, 4x4). Depuis la Phase 6 (avfilter), les
+// dérivées de Mosaic ne portent plus que la GÉOMÉTRIE des slots : la
+// composition est faite par MosaicCompositor à partir de BuildDesc().
 class PartedMosaic:
 	public Mosaic
 {
@@ -11,8 +13,6 @@ public:
 	PartedMosaic(Mosaic::Type type, DWORD size);
 	virtual ~PartedMosaic();
 
-	virtual int Update(int index,BYTE *frame,int width,int heigth);
-	virtual int Clean(int index);
 protected:
 	virtual int GetWidth(int pos);
 	virtual int GetHeight(int pos);
@@ -21,7 +21,6 @@ protected:
 private:
 	int     mosaicCols;
 	int     mosaicRows;
-	int     mosaicNum;
 	int     mosaicWidth;
 	int     mosaicHeight;
 };

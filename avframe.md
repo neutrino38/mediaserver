@@ -375,6 +375,13 @@ réf, plus de memcpy) → **graphe mosaïque avfilter** (§8) → `PipeVideoInpu
 
 ## 8. Mosaïques par graphe avfilter
 
+> **FAIT** — réalisé par le chantier `mosaic_avfilter_plan.md` (Phases 0-6,
+> 2026-07-16 → 2026-08-03) : composition par `MosaicCompositor` (graphe unique,
+> liseré noir, overlays, chemin GPU VAAPI avec repli CPU), chemins BYTE\*/
+> `FrameScaler` supprimés du mcu (`framescaler` ne survit qu'en objet
+> Asterisk-only de libmedikit pour `transcoder.cpp`, non compilé ici),
+> `VideoRescaler` déplacé dans libmedikit.
+
 ### 8.1 Principe
 
 Chaque `Mosaic` possède un `AVFilterGraph` persistant :

@@ -7,36 +7,22 @@
 #include <map>
 #include <string.h>
 #include <stdlib.h>
-extern "C" {
-#include <libswscale/swscale.h>
-#include <libavcodec/avcodec.h>
-#include <libavformat/avformat.h>
-#include <libavutil/opt.h>
-#include <libavutil/common.h>
-#include <libavutil/imgutils.h>
-}
 
 // Mémorise la trame d'un slot pour la composition par graphe avfilter (Phase 3).
 // N'écrit plus un pixel dans le buffer BYTE* : le composite est produit par
-// MosaicCompositor (cf. GetPict). Redescente GPU->CPU car le chemin de Phase 3
-// est CPU (le graphe GPU natif vient en Phase 5).
+// MosaicCompositor (cf. GetPict). Les trames GPU (VAAPI) sont conservées TELLES
+// QUELLES depuis la Phase 5 : c'est le graphe qui décide (scale_vaapi en mode
+// GPU, hwdownload intégré à la branche en mode CPU) — plus aucune redescente
+// hors graphe.
 int Mosaic::Update(int index, const PictPtr& pic)
 {
 	if (!pic || !pic->GetAVFrame())
 		return 0;
 
-	PictPtr frame = pic;
-	if (pic->IsGPUPict())
-	{
-		frame = pic->DownloadToCPU();
-		if (!frame)
-			return 0;
-	}
-
 	// Mémorise la trame et l'aspect du slot (lus par BuildDesc/GetPict).
 	if (index >= 0 && index < (int) slotFrames.size())
 	{
-		slotFrames[index]     = frame;
+		slotFrames[index]     = pic;
 		slotKeepAspect[index] = keepAspect;
 	}
 
@@ -136,11 +122,13 @@ MosaicGraphDesc Mosaic::BuildDesc()
 	MosaicGraphDesc desc;
 	desc.width           = mosaicTotalWidth;
 	desc.height          = mosaicTotalHeight;
-	desc.wantGPU         = false;   // chemin GPU : Phase 5
+	desc.wantGPU         = false;   // décidé après la boucle (politique §2.1)
 	desc.hasMosaicOverlay = false;
 	desc.blackBackground = HasBlackBackground();
 
 	slotOverlayPicts.clear();
+
+	bool anyGPUInput = false;
 
 	for (int pos = 0; pos < numSlots && pos < (int) slotFrames.size(); pos++)
 	{
@@ -157,6 +145,8 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		s.inH    = f->height;
 		s.inFmt  = f->format;
 		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU (clé de reconfig)
+		if (pic->IsGPUPict())
+			anyGPUInput = true;
 
 		int dx, dy;
 		ComputeSlotPlacement(pos, f->width, f->height, slotKeepAspect[pos],
@@ -210,14 +200,22 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		}
 	}
 
+	// Politique GPU (§2.1 du plan) : composer sur GPU seulement si le device
+	// VAAPI partagé existe ET qu'au moins une entrée est déjà une surface GPU —
+	// sans entrée GPU, tout monter en VRAM serait une pure perte (uploads puis
+	// probable redescente côté encodeur logiciel). Le compositor peut encore
+	// replier en CPU (échec de config, slots superposés type PIP).
+	desc.wantGPU = anyGPUInput && Pict::GetVAAPIDevice() != nullptr;
+
 	return desc;
 }
 
 // Composite de la mosaïque via le graphe avfilter (MosaicCompositor). Une seule
 // composition par tick grâce au cache 'compositeValid' (invalidé par SetChanged
 // sur tout Update/Clean) : plusieurs inputs partageant la mosaïque n'entraînent
-// qu'une compo. Repli sur l'ancien chemin BYTE* si la (re)config du graphe échoue
-// (garde-fou de mise au point, cf. mosaic_avfilter_plan.md §3/§4).
+// qu'une compo. En cas d'échec de (re)configuration on ressert le dernier
+// composite connu (éventuellement nul) — le chemin BYTE* de repli a disparu
+// en Phase 6.
 PictPtr Mosaic::GetPict()
 {
 	if (compositeValid && composite)
@@ -226,10 +224,7 @@ PictPtr Mosaic::GetPict()
 	MosaicGraphDesc desc = BuildDesc();
 	if (!compositor.Configure(desc))
 	{
-		Error("-Mosaic: echec Configure du compositor, repli chemin BYTE*\n");
-		PictPtr legacy = GetPictLegacy();
-		if (legacy)
-			composite = legacy;
+		Error("-Mosaic: echec Configure du compositor, composite précédent resservi\n");
 		return composite;
 	}
 
@@ -266,38 +261,6 @@ const PictPtr& Mosaic::GetBackground()
 			                               128, 128, 128);
 	}
 	return background;
-}
-
-// Ancien chemin : enveloppe le composite BYTE* YUV420P contigu dans un Pict
-// (copie). Repli si le graphe avfilter n'a pas pu être configuré. Phase 6 : retrait.
-PictPtr Mosaic::GetPictLegacy()
-{
-	BYTE* buf = GetFrame();
-	if (!buf)
-		return nullptr;
-
-	const int w = mosaicTotalWidth;
-	const int h = mosaicTotalHeight;
-	if (w <= 0 || h <= 0)
-		return nullptr;
-
-	AVFrame* f = av_frame_alloc();
-	if (!f)
-		return nullptr;
-	f->format = AV_PIX_FMT_YUV420P;
-	f->width  = w;
-	f->height = h;
-	if (av_frame_get_buffer(f, 32) < 0)
-	{
-		av_frame_free(&f);
-		return nullptr;
-	}
-
-	const uint8_t* src[4] = { buf, buf + w*h, buf + w*h*5/4, NULL };
-	int srcLs[4] = { w, w/2, w/2, 0 };
-	av_image_copy(f->data, f->linesize, src, srcLs, AV_PIX_FMT_YUV420P, w, h);
-
-	return std::make_shared<Pict>(f);
 }
 
 int Mosaic::GetNumSlotsForType(Mosaic::Type type)
@@ -343,15 +306,6 @@ Mosaic::Mosaic(Type type,DWORD size)
 	//Store mosaic type
 	mosaicType = type;
 
-	//Calculate total size
-	mosaicSize = mosaicTotalWidth*mosaicTotalHeight*3/2+AV_INPUT_BUFFER_PADDING_SIZE+32;
-	//Allocate memory
-	mosaicBuffer = (BYTE *) malloc(mosaicSize);
-	//Get aligned
-	mosaic = ALIGNTO32(mosaicBuffer);
-	//Reset mosaic
-	memset(mosaicBuffer ,(BYTE)-128,mosaicSize);
-
 	//Store number of slots
 	numSlots = GetNumSlotsForType(type);
 
@@ -369,19 +323,8 @@ Mosaic::Mosaic(Type type,DWORD size)
 	memset(mosaicPos,0,numSlots*sizeof(int));
 	memset(mosaicSlotsBlockingTime,0,numSlots*sizeof(QWORD));
 
-	//Alloc resizers
-	resizer = (FrameScaler**)malloc(numSlots*sizeof(FrameScaler*));
-
-	//Create each resize
-	for (int pos=0;pos<numSlots;pos++)
-		//New scaler
-		resizer[pos] = new FrameScaler();
-
 	//Not changed
 	mosaicChanged = false;
-
-	//NOt need to add overlay
-	overlayNeedsUpdate = false;
 
 	//No overlay
 	overlay = nullptr;
@@ -394,17 +337,6 @@ Mosaic::Mosaic(Type type,DWORD size)
 
 Mosaic::~Mosaic()
 {
-	//Free memory
-	free(mosaicBuffer);
-
-	//Delete each resize
-	for (int i=0;i<numSlots;i++)
-		//Delete
-		delete resizer[i];
-
-	//Free memory
-	free(resizer);
-
 	//If already have slot list
 	if (mosaicSlots)
 		//Delete it
@@ -988,26 +920,6 @@ Mosaic* Mosaic::CreateMosaic(Type type,DWORD size)
 	return NULL;
 }
 
-BYTE* Mosaic::GetFrame()
-{
-	//Check if there is a overlay
-	if (!overlay)
-		//Return mosaic without change
-		return mosaic;
-	//Check if we need to change
-	if (overlayNeedsUpdate)
-	{
-
-		BYTE * mosaicU = mosaic + (mosaicTotalWidth*mosaicTotalHeight);
-		BYTE * mosaicV = mosaicU + (mosaicTotalWidth*mosaicTotalHeight)/4;
-		//Calculate and return
-		overlay->Resize( mosaicTotalWidth, mosaicTotalHeight );
-		return overlay->Display(mosaic, mosaicU, mosaicV, mosaicTotalWidth, mosaicTotalHeight, false);
-        }
-	//Return overlay
-	return overlay->GetOverlay();
-}
-
 int Mosaic::SetOverlayImage(int id,const char* filename)
 {
     if ( id <= 0)
@@ -1238,24 +1150,6 @@ void Mosaic::Dump()
 	Log("-MosaicSlots [%s]\n",line1);
 	Log("-MosaicPos   [%s]\n",line2);
 
-}
-
-BYTE * Mosaic::ApplyParticipantOverlay(int pos, BYTE *picY, BYTE *picU, BYTE *picV, int imgWidth, int imgHeight, bool changeFrame)
-{
-	std::map<int, std::unique_ptr<Overlay>>::iterator it = overlays.find(mosaicPos[pos]);
-
-
-	// if (it != overlays.end() )
-	//	Log("-ApplyOverlay: pos=%d, part=%d, hascontent=%d.\n",
-	//	    pos, mosaicPos[pos], (int)  it->second->HasContent() );
-
-	//If found
-	if (it != overlays.end() && it->second && it->second->HasContent() )
-	{
-	     it->second->Resize(imgWidth, imgHeight);
-	     return it->second->Display(picY, picU, picV, mosaicTotalWidth, mosaicTotalHeight, changeFrame);
-	}
-	return picY;
 }
 
 void Mosaic::MoveOverlays(Mosaic *other)

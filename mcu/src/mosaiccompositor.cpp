@@ -1,6 +1,7 @@
 #include "log.h"
 #include "mosaiccompositor.h"
 #include <string>
+#include <string.h>
 extern "C"
 {
 #include <libavfilter/buffersrc.h>
@@ -33,8 +34,57 @@ void MosaicCompositor::Release()
 	mosaicOvrSrc = nullptr;
 	slotSrcs.clear();
 	ovrSrcs.clear();
+	gpuBackground.reset();
 	tick         = 0;
 	// cur et gpuBroken sont volontairement conservés (mémo de reconfig / échec GPU).
+}
+
+// Deux vignettes (emprise liseré comprise) se chevauchent-elles ? Vrai pour les
+// dispositions PIP (incrustations posées SUR l'image principale plein cadre).
+bool MosaicCompositor::SlotsOverlap() const
+{
+	for (size_t i = 0; i < cur.slots.size(); i++)
+		for (size_t j = i + 1; j < cur.slots.size(); j++)
+		{
+			const MosaicSlotDesc& a = cur.slots[i];
+			const MosaicSlotDesc& b = cur.slots[j];
+			const int ax0 = a.x - a.border, ay0 = a.y - a.border;
+			const int ax1 = a.x + a.w + a.border, ay1 = a.y + a.h + a.border;
+			const int bx0 = b.x - b.border, by0 = b.y - b.border;
+			const int bx1 = b.x + b.w + b.border, by1 = b.y + b.h + b.border;
+			if (ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1)
+				return true;
+		}
+	return false;
+}
+
+// Fond du mode GPU : la couleur de base, plus un rectangle NOIR sous l'emprise
+// (liseré compris) de chaque vignette. En mode CPU le liseré vient d'un pad par
+// image ; sur GPU (pas de pad_vaapi) il vient du fond, qui reste visible sur
+// 'border' px autour de chaque image posée par-dessus. Y=16 : le même noir
+// vidéo (limited range) que produit le pad CPU. U/V restent neutres (128) dans
+// les deux couleurs de base, seul le plan Y est peint.
+bool MosaicCompositor::BuildGpuBackground()
+{
+	gpuBackground = cur.blackBackground
+	              ? Pict::CreateBlack(cur.width, cur.height)
+	              : Pict::CreateColor(cur.width, cur.height, 128, 128, 128);
+	if (!gpuBackground || !gpuBackground->GetAVFrame())
+		return false;
+
+	AVFrame* f = gpuBackground->GetAVFrame();   // frais de fabrique : seul détenteur
+	for (const MosaicSlotDesc& s : cur.slots)
+	{
+		int x0 = s.x - s.border, y0 = s.y - s.border;
+		int x1 = s.x + s.w + s.border, y1 = s.y + s.h + s.border;
+		if (x0 < 0) x0 = 0;
+		if (y0 < 0) y0 = 0;
+		if (x1 > cur.width)  x1 = cur.width;
+		if (y1 > cur.height) y1 = cur.height;
+		for (int y = y0; y < y1; y++)
+			memset(f->data[0] + y * f->linesize[0] + x0, 16, x1 - x0);
+	}
+	return true;
 }
 
 bool MosaicCompositor::Configure(const MosaicGraphDesc& desc)
@@ -71,11 +121,35 @@ bool MosaicCompositor::Configure(const MosaicGraphDesc& desc)
 
 bool MosaicCompositor::BuildGraph(bool gpu)
 {
-	if (gpu)
-		return false;   // chemin VAAPI : Phase 5
-
 	if (cur.width <= 0 || cur.height <= 0)
 		return false;
+
+	// Overlays présents ? En mode GPU ils imposent une queue CPU (overlay_vaapi
+	// ne gère pas l'alpha RGBA de façon fiable, cf. plan §2.5).
+	bool anyOverlay = cur.hasMosaicOverlay;
+	for (const MosaicSlotDesc& s : cur.slots)
+		if (s.hasOverlay)
+			anyOverlay = true;
+
+	AVBufferRef* device = nullptr;
+	if (gpu)
+	{
+		device = Pict::GetVAAPIDevice();
+		if (!device)
+			return false;   // pas d'accélération sur cette machine
+		if (cur.slots.empty())
+			return false;   // rien à composer : autant servir le fond en CPU
+		if (SlotsOverlap())
+		{
+			// PIP : le liseré d'une incrustation devrait passer PAR-DESSUS
+			// l'image principale, or sur GPU il est peint dans le fond (pas de
+			// pad_vaapi). Repli CPU assumé pour ces dispositions.
+			Log("-MosaicCompositor: vignettes superposees (PIP), repli CPU\n");
+			return false;
+		}
+		if (!BuildGpuBackground())
+			return false;
+	}
 
 	graph = avfilter_graph_alloc();
 	if (!graph)
@@ -84,7 +158,7 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	char args[256];
 	char name[32];
 
-	// --- buffersrc du fond (WxH, yuv420p) -----------------------------------
+	// --- buffersrc du fond (WxH, yuv420p — uploadé par le graphe en GPU) ----
 	snprintf(args, sizeof(args),
 	         "video_size=%dx%d:pix_fmt=%d:time_base=1/1000:pixel_aspect=1/1",
 	         cur.width, cur.height, AV_PIX_FMT_YUV420P);
@@ -105,6 +179,24 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 		if (avfilter_graph_create_filter(&slotSrcs[i], avfilter_get_by_name("buffer"),
 		                                 name, args, NULL, graph) < 0)
 			return false;
+
+		// Entrée GPU : le buffersrc doit connaître le hw_frames_ctx de la
+		// surface (même patron que VideoRescaler) pour que scale_vaapi négocie.
+		if (s.hwFramesCtx)
+		{
+			AVBufferSrcParameters* par = av_buffersrc_parameters_alloc();
+			if (!par)
+				return false;
+			par->format        = s.inFmt;
+			par->width         = s.inW;
+			par->height        = s.inH;
+			par->time_base     = av_make_q(1, 1000);
+			par->hw_frames_ctx = s.hwFramesCtx;
+			int ret = av_buffersrc_parameters_set(slotSrcs[i], par);
+			av_free(par);
+			if (ret < 0)
+				return false;
+		}
 
 		if (s.hasOverlay)
 		{
@@ -129,11 +221,13 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 			return false;
 	}
 
-	// --- buffersink contraint en yuv420p (mode CPU) ------------------------
+	// --- buffersink : yuv420p (CPU, ou GPU avec queue overlays), sinon VAAPI -
 	if (avfilter_graph_create_filter(&sinkCtx, avfilter_get_by_name("buffersink"),
 	                                 "out", NULL, NULL, graph) < 0)
 		return false;
-	const enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE };
+	const enum AVPixelFormat outFmt =
+		(gpu && !anyOverlay) ? AV_PIX_FMT_VAAPI : AV_PIX_FMT_YUV420P;
+	const enum AVPixelFormat pix_fmts[] = { outFmt, AV_PIX_FMT_NONE };
 	if (av_opt_set_int_list(sinkCtx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE,
 	                        AV_OPT_SEARCH_CHILDREN) < 0)
 		return false;
@@ -142,38 +236,74 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	std::string desc;
 	char frag[256];
 
-	// scale par slot : [inK] scale=w:h,format=yuv420p[,pad liseré noir] [sK].
-	// Le pad ajoute 'border' px de noir autour de l'IMAGE mise à l'échelle : le
-	// liseré est garanti noir quel que soit le fond de la mosaïque (gris/noir).
+	// Chaîne d'entrée par slot.
+	// CPU : [inK] [hwdownload,]scale=w:h,format=yuv420p[,pad liseré noir] [sK]
+	//   — le pad ajoute 'border' px de noir autour de l'image, garanti noir quel
+	//   que soit le fond ; une entrée GPU en mode CPU est redescendue DANS la
+	//   branche (une traversée, pas de DownloadToCPU hors graphe, plan §2.3).
+	// GPU : [inK] [format=nv12,hwupload,]scale_vaapi=w:h [sK]
+	//   — pas de pad_vaapi : le liseré est peint dans le fond (BuildGpuBackground).
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
 		const MosaicSlotDesc& s = cur.slots[i];
-		if (s.border > 0)
+		if (gpu)
 			snprintf(frag, sizeof(frag),
-			         "[in%zu] scale=%d:%d,format=yuv420p,"
+			         "[in%zu] %sscale_vaapi=w=%d:h=%d [s%zu];",
+			         i, s.hwFramesCtx ? "" : "format=nv12,hwupload,",
+			         s.w, s.h, i);
+		else if (s.border > 0)
+			snprintf(frag, sizeof(frag),
+			         "[in%zu] %sscale=%d:%d,format=yuv420p,"
 			         "pad=%d:%d:%d:%d:black [s%zu];",
-			         i, s.w, s.h,
+			         i, s.hwFramesCtx ? "hwdownload,format=nv12," : "",
+			         s.w, s.h,
 			         s.w + 2*s.border, s.h + 2*s.border,
 			         s.border, s.border, i);
 		else
 			snprintf(frag, sizeof(frag),
-			         "[in%zu] scale=%d:%d,format=yuv420p [s%zu];", i, s.w, s.h, i);
+			         "[in%zu] %sscale=%d:%d,format=yuv420p [s%zu];",
+			         i, s.hwFramesCtx ? "hwdownload,format=nv12," : "",
+			         s.w, s.h, i);
 		desc += frag;
 	}
 
-	// cascade overlay des vignettes : [prev][sK] overlay=x:y [cK]
-	// (x,y) désignent l'IMAGE ; la vignette paddée est donc posée liseré compris,
-	// décalée du liseré vers le haut/gauche.
+	// Fond : en mode GPU il monte en VRAM (nv12, format de surface nominal des
+	// pools VAAPI) une fois par tick.
 	std::string prev = "bg";
+	if (gpu)
+	{
+		desc += "[bg] format=nv12,hwupload [bgup];";
+		prev = "bgup";
+	}
+
+	// cascade overlay des vignettes : [prev][sK] overlay(_vaapi)=x:y [cK]
+	// CPU : (x,y) désignent l'IMAGE, la vignette paddée est posée décalée du
+	// liseré. GPU : l'image nue est posée en (x,y), le liseré peint dans le
+	// fond reste visible autour.
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
 		const MosaicSlotDesc& s = cur.slots[i];
 		std::string next = "c" + std::to_string(i);
-		snprintf(frag, sizeof(frag),
-		         "[%s][s%zu] overlay=x=%d:y=%d:" SYNC_OPTS " [%s];",
-		         prev.c_str(), i, s.x - s.border, s.y - s.border, next.c_str());
+		if (gpu)
+			snprintf(frag, sizeof(frag),
+			         "[%s][s%zu] overlay_vaapi=x=%d:y=%d:" SYNC_OPTS " [%s];",
+			         prev.c_str(), i, s.x, s.y, next.c_str());
+		else
+			snprintf(frag, sizeof(frag),
+			         "[%s][s%zu] overlay=x=%d:y=%d:" SYNC_OPTS " [%s];",
+			         prev.c_str(), i, s.x - s.border, s.y - s.border, next.c_str());
 		desc += frag;
 		prev = next;
+	}
+
+	// Queue CPU du mode GPU (plan §2.5) : les overlays RGBA se composent en CPU,
+	// le composite redescend UNE fois, après le gros du travail (scale+compo GPU).
+	if (gpu && anyOverlay)
+	{
+		snprintf(frag, sizeof(frag),
+		         "[%s] hwdownload,format=nv12,format=yuv420p [cpuq];", prev.c_str());
+		desc += frag;
+		prev = "cpuq";
 	}
 
 	// overlays participants (empilés APRÈS toutes les vignettes) :
@@ -257,6 +387,15 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	if (ok)
 	{
 		ret = avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
+		if (ret >= 0 && gpu)
+		{
+			// Équivalent du -filter_hw_device de ffmpeg : les hwupload (et tout
+			// filtre créé par le parse qui en aurait besoin) reçoivent le device
+			// VAAPI partagé AVANT la config, faute de quoi la négociation échoue.
+			for (unsigned i = 0; i < graph->nb_filters; i++)
+				if (!graph->filters[i]->hw_device_ctx)
+					graph->filters[i]->hw_device_ctx = av_buffer_ref(device);
+		}
 		if (ret >= 0)
 			ret = avfilter_graph_config(graph, NULL);
 		ok = (ret >= 0);
@@ -329,7 +468,10 @@ PictPtr MosaicCompositor::Compose(const std::vector<PictPtr>& slotFrames,
 	// Tous les push d'un tick partagent le même pts monotone (framesync, §4).
 	const int64_t pts = tick++;
 
-	if (!PushInput(bgSrc, background, pts))
+	// En mode GPU le fond de l'appelant est remplacé par le fond du compositor
+	// (liseré noir peint sous chaque vignette, cf. BuildGpuBackground).
+	const PictPtr& bg = (curGPU && gpuBackground) ? gpuBackground : background;
+	if (!PushInput(bgSrc, bg, pts))
 		return nullptr;
 
 	for (size_t i = 0; i < cur.slots.size(); i++)

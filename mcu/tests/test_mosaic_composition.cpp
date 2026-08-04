@@ -391,6 +391,16 @@ TEST(MosaicGeometry, DescIsStableAcrossContentChanges)
 	EXPECT_FALSE(before == MosaicProbe::Desc(*m));
 }
 
+// Politique GPU (§2.1) : sans la moindre entrée GPU, composer sur GPU serait
+// une pure perte (uploads puis probable redescente) — wantGPU doit rester
+// faux, que la machine ait un device VAAPI ou non.
+TEST(MosaicGeometry, WantGpuRequiresGpuInputs)
+{
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	FillSlots(*m, 2, 640, 480);
+	EXPECT_FALSE(MosaicProbe::Desc(*m).wantGPU);
+}
+
 // ===========================================================================
 // Composition réelle (MosaicCompositor + graphe avfilter) — pixels vérifiés
 // ===========================================================================
@@ -549,6 +559,75 @@ TEST(MosaicComposition, EveryCompositionTypeComposes)
 		EXPECT_EQ(AV_PIX_FMT_YUV420P, out->GetAVFrame()->format)
 			<< "le sink doit contraindre le composite en yuv420p";
 	}
+}
+
+// ===========================================================================
+// Chemin GPU (Phase 5) — repli CPU vérifiable sans carte graphique
+// ===========================================================================
+// Sur une machine SANS device VAAPI, demander le GPU doit replier proprement
+// en CPU (une trace, pas d'échec) ; sur une machine AVEC GPU ces mêmes tests
+// exercent le vrai graphe VAAPI (les assertions de format en tiennent compte).
+
+TEST(MosaicCompositorGpu, GpuRequestStillComposesEverywhere)
+{
+	MosaicGraphDesc d;
+	d.width   = 1280;
+	d.height  = 720;
+	d.wantGPU = true;
+
+	MosaicSlotDesc s;
+	s.pos = 0; s.x = 82; s.y = 2; s.w = 474; s.h = 356; s.border = 2;
+	s.inW = 640; s.inH = 480; s.inFmt = AV_PIX_FMT_YUV420P;
+	d.slots.push_back(s);
+
+	MosaicCompositor comp;
+	ASSERT_TRUE(comp.Configure(d)) << "le repli CPU doit rendre Configure vrai";
+
+	PictPtr out = comp.Compose({ SolidPict(640, 480, 90) },
+	                           std::vector<PictPtr>(),
+	                           SolidPict(1280, 720, 128), nullptr);
+	ASSERT_TRUE(out != nullptr);
+	EXPECT_EQ(1280u, out->GetWidth());
+	EXPECT_EQ(720u,  out->GetHeight());
+	if (!Pict::GetVAAPIDevice())
+	{
+		// Machine sans GPU : composite CPU, pixels vérifiables.
+		EXPECT_EQ(AV_PIX_FMT_YUV420P, out->GetAVFrame()->format);
+		EXPECT_NEAR(90, LumaAt(out, 320, 180), 2);
+	}
+}
+
+// Slots superposés (PIP) : le liseré GPU est peint dans le fond, qui serait
+// masqué par l'image principale — le mode GPU doit replier en CPU MÊME sur
+// une machine avec device VAAPI (sortie yuv420p garantie partout).
+TEST(MosaicCompositorGpu, OverlappingSlotsComposeOnCpu)
+{
+	MosaicGraphDesc d;
+	d.width   = 1280;
+	d.height  = 720;
+	d.wantGPU = true;
+
+	MosaicSlotDesc main;
+	main.pos = 0; main.x = 2; main.y = 2; main.w = 1276; main.h = 716; main.border = 2;
+	main.inW = 640; main.inH = 480; main.inFmt = AV_PIX_FMT_YUV420P;
+	MosaicSlotDesc pip;
+	pip.pos = 1; pip.x = 170; pip.y = 506; pip.w = 234; pip.h = 176; pip.border = 2;
+	pip.inW = 640; pip.inH = 480; pip.inFmt = AV_PIX_FMT_YUV420P;
+	d.slots.push_back(main);
+	d.slots.push_back(pip);
+
+	MosaicCompositor comp;
+	ASSERT_TRUE(comp.Configure(d));
+
+	PictPtr out = comp.Compose({ SolidPict(640, 480, 60), SolidPict(640, 480, 220) },
+	                           std::vector<PictPtr>(),
+	                           SolidPict(1280, 720, 128), nullptr);
+	ASSERT_TRUE(out != nullptr);
+	EXPECT_EQ(AV_PIX_FMT_YUV420P, out->GetAVFrame()->format)
+		<< "la superposition doit forcer le chemin CPU meme avec un GPU";
+	// L'incrustation est bien posée SUR l'image principale.
+	EXPECT_NEAR(60,  LumaAt(out, 640, 200), 2);
+	EXPECT_NEAR(220, LumaAt(out, 280, 590), 2);
 }
 
 // ===========================================================================
