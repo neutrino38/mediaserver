@@ -15,6 +15,9 @@
 #include "websockets.h"
 #include "jsr309/WSEndpoint.h"
 #include <signal.h>
+#include <limits.h>
+#include <string.h>
+#include <unistd.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -23,6 +26,7 @@
 #include <sys/wait.h>
 #include "amf.h"
 #include "dtls.h"
+#include "video.h"
 #include <openssl/crypto.h>
 
 #ifdef MOTELI
@@ -144,6 +148,8 @@ int main(int argc,char **argv)
 	int rtmpPort = 1935;
 	int minPort = RTPSession::GetMinPort();
 	int maxPort = RTPSession::GetMaxPort();
+	//Adresse annoncée dans le SDP : NULL → auto-détectée
+	const char* publicIp = NULL;
 	int vadPeriod = 5000;
 	const char *logfile = "mcu.log";
 	const char *pidfile = "mcu.pid";
@@ -166,7 +172,7 @@ int main(int argc,char **argv)
 		{
 			//Show usage
 			printf("Mediaserver version %s %s\r\n",MCUVERSION,MCUDATE);
-			printf("Usage: mcu [-h] [--help] [--mcu-log logfile] [--mcu-pid pidfile] [--http-port port] [--rtmp-port port] [--min-rtp-port port] [--max-rtp-port port] [--vad-period ms]\r\n\r\n"
+			printf("Usage: mcu [-h] [--help] [--mcu-log logfile] [--mcu-pid pidfile] [--http-port port] [--rtmp-port port] [--min-rtp-port port] [--max-rtp-port port] [--public-ip ip] [--vad-period ms]\r\n\r\n"
 				"Options:\r\n"
 				" -h,--help        Print help\r\n"
 				" -f               Run as daemon in safe mode\r\n"
@@ -176,6 +182,9 @@ int main(int argc,char **argv)
 				" --http-port      Set HTTP xmlrpc api port\r\n"
 				" --min-rtp-port   Set min rtp port\r\n"
 				" --max-rtp-port   Set max rtp port\r\n"
+				" --public-ip      Set the IP address announced in the SDP (c= line and ICE candidates).\r\n"
+				"                  Required behind a NAT, where it differs from the bound address;\r\n"
+				"                  defaults to the first non-loopback IPv4 address of the host\r\n"
 				" --rtmp-port      Set RTMP port\r\n"
 				" --websocket-port Set WebSocket server port \r\n"
 				" --websocket-secure Enable secure WebSocket (wss://)\r\n"
@@ -215,6 +224,9 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--max-rtp-port")==0 && (i+1<argc))
 			//Get rtmp port
 			maxPort = atoi(argv[++i]);
+		else if (strcmp(argv[i],"--public-ip")==0 && (i+1<argc))
+			//Get the IP to announce in the SDP
+			publicIp = argv[++i];
 		else if (strcmp(argv[i],"--mcu-log")==0 && (i+1<argc))
 			//Get rtmp port
 			logfile = argv[++i];
@@ -335,6 +347,48 @@ int main(int argc,char **argv)
 	Log("-MCU Version %s %s\r\n",MCUVERSION,MCUDATE);
         gserver = &server;
 
+	//Accélération matérielle : sonde (et crée si possible) le device VAAPI
+	//partagé une bonne fois au démarrage — le même device que les décodeurs,
+	//les encodeurs et le graphe de composition des mosaïques utiliseront.
+	//Le verdict est ainsi visible en tête de log plutôt que découvert au
+	//premier appel.
+	if (Pict::GetVAAPIDevice())
+		Log("-Acceleration materielle VAAPI DISPONIBLE : decodage/encodage/composition video sur GPU actives (repli CPU automatique au cas par cas)\n");
+	else
+		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
+
+	//Adresse annoncée dans le SDP (ligne c= et candidats ICE des deux API de
+	//contrôle). Résolue ici, avant toute initialisation de serveur : sans elle
+	//aucun SDP joignable ne peut être publié, donc chaque appel échouerait à la
+	//réponse. Un refus de démarrer est la panne honnête — visible tout de suite,
+	//au bon endroit — plutôt qu'un serveur en apparence sain qui casse appel
+	//par appel.
+	if (!RTPSession::SetAnnouncedIp(publicIp) && *RTPSession::GetAnnouncedIp())
+		//Auto-détectée : premier IPv4 non loopback du nom d'hôte
+		Log("-RTPSession announced IP auto-detected as \"%s\"\n",RTPSession::GetAnnouncedIp());
+
+	if (!*RTPSession::GetAnnouncedIp())
+	{
+		char hostname[HOST_NAME_MAX];
+
+		//Le nom qu'on a tenté de résoudre fait partie du diagnostic
+		if (gethostname(hostname, sizeof hostname)!=0)
+			strcpy(hostname,"(unknown)");
+
+		Error("-MCU cannot start: no IP address to announce in the SDP.\n"
+		      "  The c= line and the ICE candidates of every call need one, and it cannot be\n"
+		      "  guessed from the control channel.\n"
+		      "  Host name \"%s\" does not resolve to a non-loopback IPv4 address.\n"
+		      "  Fix it with one of:\n"
+		      "    - pass --public-ip <ip> (mandatory behind a NAT: the address the peers reach,\n"
+		      "      which is not the one bound locally),\n"
+		      "    - or make \"%s\" resolve to the host IPv4 address (/etc/hosts or DNS).\n",
+		      hostname,hostname);
+
+		//On ne démarre pas
+		return -1;
+	}
+
 
 
 	//Set DTLS certificate
@@ -432,7 +486,7 @@ int main(int argc,char **argv)
 	if (!RTPSession::SetPortRange(minPort,maxPort))
 		//Using default ones
 		Log("-RTPSession using default port range [%d,%d]\n",RTPSession::GetMinPort(),RTPSession::GetMaxPort());
-	
+
 	//Set default video mixer vad period
 	VideoMixer::SetVADDefaultChangePeriod(vadPeriod);
 

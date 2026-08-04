@@ -105,7 +105,7 @@ public:
 	virtual int RefuseDocSharingRequest(int confId,int partId)	{ return 0; };
 	virtual int StopDocSharing(int confId,int partId)			{ return 0; };
 	
-	int LoadLogo(const char * filename) { return logo.Load(filename); }
+	int LoadLogo(const char * filename) { logo = Pict::Load(filename); return logo ? 1 : 0; }
 	void SetDocSharingMode(DocSharingMode mode) { docSharingMode = mode; }
 	DocSharingMode GetDocSharingMode() { return docSharingMode; }
 
@@ -115,7 +115,7 @@ protected:
 	DocSharingMode docSharingMode;
 	Listener *listener;
 	DWORD partId;
-	Logo logo;
+	PictPtr logo;
 	//Use		use;
 };
 

@@ -26,7 +26,8 @@ int AppMixer::DisplayImage(const char* filename)
 	Log("-DisplayImage [\"%s\"]\n",filename);
 
 	//Load image
-	if (!logo.Load(filename))
+	logo = Pict::Load(filename);
+	if (!logo)
 		//Error
 		return Error("-Error loading file");
 
@@ -36,35 +37,31 @@ int AppMixer::DisplayImage(const char* filename)
 		return Error("-No output");
 
 	//Set size
-	output-> SetVideoSize(logo.GetWidth(),logo.GetHeight());
+	output-> SetVideoSize(logo->GetWidth(),logo->GetHeight());
 	//Set image
-	output->NextFrame(logo.GetFrame());
+	output->NextFrame(logo);
 
 	//Everything ok
 	return true;
 }
 
-int AppMixer::DisplayImage(Logo* p_logo)
+int AppMixer::DisplayImage(const PictPtr& p_logo)
 {
 	Log("-DisplayImage Logo \n");
-	if ( p_logo == NULL || p_logo->GetFrame() == NULL )
-	{
-		logo.Clean();
-	}
-	else
-	{
-		logo = *p_logo;
-	}
-	
+	// Partage la trame (immuable) ; nullptr => rien à afficher.
+	logo = (p_logo && p_logo->GetAVFrame()) ? p_logo : nullptr;
+
 	//Check output
 	if (!output)
 		//Error
 		return Error("-No output");
 
-	//Set size
-	output-> SetVideoSize(logo.GetWidth(),logo.GetHeight());
-	//Set image
-	output->NextFrame(logo.GetFrame());
+	//Set image if any
+	if (logo)
+	{
+		output-> SetVideoSize(logo->GetWidth(),logo->GetHeight());
+		output->NextFrame(logo);
+	}
 
 	//Everything ok
 	return true;

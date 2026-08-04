@@ -9,10 +9,6 @@ PipeVideoOutput::PipeVideoOutput(pthread_mutex_t* mutex, pthread_cond_t* cond)
 	videoMixerMutex = mutex;
 	videoMixerCond  = cond;
 
-	//E iniciamos el buffer
-	buffer		= NULL;
-	bufferSize	= 0;
-
 	//Ponemos el cambio
 	inited		= false;
 	isChanged	= false;
@@ -26,10 +22,7 @@ PipeVideoOutput::PipeVideoOutput(pthread_mutex_t* mutex, pthread_cond_t* cond)
 
 PipeVideoOutput::~PipeVideoOutput()
 {
-	//Si estaba reservado
-	if (buffer!=NULL)
-		//Liberamos memoria
-		free(buffer);
+	// `last` (PictPtr) se libère tout seul.
 }
 
 bool PipeVideoOutput::SizeHasChanged(DWORD version)
@@ -46,26 +39,22 @@ bool PipeVideoOutput::SizeHasChanged(DWORD version)
     }
 }
 
-int PipeVideoOutput::NextFrame(BYTE *pic)
+int PipeVideoOutput::NextFrame(PictPtr pic)
 {
 	//Check pic
-	if (!pic)
+	if (!pic || !pic->GetAVFrame())
 		return Error("-PipeVideoOuput called with null frame");
-
-	//Check pic
-	if (!buffer)
-		return Error("-Null buffer, size not set");
 
 	//Check if wer are inited
 	if (!inited)
 		//Exit
 		return Error("-PipeVideoOutput calling NextFrame without been inited\n");
-	
+
 	//Bloqueamos
 	pthread_mutex_lock(videoMixerMutex);
 
-	//Copiamos
-	memcpy(buffer,pic,bufferSize);
+	// Publie une référence de la trame (zéro-copie, plus de memcpy).
+	last = pic;
 
 	//Ponemos el cambio
 	isChanged = true;
@@ -85,37 +74,29 @@ int PipeVideoOutput::SetVideoSize(int width,int height)
 	if ((videoWidth==width) && (videoHeight==height))
 		//Not changed
 		return 0;
-	
+
 	//Lock
 	Log("-SetVideoSize: inbound video size changed to %dx%d.\n", width, height);
 	pthread_mutex_lock(videoMixerMutex);
 
-	//Freem memory
-	if (buffer)
-		free(buffer);
-	
 	//Store size
 	videoWidth = width;
 	videoHeight= height;
 	sizeChange = true;
-	//Check frame size
-	bufferSize = (width*height*3)/2;
-	//Get memory
-	buffer = (BYTE*)malloc(bufferSize);
 	//Unlock
 	pthread_mutex_unlock(videoMixerMutex);
-	
+
 	//Changed
 	return 1;
 }
 
-BYTE* PipeVideoOutput::GetFrame()
+PictPtr PipeVideoOutput::GetFrame()
 {
 	//QUitamos el cambio
 	isChanged = false;
 
-	//Y devolvemos el buffer
-	return buffer;
+	//Y devolvemos la ultima trama (partage refcompté)
+	return last;
 }
 
 int PipeVideoOutput::Init()
@@ -124,7 +105,7 @@ int PipeVideoOutput::Init()
 	inited = true;
 
 	return true;
-} 
+}
 
 int PipeVideoOutput::End()
 {
@@ -132,7 +113,7 @@ int PipeVideoOutput::End()
 	inited = false;
 
 	return true;
-} 
+}
 
 int PipeVideoOutput::IsChanged(DWORD version)
 {

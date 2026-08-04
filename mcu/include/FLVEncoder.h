@@ -18,6 +18,23 @@ public:
 	    audioCodec = codec;
 	}
 	
+	// Taille (et cadence) de la vidéo encodée. À appeler AVANT StartEncoding :
+	// le thread d'encodage lit ces valeurs une fois, à l'ouverture du codec.
+	// Sans cet appel, la valeur par défaut du constructeur (CIF 352x288)
+	// s'applique — ce qui, pour un enregistrement de conférence, ne correspond
+	// pas à la taille du composite de la mosaïque (cf. MultiConf::StartRecordingBroadcaster).
+	// fps et bitrate à 0 : conserver les valeurs courantes.
+	void SetVideoSize(int width, int height, int fps = 0, int bitrate = 0)
+	{
+		if (width > 0 && height > 0)
+		{
+			this->width  = width;
+			this->height = height;
+		}
+		if (fps > 0)     this->fps     = fps;
+		if (bitrate > 0) this->bitrate = bitrate;
+	}
+
 	int Init(AudioInput* audioInput,VideoInput *videoInput, TextInput *textInput);
 	int StartEncoding();
 	int StopEncoding();

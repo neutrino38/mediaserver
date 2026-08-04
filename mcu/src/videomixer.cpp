@@ -13,20 +13,19 @@ typedef std::set<Pair, std::greater<Pair> > RevOrderedSetOfPairs;
 
 DWORD VideoMixer::vadDefaultChangePeriod = 5000;
 
-inline void CleanSlot(int pos, Mosaic *mosaic, Logo &p_logo)
+inline void CleanSlot(int pos, Mosaic *mosaic, const PictPtr &p_logo)
 {
-	if ( p_logo.GetFrame())
+	if ( p_logo )
 	{
 		mosaic->KeepAspectRatio(false);
 		//Update with logo
-	
-		mosaic->Update(pos,p_logo.GetFrame(),p_logo.GetWidth(),p_logo.GetHeight());
+		mosaic->Update(pos,p_logo);
 	}
 	else
 	{
 		//Clean it
 		mosaic->Clean(pos);
-		
+
 	}
 }
 
@@ -38,7 +37,8 @@ inline void CleanSlot(int pos, Mosaic *mosaic)
 
 int VideoMixer::LoadLogo(const char * filename)
 {
-	if (logo.Load(filename))
+	logo = Pict::Load(filename);
+	if (logo)
 	{
 		//Protegemos la lista
 		lstVideosUse.WaitUnusedAndLock();
@@ -152,8 +152,8 @@ int VideoMixer::MixVideo()
 
 			//Si no ha cambiado el frame volvemos al principio
 			if (input && mosaic && (mosaic->HasChanged() || forceUpdate))
-				//Colocamos el frame
-				input->SetFrame(mosaic->GetFrame(),mosaic->GetWidth(),mosaic->GetHeight());
+				//Colocamos el frame (composite mosaïque -> Pict, pont Phase 5)
+				input->SetFrame(mosaic->GetPict());
 		}
 
 		
@@ -386,7 +386,7 @@ int VideoMixer::MixVideo()
 									//Change mosaic
 									CleanSlot(i, mosaic);
 									mosaic->KeepAspectRatio( output->IsAspectRatioKept() );
-									mosaic->Update(i,output->GetFrame(),output->GetWidth(),output->GetHeight());
+									mosaic->Update(i,output->GetFrame());
 								}
 							}
 						    }
@@ -419,7 +419,7 @@ int VideoMixer::MixVideo()
 						if (output && (output->IsChanged(version) || vadPos!=oldVadPos || vadId != oldVad))
 							//Change mosaic
 							mosaic->KeepAspectRatio( output->IsAspectRatioKept() );		
-							mosaic->Update(vadPos,output->GetFrame(),output->GetWidth(),output->GetHeight());
+							mosaic->Update(vadPos,output->GetFrame());
 					}
 				}
 			}
@@ -445,22 +445,9 @@ int VideoMixer::MixVideo()
 					{
 						if ( output->SizeHasChanged(version) )mosaic->Clean(pos);
 					
-						mosaic->Update(pos,output->GetFrame(),output->GetWidth(),output->GetHeight());
+						mosaic->Update(pos,output->GetFrame());
 					}
 				}
-				
-#ifdef MCUDEBUG
-#ifdef VADWEBRTC
-				//Check it is on the mosaic and it is vad
-				if (pos>=0 && proxy)
-				{
-					//Get vad
-					DWORD vad = proxy->GetVAD(id);
-					//Set VU meter
-					mosaic->DrawVUMeter(pos,vad,48000);
-				}
-#endif
-#endif
 			}
 		}
 
@@ -485,13 +472,47 @@ int VideoMixer::CreateMosaic(Mosaic::Type comp, int size)
 	//Get the new id
 	int mosaicId = maxMosaics++;
 
-	//Create mosaic
-	SetCompositionType(mosaicId, comp, size);
+	//Create mosaic. Un type invalide ne crée RIEN : propager l'échec par -1 (et non
+	//par 0, qui est l'id légitime de la mosaïque par défaut) plutôt que de rendre un
+	//id auquel aucune mosaïque ne correspond — les appelants s'en serviraient pour
+	//indexer 'mosaics' et y trouveraient un shared_ptr vide.
+	if (!SetCompositionType(mosaicId, comp, size))
+	{
+		//Error() rend 0, or 0 est l'id de la mosaïque par défaut : renvoyer -1.
+		Error("<Create mosaic : echec pour le type de composition [%d]\n",comp);
+		return -1;
+	}
 
 	Log("<Create mosaic  [id:%d]\n",mosaicId);
 
 	//Return the new id
 	return mosaicId;
+}
+
+/*******************************
+ * GetMosaicSize
+ *	Taille du composite d'une mosaique
+ **************************************/
+int VideoMixer::GetMosaicSize(int mosaicId,int &width,int &height)
+{
+	//Protege l'acces a la map (meme discipline que les autres accesseurs)
+	lstVideosUse.IncUse();
+
+	int res = 0;
+	Mosaics::iterator it = mosaics.find(mosaicId);
+	if (it!=mosaics.end() && it->second)
+	{
+		width  = it->second->GetWidth();
+		height = it->second->GetHeight();
+		res = 1;
+	}
+
+	lstVideosUse.DecUse();
+
+	if (!res)
+		return Error("-GetMosaicSize: mosaic not found [id:%d]\n",mosaicId);
+
+	return res;
 }
 
 /*******************************
@@ -587,10 +608,16 @@ int VideoMixer::Init(Mosaic::Type comp,int size, const char * logoFile)
 {
 	if ( logoFile == NULL ) logoFile = "/var/lib/mediaserver/logo.png";
 	//Allocamos para el logo
-	logo.Load(logoFile);
+	logo = Pict::Load(logoFile);
 
 	//Create default misxer
 	int id = CreateMosaic(comp,size);
+
+	//Type de composition invalide passé à la création de la conférence : refuser
+	//l'initialisation. Sans ce test, mosaics[id] insérait un shared_ptr VIDE et
+	//defaultMosaic devenait nul — le mixer partait avec une mosaïque fantôme.
+	if (id < 0)
+		return Error("-VideoMixer::Init: type de composition invalide [%d]\n",comp);
 
 	//Set default
 	defaultMosaic = mosaics[id].get();
@@ -1116,6 +1143,15 @@ int VideoMixer::SetCompositionType(int mosaicId,Mosaic::Type comp, int size)
 	std::shared_ptr<Mosaic> mosaicPtr(Mosaic::CreateMosaic(comp,size));
 	Mosaic *mosaic = mosaicPtr.get();
 
+	//Type de composition invalide : ne RIEN toucher (la mosaïque en place reste
+	//valide et la conférence continue), et surtout RELÂCHER le verrou avant de
+	//sortir — sans quoi le mixer se figerait sur la première requête erronée.
+	if (!mosaic)
+	{
+		lstVideosUse.Unlock();
+		return Error("-SetCompositionType: type de composition invalide [%d]\n",comp);
+	}
+
 	//If we had a previus mosaic
 	if (oldMosaic)
 	{
@@ -1223,7 +1259,7 @@ int VideoMixer::UpdateMosaic(Mosaic* mosaic)
 				//Update slot
 				mosaic->Clean(i);
 				mosaic->KeepAspectRatio( output->IsAspectRatioKept() );
-				mosaic->Update(i,output->GetFrame(),output->GetWidth(),output->GetHeight());
+				mosaic->Update(i,output->GetFrame());
 			} else {
 				//Check logo
 				CleanSlot(i, mosaic, logo);

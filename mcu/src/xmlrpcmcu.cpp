@@ -4,6 +4,7 @@
 
 #include "xmlhandler.h"
 #include "mcu.h"
+#include "rtpsession.h"
 
 //CreateConference
 xmlrpc_value* CreateConference(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
@@ -121,8 +122,17 @@ xmlrpc_value* GetConferences(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	//Process result
 	for (MCU::ConferencesInfo::iterator it = list.begin(); it!=list.end(); ++it)
 	{
+		//Le tag est un std::wstring : le passer tel quel a xmlrpc_build_value("s")
+		//le fait lire comme du char*, donc s'arreter au premier octet nul du
+		//wchar_t — "c-a8592bc0" ressortait tronque a "c". On serialise en UTF-8
+		//avant, comme GetBroadcastPublishedStreams le fait pour ses propres noms.
+		char name[1024];
+		UTF8Parser utf8name(it->second.name);
+		//Serialize
+		int len = utf8name.Serialize((BYTE*)name,sizeof(name)-1);
+		name[len] = 0;
 		//Create array
-		xmlrpc_value* val = xmlrpc_build_value(env,"(isi)",it->second.id,it->second.name.c_str(),it->second.numPart);
+		xmlrpc_value* val = xmlrpc_build_value(env,"(isi)",it->second.id,name,it->second.numPart);
 		//Add it
 		xmlrpc_array_append_item(env,arr,val);
 		//Release
@@ -155,8 +165,9 @@ xmlrpc_value* CreateMosaic(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	//La borramos
 	int mosaicId = conf->CreateMosaic((Mosaic::Type)comp,size);
 
-	//Salimos
-	if(!mosaicId)
+	//Salimos. L'id 0 est celui, legitime, de la mosaique par defaut : seul un id
+	//negatif signale l'echec (type de composition invalide, cf. VideoMixer).
+	if(mosaicId < 0)
 		return xmlerror(env,"Could not create mosaic");
 
 	//Devolvemos el resultado
@@ -1666,14 +1677,17 @@ xmlrpc_value* SetParticipantDisplayName(xmlrpc_env *env, xmlrpc_value *param_arr
 	MCU *mcu = (MCU *)user_data;
 	std::shared_ptr<MultiConf> conf;
 
-	 //Parseamos
+	//Ordre RÉEL sur le câble : (confId, mosaicId, partId, name, scriptCode) —
+	//mosaicId AVANT partId, comme SetParticipantBackground. Les anciens noms de
+	//variables locales étaient inversés et ont induit la doc en erreur (cf.
+	//MCU-API.md) ; le comportement, lui, a toujours été celui-ci.
 	int confId;
-	int partId;
 	int mosaicId;
+	int partId;
 	char *name;
 	int scriptCode;
 
-	xmlrpc_parse_value(env, param_array, "(iiisi)", &confId, &partId, &mosaicId, &name, &scriptCode);
+	xmlrpc_parse_value(env, param_array, "(iiisi)", &confId, &mosaicId, &partId, &name, &scriptCode);
 
 		//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1683,14 +1697,12 @@ xmlrpc_value* SetParticipantDisplayName(xmlrpc_env *env, xmlrpc_value *param_arr
 	if(!mcu->GetConferenceRef(confId,conf))
 		return xmlerror(env,"Conference does not exist");
 
-	//Get the rtp map
-	//La borramos
 	int res;
 
 	if (strlen(name) > 0 )
-	    res = conf->SetParticipantDisplayName(partId, mosaicId, name,scriptCode);
+	    res = conf->SetParticipantDisplayName(mosaicId, partId, name,scriptCode);
 	else
-	    res = conf->SetParticipantDisplayName(partId, mosaicId, NULL,scriptCode);
+	    res = conf->SetParticipantDisplayName(mosaicId, partId, NULL,scriptCode);
 
 	//Salimos
 	if(!res)
@@ -2056,17 +2068,29 @@ MCU *mcu = (MCU *)user_data;
 		return xmlerror(env,"Conference does not exist");
 
 	//La borramos
-		int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto);
-	
+	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto);
+
 
 	//Salimos
 	if(!recVideoPort)
-		xmlerror(env,"Could not start receiving media.");
-	
-	Log("StartReceiving recVideoPort=%i\n",recVideoPort);	
-						
-	//Devolvemos el resultado
-	return xmlok(env,xmlrpc_build_value(env,"(i)",recVideoPort));
+		return xmlerror(env,"Could not start receiving media.");
+
+	//L'adresse annoncée dans le SDP du contrôleur. L'API de conférence n'a pas
+	//d'équivalent de GetMediaCandidates, si bien que le contrôleur devait la tenir
+	//dans sa propre configuration — dupliquée, et fausse dès que le serveur bougeait.
+	//Elle est ici la même que celle des candidats JSR-309, réglée par --public-ip.
+	const char* announcedIp = RTPSession::GetAnnouncedIp();
+
+	//Garde-fou : main() refuse de démarrer sans adresse annonçable, donc ceci ne
+	//peut arriver que depuis un point d'entrée qui aurait sauté ce contrôle.
+	if (!announcedIp || !*announcedIp)
+		return xmlerror(env,"No announced IP: start the server with --public-ip.");
+
+	Log("StartReceiving recVideoPort=%i ip=%s\n",recVideoPort,announcedIp);
+
+	//Devolvemos el resultado. returnVal[0] reste le port (les clients qui ne lisent
+	//que lui sont inchangés) ; l'IP est ajoutée en returnVal[1].
+	return xmlok(env,xmlrpc_build_value(env,"(is)",recVideoPort,announcedIp));
 }
 
 xmlrpc_value* StopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)

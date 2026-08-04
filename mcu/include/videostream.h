@@ -24,7 +24,7 @@ public:
 		virtual void onRequestFPU() = 0;
 	};
 public:
-	VideoStream(Listener* listener, Logo & muteLogo,MediaFrame::MediaRole = MediaFrame::VIDEO_MAIN);
+	VideoStream(Listener* listener, PictPtr & muteLogo,MediaFrame::MediaRole = MediaFrame::VIDEO_MAIN);
 	~VideoStream();
 
 	int Init(VideoInput *input, VideoOutput *output);
@@ -126,7 +126,7 @@ private:
 	bool	sendFPU;
 	bool	muted;
 	MediaFrame::MediaRole mediaRole;
-	Logo & logo;
+	PictPtr & logo;
 };
 
 #endif

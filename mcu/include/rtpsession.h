@@ -55,10 +55,29 @@ public:
 	static DWORD GetMinPort() { return minLocalPort; }
 	static DWORD GetMaxPort() { return maxLocalPort; }
 
+	//Adresse annoncée dans le SDP (ligne c= et candidats ICE). Elle est globale au
+	//serveur : la tenir ici, à côté de la plage de ports, évite que chaque API de
+	//contrôle (JSR-309 via Endpoint::GetMediaCandidates, MCU via StartReceiving) la
+	//redérive à sa façon. Derrière un NAT elle diffère de l'IP bindée, d'où le
+	//réglage explicite --public-ip.
+	//SetAnnouncedIp : à appeler au démarrage, avant tout GetAnnouncedIp. Rend true
+	//si une adresse explicite valide a été installée, false si elle est absente ou
+	//invalide (l'auto-détection reste alors en place).
+	static bool SetAnnouncedIp(const char* ip);
+	//Résolue à la première utilisation si aucune adresse explicite n'a été fournie :
+	//premier IPv4 non loopback de l'hôte. Chaîne vide si l'hôte ne se résout pas.
+	static const char* GetAnnouncedIp();
+
 private:
 	// Admissible port range
 	static DWORD minLocalPort;
 	static DWORD maxLocalPort;
+	// Adresse annoncée dans le SDP, vide si la résolution a échoué. Le drapeau
+	// distingue « pas encore résolue » de « résolue, sans résultat » : un échec
+	// mémorisé évite de relancer un gethostbyname perdant à chaque appel.
+	static std::string announcedIp;
+	static bool announcedIpResolved;
+	static std::mutex announcedIpMutex;
 	
 public:
 	RTPSession(MediaFrame::Type media,Listener *listener, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -393,6 +412,19 @@ private:
 	int	natPrimingLeft;
 	timeval	natPrimingLast;
 	int	SendNATPrimingPacket();
+	//P7 : rattrapage de la cible d'envoi derrière un NAT symétrique. Le pair annonce
+	//une adresse privée dans son SDP mais son RTP nous arrive d'une tout autre
+	//adresse:port (mapping NAT) : on ré-aiguille l'envoi vers la source réellement
+	//observée. natLatch = correction autorisée — propriété RTP "natLatch", ou 0.0.0.0
+	//passé à SetRemotePort ; désactivée par défaut, c'est au plan de contrôle de
+	//l'activer ; natCorrected / natRtcpCorrected = correction déjà faite (one-shot :
+	//recIP est recalé à chaque paquet de source différente, la cible suivrait sinon
+	//le moindre battement). NatCorrectable() porte la règle commune.
+	bool	natLatch;
+	bool	natCorrected;
+	bool	natRtcpCorrected;
+	bool	NatCorrectable(in_addr_t announced);
+	static bool IsRFC1918(in_addr_t addr);
 	pthread_t thread;
 	std::mutex mutex;	
 

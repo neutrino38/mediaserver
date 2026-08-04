@@ -11,7 +11,6 @@
 #include "config.h"
 #include "media.h"
 #include "video.h"
-#include "medkit/logo.h"
 #include "participant.h"
 #include "bfcp_server.h"
 
@@ -27,7 +26,7 @@ class SharedDocMixer  :
 public:
 	SharedDocMixer();
 	~SharedDocMixer();
-	int Init(VideoOutput *output, Logo *logo,MultiConf *conf);
+	int Init(VideoOutput *output, const PictPtr& logo,MultiConf *conf);
 	int ShareSecondaryStream(ParticipantPtr part);
 	
 	int initDocSharing( ParticipantPtr part,char *sendIp,int sendPort);
@@ -36,7 +35,7 @@ public:
 	
 	int StopSharing();
 	int StopSharing(ParticipantPtr part);
-	virtual int NextFrame(BYTE *pic);
+	virtual int NextFrame(PictPtr pic);
 	virtual int SetVideoSize(int width,int height) ;
 	
 	int addParticipant(int confId, ParticipantPtr part,Participant::DocSharingMode docSharingMode, MediaFrame::MediaProtocol proto = MediaFrame::TCP);
@@ -51,7 +50,7 @@ public:
 
 private:
 	
-	Logo*			logo;
+	PictPtr			logo;
 	std::weak_ptr<Participant> part;
 	VideoOutput*	output;
 	MultiConf* 		conf;

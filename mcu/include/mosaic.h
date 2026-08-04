@@ -1,11 +1,13 @@
 #ifndef _MOSAIC_H_
 #define _MOSAIC_H_
 #include "config.h"
-#include "framescaler.h"
+#include "video.h"
 #include "overlay.h"
+#include "mosaiccompositor.h"
 #include "vad.h"
 #include <map>
 #include <memory>
+#include <vector>
 
 class Mosaic
 {
@@ -17,6 +19,11 @@ public:
 	static const int SlotLocked   = -1;
 	static const int SlotVAD      = -2;
 	static const int SlotReset    = -3; // For internal use only
+
+	// Liseré noir (px) réservé autour de l'image de chaque slot : le slot utile
+	// est rétréci d'autant de chaque côté et le graphe pad l'image en noir.
+	// (constexpr : implicitement inline en C++17, gtest la lie par référence.)
+	static constexpr int SlotBorder = 2;
 	
 	typedef enum
 	{
@@ -57,9 +64,20 @@ public:
 	int HasChanged()	{ return mosaicChanged; }
 	void Reset()		{ mosaicChanged = true; }
 
-	BYTE* GetFrame();
-	virtual int Update(int index,BYTE *frame,int width,int heigth) = 0;
-	virtual int Clean(int index) = 0;
+	// Composite de la mosaïque : composition par le graphe avfilter
+	// (MosaicCompositor) à partir des trames mémorisées par slot, avec cache
+	// intra-tick. Le chemin BYTE* historique a disparu en Phase 6.
+	PictPtr GetPict();
+	// Mémorise la trame du slot (GPU conservée telle quelle depuis la Phase 5)
+	// et l'aspect du slot ; la composition est faite par le graphe avfilter.
+	int Update(int index, const PictPtr& pic);
+	// Slot vidé : plus de trame mémorisée, le fond redevient visible.
+	int Clean(int index)
+	{
+		ClearSlotFrame(index);
+		SetChanged();
+		return 1;
+	}
 
 	int AddParticipant(int id);
 	int HasParticipant(int id);
@@ -88,7 +106,6 @@ public:
 	int SetOverlaySVG(int id, const char* svg);
 	int SetOverlayTXT(int id, const char *msg,int scriptCode);
 	int ResetOverlay(int id);
-	int DrawVUMeter(int pos,DWORD val,DWORD size);
 
 	int UpdateParticipantInfo(int id, int vadLevel);
 	int CalculatePositions();
@@ -111,31 +128,52 @@ public:
          */
 	void MoveOverlays(Mosaic *other);
 
-	/**
-	 * Apply the participant overlay to inside the mosaic
-	 *
-	 * @param pos position of the participant inside the mosaic.
-	 * @param pic base pointer of the mosaic
-	 * @param offsetY offset in bytes to add to place the overlay inside the Y plane
-	 * @param offsetUV offset in bytes to add to place the overlay inside the U and V planes
-	 * @param imgWidth width of the participant slot.
-	 * @param imgHeight height of the participant slot
-	 * @param changeFrame whether or not the overlay should be directly applied to the mosaic's bitmap.
-	 *
-	 * @return a copy of the slot with the particpant picture combined with the overlay.
-	 * this bitmap has teh size of a participant slot and is coded in YUV. Memory buffer
-	 * is managed by the overlay instance and is reused every call of this method.
-	 */
-	BYTE *ApplyParticipantOverlay(int pos, BYTE *picY, BYTE *picU, BYTE *picV,
-				      int imgWidth, int imgHeight, bool changeFrame = false);
-	
 protected:
 	virtual int GetWidth(int pos) = 0;
 	virtual int GetHeight(int pos) = 0;
 	virtual int GetTop(int pos) = 0;
 	virtual int GetLeft(int pos) = 0;
+
+	// Fond noir (mosaic1p1) au lieu du gris neutre. cf. HasBlackBackground du
+	// constructeur d'AsymmetricMosaic (peint-en-noir).
+	virtual bool HasBlackBackground() const { return false; }
+	// Slot toujours étiré plein cadre, aspect ignoré (PIPMosaic pos==0, fidèle à
+	// l'étirement historique du slot principal PIP).
+	virtual bool StretchSlot(int pos) const { return false; }
+
+	// Liseré effectif du slot : SlotBorder, ou 0 si le slot est trop petit pour
+	// en réserver un (garde-fou ; tous les slots réels font >= ~180 px).
+	int GetSlotBorder(int pos);
+
+	// Calcule la taille effective de l'image (letterbox/pillarbox) et son
+	// décalage dans le slot, d'après ComputeAspectRatio et keepAspect. Le
+	// placement se fait dans le slot UTILE (liseré déduit de chaque côté) ;
+	// dx/dy incluent le liseré. Factorise l'arithmétique dupliquée des
+	// Update(BYTE*) (partedmosaic / asymmetricmosaic).
+	void ComputeSlotPlacement(int pos, int inW, int inH, bool keepAspect,
+	                          int& outW, int& outH, int& dx, int& dy);
+
+	// Construit la description du graphe de composition (géométrie + placement
+	// letterbox de chaque slot ACTIF, overlays participant/mosaïque). Matérialise
+	// au passage les Pict RGBA des overlays dans slotOverlayPicts/mosaicOverlayPict
+	// (rendu Overlay mis en cache, re-rendu seulement si contenu/taille changent).
+	// cf. mosaic_avfilter_plan.md §3.
+	MosaicGraphDesc BuildDesc();
+
+	// Fond de la mosaïque (Pict WxH, généré une fois : couleur/taille fixes).
+	// Gris neutre (Y=U=V=128) ou noir si HasBlackBackground() (mosaic1p1).
+	const PictPtr& GetBackground();
+
+	// Retire la trame mémorisée d'un slot (slot vide = pas de branche dans le
+	// graphe, le fond reste visible). À appeler depuis Clean() des dérivées.
+	void ClearSlotFrame(int pos)
+	{
+		if (pos >= 0 && pos < (int) slotFrames.size())
+			slotFrames[pos].reset();
+	}
+
 protected:
-	void SetChanged()	{ mosaicChanged = true; overlayNeedsUpdate = true; }
+	void SetChanged()	{ mosaicChanged = true; compositeValid = false; }
 
 protected:
 	typedef std::map<int,int> Participants;
@@ -157,22 +195,32 @@ protected:
 	int numSlots;
 	int vadParticipant;
 
-	FrameScaler** resizer;
-	BYTE* 	mosaic;
-	BYTE*	mosaicBuffer;
 	int 	mosaicTotalWidth;
 	int 	mosaicTotalHeight;
 	Type	mosaicType;
-	int     mosaicSize;
 
 	std::unique_ptr<Overlay> overlay;
-	bool	 overlayNeedsUpdate;
 
 	bool  keepAspect;
 	DWORD ratio; /* ratio * 1000 */
 
 protected:
 	int GetNextFreeSlot(int id);
+
+	// --- Chemin avfilter (migration graphe unique, cf. mosaic_avfilter_plan.md) ---
+	// Dernière trame connue par slot (nullptr = slot vide, pas de branche).
+	std::vector<PictPtr> slotFrames;
+	// Aspect à conserver, mémorisé par slot au moment du Update (corrige la course
+	// bénigne du drapeau global keepAspect écrasé à chaque Update).
+	std::vector<bool>    slotKeepAspect;
+	PictPtr              background;   // Pict de fond WxH (généré paresseusement)
+	PictPtr              composite;    // cache du dernier composite
+	bool                 compositeValid = false; // composite à jour (invalidé par SetChanged)
+	MosaicCompositor     compositor;   // matérialisation du graphe
+	// Pict RGBA des overlays, remplis par BuildDesc (alignés sur desc.slots ;
+	// nullptr si le slot n'a pas d'overlay), consommés par GetPict -> Compose.
+	std::vector<PictPtr> slotOverlayPicts;
+	PictPtr              mosaicOverlayPict;
 };
 
 #endif

@@ -25,7 +25,6 @@ public:
 	void RemoveParticipant(int id);
 
 	SWORD* GetBuffer()	{ return mixer_buffer; }
-	void UpdatePartVad(DWORD vadLevel);
 
         std::set<int> GetParticipants() { return participants; }
         
@@ -37,7 +36,6 @@ private:
 	//Audio mixing buffer
 	SWORD* mixer_buffer;
 	Participants participants;
-	DWORD avgVad;
 };
 
 #endif	/* SIDEBAR_H */

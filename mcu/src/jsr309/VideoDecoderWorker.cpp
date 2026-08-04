@@ -213,7 +213,7 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
                 //Try to decode what is in the buffer
                 videoDecoder->DecodePacket(NULL,0,1,1);
                 //Get picture
-                BYTE *frame = videoDecoder->GetFrame();
+                PictPtr frame = videoDecoder->GetFrame();
                 DWORD width = videoDecoder->GetWidth();
                 DWORD height = videoDecoder->GetHeight();
                 //Check values
@@ -264,7 +264,7 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
                 frameSeqNum = RTPPacket::MaxExtSeqNum;
 
                 //Get picture
-                BYTE *frame = videoDecoder->GetFrame();
+                PictPtr frame = videoDecoder->GetFrame();
                 DWORD width = videoDecoder->GetWidth();
                 DWORD height = videoDecoder->GetHeight();
                 //Check values

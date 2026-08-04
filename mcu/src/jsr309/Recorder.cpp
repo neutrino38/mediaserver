@@ -121,8 +121,17 @@ void Recorder::onRTPPacket(RTPPacket &packet)
 				{
 					//If got frame
 					if (frame)
+					{
+						//Le mcu horodate en MILLISECONDES (MP4Recorder
+						//reconvertit vers l'horloge video 90 kHz de
+						//libmedkit). Le depacketiseur laisse ici le
+						//timestamp RTP brut (90 kHz, origine aleatoire) :
+						//on le ramene en ms, comme le fait deja la voie
+						//audio (/8) et la voie texte (rebasage).
+						frame->SetTimestamp(frame->GetTimeStamp()/90);
 						//Record frame
 						onMediaFrame(*frame);
+					}
 					//Clear frame
 					video->ResetFrame();
 				}

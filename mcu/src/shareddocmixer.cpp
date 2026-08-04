@@ -18,7 +18,7 @@ SharedDocMixer::SharedDocMixer()
 {
 	//No output
 	output  		= NULL;
-	logo			= NULL;
+	logo			= nullptr;
 	bfcp_server 	= NULL;
 	
 	sharedMosaic	= -1;
@@ -31,7 +31,7 @@ SharedDocMixer::~SharedDocMixer()
 {
 	//No output
 	output  		= NULL;
-	logo			= NULL;	
+	logo			= nullptr;	
 	conf			= NULL;
 	if ( bfcp_server != NULL )
         delete bfcp_server;
@@ -44,7 +44,7 @@ SharedDocMixer::~SharedDocMixer()
 	confId			= 0;
 }
 
-int SharedDocMixer::Init(VideoOutput* output, Logo *logo, MultiConf* conf)
+int SharedDocMixer::Init(VideoOutput* output, const PictPtr& logo, MultiConf* conf)
 {
 	//Set output
 	this->output 	= output;
@@ -208,12 +208,12 @@ int SharedDocMixer::StopSharing()
 	}
 	
 
-	if (logo != NULL && output != NULL)
+	if (logo && output != NULL)
 	{
 		//Set size
 		output->SetVideoSize(logo->GetWidth(),logo->GetHeight());
 		//Set image
-		return output->NextFrame(logo->GetFrame());
+		return output->NextFrame(logo);
 	}
 	
 	
@@ -232,12 +232,12 @@ int SharedDocMixer::StopSharing(ParticipantPtr part)
 		return 1;
 }
 
-int SharedDocMixer::NextFrame(BYTE *pic)
+int SharedDocMixer::NextFrame(PictPtr pic)
 {
 	ParticipantPtr currentPart = this->part.lock();
 	if ( currentPart && output != NULL)
 	{
-		
+
 		return output->NextFrame(pic);
 	}
 	else
@@ -631,7 +631,7 @@ int SharedDocMixer::End()
 	
 		//Reset output
 	output 		= NULL;
-	logo		= NULL;
+	logo		= nullptr;
 	conf    	= NULL;
 	
 	if ( bfcp_server != NULL )

@@ -55,7 +55,8 @@ private:
 	{
 		std::shared_ptr<PipeAudioInput>  input;
 		std::shared_ptr<PipeAudioOutput> output;
-		SWORD		buffer[Sidebar::MIXER_BUFFER_SIZE];
+		//Alignement exigé par _mm_load/_mm_store_si128 dans le mix-minus
+		alignas(16) SWORD buffer[Sidebar::MIXER_BUFFER_SIZE];
 		DWORD		len;
 		Sidebar*	sidebar;
 		DWORD		vad;

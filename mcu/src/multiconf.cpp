@@ -230,6 +230,28 @@ int MultiConf::StartRecordingBroadcaster(const char* filename,int mosaicId, int 
 	audioMixer.InitMixer(RecorderId,sidebarId);
 	textMixer.InitMixer(RecorderId);
 
+	//Aligne la vidéo enregistrée sur le composite de la mosaïque enregistrée.
+	//Sans cela, l'encodeur garde son défaut CIF 352x288 : une mosaïque 1280x720
+	//était enregistrée en CIF, donc à la fois réduite et DÉFORMÉE (le pipe
+	//redimensionne sans conserver le ratio, 16:9 écrasé en 4:3).
+	int mosaicWidth = 0, mosaicHeight = 0;
+	if (videoMixer.GetMosaicSize(mosaicId,mosaicWidth,mosaicHeight))
+	{
+		//Le débit doit suivre la taille : le défaut de FLVEncoder (512 kb/s) est
+		//dimensionné pour du CIF. Appliqué tel quel à une mosaïque 1280x720 il
+		//donne une image en gros pavés (~0,006 bit/pixel/image). On vise
+		//0,08 bit/pixel/image, plancher au défaut historique et plafond à
+		//4 Mb/s pour ne pas produire de fichiers démesurés.
+		const int recFps = 30;
+		int recBitrate = (int)(((QWORD)mosaicWidth*mosaicHeight*recFps*8)/100000);
+		if (recBitrate < 512)  recBitrate = 512;
+		if (recBitrate > 4096) recBitrate = 4096;
+
+		Log("-Recording video size aligned on mosaic %d [%dx%d,%d fps,%d kb/s]\n",
+		    mosaicId,mosaicWidth,mosaicHeight,recFps,recBitrate);
+		recEncoder.SetVideoSize(mosaicWidth,mosaicHeight,recFps,recBitrate);
+	}
+
 	//Open file for recording
 	if (!recorder->Create(filename))
 		//Fail
@@ -248,8 +270,12 @@ int MultiConf::StartRecordingBroadcaster(const char* filename,int mosaicId, int 
 			recEncoder.AddMediaListener(static_cast<FLVRecorder*>(recorder.get()));
 			break;
 		case RecorderControl::MP4:
-			//Set change codec and add a media listener
-			recEncoder.SetCodec(AudioCodec::PCMA);
+			//Audio enregistré en AAC : c'est le codec audio « natif » du
+			//conteneur MP4. Le G.711 (PCMA) y est certes stockable, mais seuls
+			//VLC/ffmpeg le rejouent — ni les navigateurs, ni QuickTime, ni la
+			//plupart des lecteurs mobiles. La piste AAC est produite par
+			//FLVEncoder, qui l'ouvre à la fréquence native du mixeur audio.
+			recEncoder.SetCodec(AudioCodec::AAC);
 			recEncoder.AddMediaFrameListener(static_cast<MP4Recorder*>(recorder.get()));
 			break;
 	}

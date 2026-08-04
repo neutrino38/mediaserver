@@ -7,7 +7,7 @@
 #include "pipevideooutput.h"
 #include "eventstreaminghandler.h"
 #include "mosaic.h"
-#include "medkit/logo.h"
+#include "video.h"
 #include <map>
 #include <list>
 #include <memory>
@@ -29,7 +29,7 @@ public:
 
 	int Init(Mosaic::Type comp,int size, const char * logoFile = NULL);
 	int LoadLogo(const char *filename);
-	Logo* GetLogo(){ return &logo;};
+	PictPtr GetLogo(){ return logo;};
 	void SetVADMode(VADMode vadMode);
 	void SetVADProxy(VADProxy* proxy);
 	int CreateMixer(int id);
@@ -52,6 +52,10 @@ public:
 	int AddMosaicParticipant(int mosaicId,int partId);
 	int RemoveMosaicParticipant(int mosaicId,int partId);
 	int GetMosaicPositions(int mosaicId,std::list<int> &positions);
+	// Taille du composite d'une mosaïque (celle que produit GetPict). Permet à un
+	// consommateur — l'encodeur d'enregistrement notamment — de se caler dessus au
+	// lieu d'imposer sa propre résolution. 0 si la mosaïque n'existe pas.
+	int GetMosaicSize(int mosaicId,int &width,int &height);
 	int SetSlot(int mosaicId,int num,int id);
 	int SetCompositionType(int mosaicId,Mosaic::Type comp,int size);
 	int DeleteMosaic(int mosaicId);
@@ -97,7 +101,7 @@ private:
 	int maxMosaics;
 
 	//Las propiedades del mosaico
-	Logo 	logo;
+	PictPtr	logo;
 	//Observateur non possedant sur un Mosaic detenu par la map mosaics.
 	Mosaic	*defaultMosaic;
 

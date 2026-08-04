@@ -10,6 +10,8 @@
 #include <sys/poll.h>
 #include <netinet/tcp.h>
 #include <netinet/in.h>
+#include <netdb.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
@@ -96,6 +98,104 @@ bool RTPSession::SetPortRange(int minPort, int maxPort)
 	return true;
 }
 
+std::string RTPSession::announcedIp;
+bool RTPSession::announcedIpResolved = false;
+std::mutex RTPSession::announcedIpMutex;
+
+//Auto-détection de l'adresse à annoncer, à défaut de --public-ip : premier IPv4
+//non loopback de l'hôte. Déplacée ici depuis Endpoint::GetMediaCandidates, qui la
+//refaisait — gethostbyname compris, et sans verrou — à chaque appel.
+static std::string DetectAnnouncedIp()
+{
+	char hostname[HOST_NAME_MAX];
+
+	//Nom de l'hôte
+	if (gethostname(hostname, sizeof hostname) != 0)
+	{
+		//Erreur
+		Error("-RTPSession cannot get hostname to detect the announced IP\n");
+		//Rien
+		return std::string();
+	}
+
+	//Résolution
+	struct hostent *localHost = gethostbyname(hostname);
+
+	//Comprobamos
+	if (!localHost || localHost->h_addrtype != AF_INET)
+	{
+		//Erreur
+		Error("-RTPSession cannot resolve \"%s\" to detect the announced IP\n",hostname);
+		//Rien
+		return std::string();
+	}
+
+	//Première adresse qui n'est pas la loopback
+	for (int i=0; localHost->h_addr_list[i]!=0; i++)
+	{
+		struct in_addr addr;
+		//Copie
+		addr.s_addr = *(u_long *) localHost->h_addr_list[i];
+		//En texte
+		const char* host = inet_ntoa(addr);
+
+		//Celle-là fera l'affaire
+		if (host && strcmp(host,"127.0.0.1")!=0)
+			return std::string(host);
+	}
+
+	//Erreur
+	Error("-RTPSession no non-loopback IPv4 address found for \"%s\"\n",hostname);
+
+	//Rien
+	return std::string();
+}
+
+bool RTPSession::SetAnnouncedIp(const char* ip)
+{
+	//Rien de fourni : l'auto-détection de GetAnnouncedIp reste en place
+	if (!ip || !*ip)
+		return false;
+
+	struct in_addr addr;
+
+	//Une adresse annoncée fausse produit un SDP que le pair ne peut pas joindre :
+	//on refuse ce qui n'est pas une IPv4 littérale plutôt que de l'annoncer.
+	if (inet_pton(AF_INET,ip,&addr)!=1)
+		return Error("-RTPSession announced IP \"%s\" is not a valid IPv4 address\n",ip);
+
+	//Verrou
+	std::lock_guard<std::mutex> lock(announcedIpMutex);
+
+	//Set : une adresse explicite dispense de toute auto-détection
+	announcedIp = ip;
+	announcedIpResolved = true;
+
+	//Log
+	Log("-RTPSession announced IP set to \"%s\"\n",announcedIp.c_str());
+
+	//OK
+	return true;
+}
+
+const char* RTPSession::GetAnnouncedIp()
+{
+	//Verrou
+	std::lock_guard<std::mutex> lock(announcedIpMutex);
+
+	//Résolue une fois pour toutes — le pointeur rendu reste donc valide — et
+	//l'échec est mémorisé au même titre que le succès : sans quoi un hôte qui ne
+	//se résout pas relancerait un gethostbyname perdant à chaque appel.
+	if (!announcedIpResolved)
+	{
+		announcedIp = DetectAnnouncedIp();
+		announcedIpResolved = true;
+	}
+
+	//La chaîne, vide si l'hôte ne se résout pas
+	return announcedIp.c_str();
+}
+
 /*************************
 * RTPSession
 * 	Constructro
@@ -123,6 +223,12 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	
 	recIP = INADDR_ANY;
 	recPort = 0;
+	//P7 : rattrapage NAT désactivé par défaut — le plan de contrôle l'active par la
+	//propriété "natLatch" (ou en passant 0.0.0.0 à SetRemotePort), lui seul sachant
+	//de quel type de jambe il s'agit. Aucun appelant historique n'est donc affecté.
+	natLatch = false;
+	natCorrected = false;
+	natRtcpCorrected = false;
 	firReqNum = 0;
 	requestFPU = false;
 	pendingTMBR = false;
@@ -382,6 +488,15 @@ int RTPSession::SetProperties(const Properties& properties)
 			//Set rtcp muxing
 			muxRTCP = atoi(it->second.c_str());
 		} 
+		else if (it->first.compare("natLatch")==0)
+		{
+			//Autorise le rattrapage de la cible d'envoi vers la source réellement
+			//observée quand le pair a annoncé une adresse privée (NAT symétrique).
+			//Désactivé par défaut : c'est au plan de contrôle, qui seul sait de quel
+			//type de jambe il s'agit, de l'activer. Voir SendPacket / NatCorrectable.
+			natLatch = atoi(it->second.c_str());
+			if (natLatch) Log("Activated symmetric NAT latching on %s stream %p.\n", MediaFrame::TypeToString(media), this);
+		}
 		else if (it->first.compare("tmmbr")==0)
 		{
 			sendBitrateFeedback = atoi(it->second.c_str());
@@ -695,13 +810,64 @@ bool RTPSession::SetSendingCodec(DWORD codec)
 }
 
 /***********************************
+* IsRFC1918
+*	Adresse non routable sur l'Internet public : le pair qui l'annonce dans son
+*	SDP est derrière un NAT (ou nous ment), son média ne peut pas nous parvenir
+*	de là. Seule une telle annonce ouvre droit au rattrapage (voir SendPacket) :
+*	sur une adresse publique, une divergence est plus probablement du routage
+*	asymétrique légitime qu'un NAT à corriger.
+***********************************/
+bool RTPSession::IsRFC1918(in_addr_t addr)
+{
+	//addr est en ordre réseau
+	DWORD ip = ntohl(addr);
+
+	//10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (RFC 1918)
+	if ((ip & 0xFF000000) == 0x0A000000) return true;
+	if ((ip & 0xFFF00000) == 0xAC100000) return true;
+	if ((ip & 0xFFFF0000) == 0xC0A80000) return true;
+	//100.64.0.0/10 : NAT opérateur (RFC 6598), même symptôme
+	if ((ip & 0xFFC00000) == 0x64400000) return true;
+	//169.254.0.0/16 : link-local (RFC 3927), jamais routable jusqu'à nous
+	if ((ip & 0xFFFF0000) == 0xA9FE0000) return true;
+
+	return false;
+}
+
+/***********************************
+* NatCorrectable
+*	Règle commune aux rattrapages RTP et RTCP : le contrôleur l'autorise, ICE
+*	n'est pas en jeu, et l'adresse annoncée est privée. La *preuve* (un paquet
+*	réellement reçu d'ailleurs) est vérifiée par chaque appelant.
+***********************************/
+bool RTPSession::NatCorrectable(in_addr_t announced)
+{
+	//Le contrôleur n'a pas activé le rattrapage sur cette jambe
+	if (!natLatch)
+		return false;
+
+	//ICE possède déjà la cible d'envoi (OnICEConnectivityConfirmed la pose lui-même
+	//sur le pair validé) : ne pas la lui disputer.
+	if (iceRemotePwd || iceLocalPwd)
+		return false;
+
+	return IsRFC1918(announced);
+}
+
+/***********************************
 * SetRemotePort
-*	Inicia la sesion rtp de video remota 
+*	Inicia la sesion rtp de video remota
 ***********************************/
 int RTPSession::SetRemotePort(char *ip,int sendPort)
 {
 	//Get ip addr
 	DWORD ipAddr = inet_addr(ip);
+
+	//Un contrôleur qui passe 0.0.0.0 demande explicitement le latch : il ne connaît
+	//pas la vraie adresse du pair et s'en remet à la source réellement observée.
+	//Vaut autorisation, au même titre que la propriété RTP "natLatch".
+	if (ipAddr==INADDR_ANY)
+		natLatch = true;
 
 	//If we already have one and it is a NATed
 	if (recIP!=INADDR_ANY && ipAddr==INADDR_ANY)
@@ -713,6 +879,12 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	}
 	//Ok, let's et it
 	Log("-SetRemotePort [%s:%d]\n",ip,sendPort);
+
+	//Nouvelle cible posée par le plan de contrôle (re-INVITE, UPDATE…) : une
+	//correction précédente porte sur l'ancienne, elle est caduque. On rouvre le droit
+	//au rattrapage, sinon un pair qui change de mapping resterait coincé sur l'ancien.
+	natCorrected = false;
+	natRtcpCorrected = false;
 
 	//Ip y puerto de destino
 	sendAddr.sin_addr.s_addr 	= ipAddr;
@@ -1304,6 +1476,8 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			sendAddr.sin_addr.s_addr = recIP;
 			//Set port
 			sendAddr.sin_port = htons(recPort);
+			//La cible est posée : plus de rattrapage ultérieur (voir plus bas)
+			natCorrected = true;
 			//Log
 			Log("-RTPSession NAT: Now sending %s to [%s:%d].\n", MediaFrame::TypeToString(media),inet_ntoa(sendAddr.sin_addr), recPort);
 			//Check if using ice
@@ -1317,9 +1491,22 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	}
 	else if ( recIP != INADDR_ANY && recIP != sendAddr.sin_addr.s_addr )
         {
-//		sendAddr.sin_addr.s_addr = recIP;
-//		sendAddr.sin_port = htons(recPort);
-		Log("-RTPSession NAT: WARNING Trying to send packet from different ip address than receiving one.\n");
+		//Le pair a annoncé une adresse privée dans son SDP mais son RTP nous arrive
+		//d'ailleurs : c'est le mapping d'un NAT symétrique, qui a réécrit l'adresse ET
+		//le port. Émettre vers l'annonce ne mènerait nulle part — on ré-aiguille sur la
+		//source réellement observée, seule preuve dont nous disposons.
+		//One-shot : recIP est recalé sur *chaque* paquet de source différente (voir
+		//ReadRTP), sans ce garde la cible battrait au gré du moindre paquet égaré.
+		if (!natCorrected && NatCorrectable(sendAddr.sin_addr.s_addr))
+		{
+			sendAddr.sin_addr.s_addr = recIP;
+			sendAddr.sin_port = htons(recPort);
+			natCorrected = true;
+			Log("-RTPSession NAT: %s now sending to [%s:%d] (annonce privee corrigee sur la source reelle).\n",
+			    MediaFrame::TypeToString(media),inet_ntoa(sendAddr.sin_addr),recPort);
+		}
+		else
+			Log("-RTPSession NAT: WARNING Trying to send packet from different ip address than receiving one.\n");
 	}
 	
 	//Check if we need to send SR
@@ -1581,6 +1768,22 @@ int RTPSession::ReadRTCP()
 		//Exit
 		return 0;
 
+	//Rattrapage NAT du RTCP, pendant de celui du RTP dans SendPacket. Le mapping du
+	//port RTCP est indépendant de celui du RTP : on le prend sur *ce* paquet plutôt
+	//que de le deviner à recPort+1. Sans objet en rtcp-mux, où le RTCP part sur
+	//sendAddr (déjà corrigé côté RTP).
+	if (sendRtcpAddr.sin_addr.s_addr != INADDR_ANY
+	    && sendRtcpAddr.sin_addr.s_addr != from_addr.sin_addr.s_addr
+	    && !natRtcpCorrected
+	    && NatCorrectable(sendRtcpAddr.sin_addr.s_addr))
+	{
+		sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
+		sendRtcpAddr.sin_port        = from_addr.sin_port;
+		natRtcpCorrected             = true;
+		Log("-RTPSession NAT: RTCP now sending to %s:%d (annonce privee corrigee sur la source reelle).\n",
+		    inet_ntoa(sendRtcpAddr.sin_addr),ntohs(sendRtcpAddr.sin_port));
+	}
+
 	//Check if we have sendinf ip address
 	if (sendRtcpAddr.sin_addr.s_addr == INADDR_ANY)
 	{
@@ -1588,6 +1791,8 @@ int RTPSession::ReadRTCP()
 		sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
 		//Set port
 		sendRtcpAddr.sin_port = from_addr.sin_port;
+		//Cible RTCP posée : plus de rattrapage ultérieur
+		natRtcpCorrected = true;
 		//Log it
 		Log("-Got first RTCP packet, sending to %s:%d with rtcp-muxing %s\n",
 		    inet_ntoa(sendRtcpAddr.sin_addr),ntohs(sendRtcpAddr.sin_port),

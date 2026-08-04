@@ -4,7 +4,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <video.h>
-#include <framescaler.h>
+#include "videorescaler.h"
 
 class PipeVideoInput
 	: public VideoInput
@@ -14,28 +14,29 @@ public:
 	virtual ~PipeVideoInput();
 
 	virtual int   StartVideoCapture(int width,int height,int fps);
-	virtual BYTE* GrabFrame(DWORD timeout);
+	virtual PictPtr GrabFrame(DWORD timeout);
 	virtual void  CancelGrabFrame();
 	virtual DWORD GetBufferSize();
 	virtual int   StopVideoCapture();
 
 	int Init();
-	int SetFrame(BYTE * buffer, int height, int width);
+	// Publie une trame (mise à l'échelle vers videoWidth x videoHeight si besoin).
+	int SetFrame(PictPtr pic);
 	int End();
 
 private:
-
-	FrameScaler resizer;
+	PictPtr last;
+	VideoRescaler resizer;
 	int videoWidth;
 	int videoHeight;
 	int videoSize;
 	int videoFPS;
-	int imgPos;
 	int imgNew;
 	int inited;
 	int capturing;
-	BYTE *imgBuffer[2];
-	BYTE *grabPic;
+	//Détection de gel du flux amont : un seul log par épisode (stopped/resumed)
+	bool stalled;
+	int  okStreak;
 
 	std::mutex newPicMutex;
 	std::condition_variable newPicCond;

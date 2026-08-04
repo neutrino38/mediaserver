@@ -1,0 +1,131 @@
+#ifndef _MOSAICCOMPOSITOR_H_
+#define _MOSAICCOMPOSITOR_H_
+
+#include <video.h>
+#include <vector>
+extern "C"
+{
+#include <libavfilter/avfilter.h>
+}
+
+// Description d'un slot ACTIF de la mosaïque (= slot pour lequel une trame est
+// mémorisée). Sert de clé de (re)configuration du graphe : tout changement
+// structurel (géométrie, taille/format d'entrée, présence d'overlay) reconstruit
+// le graphe. Un simple changement de contenu (nouvelle trame) ne reconstruit rien.
+struct MosaicSlotDesc
+{
+	int  pos       = 0;      // index de slot (traçage/logs)
+	int  x         = 0;      // position de l'IMAGE (GetLeft + liseré + décalage letterbox)
+	int  y         = 0;      // position de l'IMAGE (GetTop + liseré + décalage letterbox)
+	int  w         = 0;      // largeur effective de l'image (hors liseré)
+	int  h         = 0;      // hauteur effective de l'image (hors liseré)
+	int  border    = 0;      // liseré noir (px) rendu par pad autour de l'image ;
+	                         // la vignette totale fait (w+2b)x(h+2b) en (x-b,y-b)
+	int  inW       = 0;      // largeur de la trame d'entrée (clé de reconfig)
+	int  inH       = 0;      // hauteur de la trame d'entrée (clé de reconfig)
+	int  inFmt     = 0;      // format de la trame d'entrée (AVPixelFormat, clé de reconfig)
+	AVBufferRef* hwFramesCtx = nullptr; // ctx trames VAAPI de l'entrée (non possédé), clé de reconfig
+	bool hasOverlay = false; // overlay participant à empiler sur ce slot
+	int  ovX       = 0;      // position de l'overlay participant (slot utile, liseré déduit)
+	int  ovY       = 0;      // position de l'overlay participant (slot utile, liseré déduit)
+	int  ovW       = 0;      // largeur de l'overlay rgba (== slot utile)
+	int  ovH       = 0;      // hauteur de l'overlay rgba (== slot utile)
+
+	bool operator==(const MosaicSlotDesc& o) const
+	{
+		return pos == o.pos && x == o.x && y == o.y && w == o.w && h == o.h &&
+		       border == o.border &&
+		       inW == o.inW && inH == o.inH && inFmt == o.inFmt &&
+		       hwFramesCtx == o.hwFramesCtx && hasOverlay == o.hasOverlay &&
+		       ovX == o.ovX && ovY == o.ovY && ovW == o.ovW && ovH == o.ovH;
+	}
+	bool operator!=(const MosaicSlotDesc& o) const { return !(*this == o); }
+};
+
+// Description complète du graphe de composition d'une mosaïque. Comparée
+// structurellement à chaque tick : reconstruction UNIQUEMENT si elle change.
+struct MosaicGraphDesc
+{
+	int  width  = 0;              // largeur du composite (mosaicTotalWidth)
+	int  height = 0;              // hauteur du composite (mosaicTotalHeight)
+	bool wantGPU = false;         // souhait GPU (le compositor peut replier CPU)
+	bool blackBackground = false; // fond noir (mosaic1p1) au lieu du gris neutre
+	bool hasMosaicOverlay = false;// overlay plein cadre présent
+	std::vector<MosaicSlotDesc> slots; // slots ACTIFS uniquement, ordre = ordre Z
+
+	bool operator==(const MosaicGraphDesc& o) const
+	{
+		return width == o.width && height == o.height && wantGPU == o.wantGPU &&
+		       blackBackground == o.blackBackground &&
+		       hasMosaicOverlay == o.hasMosaicOverlay && slots == o.slots;
+	}
+	bool operator!=(const MosaicGraphDesc& o) const { return !(*this == o); }
+};
+
+// Matérialise une MosaicGraphDesc en AVFilterGraph PERSISTANT (scale +
+// composition overlay) et gère le cycle push/pull par tick. Généralisation
+// N-entrées de VideoRescaler : mêmes idiomes (reconfiguration paresseuse,
+// avfilter_graph_parse_ptr). Côté mcu (comme VideoRescaler) ; non copiable
+// (possède un graphe ffmpeg). NON thread-safe : tous les accès se font sous le
+// verrou du thread MixVideo (cf. mosaic_avfilter_plan.md §4).
+class MosaicCompositor
+{
+public:
+	MosaicCompositor();
+	~MosaicCompositor();
+
+	MosaicCompositor(const MosaicCompositor&)            = delete;
+	MosaicCompositor& operator=(const MosaicCompositor&) = delete;
+
+	// (Re)construit le graphe si desc != description courante (sinon no-op).
+	// Applique la politique GPU/CPU avec repli automatique. false = échec
+	// définitif (l'appelant renonce à composer ce tick).
+	bool Configure(const MosaicGraphDesc& desc);
+
+	// Un tick de composition : pousse la trame de chaque slot actif, le fond,
+	// les overlays (tous au même pts, tick monotone), puis tire le sink une fois.
+	// slotFrames[i]/slotOverlays[i] sont alignés sur desc.slots[i] (slotOverlays[i]
+	// n'est consulté que si desc.slots[i].hasOverlay). background est obligatoire ;
+	// mosaicOverlay est requis ssi desc.hasMosaicOverlay.
+	// Retour : composite dans un Pict NEUF (nullptr en cas d'échec).
+	PictPtr Compose(const std::vector<PictPtr>& slotFrames,
+	                const std::vector<PictPtr>& slotOverlays,
+	                const PictPtr& background,
+	                const PictPtr& mosaicOverlay);
+
+	void Release();
+
+private:
+	// Matérialise cur -> AVFilterGraph. gpu=true : chaîne VAAPI (scale_vaapi +
+	// overlay_vaapi, hwupload des entrées CPU et du fond ; overlays RGBA en
+	// queue CPU après hwdownload). Le liseré noir, rendu par pad en CPU, est en
+	// mode GPU PEINT dans le fond (BuildGpuBackground) — d'où le refus des
+	// dispositions à slots superposés (PIP) : leur liseré devrait passer
+	// par-dessus l'image principale, ce que le fond ne peut pas faire.
+	bool BuildGraph(bool gpu);
+	// Vrai si deux vignettes (liseré compris) se chevauchent (PIP) : le mode GPU
+	// replie alors en CPU (le liseré du fond serait masqué par l'image du bas).
+	bool SlotsOverlap() const;
+	// Fond du mode GPU : couleur de base + rectangles noirs (Y=16, le noir vidéo
+	// du pad CPU) sous l'emprise liseré de chaque vignette. Poussé à la place du
+	// fond de l'appelant quand curGPU.
+	bool BuildGpuBackground();
+	// Pousse une référence de 'pic' (conteneur éphémère au pts donné) dans src.
+	bool PushInput(AVFilterContext* src, const PictPtr& pic, int64_t pts);
+
+	AVFilterGraph*   graph   = nullptr;
+	AVFilterContext* sinkCtx = nullptr;
+	AVFilterContext* bgSrc   = nullptr;
+	std::vector<AVFilterContext*> slotSrcs;   // 1 par desc.slots (aligné)
+	std::vector<AVFilterContext*> ovrSrcs;    // 1 par desc.slots (nullptr si !hasOverlay)
+	AVFilterContext* mosaicOvrSrc = nullptr;
+
+	MosaicGraphDesc  cur;                      // description du graphe courant
+	bool             curGPU    = false;        // mode effectif du graphe courant
+	bool             gpuBroken  = false;       // échec GPU mémorisé (ne pas retenter)
+	PictPtr          gpuBackground;            // fond du mode GPU (liseré peint, cf. BuildGpuBackground)
+	int64_t          tick      = 0;            // pts monotone (time_base 1/1000)
+	int              builds    = 0;            // nb de (re)constructions du graphe (diagnostic, jamais remis à zéro)
+};
+
+#endif
