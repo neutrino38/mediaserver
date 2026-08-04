@@ -102,6 +102,13 @@ echo "Now (re)starting mediaserver"
 %systemd_postun_with_restart mediaserver.service
 
 %changelog
+* Tue Aug 4 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- rénovation complète de la fonction MCU maintenant basée sur les graphes FFMPEG
+- support théorique de l'accélération matérielle VAAPI
+- amélioration de l'enregistrement de la conférence (dimension de l'image et texte)
+- suppression des vu-mètres
+- version 1.20.0
+
 * Wed Jul 16 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - migration du service SysV (/etc/init.d/mediaserver) vers une unite systemd
   (mediaserver.service, Type=simple). Le binaire tourne desormais en avant-plan
