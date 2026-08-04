@@ -494,10 +494,35 @@ Change le sidebar de sortie du participant.
 - **Retour** : vide.
 
 #### `SetParticipantDisplayName`
-Définit (ou efface) le nom affiché en surimpression pour le participant.
-- **Params** `(iiisi)` : `confId`, `partId`, `mosaicId`, `name` (nom affiché ;
-  vide = efface le nom), `scriptCode` (code de script/charset).
-- **Retour** : `(i)` = code de résultat.
+Affiche (ou efface) le nom d'un participant en surimpression sur SA vignette.
+Le nom est **par participant et par mosaïque** — il n'y a pas de « nom global
+de conférence » ; l'incrustation pleine toile, elle, est une image
+(`SetMosaicOverlayImage`).
+- **Params** `(iiisi)` : `confId`, `mosaicId`, `partId`, `name` (UTF-8 ;
+  chaîne vide = efface le bandeau), `scriptCode`.
+- ⚠️ **Ordre réel : `mosaicId` AVANT `partId`** (comme
+  `SetParticipantBackground`) — les noms de variables du handler suggèrent
+  l'inverse et une version antérieure de cette doc le reflétait à tort.
+  `mosaicId = -1` = toutes les mosaïques **existantes** de la conférence
+  (valeur recommandée pour l'usage courant).
+- `scriptCode` (ISO 15924) : `0` = auto-détection d'après les caractères du
+  nom ; sinon `215` latin (fonte helvetica), `410` hiragana / `411` katakana
+  (SazanamiMincho), `500` han (ZenKaiUni). Arabe (160) et cyrillique (220)
+  **non supportés** : erreur, aucun bandeau. Les fontes citées doivent être
+  connues d'ImageMagick sur le serveur, sinon le rendu échoue (trace dans
+  `mcu.log`, pas de bandeau).
+- **Rendu** : bandeau arrondi gris semi-transparent + texte blanc, en bas du
+  slot du participant (liseré noir exclu) ; texte tronqué avec « ... » s'il
+  dépasse la largeur du slot. Un changement de nom à taille de slot constante
+  ne reconstruit pas le graphe de composition (recomposition seule).
+- **Conditions** : le participant doit exister **et** appartenir à la mosaïque
+  visée, sinon erreur « no such participant ». À appeler après la création du
+  participant ; à **ré-émettre après un `CreateMosaic`** ultérieur (une
+  mosaïque neuve ne connaît pas les bandeaux existants), alors qu'un
+  `SetCompositionType` les conserve (les overlays suivent les participants).
+- **Retour** : `(i)` = 1.
+- Séquence type côté contrôleur, à l'arrivée de chaque participant :
+  `SetParticipantDisplayName(confId, -1, partId, "Alice", 0)`.
 
 #### `SetParticipantBackground` / `SetParticipantOrMosaicImage`
 *(même handler)* Définit l'image de fond d'un participant, ou une image

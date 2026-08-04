@@ -77,7 +77,16 @@ int XmlRpcServer::Run()
 		abbysHndlr.userdata	= (void*)this;
 		abbysHndlr.handleReq	= RequestHandler;
 		abbysHndlr.term		= NULL;
-		abbysHndlr.handleReqStackSize = 0;
+		//Pile déclarée pour les threads de requête Abyss. La valeur par défaut
+		//(0) est trop juste pour les handlers qui rendent du TEXTE via
+		//ImageMagick/fontconfig/freetype (SetParticipantDisplayName →
+		//Overlay::RenderText) : débordement de pile = SIGSEGV sans la moindre
+		//trace, systématique, vécu en recette (mcu.log s'arrête après
+		//« Using helvetica »). Reproduit hors mcu : le même rendu segfaute
+		//dans un thread à 64 Ko de pile et passe à 128 Ko — 1 Mo prend une
+		//marge confortable pour tous les usages Magick des handlers
+		//(RenderText, LoadImage des fonds/overlays).
+		abbysHndlr.handleReqStackSize = 1024*1024;
 
 		//Add handler
 		ServerAddHandler3(&srv,&abbysHndlr,&ret);

@@ -416,13 +416,28 @@ int Overlay::RenderText(const char* msg, int scriptCode)
 
     if (width == 0 || height == 0)
     {
-	Log("-Overlay: no slot dimension. Not rendering.\n");
+	//Pas encore de dimension (participant hors slot) : mémorise le contenu
+	//SANS rendre — l'ancien code continuait avec une image Magick 0x0. Le
+	//rendu réel aura lieu paresseusement (GetPict) après le Resize au slot.
+	Log("-Overlay: no slot dimension. Deferring text render.\n");
+	contentType = TEXT;
+	if (scriptCode != 0)
+	    this->scriptCode = scriptCode;
+	return 0;
     }
 
         Magick::Blob bob;
+        //ImageMagick 7 a INVERSÉ la sémantique du 4e canal de Color : IM6 y
+        //lisait une « opacity » (QuantumRange = transparent), IM7 un « alpha »
+        //(QuantumRange = OPAQUE). L'ancien Color(0,0,0,QuantumRange) — fond
+        //transparent voulu à l'époque IM6 — produisait donc un bandeau NOIR
+        //OPAQUE plein slot qui masquait toute la vidéo (vécu en recette).
+        //Fond : alpha 0 = transparent ; boîte grise : 75 % opaque comme
+        //l'intention d'origine (opacity QR/4 en IM6).
         Magick::Image render( Magick::Geometry(width, height),
-                          Magick::Color(0, 0, 0, QuantumRange) );
-        Magick::Color gray(QuantumRange/4, QuantumRange/4, QuantumRange/4, QuantumRange/4);
+                          Magick::Color(0, 0, 0, 0) );
+        Magick::Color gray(QuantumRange/4, QuantumRange/4, QuantumRange/4,
+                           QuantumRange - QuantumRange/4);
 
         render.strokeColor( gray );
         render.fillColor( gray ); // Fill color

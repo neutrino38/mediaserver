@@ -696,6 +696,28 @@ TEST(MosaicOverlay, MoveOverlaysCarriesThemToTheNewMosaic)
 	EXPECT_NEAR(kRedLuma, LumaAt(out, 320, 180), 6);
 }
 
+// Le bandeau de nom (RenderText) doit être TRANSPARENT hors de sa boîte.
+// Piège ImageMagick 6->7 vécu en recette : la sémantique du 4e canal de Color
+// s'est inversée (opacity -> alpha), le fond du bandeau était devenu NOIR
+// OPAQUE et masquait toute la vidéo du slot — le nom s'affichait, la vidéo non.
+TEST(MosaicOverlay, TextBannerDoesNotMaskTheVideo)
+{
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	ASSERT_EQ(0, m->AddParticipant(7));
+	m->Update(0, SolidPict(640, 480, 200));
+
+	if (m->SetOverlayTXT(7, "Alice", 0) <= 0)
+		GTEST_SKIP() << "rendu texte indisponible sur cette machine (fontes)";
+
+	PictPtr out = m->GetPict();
+	ASSERT_TRUE(out != nullptr);
+	// Centre du slot, au-dessus de la boîte du bandeau : la vidéo reste visible.
+	EXPECT_NEAR(200, LumaAt(out, 320, 100), 6);
+	// Dans la boîte (bas du slot utile) : le gris 75 % opaque assombrit
+	// nettement — preuve que le bandeau est bien posé, lui.
+	EXPECT_LT(LumaAt(out, 320, 340), 190);
+}
+
 // Un overlay posé sur un participant ABSENT ne touche à rien et ne casse pas
 // la composition (SetOverlayImage participant inconnu = no-op journalisé).
 TEST(MosaicOverlay, OverlayForUnknownParticipantIsIgnored)

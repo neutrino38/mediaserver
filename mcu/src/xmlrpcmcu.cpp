@@ -1677,14 +1677,17 @@ xmlrpc_value* SetParticipantDisplayName(xmlrpc_env *env, xmlrpc_value *param_arr
 	MCU *mcu = (MCU *)user_data;
 	std::shared_ptr<MultiConf> conf;
 
-	 //Parseamos
+	//Ordre RÉEL sur le câble : (confId, mosaicId, partId, name, scriptCode) —
+	//mosaicId AVANT partId, comme SetParticipantBackground. Les anciens noms de
+	//variables locales étaient inversés et ont induit la doc en erreur (cf.
+	//MCU-API.md) ; le comportement, lui, a toujours été celui-ci.
 	int confId;
-	int partId;
 	int mosaicId;
+	int partId;
 	char *name;
 	int scriptCode;
 
-	xmlrpc_parse_value(env, param_array, "(iiisi)", &confId, &partId, &mosaicId, &name, &scriptCode);
+	xmlrpc_parse_value(env, param_array, "(iiisi)", &confId, &mosaicId, &partId, &name, &scriptCode);
 
 		//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1694,14 +1697,12 @@ xmlrpc_value* SetParticipantDisplayName(xmlrpc_env *env, xmlrpc_value *param_arr
 	if(!mcu->GetConferenceRef(confId,conf))
 		return xmlerror(env,"Conference does not exist");
 
-	//Get the rtp map
-	//La borramos
 	int res;
 
 	if (strlen(name) > 0 )
-	    res = conf->SetParticipantDisplayName(partId, mosaicId, name,scriptCode);
+	    res = conf->SetParticipantDisplayName(mosaicId, partId, name,scriptCode);
 	else
-	    res = conf->SetParticipantDisplayName(partId, mosaicId, NULL,scriptCode);
+	    res = conf->SetParticipantDisplayName(mosaicId, partId, NULL,scriptCode);
 
 	//Salimos
 	if(!res)
