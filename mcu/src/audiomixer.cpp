@@ -1,5 +1,6 @@
 #include <signal.h>
 #include <sys/time.h>
+#include <time.h>
 #include <stdio.h>
 #ifdef __SSE2__
 #include <emmintrin.h>
@@ -22,6 +23,8 @@ AudioMixer::AudioMixer()
 	mixingAudio = 0;
 	//No sidebars
 	numSidebars = 0;
+	//No default sidebar until Init
+	defaultSidebar = NULL;
 	//NO vad by default
 	vad = false;
 }
@@ -52,34 +55,53 @@ void *AudioMixer::startMixingAudio(void *par)
 	pthread_exit((void *)(intptr_t)am->MixAudio());
 }
 
+//Cadencement du mixeur : outils timespec sur CLOCK_MONOTONIC (insensible aux
+//recalages NTP de l'horloge murale, contrairement à gettimeofday/msleep).
+static inline bool tsBefore(const timespec &a,const timespec &b)
+{
+	return a.tv_sec<b.tv_sec || (a.tv_sec==b.tv_sec && a.tv_nsec<b.tv_nsec);
+}
+
+static inline QWORD tsDiffUsec(const timespec &from,const timespec &to)
+{
+	return (QWORD)((to.tv_sec-from.tv_sec)*1000000LL + (to.tv_nsec-from.tv_nsec)/1000);
+}
+
 /***********************************
 * MixAudio
 *	Mezcla los audios
 ************************************/
 int AudioMixer::MixAudio()
 {
-	timeval  tv;
 	DWORD step = 10;
 	QWORD prev = 0;
-	DWORD avgVad;
 	int overtimeCount;
+	timespec start,next,now;
 	//Logeamos
 	Log(">MixAudio\n");
 
 	//Init ts
-	getUpdDifTime(&tv);
+	clock_gettime(CLOCK_MONOTONIC,&start);
+	next = start;
 	overtimeCount = 0;
 	//Mientras estemos mezclando
 	while(mixingAudio)
 	{
-		//Get processing time
-		DWORD proc = getDifTime(&tv)-prev;
-		
-		//check we have not to hurry up
-		if (proc<step*1000)
+		//Tick absolu suivant : +step ms exactement, la gigue d'un réveil
+		//tardif ne se cumule pas sur les ticks suivants
+		next.tv_nsec += step*1000000;
+		if (next.tv_nsec>=1000000000)
 		{
-			//Wait until next to process again minus process time
-			msleep(step*1000-proc);
+			next.tv_nsec -= 1000000000;
+			next.tv_sec++;
+		}
+
+		//check we have not to hurry up
+		clock_gettime(CLOCK_MONOTONIC,&now);
+		if (tsBefore(now,next))
+		{
+			//Wait until next tick
+			while (clock_nanosleep(CLOCK_MONOTONIC,TIMER_ABSTIME,&next,NULL)==EINTR);
 			if (overtimeCount > 0)
 			{
 				overtimeCount--;
@@ -87,16 +109,30 @@ int AudioMixer::MixAudio()
 		}
 		else
 		{
-			if ( overtimeCount == 0) Log("-Audiomixer taking too much time, hurrying up [%u]\n",proc);
-			overtimeCount++;
+			QWORD late = tsDiffUsec(next,now);
+			//Un réveil tardif isolé (gigue d'ordonnanceur, courante en VM)
+			//est sans conséquence : numSamples suit l'horloge réelle. On ne
+			//signale qu'un retard persistant — le mixage ne tient pas les
+			//10 ms — via le solde ticks en retard / ticks à l'heure
+			//(plafonné pour ne pas déborder en surcharge permanente)
+			if (overtimeCount < 100 && ++overtimeCount == 25)
+				Log("-Audiomixer sustained overtime, hurrying up [%llu us late]\n",(unsigned long long)late);
+			//Après un gros décrochage (process suspendu), on resynchronise
+			//pour éviter une rafale de ticks de rattrapage
+			if (late > 100000)
+			{
+				Log("-Audiomixer resync after stall [%llu us late]\n",(unsigned long long)late);
+				next = now;
+			}
 		}
-			
+
 
 		//Block list
 		lstAudiosUse.WaitUnusedAndLock();
 
-		//Get new time
-		QWORD curr = getDifTime(&tv);
+		//Get new time (base monotone : numSamples suit l'horloge réelle)
+		clock_gettime(CLOCK_MONOTONIC,&now);
+		QWORD curr = tsDiffUsec(start,now);
 
 		//Get num samples at desired rate for the time difference
 		DWORD numSamples = (curr*rate)/1000000-(prev*rate)/1000000;
@@ -123,23 +159,12 @@ int AudioMixer::MixAudio()
 		{
 			//Get the source
 			AudioSource *audio = it->second;
-			//Get id
-			DWORD id = it->first;
 			//Get the samples from the fifo
 			audio->len = audio->output->GetSamples(audio->buffer,numSamples);
 			//Clean rest
 			memset(audio->buffer+audio->len,0,Sidebar::MIXER_BUFFER_SIZE-audio->len);
 			//Get VAD value
 			audio->vad = audio->output->GetVAD(numSamples);
-			
-#if 0
-			if (vad)
-			{
-			    for (Sidebars::iterator sit = sidebars.begin(); sit!=sidebars.end(); ++sit)
-				//Mix it and update length
-				if ( sit->second->HasParticipant(id) ) sit->second->UpdatePartVad(audio->vad);
-			}
-#endif
 		}
 
 		for(Audios::iterator it = audios.begin(); it != audios.end(); ++it)
@@ -176,14 +201,22 @@ int AudioMixer::MixAudio()
 			SWORD *buffer = audio->buffer;
 
 			//Check if we have been added to the sidebar
-			if (audio->sidebar->HasParticipant(id))
+			//(un participant muet reçoit le mix tel quel : rien à soustraire)
+			if (audio->sidebar->HasParticipant(id) && audio->len > 0)
 			{
 #ifndef __SSE2__
-				// Mixing witjout SSE
-				//Calculate the result
-				for(int i=0; i<audio->len; ++i)
+				// Mixing without SSE
+				//Calculate the result (différence saturée, pas de wrap 16 bits)
+				for(DWORD i=0; i<audio->len; ++i)
+				{
 					//We don't want to hear our own signal
-					buffer[i] = mixed[i] - buffer[i];
+					int diff = mixed[i] - buffer[i];
+					if (diff > 32767)
+						diff = 32767;
+					else if (diff < -32768)
+						diff = -32768;
+					buffer[i] = diff;
+				}
 #else
 				//Get pointers to buffer
 				__m128i* b = (__m128i*) buffer;
@@ -195,8 +228,8 @@ int AudioMixer::MixAudio()
 					//Load data in SSE registers
 					__m128i xmm1 = _mm_load_si128(m);
 					__m128i xmm2 = _mm_load_si128(b);
-					//SSE2 sum
-					_mm_store_si128(b,  _mm_sub_epi16(xmm1,xmm2));
+					//Différence saturée (subs) : même coût que sub, sans wrap 16 bits
+					_mm_store_si128(b,  _mm_subs_epi16(xmm1,xmm2));
 				}
 #endif
 				//Check length
@@ -240,7 +273,7 @@ int AudioMixer::Init(bool vad,DWORD rate)
 	}
 	else
 	{
-		return Error("Unsupported rate. Musr be 8000, 16000 or 32000 Hz.\n");
+		return Error("Unsupported rate. Must be 8000, 16000, 32000 or 48000 Hz.\n");
 	}
 
 	// Estamos mzclando
@@ -372,17 +405,18 @@ int AudioMixer::InitMixer(int id,int sidebarId)
 
 	Log(">Audio mixer: partId=%d will listen to sidebar %d\n",id, sidebarId);
 
-	//Protegemos la lista
-	lstAudiosUse.IncUse();
+	//Verrou exclusif : on mute audio->sidebar et le set du sidebar par défaut,
+	//deux requêtes XML-RPC concurrentes ne doivent pas s'entrelacer (§1.3)
+	lstAudiosUse.WaitUnusedAndLock();
 
 	//Buscamos el audio source
 	Audios::iterator it = audios.find(id);
 
-	//Si no esta	
+	//Si no esta
 	if (it == audios.end())
 	{
 		//Desprotegemos
-		lstAudiosUse.DecUse();
+		lstAudiosUse.Unlock();
 		//Salimos
 		return Error("Mixer not found\n");
 	}
@@ -406,10 +440,12 @@ int AudioMixer::InitMixer(int id,int sidebarId)
 	audio->output->Init(rate);
 
 	//Add participant to default sidebar
+	//Choix de conception : tout participant CONTRIBUE au sidebar par défaut
+	//(défaut = « tous ») ; ce qu'il ÉCOUTE reste audio->sidebar.
 	defaultSidebar->AddParticipant(id);
 
 	//Desprotegemos
-	lstAudiosUse.DecUse();
+	lstAudiosUse.Unlock();
 
 	Log("<Init mixer [%d]\n",id);
 
@@ -594,8 +630,8 @@ int AudioMixer::SetMixerSidebar(int id,int sidebarId)
 {
 	Log(">SetMixerSidebar [id:%d,sidebar:%d]\n",id,sidebarId);
 
-	//Protegemos la lista
-	lstAudiosUse.IncUse();
+	//Verrou exclusif : mutation d'état, cf. §1.3
+	lstAudiosUse.WaitUnusedAndLock();
 
 	//Buscamos el audio source
 	Audios::iterator it = audios.find(id);
@@ -604,7 +640,7 @@ int AudioMixer::SetMixerSidebar(int id,int sidebarId)
 	if (it == audios.end())
 	{
 		//Desprotegemos
-		lstAudiosUse.DecUse();
+		lstAudiosUse.Unlock();
 		//Salimos
 		return Error("Mixer not found\n");
 	}
@@ -621,11 +657,11 @@ int AudioMixer::SetMixerSidebar(int id,int sidebarId)
 		audio->sidebar = itSidebar->second;
 	else
 		//Send only participant
-		Log("-Sidebar %d for participant found, will be send only.\n",
+		Log("-No sidebar %d for participant found, will be send only.\n",
                     sidebarId );
 
 	//Desprotegemos
-	lstAudiosUse.DecUse();
+	lstAudiosUse.Unlock();
 
 	Log("<SetMixerSidebar [%d]\n",id);
 
@@ -636,7 +672,7 @@ int AudioMixer::SetMixerSidebar(int id,int sidebarId)
 
 int AudioMixer::GetMixerSidebar(int id)
 {
-	Log(">GetMixerSidebar [id:%d,sidebar:%d]\n",id);
+	Log(">GetMixerSidebar [id:%d]\n",id);
 
 	//Protegemos la lista
 	lstAudiosUse.IncUse();
@@ -682,8 +718,8 @@ int AudioMixer::AddSidebarParticipant(int sidebarId, int partId)
 {
 	Log("-AddSidebarParticipant [sidebar:%d,partId:%d]\n",sidebarId,partId);
 
-	//Block
-	lstAudiosUse.IncUse();
+	//Verrou exclusif : mutation du set du sidebar, cf. §1.3
+	lstAudiosUse.WaitUnusedAndLock();
 
 	//Get the sidebar for the user
 	Sidebars::iterator itSidebar = sidebars.find(sidebarId);
@@ -692,7 +728,7 @@ int AudioMixer::AddSidebarParticipant(int sidebarId, int partId)
 	if (itSidebar==sidebars.end())
 	{
 		//UnBlock
-		lstAudiosUse.DecUse();
+		lstAudiosUse.Unlock();
 		//Salimos
 		return Error("Sidebar not found\n");
 	}
@@ -701,7 +737,7 @@ int AudioMixer::AddSidebarParticipant(int sidebarId, int partId)
 	itSidebar->second->AddParticipant(partId);
 
 	//UnBlock
-	lstAudiosUse.DecUse();
+	lstAudiosUse.Unlock();
 
 	//Everything ok
 	return 1;
@@ -715,9 +751,9 @@ int AudioMixer::RemoveSidebarParticipant(int sidebarId, int partId)
 {
 	Log(">-RemoveSidebarParticipant [sidebar:%d,partId:%d]\n",sidebarId,partId);
 
-	//Block
-	lstAudiosUse.IncUse();
-	
+	//Verrou exclusif : mutation du set du sidebar, cf. §1.3
+	lstAudiosUse.WaitUnusedAndLock();
+
 	//Get the sidebar for the user
 	Sidebars::iterator itSidebar = sidebars.find(sidebarId);
 
@@ -725,7 +761,7 @@ int AudioMixer::RemoveSidebarParticipant(int sidebarId, int partId)
 	if (itSidebar==sidebars.end())
 	{
 		//UnBlock
-		lstAudiosUse.DecUse();
+		lstAudiosUse.Unlock();
 		//Salimos
 		return Error("Sidebar not found\n");
 	}
@@ -737,7 +773,7 @@ int AudioMixer::RemoveSidebarParticipant(int sidebarId, int partId)
 	sidebar->RemoveParticipant(partId);
 
 	//UnBlock
-	lstAudiosUse.DecUse();
+	lstAudiosUse.Unlock();
 		
 	//Correct
 	return 1;
@@ -745,17 +781,17 @@ int AudioMixer::RemoveSidebarParticipant(int sidebarId, int partId)
 
 int AudioMixer::CreateSidebar()
 {
-	//Get id
-	int id = numSidebars++;
+	//Verrou exclusif : mutation de la map, cf. §1.3
+	lstAudiosUse.WaitUnusedAndLock();
 
-	//Block
-	lstAudiosUse.IncUse();
+	//Get id (sous le verrou : deux appels concurrents ne partagent plus un id)
+	int id = numSidebars++;
 
 	//add it
 	sidebars[id] = new Sidebar();
 
 	//UnBlock
-	lstAudiosUse.DecUse();
+	lstAudiosUse.Unlock();
 
 	return id;
 }
@@ -780,6 +816,16 @@ int AudioMixer::DeleteSidebar(int sidebarId)
 
 	//Get the old sidebar
 	Sidebar *sidebar = it->second;
+
+	//Le sidebar par défaut ne doit jamais être détruit : InitMixer/EndMixer
+	//écrivent dans defaultSidebar sans re-vérifier son existence.
+	if (sidebar == defaultSidebar)
+	{
+		//UnBlock
+		lstAudiosUse.Unlock();
+		//error
+		return Error("Cannot delete default sidebar [id:%d]\n",sidebarId);
+	}
 
 	//For each audio
 	for (Audios::iterator ita = audios.begin(); ita!= audios.end(); ++ita)
@@ -838,7 +884,7 @@ int AudioMixer::DumpMixerInfo(int sidebarId, std::string & info)
 		//UnBlock
 		lstAudiosUse.DecUse();
 		//error
-                sprintf(partId, "Sidebar %d: no such sidebar\n", sidebarId);
+                snprintf(partId, sizeof(partId), "Sidebar %d: no such sidebar\n", sidebarId);
                 info += partId;
 		return 200;
 	}
@@ -846,7 +892,7 @@ int AudioMixer::DumpMixerInfo(int sidebarId, std::string & info)
         std::set<int> parts = it->second->GetParticipants();
         
         
-        sprintf(partId, "Sidebar %d (vadmode=%d): ", sidebarId, vad);
+        snprintf(partId, sizeof(partId), "Sidebar %d (vadmode=%d): ", sidebarId, vad);
         info += partId;
         if (parts.empty()) info += "no participant";
 
@@ -854,7 +900,7 @@ int AudioMixer::DumpMixerInfo(int sidebarId, std::string & info)
              it2 != parts.end();
              it2++)
         {
-            sprintf(partId, "%d ", *it2);
+            snprintf(partId, sizeof(partId), "%d ", *it2);
             info += partId;
         }
 

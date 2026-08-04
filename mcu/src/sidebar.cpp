@@ -39,10 +39,16 @@ int Sidebar::Update(int id,SWORD *samples,DWORD len)
 		//Exit
 		return Error("-Sidebar error updating participant not found [id:%d]\n",id);
 #ifndef __SSE2__  // Sans SSE
-	//Mix the audio
-	for(int i = 0; i < len; ++i)
-		//MIX
-		mixer_buffer[i] += samples[i];
+	//Mix the audio (somme saturée : le wrap 16 bits ferait bien pire qu'un clip)
+	for(DWORD i = 0; i < len; ++i)
+	{
+		int sum = mixer_buffer[i] + samples[i];
+		if (sum > 32767)
+			sum = 32767;
+		else if (sum < -32768)
+			sum = -32768;
+		mixer_buffer[i] = sum;
+	}
 #else
 	//Get pointers to buffer
 	__m128i* d = (__m128i*) mixer_buffer;
@@ -54,8 +60,8 @@ int Sidebar::Update(int id,SWORD *samples,DWORD len)
 		//Load data in SSE registers
 		__m128i xmm1 = _mm_load_si128(d);
 		__m128i xmm2 = _mm_load_si128(s);
-		//SSE2 sum
-		_mm_store_si128(d, _mm_add_epi16(xmm1,xmm2));
+		//Somme saturée (adds) : même coût que add, sans wrap 16 bits
+		_mm_store_si128(d, _mm_adds_epi16(xmm1,xmm2));
 	}
 #endif
 	//OK
@@ -86,10 +92,4 @@ bool Sidebar::HasParticipant(int id)
 		return false;
 	//Found
 	return true;
-}
-
-
-void Sidebar::UpdatePartVad(DWORD vadLevel)
-{
-    avgVad += vadLevel;
 }
