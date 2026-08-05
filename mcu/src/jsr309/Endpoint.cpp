@@ -527,8 +527,12 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 		in[it->first] = it->second;
 
 	NegotiationResult result;
-	//remoteFmtp ignoré en phase 4 (ingestion = phase 5).
-	if (!CodecNegotiator::Negotiate(type, in, codecProperties, NULL, result))
+	//Le fmtp DISTANT vit dans le même conteneur que les props locales : StoreCodecProperties
+	//range les clés "codec.<x>.*" débarrassées de leur préfixe, donc le "codec.h264.fmtp"
+	//envoyé par le contrôleur (§5.3 nego_fmtp.md, décision C) y est sous "h264.fmtp". On
+	//passe donc codecProperties des deux côtés : le négociateur y lit notre intention ET
+	//ce que le pair a déclaré, chacun sous sa propre clé.
+	if (!CodecNegotiator::Negotiate(type, in, codecProperties, &codecProperties, result))
 	{
 		//Média non négociable (ne devrait pas arriver pour audio/vidéo/texte) :
 		//on retombe sur la map proposée telle quelle (comportement historique).
