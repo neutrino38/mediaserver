@@ -62,6 +62,14 @@ private:
 	Listener* listener;
 
 	//Los objectos gordos
+public:
+	//P7/S1 : (re)arme le chien de garde d'inactivite RTP sur la session interne.
+	//timeoutMs > 0 (re)configure le seuil ET arme, chrono a partir de maintenant ;
+	//0 desarme. Le mecanisme est celui deja utilise par JSR-309
+	//(MediaSession::EndpointStartRTPTimeout), on ne fait que l'exposer au MCU.
+	void ArmRTPTimeout(DWORD timeoutMs) { rtp.ArmRTPTimeout(timeoutMs); }
+
+private:
 	RTPSession	rtp;
 	//Co-propriété du pipe du mixer (Point 1 / C-4) : le pipe reste vivant tant
 	//que ce stream le détient, même si DeleteMixer a déjà retiré la map.

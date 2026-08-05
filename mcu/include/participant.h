@@ -28,6 +28,16 @@ public:
 	public:
 		virtual void onRequestFPU(Participant *part) = 0;
 		virtual void onDTMF(Participant *part,DTMFMessage* dtmf) = 0;
+
+		//P7/S1-S2 : notifications media par participant, remontees jusqu'au
+		//controleur SIP sous forme d'evenements MCU 3 et 4.
+		//
+		//NON PURES, deliberement : ce sont des notifications optionnelles, et un
+		//listener qui ne les traite pas doit rester valide. Meme discipline que
+		//RTPSession::Listener::onRTPTimeout/onRTPPacketReceived, dont elles sont
+		//le relais.
+		virtual void onParticipantMediaTimeout(Participant *part,MediaFrame::Type media,MediaFrame::MediaRole role) {}
+		virtual void onParticipantMediaConnected(Participant *part,MediaFrame::Type media,MediaFrame::MediaRole role) {}
 	};
 public:
 	Participant(Type type,int partId)

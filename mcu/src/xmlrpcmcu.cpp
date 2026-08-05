@@ -2093,6 +2093,63 @@ MCU *mcu = (MCU *)user_data;
 	return xmlok(env,xmlrpc_build_value(env,"(is)",recVideoPort,announcedIp));
 }
 
+/**
+ * StartRTPTimeout — P7/S1
+ *
+ * Arme ou desarme le chien de garde d'inactivite RTP d'un media d'un
+ * participant. Miroir de EndpointStartRTPTimeout cote JSR-309.
+ *
+ * timeoutMs > 0 (re)configure le seuil ET arme, le chrono partant de MAINTENANT ;
+ * 0 desarme. Le controleur arme apres avoir envoye la reponse SDP, ce qui rend
+ * detectable le cas « repondu mais aucun media n'est jamais arrive » sans jamais
+ * surveiller la phase de sonnerie ; il desarme quand un media passe en garde
+ * (hold), sans quoi une mise en attente legitime se lirait comme une patte morte.
+ *
+ * `role` est optionnel, comme partout ailleurs sur cette API (defaut VIDEO_MAIN).
+ */
+xmlrpc_value* StartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	 //Parseamos
+	int confId;
+	int partId;
+	int media;
+	int timeoutMs;
+	int role;
+
+	xmlrpc_parse_value(env, param_array, "(iiiii)", &confId,&partId,&media,&timeoutMs,&role);
+
+	if (env->fault_occurred)
+	{
+	    // Try without role argument
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    role = MediaFrame::VIDEO_MAIN;
+	    xmlrpc_parse_value(env, param_array, "(iiii)", &confId,&partId,&media,&timeoutMs);
+	}
+
+	//Comprobamos si ha habido error
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
+	//Obtenemos la referencia
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	//Un timeout negatif vaut desarmement : le controleur n'a pas a connaitre la
+	//difference entre 0 et « valeur absurde ».
+	int res = conf->StartRTPTimeout(partId,(MediaFrame::Type)media,(DWORD)(timeoutMs>0?timeoutMs:0),(MediaFrame::MediaRole)role);
+
+	//Salimos
+	if(!res)
+		return xmlerror(env,"Could not arm the RTP timeout.");
+
+	//Devolvemos el resultado
+	return xmlok(env);
+}
+
 xmlrpc_value* StopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	MCU *mcu = (MCU *)user_data;
@@ -2348,6 +2405,7 @@ XmlHandlerCmd mcuCmdList[] =
 	{"StopSending",StopSending},
 	{"StartReceiving",StartReceiving},
 	{"StopReceiving",StopReceiving},
+	{"StartRTPTimeout",StartRTPTimeout},
 	{"SetAudioCodec",SetAudioCodec},
 	{"SetTextCodec",SetTextCodec},	
 	{"SetAppCodec",SetAppCodec},

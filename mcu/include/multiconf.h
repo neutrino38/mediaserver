@@ -65,8 +65,11 @@ public:
 		virtual ~Listener(){};
 		virtual void onParticipantRequestFPU(MultiConf *conf,int partId) = 0;
 		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status) = 0;
-		
-		
+
+		//P7/S1-S2 : le flux RTP d'un media d'un participant s'est tu, ou son
+		//premier paquet vient d'arriver. Non pures (cf. Participant::Listener).
+		virtual void onParticipantMediaTimeout(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role) {}
+		virtual void onParticipantMediaConnected(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role) {}
 	};
 	
 public:
@@ -117,6 +120,9 @@ public:
 	int StopSending(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StartReceiving(int partId,MediaFrame::Type media,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN,int confID= 0, MediaFrame::MediaProtocol proto = MediaFrame::TCP);
 	int StopReceiving(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//P7/S1 : arme (timeoutMs > 0) ou desarme (0) le chien de garde d'inactivite
+	//RTP d'un media d'un participant.
+	int StartRTPTimeout(int partId,MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetLocalCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key, MediaFrame::MediaRole role);
 	int SetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key, MediaFrame::MediaRole role,int keyRank=0);
 	int SetLocalSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd, MediaFrame::MediaRole role);
@@ -159,6 +165,9 @@ public:
 	void onRequestFPU(Participant * part);
 	void onRequestDocSharing(int partId, std::wstring status);
 	void onDTMF(Participant * part , DTMFMessage* dtmf);
+	//P7/S1-S2
+	void onParticipantMediaTimeout(Participant *part,MediaFrame::Type media,MediaFrame::MediaRole role);
+	void onParticipantMediaConnected(Participant *part,MediaFrame::Type media,MediaFrame::MediaRole role);
 
 	/** RTMPNetConnection */
 	//virtual void Connect(RTMPNetConnection::Listener* listener); -> Not needed to be overriden yet

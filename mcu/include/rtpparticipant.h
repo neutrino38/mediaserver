@@ -63,6 +63,12 @@ public:
 	
 	int SetMediaListener(MediaFrame::Listener *listener,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return video[role]->SetMediaListener(listener); }
 
+	//P7/S1 : (re)arme ou desarme le chien de garde d'inactivite RTP d'un media.
+	//timeoutMs > 0 arme (chrono a partir de maintenant), 0 desarme. Jamais appele
+	//sur le texte par le controleur : le T.140 est legitimement silencieux entre
+	//deux frappes et declencherait un faux positif.
+	int StartRTPTimeout(MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+
 	//RTPSession::Listener
 	virtual void onFPURequested(RTPSession *session);
 	virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate);
@@ -70,6 +76,11 @@ public:
 	virtual void onRequestFPU();
 	virtual void onNewStream( RTPSession *session, DWORD newSsrc, bool receiving );
 	virtual void onDTMF(DTMFMessage* dtmf);
+	//P7/S1-S2. La session porte son propre media et son role (RTPSession::
+	//GetMediaType/GetMediaRole), donc aucun besoin de comparer des pointeurs pour
+	//savoir laquelle des trois piles a parle.
+	virtual void onRTPTimeout( RTPSession *session );
+	virtual void onRTPPacketReceived( RTPSession *session );
 	
         virtual int DumpInfo(std::string & info);
 		

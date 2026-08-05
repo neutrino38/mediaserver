@@ -362,6 +362,72 @@ void RTPParticipant::onDTMF( DTMFMessage* dtmf)
 		listener->onDTMF(this, dtmf);
 }
 
+/**********************
+* onRTPTimeout / onRTPPacketReceived
+*	P7/S1-S2. Le flux RTP d'un media s'est tu, ou son premier paquet vient
+*	d'arriver. On se contente de relayer : la politique (BYE, liberation du
+*	quota, jonction de la mosaique) est au controleur SIP.
+*
+*	Ces deux callbacks sont partagees par les trois piles, contrairement a
+*	onRequestFPU (VideoStream::Listener) ou onDTMF (AudioStream::Listener) qui
+*	sont portees par des interfaces distinctes. C'est la session qui dit de quel
+*	media il s'agit.
+***********************/
+void RTPParticipant::onRTPTimeout( RTPSession *session )
+{
+	if (!session)
+		return;
+
+	Log("-RTPParticipant onRTPTimeout [partId:%d,media:%s,role:%d]\n",
+	    GetPartId(),MediaFrame::TypeToString(session->GetMediaType()),(int)session->GetMediaRole());
+
+	//Check
+	if (listener)
+		//Call listener
+		listener->onParticipantMediaTimeout(this,session->GetMediaType(),session->GetMediaRole());
+}
+
+void RTPParticipant::onRTPPacketReceived( RTPSession *session )
+{
+	if (!session)
+		return;
+
+	Log("-RTPParticipant onRTPPacketReceived [partId:%d,media:%s,role:%d]\n",
+	    GetPartId(),MediaFrame::TypeToString(session->GetMediaType()),(int)session->GetMediaRole());
+
+	//Check
+	if (listener)
+		//Call listener
+		listener->onParticipantMediaConnected(this,session->GetMediaType(),session->GetMediaRole());
+}
+
+/**********************
+* StartRTPTimeout
+*	P7/S1. Arme (timeoutMs > 0) ou desarme (0) le chien de garde d'un media.
+*	Le controleur l'arme APRES avoir envoye la reponse SDP, ce qui rend
+*	detectable le cas « repondu mais aucun media n'est jamais arrive » sans
+*	jamais surveiller la phase de sonnerie.
+***********************/
+int RTPParticipant::StartRTPTimeout(MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role)
+{
+	switch (media)
+	{
+		case MediaFrame::Audio:
+			audio.ArmRTPTimeout(timeoutMs);
+			return 1;
+		case MediaFrame::Video:
+			if (role >= MAX_VIDEO_STREAM || !video[role])
+				return Error("StartRTPTimeout: no video stream for role %d\n",(int)role);
+			video[role]->ArmRTPTimeout(timeoutMs);
+			return 1;
+		case MediaFrame::Text:
+			text.ArmRTPTimeout(timeoutMs);
+			return 1;
+		default:
+			return Error("StartRTPTimeout: unsupported media %d\n",(int)media);
+	}
+}
+
 int RTPParticipant::SetMute(MediaFrame::Type media, bool isMuted,MediaFrame::MediaRole role)
 {
 	//Depending on the type

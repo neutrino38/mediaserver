@@ -329,6 +329,52 @@ void MCU::onParticipantRequestFPU(MultiConf *conf,int partId)
 		eventMngr->AddEvent(it->second.queueId, new ::PlayerRequestFPUEvent(it->first,conf->GetTag(),partId));
 }
 
+/**********************
+* onParticipantMediaTimeout / onParticipantMediaConnected
+*	P7/S1-S2. Meme forme que onParticipantRequestFPU : on retrouve la conference
+*	par son tag (si elle n'y est plus, elle se detruit, on ignore) et on empile
+*	l'evenement dans la file du controleur.
+***********************/
+void MCU::onParticipantMediaTimeout(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role)
+{
+	//Bloqueamos
+	std::lock_guard<std::mutex> lock(mutex);
+
+	//Find the conference by tag
+	ConferenceTags::iterator tit = tags.find(conf->GetTag());
+	if (tit==tags.end())
+		return;
+	Conferences::iterator it = conferences.find(tit->second);
+	if (it==conferences.end())
+		return;
+
+	//Check Event and event queue
+	if (eventMngr && it->second.queueId>0)
+		//Send new event
+		eventMngr->AddEvent(it->second.queueId,
+			new ::ParticipantMediaEvent(MCU::ParticipantMediaTimeout,it->first,conf->GetTag(),partId,(int)media,(int)role));
+}
+
+void MCU::onParticipantMediaConnected(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role)
+{
+	//Bloqueamos
+	std::lock_guard<std::mutex> lock(mutex);
+
+	//Find the conference by tag
+	ConferenceTags::iterator tit = tags.find(conf->GetTag());
+	if (tit==tags.end())
+		return;
+	Conferences::iterator it = conferences.find(tit->second);
+	if (it==conferences.end())
+		return;
+
+	//Check Event and event queue
+	if (eventMngr && it->second.queueId>0)
+		//Send new event
+		eventMngr->AddEvent(it->second.queueId,
+			new ::ParticipantMediaEvent(MCU::ParticipantMediaConnected,it->first,conf->GetTag(),partId,(int)media,(int)role));
+}
+
 void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status)
 {
 	//Bloqueamos

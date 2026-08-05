@@ -328,6 +328,12 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
 |------|-----|-------|
 | 1 | ParticipantRequestFPU | `(int type, int confId, string tag, int partId)` |
 | 2 | ParticipantRequestDocSharing | `(int type, int confId, string tag, int partId, string status)` |
+| 3 | ParticipantMediaTimeout | `(int type, int confId, string tag, int partId, int media, int role)` |
+| 4 | ParticipantMediaConnected | `(int type, int confId, string tag, int partId, int media, int role)` |
+
+> Les codes sont **ajoutés en fin**, jamais renumérotés ni réutilisés : ils sont
+> partagés avec tous les contrôleurs, y compris ceux qui ne connaissent que 1 et 2
+> (un type inconnu doit être ignoré, pas traité comme une erreur).
 
 - **ParticipantRequestFPU** (1) : un participant a demandé une image complète
   (Full Picture Update / keyframe). `tag` = nom/tag de la conférence, `partId` =
@@ -337,8 +343,21 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
   traiter avec `AcceptDocSharingRequest` / `RefuseDocSharingRequest` /
   `StopDocSharing` (§6.10). Émis par `onParticipantRequestDocSharing`.
 
+- **ParticipantMediaTimeout** (3) : le flux RTP d'un média de ce participant s'est
+  **tu**. Émis **une seule fois** par transition actif → inactif, sur le média et le
+  rôle concernés (`media` = `MediaFrame::Type` §4, `role` = `MediaFrame::MediaRole`) —
+  un participant portant audio + vidéo principale + présentation, il faut les deux
+  pour savoir quelle ligne `m=` s'est arrêtée. N'est émis que si le contrôleur a armé
+  le chien de garde (`StartRTPTimeout`, §6.7) : **rien n'est surveillé par défaut**.
+  Émis par `onParticipantMediaTimeout`.
+- **ParticipantMediaConnected** (4) : **premier paquet RTP/SRTP validé** d'un cycle de
+  réception, même tuple. Émis une fois **par cycle** : un `StopReceiving` suivi d'un
+  `StartReceiving` le réarme. Pour une patte sécurisée, le recevoir prouve
+  intrinsèquement que la poignée de main DTLS a abouti — c'est l'équivalent conférence
+  de l'`EndpointConnectedEvent` de JSR-309. Émis par `onParticipantMediaConnected`.
+
 Réf. : `mcu/include/mcu.h` (`PlayerRequestFPUEvent`,
-`PlayerRequestDocSharingEvent`), `mcu/src/mcu.cpp`.
+`PlayerRequestDocSharingEvent`, `ParticipantMediaEvent`), `mcu/src/mcu.cpp`.
 
 ---
 
@@ -665,6 +684,27 @@ Ouvre la réception RTP d'un média et alloue un port local.
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
 - **Params** (sans role) `(iii)` : idem, `role` = VIDEO_MAIN.
 - **Retour** : vide.
+
+#### `StartRTPTimeout`
+Arme ou désarme le **chien de garde d'inactivité RTP** d'un média d'un participant.
+Miroir de `EndpointStartRTPTimeout` côté JSR-309.
+- **Params** `(iiiii)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
+  `timeoutMs`, `role` (`MediaRole`).
+- **Params** (sans role) `(iiii)` : idem, `role` = VIDEO_MAIN.
+- **Retour** : vide.
+- `timeoutMs > 0` **(re)configure le seuil ET arme**, le chronomètre partant de
+  *maintenant* ; `0` (ou une valeur négative) **désarme**.
+- **Rien n'est surveillé tant que le contrôleur n'a pas armé.** L'armement se fait
+  après l'envoi de la réponse SDP, pas avant : c'est ce qui rend détectable le cas
+  « répondu mais aucun média n'est jamais arrivé » sans jamais surveiller la phase de
+  sonnerie.
+- Une mise en garde (hold) légitime doit **désarmer** le média concerné, sinon elle se
+  lira comme une patte morte.
+- À l'expiration, l'événement `ParticipantMediaTimeout` (type 3, §5) est émis **une
+  fois**. Le serveur ne retire pas le participant du mix : la politique (BYE,
+  libération du quota, tuile de mosaïque) appartient au contrôleur.
+- Déconseillé sur le **texte** : le T.140 est légitimement silencieux entre deux
+  frappes et déclencherait un faux positif.
 
 #### `StartSending`
 Ouvre l'émission RTP d'un média vers une destination.

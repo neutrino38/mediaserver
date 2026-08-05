@@ -94,6 +94,14 @@ private:
 	//"emprunté" (SharedDocMixer), shared_ptr à deleter no-op.
 	std::shared_ptr<VideoInput>	videoInput;
 	std::shared_ptr<VideoOutput>	videoOutput;
+public:
+	//P7/S1 : (re)arme le chien de garde d'inactivite RTP sur la session interne.
+	//timeoutMs > 0 (re)configure le seuil ET arme, chrono a partir de maintenant ;
+	//0 desarme. Le mecanisme est celui deja utilise par JSR-309
+	//(MediaSession::EndpointStartRTPTimeout), on ne fait que l'exposer au MCU.
+	void ArmRTPTimeout(DWORD timeoutMs) { rtp.ArmRTPTimeout(timeoutMs); }
+
+private:
 	RTPSession      rtp;
 	std::weak_ptr<RTPSession>     rtpSession;
 	RTPSmoother		smoother;

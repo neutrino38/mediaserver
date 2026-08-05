@@ -1434,6 +1434,35 @@ int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,Media
 * StopReceivingVideo
 * 	StopReceivingVideo
 *************************/
+/**********************
+* StartRTPTimeout
+*	P7/S1. Arme (timeoutMs > 0) ou desarme (0) le chien de garde d'inactivite RTP
+*	d'un media. Meme prise de verrou que StopReceiving : c'est la seule chose qui
+*	protege l'acces au participant.
+***********************/
+int MultiConf::StartRTPTimeout(int id,MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role)
+{
+	int ret = 0;
+
+	Log("-StartRTPTimeout %s [partId:%d,timeoutMs:%u]\n",MediaFrame::TypeToString(media),id,timeoutMs);
+
+	//Use list
+	participantsLock.IncUse();
+
+	//Get the participant
+	RTPParticipantPtr part = GetRTPParticipant(id);
+
+	//Check participant
+	if (part)
+		ret = part->StartRTPTimeout(media,timeoutMs,role);
+
+	//Unlock
+	participantsLock.DecUse();
+
+	//Exit
+	return ret;
+}
+
 int MultiConf::StopReceiving(int id,MediaFrame::Type media,MediaFrame::MediaRole role)
 {
 	int ret = 0;
@@ -2461,6 +2490,29 @@ void MultiConf::onRequestFPU(Participant *part)
 	if (listener)
 		//Send event
 		listener->onParticipantRequestFPU(this,part->GetPartId());
+}
+
+/**********************
+* onParticipantMediaTimeout / onParticipantMediaConnected
+*	P7/S1-S2. Simples relais vers le MCU, qui en fait des evenements de file.
+*	Volontairement SANS verrou ni action sur le mix : on est appele depuis le
+*	thread RTP du participant, et decider quoi faire d'une patte muette est la
+*	politique du controleur SIP, pas la notre.
+***********************/
+void MultiConf::onParticipantMediaTimeout(Participant *part,MediaFrame::Type media,MediaFrame::MediaRole role)
+{
+	//Check listener
+	if (listener && part)
+		//Send event
+		listener->onParticipantMediaTimeout(this,part->GetPartId(),media,role);
+}
+
+void MultiConf::onParticipantMediaConnected(Participant *part,MediaFrame::Type media,MediaFrame::MediaRole role)
+{
+	//Check listener
+	if (listener && part)
+		//Send event
+		listener->onParticipantMediaConnected(this,part->GetPartId(),media,role);
 }
 
 void MultiConf::onDTMF(Participant * part, DTMFMessage* dtmf)
