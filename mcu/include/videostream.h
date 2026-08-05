@@ -118,6 +118,14 @@ private:
 	int 		videoBitrateLimit;
 	int 		videoBitrateLimitCount;
 	int		videoIntraPeriod;
+public:
+	//P8a : les proprietes codec locales, telles que SetRTPProperties les a retenues
+	//(prefixe "codec." deja retire). C'est de la que le negociateur derive le fmtp
+	//que NOUS annoncons, d'ou l'obligation pour le controleur de les envoyer AVANT
+	//StartReceiving (cf. mcu_module.md decision 8).
+	const Properties& GetCodecProperties() const { return videoProperties; }
+
+private:
 	Properties	videoProperties;
 
 	//Las threads

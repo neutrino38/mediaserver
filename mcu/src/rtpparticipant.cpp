@@ -6,6 +6,7 @@
  */
 
 #include "rtpparticipant.h"
+#include "medkit/negotiator.h"
 
 RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag) :
 	Participant(Participant::RTP,partId),
@@ -296,6 +297,104 @@ int RTPParticipant::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,MediaFr
 	return 0;
 }
 
+/**********************
+* StartReceiving (variante negociee) — P8a
+*	Delegue la selection des codecs au media serveur : on filtre la map proposee
+*	via CodecNegotiator, on installe la map ACCEPTEE au lieu de la proposee, et on
+*	remonte au controleur le fmtp par PT accepte.
+*
+*	Decalque de Endpoint::Port::NegotiateReceiving (chemin JSR-309), a une
+*	difference pres : la struct du fil est indexee par PAYLOAD TYPE alors que le
+*	negociateur attend le fmtp distant par NOM de codec. La conversion se fait ici
+*	parce que c'est le seul endroit ou la rtpMap et le fmtp de l'offre sont tous
+*	deux en main.
+***********************/
+int RTPParticipant::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,
+                                   const std::map<int,std::string>& offerFmtp,
+                                   std::map<int,std::string>& negotiatedFmtpOut,
+                                   MediaFrame::MediaRole role)
+{
+	negotiatedFmtpOut.clear();
+
+	//RTPMap (BYTE,BYTE) -> map<int,int> attendue par le negociateur (qui reste
+	//agnostique du RTPMap du MCU).
+	std::map<int,int> proposed;
+	for (RTPMap::const_iterator it=rtpMap.begin(); it!=rtpMap.end(); ++it)
+		proposed[it->first] = it->second;
+
+	//fmtp distant : PT -> "<nomcodec>.fmtp", la convention du negociateur (§5.3
+	//nego_fmtp.md). Un fmtp portant un PT que l'offre ne propose pas est ignore.
+	Properties remoteFmtp;
+	for (std::map<int,std::string>::const_iterator it=offerFmtp.begin(); it!=offerFmtp.end(); ++it)
+	{
+		std::map<int,int>::const_iterator pt = proposed.find(it->first);
+		if (pt == proposed.end())
+			continue;
+
+		const char* name = GetNameForCodec(media,(DWORD)pt->second);
+		if (!name)
+			continue;
+
+		std::string key(name);
+		for (char &c : key)
+			if (c >= 'A' && c <= 'Z')
+				c += 'a' - 'A';
+
+		remoteFmtp[key + ".fmtp"] = it->second;
+	}
+
+	//Props locales de CE media : ce que SetRTPProperties a retenu, d'ou le
+	//negociateur derive le fmtp que nous annoncons. Le texte n'en a pas (le fmtp du
+	//T140RED se derive de la seule map proposee), d'ou la map vide.
+	static const Properties noProps;
+	const Properties* localProps = &noProps;
+	switch (media)
+	{
+		case MediaFrame::Audio:
+			localProps = &audio.GetCodecProperties();
+			break;
+		case MediaFrame::Video:
+			if (!video[role])
+				return Error("StartReceiving: no video stream for role %d\n",(int)role);
+			localProps = &video[role]->GetCodecProperties();
+			break;
+		default:
+			break;
+	}
+
+	NegotiationResult result;
+	if (CodecNegotiator::Negotiate(media,proposed,*localProps,&remoteFmtp,result))
+	{
+		//Map ACCEPTEE (decision D) : un PT propose non supporte DISPARAIT.
+		RTPMap accepted;
+		for (std::map<int,int>::const_iterator it=result.acceptedMap.begin(); it!=result.acceptedMap.end(); ++it)
+			accepted[(BYTE)it->first] = (BYTE)it->second;
+
+		//Contrat du retour : TOUT PT accepte est une cle, y compris les codecs sans
+		//fmtp (valeur vide). La presence de la cle EST le signal d'acceptation.
+		for (std::vector<NegotiatedCodec>::const_iterator it=result.codecs.begin(); it!=result.codecs.end(); ++it)
+			negotiatedFmtpOut[it->payloadType] = it->fmtp;
+
+		Log("-StartReceiving negotiated %s [partId:%d,proposed:%u,accepted:%u]\n",
+		    MediaFrame::TypeToString(media),GetPartId(),
+		    (unsigned)proposed.size(),(unsigned)accepted.size());
+
+		//C'est la map filtree qui est installee, et c'est elle que l'appelant doit
+		//voir : le controleur construit son SDP depuis le retour, pas depuis ce
+		//qu'il avait propose.
+		rtpMap = accepted;
+	}
+	else
+	{
+		//Media non negociable : repli sur la map proposee telle quelle
+		//(comportement historique), et aucun fmtp remonte.
+		Log("-StartReceiving %s not negotiable, keeping the proposed map [partId:%d]\n",
+		    MediaFrame::TypeToString(media),GetPartId());
+	}
+
+	return StartReceiving(media,rtpMap,role);
+}
+
 int RTPParticipant::StartReceiving(MediaFrame::Type media,MediaFrame::MediaRole role)
 {
 		switch (media)
@@ -416,7 +515,7 @@ int RTPParticipant::StartRTPTimeout(MediaFrame::Type media,DWORD timeoutMs,Media
 			audio.ArmRTPTimeout(timeoutMs);
 			return 1;
 		case MediaFrame::Video:
-			if (role >= MAX_VIDEO_STREAM || !video[role])
+			if (!video[role])
 				return Error("StartRTPTimeout: no video stream for role %d\n",(int)role);
 			video[role]->ArmRTPTimeout(timeoutMs);
 			return 1;

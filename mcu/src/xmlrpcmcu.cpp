@@ -2022,7 +2022,21 @@ MCU *mcu = (MCU *)user_data;
 	int proto;
 	int recPort = 0;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiiSii)", &confId,&partId,&media,&rtpMap,&role,&proto);
+	//P8a : `offer` (7e param) porte les attributs codec de l'offre — aujourd'hui son
+	//seul membre est "fmtp", une struct PT -> parametres. Struct plutot que fmtp nu
+	//pour que le negociateur puisse en demander plus sans un enieme parametre
+	//positionnel et son repli de signature.
+	xmlrpc_value *offer = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiiSiiS)", &confId,&partId,&media,&rtpMap,&role,&proto,&offer);
+
+	if (env->fault_occurred)
+	{
+	    // Try without the offer argument (pre-P8a controller)
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    offer = NULL;
+	    xmlrpc_parse_value(env, param_array, "(iiiSii)", &confId,&partId,&media,&rtpMap,&role,&proto);
+	}
 
 	if (env->fault_occurred)
 	{
@@ -2030,10 +2044,11 @@ MCU *mcu = (MCU *)user_data;
 	    xmlrpc_env_clean(env);
 	    xmlrpc_env_init(env);
 	    proto = MediaFrame::TCP;
+	    offer = NULL;
 		xmlrpc_parse_value(env, param_array, "(iiiSi)", &confId,&partId,&media,&rtpMap,&role);
-	
+
 	}
-	
+
 	//Get the rtp map
 	RTPMap map;
 
@@ -2067,8 +2082,46 @@ MCU *mcu = (MCU *)user_data;
 	if(!mcu->GetConferenceRef(confId,conf))
 		return xmlerror(env,"Conference does not exist");
 
-	//La borramos
-	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto);
+	//P8a : le fmtp de l'offre, extrait du membre "fmtp" de `offer` (struct PT ->
+	//parametres, les parametres SEULS sans "a=fmtp:<pt> "). Absent ou mal forme =>
+	//map vide, et le serveur annonce alors sa propre config.
+	std::map<int,std::string> offerFmtp;
+	if (offer)
+	{
+		xmlrpc_value* fmtpStruct = NULL;
+		xmlrpc_struct_find_value(env,offer,"fmtp",&fmtpStruct);
+		if (!env->fault_occurred && fmtpStruct)
+		{
+			int n = xmlrpc_struct_size(env,fmtpStruct);
+			for (int i=0;i<n && !env->fault_occurred;i++)
+			{
+				xmlrpc_value *key, *val;
+				const char *ptStr, *params;
+				xmlrpc_struct_read_member(env,fmtpStruct,i,&key,&val);
+				xmlrpc_parse_value(env,key,"s",&ptStr);
+				xmlrpc_parse_value(env,val,"s",&params);
+				if (!env->fault_occurred)
+					offerFmtp[atoi(ptStr)] = params;
+				xmlrpc_DECREF(key);
+				xmlrpc_DECREF(val);
+			}
+			xmlrpc_DECREF(fmtpStruct);
+		}
+		//Un `offer` illisible ne coute pas l'appel : on repart sur la config locale.
+		if (env->fault_occurred)
+		{
+			xmlrpc_env_clean(env);
+			xmlrpc_env_init(env);
+			offerFmtp.clear();
+			Log("StartReceiving: unreadable offer struct, negotiating against our own config\n");
+		}
+	}
+
+	//La borramos. `negotiatedFmtp` non NULL demande la variante negociee : la map
+	//installee est la map FILTREE, et `map` est reecrite avec elle.
+	std::map<int,std::string> negotiatedFmtp;
+	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto,
+	                                        &offerFmtp,&negotiatedFmtp);
 
 
 	//Salimos
@@ -2089,8 +2142,28 @@ MCU *mcu = (MCU *)user_data;
 	Log("StartReceiving recVideoPort=%i ip=%s\n",recVideoPort,announcedIp);
 
 	//Devolvemos el resultado. returnVal[0] reste le port (les clients qui ne lisent
-	//que lui sont inchangés) ; l'IP est ajoutée en returnVal[1].
-	return xmlok(env,xmlrpc_build_value(env,"(is)",recVideoPort,announcedIp));
+	//que lui sont inchangés) ; l'IP est ajoutée en returnVal[1] ; le fmtp négocié en
+	//returnVal[2] (P8a). Purement additif : mcuGold lit l'index 0, un contrôleur
+	//pré-S4 les index 0-1, et un contrôleur pré-P8a ignore simplement le troisième.
+	//
+	//Contrat de returnVal[2] : TOUT PT accepté est une clé, y compris les codecs
+	//SANS fmtp (valeur vide) ; un PT absent a été filtré. La présence de la clé EST
+	//le signal d'acceptation — c'est la seule source dont le contrôleur dispose pour
+	//connaître l'ensemble accepté, donc NE PAS filtrer les valeurs vides ici (ce
+	//serait faire disparaître PCMU, PCMA, G722 et T140 de ses SDP).
+	xmlrpc_value* fmtpStruct = xmlrpc_struct_new(env);
+	for (std::map<int,std::string>::const_iterator it=negotiatedFmtp.begin(); it!=negotiatedFmtp.end(); ++it)
+	{
+		char ptStr[16];
+		snprintf(ptStr,sizeof(ptStr),"%d",it->first);
+		xmlrpc_value* v = xmlrpc_string_new(env,it->second.c_str());
+		xmlrpc_struct_set_value(env,fmtpStruct,ptStr,v);
+		xmlrpc_DECREF(v);
+	}
+
+	xmlrpc_value* ret = xmlrpc_build_value(env,"(isS)",recVideoPort,announcedIp,fmtpStruct);
+	xmlrpc_DECREF(fmtpStruct);
+	return xmlok(env,ret);
 }
 
 /**

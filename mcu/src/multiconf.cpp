@@ -1380,7 +1380,9 @@ int MultiConf::StopSending(int id,MediaFrame::Type media,MediaFrame::MediaRole r
 	return ret;
 }
 
-int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,MediaFrame::MediaRole role, int confId, MediaFrame::MediaProtocol proto)
+int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,MediaFrame::MediaRole role, int confId, MediaFrame::MediaProtocol proto,
+                              const std::map<int,std::string>* offerFmtp,
+                              std::map<int,std::string>* negotiatedFmtpOut)
 {
 	int ret = 0;
 	Participant::DocSharingMode docSharingMode;
@@ -1420,7 +1422,16 @@ int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,Media
 				}
 				break;			
 			default:
-				ret = part->StartReceiving(media,rtpMap,role);
+				//P8a : la variante negociee n'est prise que si l'appelant veut le
+				//retour enrichi. Sans elle, rien ne change pour un controleur qui
+				//ne l'a pas demandee.
+				if (negotiatedFmtpOut)
+				{
+					static const std::map<int,std::string> noFmtp;
+					ret = part->StartReceiving(media,rtpMap,offerFmtp?*offerFmtp:noFmtp,*negotiatedFmtpOut,role);
+				}
+				else
+					ret = part->StartReceiving(media,rtpMap,role);
 		}
 	}
 	

@@ -662,19 +662,53 @@ Les *rtpMap* sont des structs XML-RPC dont les **clés sont les payload types RT
 numériques** (en chaîne) et les **valeurs les identifiants de codec** (int).
 
 #### `StartReceiving`
-Ouvre la réception RTP d'un média et alloue un port local.
-- **Params** `(iiiSii)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
+Ouvre la réception RTP d'un média, alloue un port local, et **négocie les codecs**.
+- **Params** `(iiiSiiS)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
   `rtpMap` (struct PT→codec), `role` (`MediaRole`), `proto`
-  (`MediaFrame::MediaProtocol`).
+  (`MediaFrame::MediaProtocol`), `offer` (struct, voir ci-dessous).
+- **Params** (sans offer) `(iiiSii)` : idem, pas d'entrée distante — le serveur
+  annonce alors sa propre configuration.
 - **Params** (sans proto) `(iiiSi)` : idem, `proto` = TCP (3).
-- **Retour** : `(i,s)` = `recvPort` (port RTP alloué) puis `ip` = l'adresse à
-  annoncer dans le SDP (ligne `c=` et candidats ICE) pour ce média : le réglage
-  global `--public-ip` du serveur, à défaut le premier IPv4 non loopback de
-  l'hôte (§1). Le port seul ne suffit pas au contrôleur, et cette adresse n'est
-  pas déductible du canal de contrôle — derrière un NAT elle en diffère.
-- `returnVal[0]` **reste le port** : un client qui ne lit que cet index (le
-  `XmlRpcMcuClient` Java) est inchangé. Les enrichissements futurs (fmtp
-  négocié) s'ajoutent de la même façon, en fin de tableau.
+- **Retour** : `(i,s,S)` = `recvPort`, `ip`, `fmtpByPt`.
+
+**`offer`** porte les attributs codec de l'offre SDP, ceux que la `rtpMap` ne peut
+pas transporter. Un seul membre aujourd'hui :
+
+```
+offer = { "fmtp": { "<pt>": "<paramètres>" } }
+```
+
+Les valeurs sont les paramètres **seuls** — exactement ce qui suit `a=fmtp:<pt> `,
+sans le préfixe ni le numéro de PT. Les clés sont les PT **de l'offre**. Une struct
+plutôt qu'une map de fmtp nue, pour que le négociateur puisse en demander plus sans
+un énième paramètre positionnel. Un `offer` illisible ne coûte pas l'appel : le
+serveur le journalise et négocie contre sa seule configuration.
+
+> C'est le contrôleur qui parse le SDP, jamais le serveur : passer le SDP brut
+> mettrait ici un **second parseur SDP**, à une release de divergence du premier.
+
+**`fmtpByPt`** (`returnVal[2]`) est le verdict de la négociation :
+`{ "<pt>": "<paramètres fmtp>" }`.
+
+- **TOUT PT accepté est une clé**, y compris les codecs **sans** fmtp (PCMU, PCMA,
+  G722, T140…) : valeur **chaîne vide**. Un PT **absent** a été filtré, faute d'être
+  supporté.
+- La **présence de la clé est le signal d'acceptation** : c'est la seule source dont
+  le contrôleur dispose pour connaître l'ensemble accepté, et c'est de là qu'il
+  reconstruit sa ligne `m=` et ses `a=fmtp`. Même contrat, mot pour mot, que
+  `EndpointStartReceiving` côté JSR-309 (`xmlrpc_jsr309_api.md` §6.7).
+- La `rtpMap` réellement **installée** est la map filtrée, pas celle proposée.
+- Un média non négociable retombe sur la map proposée telle quelle, sans fmtp
+  remonté (comportement d'avant la délégation).
+
+Le fmtp que le serveur annonce dérive des propriétés `codec.*` du participant, donc
+le contrôleur doit les envoyer par `SetRTPProperties` **avant** `StartReceiving` ;
+envoyées après, la négociation travaille sur une map vide et annonce les défauts du
+serveur.
+
+- `returnVal[0]` **reste le port** et `returnVal[1]` l'adresse : un client qui ne lit
+  que l'index 0 (le `XmlRpcMcuClient` Java) ou les index 0-1 (un contrôleur pré-P8a)
+  est inchangé. Les ajouts se font en fin de tableau, jamais par déplacement.
 - `ip` est toujours renseignée : le serveur ne démarre pas sans (§1).
 - Échoue désormais (enveloppe `xmlerror`) quand le serveur n'a pas pu ouvrir la
   réception — il renvoyait auparavant `returnCode: 1` avec un port `0`, que le

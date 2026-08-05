@@ -118,7 +118,12 @@ public:
 	
 	int StartSending(int partId,MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
-	int StartReceiving(int partId,MediaFrame::Type media,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN,int confID= 0, MediaFrame::MediaProtocol proto = MediaFrame::TCP);
+	//P8a : `offerFmtp` (fmtp de l'offre par PT) et `negotiatedFmtpOut` (fmtp par PT
+	//accepte) sont optionnels — NULL redonne exactement le comportement d'avant la
+	//delegation, ce qui est ce qu'un controleur anterieur obtient.
+	int StartReceiving(int partId,MediaFrame::Type media,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN,int confID= 0, MediaFrame::MediaProtocol proto = MediaFrame::TCP,
+	                   const std::map<int,std::string>* offerFmtp = NULL,
+	                   std::map<int,std::string>* negotiatedFmtpOut = NULL);
 	int StopReceiving(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//P7/S1 : arme (timeoutMs > 0) ou desarme (0) le chien de garde d'inactivite
 	//RTP d'un media d'un participant.
