@@ -701,6 +701,21 @@ serveur le journalise et négocie contre sa seule configuration.
 - Un média non négociable retombe sur la map proposée telle quelle, sans fmtp
   remonté (comportement d'avant la délégation).
 
+La résolution est **par payload type**, et c'est ce qui donne son sens aux clés de
+`offer.fmtp` : deux PT du même codec repartent avec deux fmtp différents. Un client
+peut donc offrir le même H.264 sous plusieurs PT — ce que fait tout navigateur, pour
+décrire autant de couples (`profile-level-id`, `packetization-mode`) — et chacun est
+répondu avec le sien, `packetization-mode` compris (RFC 6184 §8.2.2). Un PT absent de
+`offer.fmtp` n'hérite pas du fmtp d'un autre PT : il est négocié contre la seule
+configuration du serveur.
+
+> **Corrigé le 2026-08-06.** Le serveur collapsait ces entrées en une seule propriété
+> par *codec* : sur une offre à sept PT H.264, le dernier PT gagnait et les sept
+> repartaient avec son profil. Six réponses décrivaient un codec que l'appelant
+> n'avait pas offert, ce qu'un navigateur refuse en bloc (`BYE` juste après l'`ACK`).
+> Un contrôleur qui envoyait déjà `offer.fmtp` par PT n'a rien à changer : c'est le
+> serveur qui lit désormais la bonne entrée.
+
 Le fmtp que le serveur annonce dérive des propriétés `codec.*` du participant, donc
 le contrôleur doit les envoyer par `SetRTPProperties` **avant** `StartReceiving` ;
 envoyées après, la négociation travaille sur une map vide et annonce les défauts du

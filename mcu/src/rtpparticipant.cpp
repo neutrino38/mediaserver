@@ -322,25 +322,25 @@ int RTPParticipant::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,
 	for (RTPMap::const_iterator it=rtpMap.begin(); it!=rtpMap.end(); ++it)
 		proposed[it->first] = it->second;
 
-	//fmtp distant : PT -> "<nomcodec>.fmtp", la convention du negociateur (§5.3
+	//fmtp distant : PT -> "pt.<pt>.fmtp", la convention du negociateur (§5.3
 	//nego_fmtp.md). Un fmtp portant un PT que l'offre ne propose pas est ignore.
+	//
+	//La cle est par PAYLOAD TYPE et non par nom de codec, et ce n'est pas un detail :
+	//une offre navigateur enumere le meme H.264 sous six ou sept PT pour decrire
+	//autant de couples (profil, packetization-mode). Ce code ecrivait
+	//"h264.fmtp" dans une boucle sur les PT — le dernier itere gagnait, et les sept
+	//PT acceptes repartaient tous avec SON profil. Six d'entre eux decrivaient donc
+	//un codec que l'appelant n'avait pas offert (RFC 6184 §8.2.2) : Chrome refuse la
+	//reponse entiere et raccroche juste apres l'ACK (capture du 2026-08-06).
 	Properties remoteFmtp;
 	for (std::map<int,std::string>::const_iterator it=offerFmtp.begin(); it!=offerFmtp.end(); ++it)
 	{
-		std::map<int,int>::const_iterator pt = proposed.find(it->first);
-		if (pt == proposed.end())
+		if (proposed.find(it->first) == proposed.end())
 			continue;
 
-		const char* name = GetNameForCodec(media,(DWORD)pt->second);
-		if (!name)
-			continue;
-
-		std::string key(name);
-		for (char &c : key)
-			if (c >= 'A' && c <= 'Z')
-				c += 'a' - 'A';
-
-		remoteFmtp[key + ".fmtp"] = it->second;
+		char key[32];
+		snprintf(key,sizeof(key),"pt.%d.fmtp",it->first);
+		remoteFmtp[key] = it->second;
 	}
 
 	//Props locales de CE media : ce que SetRTPProperties a retenu, d'ou le

@@ -304,15 +304,46 @@ returnVal = [
 
 ### 5.3 Canal du fmtp distant (phase 5)
 
-Réutilise `EndpointSetRTPProperties` avec une convention de clé :
+Deux clés, selon ce que le contrôleur a à dire. La **résolution est par payload
+type** ; la clé par nom de codec n'est qu'un raccourci valable quand il n'y a qu'un
+PT par codec.
 
 ```
-codec.<nomCodec>.fmtp = "<paramètres fmtp reçus du pair>"
+pt.<pt>.fmtp        = "<paramètres fmtp reçus du pair pour CE payload type>"
+   ex. pt.109.fmtp = "profile-level-id=42e01f;packetization-mode=1"
+
+codec.<nomCodec>.fmtp = "<paramètres fmtp reçus du pair>"     (raccourci historique)
    ex. codec.h264.fmtp = "profile-level-id=42e01f;packetization-mode=1"
 ```
 
-Routé (§4.3) vers le stockage de l'endpoint, parsé par le négociateur, converti
-en `effectiveProps` (ex. `h264.profile-level-id`) pour l'encodeur d'émission.
+- **`pt.<pt>.fmtp`** est alimentée par le paramètre `offer` de `StartReceiving`
+  (chemin MCU, cf. MCU-API §`StartReceiving`), une entrée par PT de l'offre.
+- **`codec.<nomCodec>.fmtp`** est alimentée par `EndpointSetRTPProperties`
+  (chemin JSR-309), routée (§4.3) vers le stockage de l'endpoint, où
+  `StoreCodecProperties` la range débarrassée du préfixe `codec.`.
+- La clé par PT gagne quand les deux sont présentes, ce qui rend la migration d'un
+  contrôleur sans coordination possible.
+
+Le négociateur parse la valeur, en tire le fmtp **annoncé** pour ce PT et les
+`effectiveProps` (ex. `h264.profile-level-id`, `h264.packetization-mode`) qui
+bornent l'encodeur d'émission.
+
+> **Pourquoi par PT — corrigé le 2026-08-06.** La clé par nom de codec, seule, ne
+> peut porter qu'UNE résolution pour tous les PT d'un même codec. Une offre
+> navigateur énumère le même H.264 sous six ou sept PT, précisément pour décrire
+> autant de couples (profil, `packetization-mode`) : Chrome 138 en offre sept.
+> `RTPParticipant::StartReceiving` écrivait `h264.fmtp` dans une boucle sur les PT
+> — le dernier itéré gagnait — et le négociateur servait ce profil aux sept PT
+> acceptés. Six réponses décrivaient donc un codec que l'appelant n'avait pas
+> offert : libwebrtc refuse la réponse entière et l'application raccroche juste
+> après l'ACK. `H264Encoder::ResolveNegotiation` était correct — il annonce bien le
+> profil du pair — on lui passait simplement le mauvais pair.
+>
+> Le `packetization-mode` annoncé, codé en dur à `1`, relevait de la même erreur :
+> le mode fait partie de l'**identité** du payload type côté pair. Il est désormais
+> celui du pair pour ce PT, dans les deux jeux de propriétés (annoncé et effectif).
+> Reste à faire : le packetiseur n'honore pas encore le mode 0 (il émet du FU-A),
+> ce que `ResolveNegotiation` signale par un `Log`.
 
 ## 6. Dynamique d'appel (les deux sens)
 
