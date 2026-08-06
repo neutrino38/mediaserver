@@ -46,7 +46,11 @@ public:
 	    // et dérive le fmtp local (params seuls) SANS ouvrir de codec. Remplit
 	    // acceptedOut (sous-ensemble accepté) et mémorise le résultat (fmtp par PT
 	    // + effectiveProps) pour le retour XML-RPC et l'encodeur (ph.5).
-	    void NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut);
+	    // `offerFmtp` (P8a, optionnel) : le fmtp de l'offre PAR PAYLOAD TYPE, posé
+	    // en clés "pt.<pt>.fmtp" au-dessus du canal par codec — deux PT d'un même
+	    // codec repartent alors chacun avec son propre profil (RFC 6184 §8.2.2).
+	    void NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut,
+	                            const std::map<int,std::string>* offerFmtp = NULL);
 	    // fmtp de la dernière négociation : PT -> paramètres (params seuls). TOUT PT
 	    // accepté est présent ; un codec sans fmtp a une valeur "" (chaîne vide). Un
 	    // PT absent a été filtré (non supporté). Vide tant qu'aucune négociation n'a eu lieu.
@@ -128,7 +132,10 @@ public:
 	//Watchdog d'inactivité RTP (gap 5) : arme (timeoutMs>0) ou désarme (0) le flux.
 	int ArmRTPTimeout(MediaFrame::Type media,DWORD timeoutMs, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(MediaFrame::Type media, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
-	int StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN);
+	//P8a : `offerFmtp` (optionnel) porte le fmtp de l'offre par payload type, relayé
+	//au négociateur — NULL = pas d'entrée distante, négociation contre notre config.
+	int StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::MediaRole role =  MediaFrame::VIDEO_MAIN,
+	                   const std::map<int,std::string>* offerFmtp = NULL);
 	int StopReceiving(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int RequestUpdate(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 

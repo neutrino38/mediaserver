@@ -1151,7 +1151,21 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	int media;
 	int recPort = 0;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&rtpMap);
+	//P8a : `offer` (5e param, optionnel) porte les attributs codec de l'offre — même
+	//contrat que le StartReceiving de l'API MCU : aujourd'hui son seul membre est
+	//"fmtp", une struct PT -> paramètres. Struct plutôt que fmtp nu pour que le
+	//négociateur puisse en demander plus sans un énième paramètre positionnel.
+	xmlrpc_value *offer = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiiSS)", &sessionId,&endpointId,&media,&rtpMap,&offer);
+
+	if (env->fault_occurred)
+	{
+		// Try without the offer argument (pre-P8a controller)
+		xmlrpc_env_clean(env);
+		xmlrpc_env_init(env);
+		offer = NULL;
+		xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&rtpMap);
+	}
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1160,7 +1174,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//Obtenemos la referencia
 	if(!jsr->GetMediaSessionRef(sessionId,session))
 		return xmlerror(env,"The media Session does not exist");
-	
+
 	//Get the rtp map
 	RTPMap map;
 
@@ -1186,9 +1200,47 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		xmlrpc_DECREF(val);
 	}
 
-	//Start receiving video and get listening port + fmtp négocié (phase 4)
+	//P8a : le fmtp de l'offre, extrait du membre "fmtp" de `offer` (struct PT ->
+	//paramètres, les paramètres SEULS sans "a=fmtp:<pt> "). Absent ou mal formé =>
+	//map vide, et le serveur négocie alors contre sa seule configuration (le canal
+	//codec.<x>.fmtp posé par EndpointSetRTPProperties, s'il a été alimenté).
+	std::map<int,std::string> offerFmtp;
+	if (offer)
+	{
+		xmlrpc_value* offerStruct = NULL;
+		xmlrpc_struct_find_value(env,offer,"fmtp",&offerStruct);
+		if (!env->fault_occurred && offerStruct)
+		{
+			int n = xmlrpc_struct_size(env,offerStruct);
+			for (int i=0;i<n && !env->fault_occurred;i++)
+			{
+				xmlrpc_value *key, *val;
+				const char *ptStr, *params;
+				xmlrpc_struct_read_member(env,offerStruct,i,&key,&val);
+				xmlrpc_parse_value(env,key,"s",&ptStr);
+				xmlrpc_parse_value(env,val,"s",&params);
+				if (!env->fault_occurred)
+					offerFmtp[atoi(ptStr)] = params;
+				xmlrpc_DECREF(key);
+				xmlrpc_DECREF(val);
+			}
+			xmlrpc_DECREF(offerStruct);
+		}
+		//Un `offer` illisible ne coûte pas l'appel : on repart sur la config locale.
+		if (env->fault_occurred)
+		{
+			xmlrpc_env_clean(env);
+			xmlrpc_env_init(env);
+			offerFmtp.clear();
+			Log("EndpointStartReceiving: unreadable offer struct, negotiating against our own config\n");
+		}
+	}
+
+	//Start receiving video and get listening port + fmtp négocié (phase 4).
+	//P8a : le fmtp de l'offre descend jusqu'au négociateur, posé par PT.
 	std::map<int,std::string> fmtpMap;
-	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map,fmtpMap);
+	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map,fmtpMap,
+	                                          offer ? &offerFmtp : NULL);
 
 
 	//Salimos (StartReceiving peut rendre -1 : protocole non supporté)

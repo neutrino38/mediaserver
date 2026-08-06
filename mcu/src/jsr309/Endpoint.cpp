@@ -175,10 +175,11 @@ int Endpoint::StopSending(MediaFrame::Type media, MediaFrame::MediaRole role)
 	return p->StopSending();
 }
 
-int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::MediaRole role)
+int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::MediaRole role,
+                             const std::map<int,std::string>* offerFmtp)
 {
 	Log("-StartReceiving endpoint [name:%ls,media:%s]\n",name.c_str(),MediaFrame::TypeToString(media));
-	
+
 	//Get rtp enpoint for media
 	std::shared_ptr<Port> p = GetPort(media, role);
 
@@ -203,9 +204,10 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 					rtp->StopReceiving();
 				//Négociation phase 4 : filtre la map proposée selon les codecs
 				//réellement supportés (décision D) et mémorise le fmtp local
-				//(params seuls) pour le retour XML-RPC enrichi (§5.2).
+				//(params seuls) pour le retour XML-RPC enrichi (§5.2). Le fmtp de
+				//l'offre (P8a), quand le contrôleur l'a fourni, est relayé par PT.
 				RTPMap accepted;
-				p->NegotiateReceiving(rtpMap, accepted);
+				p->NegotiateReceiving(rtpMap, accepted, offerFmtp);
 				rtp->SetReceivingRTPMap(accepted);
 			}
 			break;
@@ -513,7 +515,8 @@ void Endpoint::Port::StoreCodecProperties(const Properties& properties)
 	}
 }
 
-void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut)
+void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& acceptedOut,
+                                        const std::map<int,std::string>* offerFmtp)
 {
 	//Repart d'un état propre à chaque (re)négociation.
 	acceptedOut.clear();
@@ -526,13 +529,35 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 	for (RTPMap::const_iterator it=proposed.begin(); it!=proposed.end(); ++it)
 		in[it->first] = it->second;
 
-	NegotiationResult result;
 	//Le fmtp DISTANT vit dans le même conteneur que les props locales : StoreCodecProperties
 	//range les clés "codec.<x>.*" débarrassées de leur préfixe, donc le "codec.h264.fmtp"
 	//envoyé par le contrôleur (§5.3 nego_fmtp.md, décision C) y est sous "h264.fmtp". On
-	//passe donc codecProperties des deux côtés : le négociateur y lit notre intention ET
-	//ce que le pair a déclaré, chacun sous sa propre clé.
-	if (!CodecNegotiator::Negotiate(type, in, codecProperties, &codecProperties, result))
+	//part donc de codecProperties : le négociateur y lit notre intention ET ce que le pair
+	//a déclaré, chacun sous sa propre clé.
+	//
+	//P8a : quand le contrôleur a fourni la struct `offer` d'EndpointStartReceiving, son
+	//fmtp est posé PAR-DESSUS en clés "pt.<pt>.fmtp" — la clé que RemoteParamsFor lit en
+	//premier. C'est ce qui rend la résolution par payload type : une offre navigateur
+	//énumère le même H.264 sous six ou sept PT pour décrire autant de couples
+	//(profil, packetization-mode), et le canal par nom de codec les écraserait en un
+	//seul (RFC 6184 §8.2.2 — le même collapse corrigé côté API MCU le 2026-08-06).
+	//Un fmtp portant un PT que l'offre ne propose pas est ignoré.
+	Properties remoteFmtp = codecProperties;
+	if (offerFmtp)
+	{
+		for (std::map<int,std::string>::const_iterator it=offerFmtp->begin(); it!=offerFmtp->end(); ++it)
+		{
+			if (in.find(it->first) == in.end())
+				continue;
+
+			char key[32];
+			snprintf(key,sizeof(key),"pt.%d.fmtp",it->first);
+			remoteFmtp[key] = it->second;
+		}
+	}
+
+	NegotiationResult result;
+	if (!CodecNegotiator::Negotiate(type, in, codecProperties, &remoteFmtp, result))
 	{
 		//Média non négociable (ne devrait pas arriver pour audio/vidéo/texte) :
 		//on retombe sur la map proposée telle quelle (comportement historique).
