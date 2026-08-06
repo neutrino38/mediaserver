@@ -599,6 +599,24 @@ Configure le codec vidéo d'émission du participant.
   `quality`/`fillLevel` sont parsés puis ignorés.
 - **Retour** : vide.
 
+`properties` est **le seul canal qui atteint l'encodeur** : `SetVideoCodec` remplace la
+map de propriétés du flux (`videoProperties = properties`), donc tout ce que la
+négociation a établi doit y être remis par le contrôleur. Clés H.264 attendues :
+
+| Clé | Effet |
+|---|---|
+| `h264.profile-level-id` | profil et niveau écrits dans chaque SPS émis. Absente, l'encodeur reprend son défaut (`42801F`) quelle que soit la réponse SDP annoncée, et un pair qui fait confiance à l'answer reçoit un flux qu'il peut ne pas décoder |
+| `h264.packetization-mode` | `0` borne les slices au payload RTP (aucun FU-A) **et force libx264**, VAAPI ne sachant pas contraindre la taille d'une slice ; `1` (défaut) laisse une borne large. Le serveur journalise `falling back to software encoding because of requested packetization_mode 0` |
+
+Les deux valeurs sont celles que `StartReceiving` a rendues dans `fmtpByPt` pour le
+payload type sur lequel le contrôleur va émettre : le serveur y met le mode du pair
+quand il en a déclaré un, et `1` sinon, donc annoncé et émis restent le même couple.
+
+> **Absence de `packetization-mode` dans l'offre** : lue comme « pas de contrainte »,
+> donc `1` — écart assumé à la RFC 6184 §8.1 (qui fait valoir `0`), décidé le
+> 2026-08-06. Un pair qui omet le paramètre est un SDP incomplet plus qu'un décodeur
+> single-NAL.
+
 #### `SetAudioCodec`
 Configure le codec audio du participant.
 - **Params** `(iiiS)` : `confId`, `partId`, `codec` (`AudioCodec::Type`),
