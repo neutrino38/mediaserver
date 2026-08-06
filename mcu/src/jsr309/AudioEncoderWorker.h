@@ -26,13 +26,17 @@ public:
 	virtual void AddListener(Listener *listener);
 	virtual void Update();
 	virtual void RemoveListener(Listener *listener);
+	//Phase 5 (nego_fmtp §6.3) : bornes négociées par code codec, passées à
+	//AudioCodecFactory::CreateEncoder à l'ouverture (Opus : useinbandfec,
+	//usedtx, maxaveragebitrate, cbr déclarés par le pair).
+	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);
 
 private:
 	int Start();
 	int Stop();
 protected:
 	int Encode();
-	
+
 private:
 	static void *startEncoding(void *par);
 
@@ -41,6 +45,8 @@ private:
 	AudioCodec::Type codec;
 	pthread_t thread;
 	bool encoding;
+	//Bornes négociées par code codec (phase 5), fusionnées à l'ouverture.
+	std::map<int,Properties> negotiated;
 };
 
 #endif	/* AUDIOENCODERWORKER_H */

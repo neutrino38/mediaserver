@@ -582,10 +582,16 @@ média `media` vers `endpointId`.
 > codec**, lue en repli quand `offer` ne dit rien pour un PT. Envoyer les deux
 > est légal ; à PT couvert par `offer`, `offer` gagne.
 >
-> **Encore en cours** (phase 5 de `nego_fmtp.md`) : contraindre l'**émission** —
-> borner notre encodeur au profil du pair, câblage endpoint → producteur
-> (transcodeur/mixer), H.264 en premier. Les `effectiveProps` par PT sont déjà
-> mémorisées à la négociation ; c'est leur consommation qui reste à livrer.
+> **Émission bornée — livré (2026-08-06, phase 5 de `nego_fmtp.md`)** : les
+> `effectiveProps` issues de la négociation atteignent automatiquement le
+> producteur attaché à l'endpoint (`VideoTranscoder`, `AudioTranscoder`, ports
+> de mixer) — poussées à la négociation, à l'attach et à `StartSending`, quel
+> que soit l'ordre des appels ; l'encodeur (ré)ouvre avec elles. H.264 :
+> `profile-level-id` et `packetization-mode` du pair (mode 0 ⇒ slices bornées
+> au payload RTP + encodeur logiciel). Opus : `useinbandfec`/`usedtx`/`cbr`/
+> `maxaveragebitrate` déclarés par le pair. Un player ou un relais B2B n'a pas
+> d'encodeur : sans objet. Le contrôleur n'a **rien à faire** au-delà de
+> fournir le fmtp distant (`offer` ou `codec.<x>.fmtp`).
 > Cf. §9.7 pour l'ordre d'appel exact selon le sens de l'appel.
 - **`EndpointAddICECandidate`** (trickle ICE, Niveau 1) : `candidate` est une
   ligne d'attribut SDP `candidate:` (avec ou sans le préfixe `candidate:`), p.ex.

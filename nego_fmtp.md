@@ -1,13 +1,20 @@
 # Négociation des paramètres des codecs (fmtp SDP)
 
 > Statut : **conception figée** (décisions A–E actées, §8). Phases 1-4 FAITES
-> (2026-07-15). **Phase 5 partiellement faite (2026-08-05)** : l'ingestion du fmtp
-> distant est livrée **pour H.264** (`ParseFmtpParams`,
-> `H264Encoder::ResolveNegotiation`, RFC 6184 §8.2.2), et `Endpoint::Port::
-> NegotiateReceiving` la branche enfin. **Reste ouvert** : le câblage des
-> `effectiveProps` vers l'encodeur réel (§6.3 — elles sont mémorisées, personne ne
-> les consomme), l'ingestion AV1 (phase 5b, investiguée et non écrite) et VP8/Opus.
-> Phase 6 (MCU) spécifiée, non commencée.
+> (2026-07-15). **Phase 5 LIVRÉE côté JSR-309 (2026-08-06)** : l'ingestion du fmtp
+> distant est livrée pour **H.264** (`ParseFmtpParams`,
+> `H264Encoder::ResolveNegotiation`, RFC 6184 §8.2.2) et pour **Opus**
+> (`OPUSEncoder::ResolveNegotiation`, RFC 7587 §7 — annonce inchangée, émission
+> bornée) ; **VP8 est sans objet** (aucun paramètre qui s'y prête). Le **câblage
+> des `effectiveProps` vers le producteur réel** (§6.3) est fait :
+> `Joinable::SetNegotiatedCodecProperties` (no-op par défaut), poussé par
+> `Endpoint::Port` à la négociation, à l'attach et à `StartSending` (affinage par
+> le PT d'émission), consommé par les workers d'encodage audio et vidéo — fusion
+> par-dessus la config du contrôleur à l'ouverture de l'encodeur, redémarrage si
+> les bornes changent en cours d'encodage — et relayé par les deux transcodeurs.
+> **Restent ouverts** : l'ingestion AV1 (phase 5b, deux décisions à trancher) et
+> la consommation MCU des `effectiveProps` (le `VideoStream` du participant —
+> avec la phase 6, spécifiée, non commencée).
 >
 > Le média serveur ne parle pas SIP : la signalisation et le SDP sont gérés par
 > un **contrôleur SIP** externe (p. ex. le projet elixip), qui pilote le média
@@ -454,12 +461,30 @@ l'encodeur du flux sortant. Le flux émis vers le pair provient de ce qui est
 B2B sans transcodage — la source directe (relais de paquets, aucun encodeur).
 
 Conséquence : les `effectiveProps` calculées au niveau de l'endpoint doivent
-**atteindre le producteur réel** du flux sortant. Le véhicule existe déjà
-(`VideoTranscoderSetCodec` / `*MixerPortSetCodec` acceptent des `Properties`),
-mais **le câblage endpoint→producteur reste à faire** — c'est la vraie
-difficulté de la phase 5, à traiter H.264 en premier. En relais B2B pur, les
+**atteindre le producteur réel** du flux sortant. En relais B2B pur, les
 `effectiveProps` sont sans objet : ce sont alors les deux pattes qui doivent
-avoir négocié des profils compatibles (orchestration côté contrôleur SIP).
+avoir négocié des profils compatibles (orchestration côté contrôleur SIP) ; un
+Player non plus n'a pas d'encodeur (son levier est la sélection de piste).
+
+**Câblage livré (2026-08-06)** — par l'interface `Joinable` plutôt que par
+`MediaSession`, pour survivre aux trois ordres {SetCodec, attach, négociation}
+que le contrôleur est libre de choisir :
+
+- `Joinable::SetNegotiatedCodecProperties(map<codec,Properties>)`, no-op par
+  défaut (Player, relais B2B) ;
+- `Endpoint::Port` pousse au `Joinable` attaché : à la fin de
+  `NegotiateReceiving` (premier PT accepté de chaque codec = le primaire de
+  l'offre), à l'`Attach`, et à `StartSending` — où le PT réellement émis affine
+  le choix (`RefineNegotiatedForSending` : sur une offre navigateur, plusieurs
+  PT du même H.264 portent des profils différents) ;
+- consommé par `VideoEncoderMultiplexerWorker` et
+  `AudioEncoderMultiplexerWorker` (fusion par-dessus la config du contrôleur à
+  l'ouverture — les bornes gagnent — et cycle Stop/Start si elles changent sur
+  un encodeur ouvert, au prix d'un IDR qu'un changement de profil exige de
+  toute façon), et relayé d'un cran par `VideoTranscoder`/`AudioTranscoder` ;
+- un producteur **partagé** entre plusieurs pattes reçoit les bornes de la
+  dernière qui a poussé : un même flux ne peut pas satisfaire deux bornes,
+  des bornes par patte exigent un producteur par patte (un transcodeur).
 
 C'est pourquoi le phasage isole le sens réception (phases 1-4, autonome, valeur
 immédiate) du sens émission (phase 5, dépendant de ce câblage).
@@ -540,11 +565,13 @@ choses que le contrôleur confondait jusqu'ici sont séparées :
   ce qu'on **annonce** (capacité de réception : sous-estimer est sans risque) et **pas**
   pour ce qu'on **émet** — le niveau et le mode de paquetisation déclarés par le pair
   sont des bornes dures de notre encodeur. Second corollaire :
-  `packetization-mode` n'est **pas** régi par cette règle — il est
-  aujourd'hui **codé en dur à `1`** (`h264encoder.cpp:322`), donc un appelant qui ne
-  gère que le mode 0 reçoit `packetization-mode=1`. À corriger ici, puisque c'est la
-  phase qui rend le fmtp distant lisible : le mode qu'on **émet** doit être un mode
-  que le pair a déclaré, celui qu'on **annonce** est le nôtre ;
+  `packetization-mode` n'est **pas** régi par cette règle. **Corrigé** : le mode
+  n'est plus codé en dur — `H264Encoder::WantedPacketizationMode` lit
+  `h264.packetization-mode` (absence = pas de contrainte = 1, décidé le
+  2026-08-06), le mode 0 borne chaque slice au payload RTP et force l'encodeur
+  logiciel (`WantsHardware`). Le mode qu'on **émet** est un mode que le pair a
+  déclaré, celui qu'on **annonce** sur un PT est celui que le PT portait dans
+  l'offre (`ResolveNegotiation` écrit le mode résolu dans les deux jeux) ;
 - ce qui **borne notre encodeur** = `min(notre capacité, le niveau déclaré par le
   pair)` → `effectiveProps`. Le pair a dit ce qu'il sait décoder ; émettre au-dessus
   produit un flux négocié avec succès et décodé par personne.

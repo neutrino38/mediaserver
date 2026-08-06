@@ -74,9 +74,36 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 		Log("-VideoEncoder: restarted encoder.\n");
 		Start();
 	}
-	
+
 	//Exit
 	return 1;
+}
+
+//Phase 5 (nego_fmtp §6.3) : les bornes que la négociation SDP de la patte
+//émettrice impose à l'encodeur. Les Properties ne sont lues qu'à CreateEncoder,
+//donc des bornes qui changent sur un encodeur ouvert exigent un cycle
+//Stop/Start — le même que SetCodec, au prix d'un IDR frais, ce qui est
+//précisément ce qu'un changement de profil exige de toute façon.
+void VideoEncoderMultiplexerWorker::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
+{
+	//Bornes identiques : ne pas redémarrer l'encodeur pour rien (chaque push
+	//re-signalisation/attach/StartSending repasse ici).
+	if (negotiated == byCodec)
+		return;
+
+	negotiated = byCodec;
+
+	Log("-VideoEncoder: negotiated codec properties updated [%d codec(s)]\n",
+	    (int)byCodec.size());
+
+	//Même logique de reprise que SetCodec : un encodeur ouvert ré-ouvre avec
+	//les bornes à jour, un encodeur pas encore démarré les lira au Start().
+	Stop();
+	if (!listeners.empty() && codec != (VideoCodec::Type)-1)
+	{
+		Log("-VideoEncoder: restarted encoder with negotiated properties.\n");
+		Start();
+	}
 }
 
 int VideoEncoderMultiplexerWorker::Start()
@@ -217,7 +244,22 @@ int VideoEncoderMultiplexerWorker::Encode()
 	//No wait for first
 	QWORD frameTime = 0;
 
-	videoEncoder = VideoCodecFactory::CreateEncoder(codec, params);
+	//Phase 5 (nego_fmtp §6.3) : les bornes négociées de la patte émettrice
+	//écrasent la config du contrôleur pour CE codec — le pair a déclaré ce
+	//qu'il sait décoder (profil H.264, packetization-mode), et émettre
+	//au-dessus produit un flux négocié avec succès et décodé par personne.
+	Properties effective = params;
+	std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
+	if (itNeg != negotiated.end())
+	{
+		for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
+			effective[it->first] = it->second;
+
+		Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
+		    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
+	}
+
+	videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
 
 	//Comprobamos que se haya creado correctamente
 	if (videoEncoder == NULL)

@@ -128,6 +128,11 @@ int Endpoint::StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPM
 
 	    //Set sending map
 	    rtp->SetSendingRTPMap(rtpMap);
+
+	    //Phase 5 : le PT d'émission est maintenant connu — affine les bornes
+	    //négociées par codec et pousse-les au producteur attaché, AVANT que
+	    //l'encodeur n'ouvre (ou pour qu'il ré-ouvre) avec elles.
+	    p->RefineNegotiatedForSending(rtpMap);
 	}
 
 	//And send
@@ -481,8 +486,14 @@ int Endpoint::Port::Attach(const std::shared_ptr<Joinable> & join)
     joined = join;
      //If it is not null
     if (join)
+    {
 	//Join to the new one
 	    join->AddListener((RTPEndpoint*) this);
+	    //Phase 5 : si la négociation a déjà eu lieu, le producteur qui vient
+	    //d'être attaché doit recevoir ses bornes — l'ordre attach/négociation
+	    //est libre côté contrôleur.
+	    PushNegotiatedProps();
+    }
 
     //OK
     return 1;
@@ -522,6 +533,8 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 	acceptedOut.clear();
 	negotiatedFmtp.clear();
 	negotiatedProps.clear();
+	negotiatedCodecs.clear();
+	negotiatedByCodec.clear();
 
 	//RTPMap (BYTE,BYTE) -> map<int,int> attendue par le négociateur (agnostique
 	//du RTPMap MCU, cf. phase 3).
@@ -580,7 +593,51 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 	{
 		negotiatedFmtp[it->payloadType] = it->fmtp;
 		negotiatedProps[it->payloadType] = it->effectiveProps;
+		negotiatedCodecs[it->payloadType] = it->codec;
+		//Phase 5 : bornes d'émission par CODE CODEC — le premier PT accepté du
+		//codec, c.-à-d. le premier dans l'ordre de l'offre, qui est aussi le PT
+		//primaire qu'un contrôleur délégué garde dans sa send map. StartSending
+		//affine ensuite avec le PT réellement émis (RefineNegotiatedForSending).
+		if (negotiatedByCodec.find(it->codec) == negotiatedByCodec.end())
+			negotiatedByCodec[it->codec] = it->effectiveProps;
 	}
+
+	//Un producteur peut déjà être attaché (re-INVITE, ou attach avant
+	//StartReceiving) : lui pousser les bornes tout de suite.
+	PushNegotiatedProps();
+}
+
+//Phase 5 (nego_fmtp §6.3) : le PT d'émission est celui de la send map, et c'est
+//lui qui désigne l'entrée de negotiatedProps qui borne l'encodeur — sur une offre
+//navigateur le même H.264 arrive sous plusieurs PT décrivant des couples
+//(profil, packetization-mode) différents, et émettre avec le profil d'un autre PT
+//est un flux dont le SPS contredit le payload type qui le porte.
+void Endpoint::Port::RefineNegotiatedForSending(const RTPMap& sendingMap)
+{
+	for (RTPMap::const_iterator it=sendingMap.begin(); it!=sendingMap.end(); ++it)
+	{
+		std::map<int,Properties>::const_iterator itProps = negotiatedProps.find(it->first);
+		std::map<int,int>::const_iterator itCodec = negotiatedCodecs.find(it->first);
+
+		//L'affinage exige la correspondance exacte (même PT, même codec dans les
+		//deux maps) : sans elle, le premier-PT-du-codec de la négociation reste.
+		if (itProps != negotiatedProps.end() &&
+		    itCodec != negotiatedCodecs.end() && itCodec->second == (int)it->second)
+			negotiatedByCodec[itCodec->second] = itProps->second;
+	}
+
+	PushNegotiatedProps();
+}
+
+void Endpoint::Port::PushNegotiatedProps()
+{
+	//Rien de négocié = rien à pousser : on n'écrase pas les bornes qu'une autre
+	//patte aurait posées sur un producteur partagé (cf. Joinable.h).
+	if (negotiatedByCodec.empty())
+		return;
+
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->SetNegotiatedCodecProperties(negotiatedByCodec);
 }
 
 int Endpoint::Port::GetLocalMediaPort()

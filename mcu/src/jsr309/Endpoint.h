@@ -56,6 +56,16 @@ public:
 	    // PT absent a été filtré (non supporté). Vide tant qu'aucune négociation n'a eu lieu.
 	    const std::map<int,std::string>& GetNegotiatedFmtp() const { return negotiatedFmtp; }
 
+	    // --- Câblage émission (phase 5 nego_fmtp §6.3) ---
+	    // Le PT d'émission est connu à StartSending : affine les bornes par codec
+	    // (l'entrée de negotiatedProps du PT réellement émis l'emporte sur le
+	    // premier-PT-du-codec retenu à la négociation) et les pousse au producteur.
+	    void RefineNegotiatedForSending(const RTPMap& sendingMap);
+	    // Pousse les bornes négociées (par code codec) au Joinable attaché — le
+	    // producteur du flux que ce port émet. Appelé à la fin de la négociation,
+	    // à l'attach et à StartSending, pour être robuste aux trois ordres.
+	    void PushNegotiatedProps();
+
 	    virtual int Init() = 0;
 	    virtual int End() = 0;
 	    
@@ -103,6 +113,12 @@ public:
 	    std::map<int,std::string> negotiatedFmtp;
 	    // effectiveProps par PT retenu, pour brancher l'encodeur d'émission (phase 5).
 	    std::map<int,Properties> negotiatedProps;
+	    // PT accepté -> code codec (la clé de résolution émission : le PT émis est
+	    // choisi par identité de codec, pas par égalité de PT).
+	    std::map<int,int> negotiatedCodecs;
+	    // Bornes d'émission par code codec : le premier PT accepté du codec (l'ordre
+	    // de l'offre, donc le primaire du contrôleur), affiné par StartSending.
+	    std::map<int,Properties> negotiatedByCodec;
 	    // Protected constructir
 	    Port( MediaFrame::Type type, MediaFrame::MediaProtocol transp) : RTPMultiplexer()
 	    {
