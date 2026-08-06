@@ -51,10 +51,13 @@ private:
 	VideoInput *input;
 	VideoCodec::Type codec;
 
-	int mode;	
-	int width;	
-	int height;	
+	int mode;
+	int width;
+	int height;
 	int fps;
+	//La cadence CONFIGURÉE (SetCodec), dont `fps` repart à chaque (ré)ouverture :
+	//l'écrêtage AV1 (phase 5b) doit suivre aussi une borne qui s'ASSOUPLIT.
+	int configuredFps;
 	int bitrate;
 	int intraPeriod;
 	int videoBitrateLimit;

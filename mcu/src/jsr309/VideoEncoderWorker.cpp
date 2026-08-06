@@ -10,6 +10,8 @@
 #include "tools.h"
 #include "RTPMultiplexer.h"
 #include "acumulator.h"
+//AV1Encoder::ClampToLevel (écrêtage cadence/taille, phase 5b nego_fmtp)
+#include "av1/av1codec.h"
 
 VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerSmoother()
 {
@@ -50,6 +52,7 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 	this->mode	  = mode;
 	this->bitrate	  = bitrate;
 	this->fps	  = fps;
+	this->configuredFps = fps;
 	this->intraPeriod = intraPeriod;
 	//Init limits
 	this->videoBitrateLimit		= bitrate;
@@ -228,6 +231,33 @@ int VideoEncoderMultiplexerWorker::Encode()
 	Acumulator fpsAcu(1000);
 	VideoEncoder* videoEncoder = NULL;
 
+	//Phase 5 (nego_fmtp §6.3) : les bornes négociées de la patte émettrice
+	//écrasent la config du contrôleur pour CE codec — le pair a déclaré ce
+	//qu'il sait décoder (profil H.264, packetization-mode, niveau AV1), et
+	//émettre au-dessus produit un flux négocié avec succès et décodé par
+	//personne. Fusionné AVANT la capture : l'écrêtage AV1 s'applique à elle.
+	Properties effective = params;
+	std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
+	if (itNeg != negotiated.end())
+	{
+		for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
+			effective[it->first] = it->second;
+
+		Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
+		    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
+	}
+
+	//Phase 5b : écrêtage cadence/taille au niveau AV1 déclaré par le pair
+	//(annexe A.3 — décidé le 2026-08-06 : écrêter, jamais refuser la vidéo).
+	//Repart de la CONFIG à chaque (ré)ouverture, pour suivre aussi une
+	//re-négociation qui assouplit la borne.
+	width  = GetWidth(mode);
+	height = GetHeight(mode);
+	fps    = configuredFps;
+
+	if (codec == VideoCodec::AV1)
+		AV1Encoder::ClampToLevel(effective, width, height, fps);
+
 	Log(">SendVideo [width:%d,size:%d,bitrate:%d,fps:%d,intra:%d]\n",width,height,bitrate,fps,intraPeriod);
 
 	//Comrpobamos que tengamos video de entrada
@@ -243,21 +273,6 @@ int VideoEncoderMultiplexerWorker::Encode()
 
 	//No wait for first
 	QWORD frameTime = 0;
-
-	//Phase 5 (nego_fmtp §6.3) : les bornes négociées de la patte émettrice
-	//écrasent la config du contrôleur pour CE codec — le pair a déclaré ce
-	//qu'il sait décoder (profil H.264, packetization-mode), et émettre
-	//au-dessus produit un flux négocié avec succès et décodé par personne.
-	Properties effective = params;
-	std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
-	if (itNeg != negotiated.end())
-	{
-		for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
-			effective[it->first] = it->second;
-
-		Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
-		    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
-	}
 
 	videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
 

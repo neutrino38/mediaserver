@@ -12,9 +12,17 @@
 > le PT d'émission), consommé par les workers d'encodage audio et vidéo — fusion
 > par-dessus la config du contrôleur à l'ouverture de l'encodeur, redémarrage si
 > les bornes changent en cours d'encodage — et relayé par les deux transcodeurs.
-> **Restent ouverts** : l'ingestion AV1 (phase 5b, deux décisions à trancher) et
-> la consommation MCU des `effectiveProps` (le `VideoStream` du participant —
-> avec la phase 6, spécifiée, non commencée).
+> **Phase 5b (AV1) LIVRÉE (2026-08-06)**, ses deux décisions actées : (1) le
+> `av1.level-idx` annoncé est **dérivé par le contrôleur** du profil de la
+> conférence (table A.3, poussé en `codec.av1.level-idx`) — le défaut serveur
+> reste 0/5/0 ; (2) quand le pair déclare moins que ce que la patte produit, on
+> **écrête cadence/taille** (`AV1Encoder::ClampToLevel`, appliqué par le worker
+> d'encodage à l'ouverture — jamais de refus de la vidéo).
+> `AV1Encoder::ResolveNegotiation` : annonce = notre capacité (asymétrie par
+> défaut, rien à refléter), émission = min composante par composante, défauts
+> 0/5/0 appliqués aux paramètres omis d'un fmtp présent.
+> **Reste ouvert** : la consommation MCU des `effectiveProps` (le `VideoStream`
+> du participant — avec la phase 6, spécifiée, non commencée).
 >
 > Le média serveur ne parle pas SIP : la signalisation et le SDP sont gérés par
 > un **contrôleur SIP** externe (p. ex. le projet elixip), qui pilote le média
