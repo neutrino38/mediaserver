@@ -775,13 +775,23 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 		if (wshost)
 			host=wshost;
 			
+		//Le SCHÉMA, et non le nom du protocole : sur WS, TLS est activé sur le
+		//MÊME port (--websocket-secure), donc le contrôleur SIP ne peut pas le
+		//déduire du port ni du protocole — et c'est lui qui publie cette URL dans
+		//son SDP. `ProtocolToString(WS)` rend toujours "ws" ; ici nous rendons
+		//"wss" quand nous écoutons réellement en TLS (§4.2 de
+		//jsr309_text_over_wss.md).
+		const char* scheme = MediaFrame::ProtocolToString( protocol );
+		if ( protocol == MediaFrame::WS && WSEndpoint::IsLocalSecure() )
+			scheme = "wss";
+
 		if (port > 0)
 		{
-			sprintf(url, "%s://%s:%d", MediaFrame::ProtocolToString( protocol), host, port );
+			sprintf(url, "%s://%s:%d", scheme, host, port );
 		}
 		else
 		{
-			sprintf(url, "%s://%s", MediaFrame::ProtocolToString( protocol), host );
+			sprintf(url, "%s://%s", scheme, host );
 		}
 		Log("urL = %s\n", url);
 		return strdup(url);

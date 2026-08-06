@@ -508,8 +508,10 @@ int main(int argc,char **argv)
 	
 	if (wsHost)
 		WSEndpoint::SetLocalHost(wsHost);
-	
+
 	WSEndpoint::SetLocalPort(wsPort);
+	//Le schéma que GetMediaCandidates annoncera : ws:// ou wss://, sur le même port.
+	WSEndpoint::SetLocalSecure(wsSecure);
 
 #ifdef MOTELI
 	if(cnxString) rqServer.Start(&rqHandler);

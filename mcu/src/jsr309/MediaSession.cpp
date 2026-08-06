@@ -2038,7 +2038,12 @@ int MediaSession::ConfigureMediaConnection( int endpointId, MediaFrame::Type med
 		      token, endpointId, MediaFrame::TypeToString(media),  MediaFrame::ProtocolToString(proto) );
 	    }
 	}
-	return 0;
+	//1 et non 0 : xmlrpcjsr309.cpp transforme un retour faux en xmlerror, donc ce
+	//`return 0` répondait une faute XML-RPC sur le chemin de SUCCÈS et aucun
+	//contrôleur ne pouvait configurer une connexion WebSocket. Régression de
+	//b40ddcf6 (passage à C++17), qui a ajouté un `return` à une fonction qui n'en
+	//avait aucun : elle « marchait » sur sa valeur de retour accidentelle.
+	return 1;
 }
 
 

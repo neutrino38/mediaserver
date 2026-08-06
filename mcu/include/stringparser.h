@@ -19,7 +19,18 @@ template <typename _CharT, typename _StringT>
 class  BaseStringParser
 {
 public:
-	BaseStringParser(const _StringT str)
+	//RÉFÉRENCE et non valeur : pris par valeur, ce constructeur gardait
+	//`buffer`/`c` dans une COPIE LOCALE détruite à sa sortie — tout parsing
+	//construit depuis une std::string lisait de la mémoire libérée et
+	//réussissait ou échouait au hasard de ce qui l'avait remplacée. C'est ce qui
+	//faisait échouer `MatchString("/jsr309")` sur une URL de WebSocket
+	//parfaitement valide, donc toute connexion média WebSocket (404 Not found),
+	//et c'est le même piège pour `Headers::ParseHeader`.
+	//
+	//Contrat, inchangé et désormais tenable : la chaîne doit SURVIVRE au parseur
+	//(exactement comme la surcharge (buffer, size)). Ne pas construire depuis un
+	//temporaire.
+	BaseStringParser(const _StringT& str)
 	{
 		buffer = (_CharT*)str.c_str();
 		size = str.size();
@@ -307,7 +318,7 @@ protected:
 class StringParser : public BaseStringParser<char,std::string>
 {
 public:
-	StringParser(const std::string str) : BaseStringParser<char,std::string>(str)
+	StringParser(const std::string& str) : BaseStringParser<char,std::string>(str)
 	{
 	}
 
@@ -434,7 +445,7 @@ private:
 class WideStringParser : public BaseStringParser<wchar_t,std::wstring>
 {
 public:
-	WideStringParser(const std::wstring str) : BaseStringParser<wchar_t,std::wstring>(str)
+	WideStringParser(const std::wstring& str) : BaseStringParser<wchar_t,std::wstring>(str)
 	{
 	}
 
