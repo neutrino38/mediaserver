@@ -41,8 +41,8 @@ T.140/RED ⇄ WebSocket et le pontage vers l'autre patte.
 
 Périmètre : la patte WebSocket d'un endpoint JSR-309 (`m=text`, format `t140`),
 son pontage vers une patte T.140 sur RTP (avec redondance RFC 4103) ou vers une
-autre patte WebSocket. **Hors périmètre** : l'API conférence (MCU), le partage
-de document, le DataChannel WebRTC (autre mécanisme, autre code).
+autre patte WebSocket. **Hors périmètre** : l'API conférence (MCU) — voir §11 —,
+le partage de document, le DataChannel WebRTC (autre mécanisme, autre code).
 
 ## 2. Le fait structurant : la passerelle ne terminait pas le WebSocket
 
@@ -433,3 +433,43 @@ seules.
 5. Le `mode 2` (« texte sur WS ») de l'API Java était **inatteignable** —
    `MediaTranscodingSession.java:618-626` renvoyait 2 et 3 vers WSS. Ne pas
    reproduire cette confusion : ici le schéma vient du serveur (décision B).
+
+## 11. Et pour une conférence ? (non commencé)
+
+Cette capacité est, à ce jour, **exclusivement JSR-309**. Un participant WebRTC
+d'une **conférence** n'a donc pas de chat, alors que le T.140 **sur RTP** y
+fonctionne (le MCU câble chaque participant dans le mixeur texte dès
+`CreateParticipant`). Trois faits le verrouillent :
+
+- `ConfigureMediaConnection` **n'existe pas** sur l'API conférence : zéro
+  occurrence dans `mcu/src/xmlrpcmcu.cpp` ;
+- le serveur n'enregistre **qu'un seul** handler WebSocket,
+  `wsServer.AddHandler("/jsr309", &jsr309Manager)` (`main.cpp:478`), dont le
+  parseur d'URL résout un `MediaSession` — il n'y a pas de chemin conférence ;
+- `WSEndpoint` vit sous `mcu/src/jsr309/` : même binaire, mais atteignable par
+  ce seul étage.
+
+Le contrôleur en tire la conséquence honnête : le module MCU de kelixip **omet**
+une telle section de sa réponse (jamais un écho port-0, que le client ne digère
+pas), et le dit dans son code.
+
+**Ce qu'il faudrait, et rien de plus** (le plan média, lui, est déjà écrit et
+prouvé) :
+
+1. un équivalent de `ConfigureMediaConnection` pour un *participant* — basculer
+   son port texte en `WSEndpoint` et enregistrer un token contre
+   `(confId, partId, media)` ; `Endpoint::ConfigureMediaConnection` est le
+   patron, `RTPParticipant` détient le flux texte à remplacer ;
+2. un handler WebSocket (ou une branche du handler existant) qui résout un token
+   vers un participant de conférence plutôt que vers un `MediaSession` ;
+3. l'adresse WebSocket à rendre au contrôleur : `GetMediaCandidates` n'a pas
+   d'équivalent conférence, donc elle passerait par ce même appel ou par
+   `StartReceiving`, qui annonce déjà l'adresse média depuis S4.
+
+Côté contrôleur, le miroir de ce que fait l'adaptateur JSR-309 — la couche SDP
+parse déjà ces sections (`transport: :ws`), et la moitié T140RED est gratuite.
+Suivi dans `docs/design/mcu_module.md` (dépôt elixip) : limitation **L15**,
+chantier **§16.6 (S5)**.
+
+Non planifié : cela ne vaut d'être fait que le jour où un participant WebRTC a
+besoin de chat *en conférence*, ce qu'aucune exigence ne demande aujourd'hui.
