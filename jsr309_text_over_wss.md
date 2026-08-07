@@ -1,14 +1,19 @@
 # Texte temps réel sur WebSocket (JSR-309)
 
-> Statut : **phases serveur 1-3 LIVRÉES** (2026-08-06), phases contrôleur 4-7 à
-> écrire. Portage de la capacité « texte T.140 sur WebSocket » de la passerelle
-> Java historique (`mediagw-b2bua`, `src/java/fr/ives/sbc/b2bua/media`) vers le
-> couple **serveur média JSR-309 + contrôleur SIP elixip/kelixip**.
+> Statut : **LIVRÉ des deux côtés** — phases serveur 1-3 le 2026-08-06
+> (mediaserver `3e731d4`), phases contrôleur 4-7 le 2026-08-07 (elixip
+> `6926e05`). Portage de la capacité « texte T.140 sur WebSocket » de la
+> passerelle Java historique (`mediagw-b2bua`,
+> `src/java/fr/ives/sbc/b2bua/media`) vers le couple **serveur média JSR-309 +
+> contrôleur SIP elixip**.
 >
-> Le plan média WebSocket est **vérifié bout en bout contre le binaire** :
-> WebSocket accepté sur son token, texte WS → RTP T.140 et RTP → WS,
-> U+FFFD à la fermeture, texte tamponné rejoué à la connexion, token inconnu
-> refusé. Reste la moitié signalisation, côté contrôleur (§5).
+> Vérifié bout en bout contre le binaire : le plan média (WebSocket accepté sur
+> son token, texte WS → RTP T.140 et RTP → WS, U+FFFD à la fermeture, texte
+> tamponné rejoué à la connexion, token inconnu refusé) **et** la
+> signalisation (l'adaptateur répond à l'offre du client Elioz, et l'URL qu'il
+> publie accepte un handshake WebSocket).
+>
+> Reste : la campagne d'interop avec le client réel (§8, phase 8).
 >
 > Le média serveur ne parle pas SIP : la signalisation et le SDP sont gérés par
 > un **contrôleur SIP** externe (elixip), qui pilote le serveur par l'API
@@ -263,12 +268,18 @@ Contraintes exactes, transcrites de `WebSocketLeg.java:68-142` :
 - format : le jeton `t140`, seul ;
 - `a=setup:passive` (nous sommes le serveur WebSocket) et `a=connection:new`
   (RFC 4145) ;
-- **nom d'attribut** : `ws` pour un schéma `ws`, `wss` pour `wss` ; valeur
-  **avec** le schéma et `//`, c'est-à-dire l'URL complète. La passerelle Java
-  émettait une URL *relative au protocole* (`//host:port/...`) parce que son
-  client re-préfixait le schéma lui-même (§6) — nous émettons l'URL entière,
-  qui est ce qu'un client correct attend, **et** nous acceptons les deux formes
-  en lecture ;
+- **nom d'attribut : toujours `a=ws`**, y compris en TLS, et **valeur = URL
+  absolue en schéma HTTP** — `https://host:port/jsr309/…` quand le serveur
+  écoute en TLS, `http://…` en clair. C'est le point où il faut suivre le
+  client déployé plutôt que l'esthétique : il ne lit que `a=ws` (§6.2), et une
+  URL `https://` y **fonctionne** (vérifié en production, 2026-08-07) — il la
+  convertit lui-même en `wss://`. Émettre `a=wss` comme le faisait la
+  passerelle Java, c'est écrire un attribut que personne ne lit ; émettre une
+  URL relative au protocole (`//host:port/…`, l'autre forme historique) c'est
+  laisser le client choisir le schéma, donc perdre le TLS.
+  En **lecture** (cas où c'est le pair qui héberge), accepter les quatre
+  formes : `ws`/`wss` comme nom d'attribut, et une valeur absolue
+  (`ws|wss|http|https`) ou relative au protocole ;
 - **ni `a=rtpmap`, ni `a=fmtp`, ni signalisation de redondance** sur cette
   section : la redondance est interne au serveur média, elle n'est pas négociée
   ici. C'est ce que faisait la passerelle (`addCodecsToMd` remplace entièrement
@@ -321,11 +332,13 @@ réponse plus que n'importe quelle RFC, parce que ce client est déployé.
    `a=setup:active`, `a=connection:new`, `a=sendrecv`
    (`WebRTComm.js:4234-4264`). Donc : **`TCP/WS`** (jamais `TCP/WSS`), **port
    60000 en dur**, adresse `127.0.0.1`.
-2. **Il ne lit que `a=ws` et préfixe `"ws:"` lui-même**
-   (`WebRTComm.js:4275-4278`) : il ne peut **pas** consommer un `a=wss:`. Un
-   serveur en TLS n'est donc pas utilisable par *cette* version du client —
-   à traiter comme une limite du client, pas comme une raison de mentir sur le
-   schéma.
+2. **Il ne lit que `a=ws`** — la version du dépôt y préfixe `"ws:"`
+   (`WebRTComm.js:4275-4278`), et ne consommerait donc pas un `a=wss:`. Mais le
+   client **déployé** accepte dans cet attribut une **URL absolue en
+   `https://`** et l'utilise en `wss://` (constaté en production le
+   2026-08-07). D'où la décision D : un seul attribut, `a=ws`, portant une URL
+   `http://`/`https://` absolue. Le TLS reste donc atteignable sans toucher au
+   client.
 3. **Il retire la section `m=text` avant `setRemoteDescription`**
    (`WebRTComm.js:4282-4283`) : `RTCPeerConnection` ne sait pas parser une
    `m=` en `TCP/WS`. C'est pourquoi cette section est **de la signalisation
@@ -350,8 +363,10 @@ réponse plus que n'importe quelle RFC, parce que ce client est déployé.
   (`TCP/WS`, `TCP/WSS`, `TLS/WS`, `TLS/WSS`), la réponse **mirroir** celle de
   l'offre. Le client déployé n'émet que `TCP/WS`, mais accepter les autres ne
   coûte rien et le bug inverse (Java) était une source de rejets silencieux.
-- **D. L'URL émise porte son schéma en entier**, les deux formes sont acceptées
-  en lecture (§5.3).
+- **D. Un seul attribut émis, `a=ws`, portant une URL absolue en schéma HTTP**
+  (`https://` en TLS, `http://` en clair) : c'est ce que le client déployé lit
+  et ce qu'il sait convertir en `wss://` (§5.3, §6.2). `a=wss` n'est pas émis —
+  personne ne le lit. En lecture, les quatre formes sont acceptées.
 - **E. La redondance n'est pas négociée sur la section WS**, elle est produite
   par le serveur et proposée à l'autre patte (§5.4).
 - **F. Tampon borné (32 trames / 5 s) avant la connexion du navigateur**
@@ -366,10 +381,10 @@ réponse plus que n'importe quelle RFC, parce que ce client est déployé.
 | 1 | Serveur | ~~`ConfigureMediaConnection` rend 1 (§4.1)~~ **fait** | — |
 | 2 | Serveur | ~~Schéma réel dans `GetMediaCandidates` (§4.2)~~ **fait** | — |
 | 3 | Serveur | ~~`SendReplacementChar` (§4.4), parseur (§4.4 bis), tampon (§4.5)~~ **fait** | — |
-| 4 | Contrôleur | Parsing des sections texte-sur-WS (§5.1) | — |
-| 5 | Contrôleur | `ConfigureMediaConnection` + `GetMediaCandidates` + URL (§5.2) | 1, 2 |
-| 6 | Contrôleur | Réponse SDP, et fin de l'omission (§5.3) | 4, 5 |
-| 7 | Contrôleur | T140RED proposé à l'autre patte (§5.4) | 6 |
+| 4 | Contrôleur | ~~Parsing des sections texte-sur-WS (§5.1)~~ **fait** | — |
+| 5 | Contrôleur | ~~`ConfigureMediaConnection` + `GetMediaCandidates` + URL (§5.2)~~ **fait** | 1, 2 |
+| 6 | Contrôleur | ~~Réponse SDP, et fin de l'omission (§5.3)~~ **fait** | 4, 5 |
+| 7 | Contrôleur | ~~T140RED proposé à l'autre patte (§5.4)~~ **fait** | 6 |
 | 8 | Interop | Campagne avec le client Elioz | 1-7 |
 
 Les phases 1-3 sont **indépendantes et sans risque de régression** : elles
@@ -393,14 +408,12 @@ seules.
 
 ## 10. Risques
 
-1. **Le client déployé ne lit pas `a=wss`** (§6.2) : un déploiement TLS exige
-   une mise à jour du client. À valider avec le client Elioz réel avant de
-   promettre WSS.
-2. **Pas d'authentification** au-delà de l'UUID dans l'URL : quiconque le
+1. **Pas d'authentification** au-delà de l'UUID dans l'URL : quiconque le
    devine ou l'observe (il voyage dans le SDP, donc dans la signalisation)
-   parle dans l'appel. En clair (`ws://`) le texte est lisible sur le réseau.
-   À documenter comme tel ; `wss://` est le seul remède, ce qui rejoint le
-   risque 1.
+   parle dans l'appel. En clair (`http://` → `ws://`) le texte est lisible sur
+   le réseau. Le remède est le TLS, qui est atteignable (décision D) : un
+   déploiement qui porte du texte sensible doit tourner en
+   `--websocket-secure`.
 3. **Les tokens ne sont jamais retirés** de `MediaSession::tokens` — aucun code
    ne les supprime autour de `MediaSession.cpp:2024-2039`. Fuite bornée par la
    durée de vie de la session, mais une re-signalisation répétée en accumule.
