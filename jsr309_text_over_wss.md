@@ -268,15 +268,14 @@ Contraintes exactes, transcrites de `WebSocketLeg.java:68-142` :
 - format : le jeton `t140`, seul ;
 - `a=setup:passive` (nous sommes le serveur WebSocket) et `a=connection:new`
   (RFC 4145) ;
-- **nom d'attribut : toujours `a=ws`**, y compris en TLS, et **valeur = URL
-  absolue en schéma HTTP** — `https://host:port/jsr309/…` quand le serveur
-  écoute en TLS, `http://…` en clair. C'est le point où il faut suivre le
-  client déployé plutôt que l'esthétique : il ne lit que `a=ws` (§6.2), et une
-  URL `https://` y **fonctionne** (vérifié en production, 2026-08-07) — il la
-  convertit lui-même en `wss://`. Émettre `a=wss` comme le faisait la
-  passerelle Java, c'est écrire un attribut que personne ne lit ; émettre une
-  URL relative au protocole (`//host:port/…`, l'autre forme historique) c'est
-  laisser le client choisir le schéma, donc perdre le TLS.
+- **l'URL est publiée comme la passerelle le faisait** : la **valeur** est
+  relative au protocole — `//host:port/jsr309/…`, **sans schéma** — et le schéma
+  est porté par le **nom de l'attribut**, `ws` en clair, `wss` en TLS
+  (`WebSocketLeg.java:99-142`). La ligne se lit donc `a=ws://host:port/…`, ce
+  qui *ressemble* à une URL uniquement parce que le `:` séparateur de SDP tombe
+  devant le `//` de la valeur — et c'est précisément ce qui permet à un client de
+  re-préfixer `"ws:"` et d'obtenir une URL utilisable. C'est la forme contre
+  laquelle les clients déployés ont été écrits, donc celle qu'on émet.
   En **lecture** (cas où c'est le pair qui héberge), accepter les quatre
   formes : `ws`/`wss` comme nom d'attribut, et une valeur absolue
   (`ws|wss|http|https`) ou relative au protocole ;
@@ -332,13 +331,17 @@ réponse plus que n'importe quelle RFC, parce que ce client est déployé.
    `a=setup:active`, `a=connection:new`, `a=sendrecv`
    (`WebRTComm.js:4234-4264`). Donc : **`TCP/WS`** (jamais `TCP/WSS`), **port
    60000 en dur**, adresse `127.0.0.1`.
-2. **Il ne lit que `a=ws`** — la version du dépôt y préfixe `"ws:"`
-   (`WebRTComm.js:4275-4278`), et ne consommerait donc pas un `a=wss:`. Mais le
-   client **déployé** accepte dans cet attribut une **URL absolue en
-   `https://`** et l'utilise en `wss://` (constaté en production le
-   2026-08-07). D'où la décision D : un seul attribut, `a=ws`, portant une URL
-   `http://`/`https://` absolue. Le TLS reste donc atteignable sans toucher au
-   client.
+2. **Il ne lit que `a=ws`**, et la version du dépôt y préfixe `"ws:"`
+   (`WebRTComm.js:4275-4278`) — d'où la forme relative au protocole de la
+   passerelle, qui se combine avec ce préfixe. Le client **déployé** sait de
+   plus utiliser une URL absolue `https://` placée dans cet attribut (constaté
+   en production le 2026-08-07), donc il accepte les deux ; nous émettons la
+   forme historique (décision D), qui est la seule que les deux générations de
+   client comprennent.
+   **Conséquence à surveiller en TLS** : le schéma passe alors dans le nom
+   (`a=wss`), que la version du dépôt ne lit pas. C'est le défaut historique
+   n°6 — à vérifier avec le client réel avant de promettre le WSS ; l'URL
+   absolue `https://` sous `a=ws` est le repli connu si ce cas se présente.
 3. **Il retire la section `m=text` avant `setRemoteDescription`**
    (`WebRTComm.js:4282-4283`) : `RTCPeerConnection` ne sait pas parser une
    `m=` en `TCP/WS`. C'est pourquoi cette section est **de la signalisation
@@ -363,10 +366,14 @@ réponse plus que n'importe quelle RFC, parce que ce client est déployé.
   (`TCP/WS`, `TCP/WSS`, `TLS/WS`, `TLS/WSS`), la réponse **mirroir** celle de
   l'offre. Le client déployé n'émet que `TCP/WS`, mais accepter les autres ne
   coûte rien et le bug inverse (Java) était une source de rejets silencieux.
-- **D. Un seul attribut émis, `a=ws`, portant une URL absolue en schéma HTTP**
-  (`https://` en TLS, `http://` en clair) : c'est ce que le client déployé lit
-  et ce qu'il sait convertir en `wss://` (§5.3, §6.2). `a=wss` n'est pas émis —
-  personne ne le lit. En lecture, les quatre formes sont acceptées.
+- **D. L'URL est publiée dans la forme de la passerelle** : valeur relative au
+  protocole (`//host:port/…`), schéma dans le **nom** de l'attribut (`ws` en
+  clair, `wss` en TLS) — §5.3. Une URL absolue `https://` sous `a=ws` marche
+  aussi avec le client déployé (constaté le 2026-08-07), mais la forme
+  historique est celle contre laquelle *tous* les clients ont été écrits, y
+  compris ceux qui re-préfixent `"ws:"`. Le `+1` de port, lui, n'est PAS
+  reproduit (§4.3) : le serveur n'a qu'un port. En lecture, les quatre formes
+  sont acceptées.
 - **E. La redondance n'est pas négociée sur la section WS**, elle est produite
   par le serveur et proposée à l'autre patte (§5.4).
 - **F. Tampon borné (32 trames / 5 s) avant la connexion du navigateur**
