@@ -101,14 +101,24 @@ void VideoTranscoder::onEndStream()
 	decoder.onEndStream();
 }
 
+//Phase 5 (nego_fmtp §6.3) : l'endpoint écoute le transcodeur, mais c'est son
+//encodeur qui produit — les bornes descendent d'un cran.
+void VideoTranscoder::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
+{
+	encoder.SetNegotiatedCodecProperties(byCodec);
+}
+
+//Returning 0 here made every VideoTranscoderAttachToEndpoint/Dettach XML-RPC
+//call answer an error while the attach had in fact happened — a controller that
+//checks the status tears the call down over a success.
 int VideoTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 {
 	decoder.Attach(join);
-	return 0;
+	return 1;
 }
 
 int VideoTranscoder::Dettach()
 {
 	decoder.Dettach();
-	return 0;
+	return 1;
 }

@@ -328,6 +328,12 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
 |------|-----|-------|
 | 1 | ParticipantRequestFPU | `(int type, int confId, string tag, int partId)` |
 | 2 | ParticipantRequestDocSharing | `(int type, int confId, string tag, int partId, string status)` |
+| 3 | ParticipantMediaTimeout | `(int type, int confId, string tag, int partId, int media, int role)` |
+| 4 | ParticipantMediaConnected | `(int type, int confId, string tag, int partId, int media, int role)` |
+
+> Les codes sont **ajoutés en fin**, jamais renumérotés ni réutilisés : ils sont
+> partagés avec tous les contrôleurs, y compris ceux qui ne connaissent que 1 et 2
+> (un type inconnu doit être ignoré, pas traité comme une erreur).
 
 - **ParticipantRequestFPU** (1) : un participant a demandé une image complète
   (Full Picture Update / keyframe). `tag` = nom/tag de la conférence, `partId` =
@@ -337,8 +343,21 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
   traiter avec `AcceptDocSharingRequest` / `RefuseDocSharingRequest` /
   `StopDocSharing` (§6.10). Émis par `onParticipantRequestDocSharing`.
 
+- **ParticipantMediaTimeout** (3) : le flux RTP d'un média de ce participant s'est
+  **tu**. Émis **une seule fois** par transition actif → inactif, sur le média et le
+  rôle concernés (`media` = `MediaFrame::Type` §4, `role` = `MediaFrame::MediaRole`) —
+  un participant portant audio + vidéo principale + présentation, il faut les deux
+  pour savoir quelle ligne `m=` s'est arrêtée. N'est émis que si le contrôleur a armé
+  le chien de garde (`StartRTPTimeout`, §6.7) : **rien n'est surveillé par défaut**.
+  Émis par `onParticipantMediaTimeout`.
+- **ParticipantMediaConnected** (4) : **premier paquet RTP/SRTP validé** d'un cycle de
+  réception, même tuple. Émis une fois **par cycle** : un `StopReceiving` suivi d'un
+  `StartReceiving` le réarme. Pour une patte sécurisée, le recevoir prouve
+  intrinsèquement que la poignée de main DTLS a abouti — c'est l'équivalent conférence
+  de l'`EndpointConnectedEvent` de JSR-309. Émis par `onParticipantMediaConnected`.
+
 Réf. : `mcu/include/mcu.h` (`PlayerRequestFPUEvent`,
-`PlayerRequestDocSharingEvent`), `mcu/src/mcu.cpp`.
+`PlayerRequestDocSharingEvent`, `ParticipantMediaEvent`), `mcu/src/mcu.cpp`.
 
 ---
 
@@ -580,6 +599,24 @@ Configure le codec vidéo d'émission du participant.
   `quality`/`fillLevel` sont parsés puis ignorés.
 - **Retour** : vide.
 
+`properties` est **le seul canal qui atteint l'encodeur** : `SetVideoCodec` remplace la
+map de propriétés du flux (`videoProperties = properties`), donc tout ce que la
+négociation a établi doit y être remis par le contrôleur. Clés H.264 attendues :
+
+| Clé | Effet |
+|---|---|
+| `h264.profile-level-id` | profil et niveau écrits dans chaque SPS émis. Absente, l'encodeur reprend son défaut (`42801F`) quelle que soit la réponse SDP annoncée, et un pair qui fait confiance à l'answer reçoit un flux qu'il peut ne pas décoder |
+| `h264.packetization-mode` | `0` borne les slices au payload RTP (aucun FU-A) **et force libx264**, VAAPI ne sachant pas contraindre la taille d'une slice ; `1` (défaut) laisse une borne large. Le serveur journalise `falling back to software encoding because of requested packetization_mode 0` |
+
+Les deux valeurs sont celles que `StartReceiving` a rendues dans `fmtpByPt` pour le
+payload type sur lequel le contrôleur va émettre : le serveur y met le mode du pair
+quand il en a déclaré un, et `1` sinon, donc annoncé et émis restent le même couple.
+
+> **Absence de `packetization-mode` dans l'offre** : lue comme « pas de contrainte »,
+> donc `1` — écart assumé à la RFC 6184 §8.1 (qui fait valoir `0`), décidé le
+> 2026-08-06. Un pair qui omet le paramètre est un SDP incomplet plus qu'un décodeur
+> single-NAL.
+
 #### `SetAudioCodec`
 Configure le codec audio du participant.
 - **Params** `(iiiS)` : `confId`, `partId`, `codec` (`AudioCodec::Type`),
@@ -643,19 +680,68 @@ Les *rtpMap* sont des structs XML-RPC dont les **clés sont les payload types RT
 numériques** (en chaîne) et les **valeurs les identifiants de codec** (int).
 
 #### `StartReceiving`
-Ouvre la réception RTP d'un média et alloue un port local.
-- **Params** `(iiiSii)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
+Ouvre la réception RTP d'un média, alloue un port local, et **négocie les codecs**.
+- **Params** `(iiiSiiS)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
   `rtpMap` (struct PT→codec), `role` (`MediaRole`), `proto`
-  (`MediaFrame::MediaProtocol`).
+  (`MediaFrame::MediaProtocol`), `offer` (struct, voir ci-dessous).
+- **Params** (sans offer) `(iiiSii)` : idem, pas d'entrée distante — le serveur
+  annonce alors sa propre configuration.
 - **Params** (sans proto) `(iiiSi)` : idem, `proto` = TCP (3).
-- **Retour** : `(i,s)` = `recvPort` (port RTP alloué) puis `ip` = l'adresse à
-  annoncer dans le SDP (ligne `c=` et candidats ICE) pour ce média : le réglage
-  global `--public-ip` du serveur, à défaut le premier IPv4 non loopback de
-  l'hôte (§1). Le port seul ne suffit pas au contrôleur, et cette adresse n'est
-  pas déductible du canal de contrôle — derrière un NAT elle en diffère.
-- `returnVal[0]` **reste le port** : un client qui ne lit que cet index (le
-  `XmlRpcMcuClient` Java) est inchangé. Les enrichissements futurs (fmtp
-  négocié) s'ajoutent de la même façon, en fin de tableau.
+- **Retour** : `(i,s,S)` = `recvPort`, `ip`, `fmtpByPt`.
+
+**`offer`** porte les attributs codec de l'offre SDP, ceux que la `rtpMap` ne peut
+pas transporter. Un seul membre aujourd'hui :
+
+```
+offer = { "fmtp": { "<pt>": "<paramètres>" } }
+```
+
+Les valeurs sont les paramètres **seuls** — exactement ce qui suit `a=fmtp:<pt> `,
+sans le préfixe ni le numéro de PT. Les clés sont les PT **de l'offre**. Une struct
+plutôt qu'une map de fmtp nue, pour que le négociateur puisse en demander plus sans
+un énième paramètre positionnel. Un `offer` illisible ne coûte pas l'appel : le
+serveur le journalise et négocie contre sa seule configuration.
+
+> C'est le contrôleur qui parse le SDP, jamais le serveur : passer le SDP brut
+> mettrait ici un **second parseur SDP**, à une release de divergence du premier.
+
+**`fmtpByPt`** (`returnVal[2]`) est le verdict de la négociation :
+`{ "<pt>": "<paramètres fmtp>" }`.
+
+- **TOUT PT accepté est une clé**, y compris les codecs **sans** fmtp (PCMU, PCMA,
+  G722, T140…) : valeur **chaîne vide**. Un PT **absent** a été filtré, faute d'être
+  supporté.
+- La **présence de la clé est le signal d'acceptation** : c'est la seule source dont
+  le contrôleur dispose pour connaître l'ensemble accepté, et c'est de là qu'il
+  reconstruit sa ligne `m=` et ses `a=fmtp`. Même contrat, mot pour mot, que
+  `EndpointStartReceiving` côté JSR-309 (`xmlrpc_jsr309_api.md` §6.7).
+- La `rtpMap` réellement **installée** est la map filtrée, pas celle proposée.
+- Un média non négociable retombe sur la map proposée telle quelle, sans fmtp
+  remonté (comportement d'avant la délégation).
+
+La résolution est **par payload type**, et c'est ce qui donne son sens aux clés de
+`offer.fmtp` : deux PT du même codec repartent avec deux fmtp différents. Un client
+peut donc offrir le même H.264 sous plusieurs PT — ce que fait tout navigateur, pour
+décrire autant de couples (`profile-level-id`, `packetization-mode`) — et chacun est
+répondu avec le sien, `packetization-mode` compris (RFC 6184 §8.2.2). Un PT absent de
+`offer.fmtp` n'hérite pas du fmtp d'un autre PT : il est négocié contre la seule
+configuration du serveur.
+
+> **Corrigé le 2026-08-06.** Le serveur collapsait ces entrées en une seule propriété
+> par *codec* : sur une offre à sept PT H.264, le dernier PT gagnait et les sept
+> repartaient avec son profil. Six réponses décrivaient un codec que l'appelant
+> n'avait pas offert, ce qu'un navigateur refuse en bloc (`BYE` juste après l'`ACK`).
+> Un contrôleur qui envoyait déjà `offer.fmtp` par PT n'a rien à changer : c'est le
+> serveur qui lit désormais la bonne entrée.
+
+Le fmtp que le serveur annonce dérive des propriétés `codec.*` du participant, donc
+le contrôleur doit les envoyer par `SetRTPProperties` **avant** `StartReceiving` ;
+envoyées après, la négociation travaille sur une map vide et annonce les défauts du
+serveur.
+
+- `returnVal[0]` **reste le port** et `returnVal[1]` l'adresse : un client qui ne lit
+  que l'index 0 (le `XmlRpcMcuClient` Java) ou les index 0-1 (un contrôleur pré-P8a)
+  est inchangé. Les ajouts se font en fin de tableau, jamais par déplacement.
 - `ip` est toujours renseignée : le serveur ne démarre pas sans (§1).
 - Échoue désormais (enveloppe `xmlerror`) quand le serveur n'a pas pu ouvrir la
   réception — il renvoyait auparavant `returnCode: 1` avec un port `0`, que le
@@ -665,6 +751,27 @@ Ouvre la réception RTP d'un média et alloue un port local.
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
 - **Params** (sans role) `(iii)` : idem, `role` = VIDEO_MAIN.
 - **Retour** : vide.
+
+#### `StartRTPTimeout`
+Arme ou désarme le **chien de garde d'inactivité RTP** d'un média d'un participant.
+Miroir de `EndpointStartRTPTimeout` côté JSR-309.
+- **Params** `(iiiii)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
+  `timeoutMs`, `role` (`MediaRole`).
+- **Params** (sans role) `(iiii)` : idem, `role` = VIDEO_MAIN.
+- **Retour** : vide.
+- `timeoutMs > 0` **(re)configure le seuil ET arme**, le chronomètre partant de
+  *maintenant* ; `0` (ou une valeur négative) **désarme**.
+- **Rien n'est surveillé tant que le contrôleur n'a pas armé.** L'armement se fait
+  après l'envoi de la réponse SDP, pas avant : c'est ce qui rend détectable le cas
+  « répondu mais aucun média n'est jamais arrivé » sans jamais surveiller la phase de
+  sonnerie.
+- Une mise en garde (hold) légitime doit **désarmer** le média concerné, sinon elle se
+  lira comme une patte morte.
+- À l'expiration, l'événement `ParticipantMediaTimeout` (type 3, §5) est émis **une
+  fois**. Le serveur ne retire pas le participant du mix : la politique (BYE,
+  libération du quota, tuile de mosaïque) appartient au contrôleur.
+- Déconseillé sur le **texte** : le T.140 est légitimement silencieux entre deux
+  frappes et déclencherait un faux positif.
 
 #### `StartSending`
 Ouvre l'émission RTP d'un média vers une destination.
@@ -678,6 +785,46 @@ Ouvre l'émission RTP d'un média vers une destination.
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
 - **Params** (sans role) `(iii)` : idem, `role` = VIDEO_MAIN.
 - **Retour** : vide.
+
+#### `ConfigureParticipantMediaConnection` (S5)
+Texte temps réel **sur WebSocket** pour un participant : bascule son plan texte
+du RTP vers un pont WebSocket branché sur le mixeur texte de la conférence, et
+rend l'**URL complète** que le contrôleur publie dans son SDP (`a=ws`/`a=wss`).
+Miroir, sur cette API, du couple `ConfigureMediaConnection` +
+`GetMediaCandidates` JSR-309 — en un seul appel.
+- **Params** `(iiiis)` : `confId`, `partId`, `media` (**TEXT=2 seul accepté**),
+  `proto` (**WS=2 seul accepté**), `token` (jeton d'URL, unique par
+  (re)configuration).
+- **Retour** : `(s)` = l'URL, `ws://host:port/mcu/<confId>/<token>` — ou
+  `wss://` si le serveur tourne en `--websocket-secure` : le **schéma est
+  décidé par le serveur** (TLS sur le même port), jamais par le contrôleur.
+  Hôte : `--websocket-host`, sinon `--public-ip`.
+
+Sémantique et contrat :
+- s'appelle **à la place** de `StartReceiving`/`StartSending`/`SetTextCodec`
+  pour le texte de cette patte — après la bascule, `StartReceiving` et
+  `StartSending` sur `TEXT` sont **refusés** (le texte ne vit plus en RTP) ;
+- une **re-négociation** rappelle la méthode avec un nouveau token : l'ancien
+  cesse de résoudre, le pont (et une éventuelle connexion navigateur) survit ;
+- le navigateur se connecte directement sur l'URL ; une reconnexion sur le même
+  token remplace la connexion précédente ;
+- le texte mixé avant la connexion du navigateur est conservé (borné : 32
+  trames / 5 s) et rejoué à l'ouverture ; un U+FFFD (T.140 §5.3) est injecté
+  vers le côté survivant quand une extrémité tombe ;
+- les tokens **meurent avec le participant** (`DeleteParticipant`) — pas de
+  fuite à la JSR-309 ;
+- en cas d'échec (`returnCode: 0`), **rien n'est basculé** : le participant
+  garde son plan texte RTP, et le contrôleur omet la section `m=text` de sa
+  réponse SDP.
+
+#### Porte WebSocket `/mcu/<confId>/<token>`
+Le serveur WebSocket (port `--websocket-port`, 9090 par défaut — le même que
+`/jsr309`) enregistre un handler sous le préfixe `/mcu`. La connexion est
+acceptée (101) si le token résout vers un participant de la conférence, rejetée
+404 sinon (token inconnu, conférence inconnue, participant détruit). Les
+messages WebSocket sont du texte UTF-8 nu, sans enveloppe : un message entrant
+part dans le mixeur texte, le mixage destiné à la patte (préfixé du nom du
+locuteur, comportement standard du mixeur) revient en messages sortants.
 
 ---
 

@@ -29,11 +29,16 @@ public:
 	virtual void Update();
 	virtual void SetREMB(DWORD estimation);
 	virtual void RemoveListener(Listener *listener);
+	//Bornes d'émission poussées par l'endpoint attaché (phase 5).
+	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);
+	//Bornes du codec donné ; vide si rien n'a été négocié pour lui.
+	Properties GetNegotiatedProperties(int codec);
 private:
 	typedef std::set<Joinable::Listener*> Listeners;
 protected:
 	Listeners	listeners;
 	pthread_mutex_t mutex;
+	std::map<int,Properties> negotiated;	// codec -> bornes (phase 5)
 	// Limitation du log "no listener" à 1/s : un flux entrant que personne ne
 	// consomme (ex. montant du pair pendant un play) inonderait sinon le log.
 	QWORD	lastNoListenerTs;   // ms, 0 = jamais loggé

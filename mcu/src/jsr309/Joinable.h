@@ -7,7 +7,9 @@
 
 #ifndef JOINABLE_H
 #define	JOINABLE_H
+#include <map>
 #include <memory>
+#include "config.h"
 #include "rtp.h"
 #include "xmlstreaminghandler.h"
 #include "JSR309Event.h"
@@ -48,6 +50,20 @@ public:
 	//dans Endpoint::Port. Les sources toujours actives (mixers, transcoders,
 	//players) gardent le défaut.
 	virtual bool IsReceiving() const { return true; }
+
+	//Bornes négociées de l'encodeur d'émission (phase 5 nego_fmtp §6.3) : la
+	//patte qui émettra ce flux pousse ici, par code codec, les Properties que
+	//SA négociation SDP impose au producteur — profil H.264 et
+	//packetization-mode déclarés par le pair, que l'encodeur ne doit pas
+	//dépasser. No-op par défaut : seuls les producteurs qui ENCODENT
+	//(VideoEncoderMultiplexerWorker, relayé par VideoTranscoder) les
+	//consomment — un player ou un relais B2B n'a pas d'encodeur à contraindre.
+	//
+	//Un producteur PARTAGÉ entre plusieurs pattes (port de mixer écouté par
+	//plusieurs endpoints) reçoit les bornes de la dernière patte qui a poussé :
+	//un même flux ne peut pas satisfaire deux bornes à la fois — des bornes par
+	//patte exigent un producteur par patte, ce qu'un transcodeur donne.
+	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec) {}
 protected:
 	bool PostEvent( JSR309Event *event);
 private:

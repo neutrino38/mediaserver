@@ -57,6 +57,14 @@ void AudioTranscoder::AddListener(Joinable::Listener *listener)
 	encoder.AddListener(listener);
 }
 
+//Phase 5 (nego_fmtp §6.3) : l'endpoint écoute le transcodeur, mais c'est son
+//encodeur qui produit — les bornes descendent d'un cran. Sans objet en mode
+//pont (bridging) : aucun encodeur dans le chemin.
+void AudioTranscoder::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
+{
+	encoder.SetNegotiatedCodecProperties(byCodec);
+}
+
 void AudioTranscoder::Update()
 {
     //Do nothing - update not relevant for audio
@@ -126,6 +134,8 @@ void AudioTranscoder::onEndStream()
 }
 
 
+//Returning 0 here made every AudioTranscoderAttachToEndpoint/Dettach XML-RPC
+//call answer an error while the attach had in fact happened.
 int AudioTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 {
 
@@ -139,13 +149,13 @@ int AudioTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 		if (join)
 			join->AddListener(this);
 	}
-	return 0;
+	return 1;
 }
 
 int AudioTranscoder::Dettach()
 {
 	decoder.Dettach();
-	return 0;
+	return 1;
 }
 
 int AudioTranscoder::SetCodec(int codec)

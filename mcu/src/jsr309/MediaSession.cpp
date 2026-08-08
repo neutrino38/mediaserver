@@ -1008,7 +1008,8 @@ int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
 	return endpoint->StopSending(media);
 }
 
-int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut)
+int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut,
+                                         const std::map<int,std::string>* offerFmtp)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1025,8 +1026,8 @@ int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,R
 	//Log endpoint tag name
 	Log("-EndpointStartReceiving [%ls,media:%s]\n",endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
-	//Execute
-	int port = endpoint->StartReceiving(media,rtpMap);
+	//Execute (P8a : le fmtp de l'offre descend jusqu'au négociateur)
+	int port = endpoint->StartReceiving(media,rtpMap,MediaFrame::VIDEO_MAIN,offerFmtp);
 
 	//Récupère le fmtp négocié (phase 4) pour le retour enrichi XML-RPC (§5.2).
 	//Sous le même verrou : négociation et lecture du résultat sont atomiques.
@@ -2037,7 +2038,12 @@ int MediaSession::ConfigureMediaConnection( int endpointId, MediaFrame::Type med
 		      token, endpointId, MediaFrame::TypeToString(media),  MediaFrame::ProtocolToString(proto) );
 	    }
 	}
-	return 0;
+	//1 et non 0 : xmlrpcjsr309.cpp transforme un retour faux en xmlerror, donc ce
+	//`return 0` répondait une faute XML-RPC sur le chemin de SUCCÈS et aucun
+	//contrôleur ne pouvait configurer une connexion WebSocket. Régression de
+	//b40ddcf6 (passage à C++17), qui a ajouté un `return` à une fonction qui n'en
+	//avait aucun : elle « marchait » sur sa valeur de retour accidentelle.
+	return 1;
 }
 
 

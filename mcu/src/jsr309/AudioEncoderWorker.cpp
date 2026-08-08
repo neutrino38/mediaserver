@@ -32,7 +32,7 @@ int AudioEncoderMultiplexerWorker::SetCodec(AudioCodec::Type codec)
 {
 	//Colocamos el tipo de audio
 	this->codec = codec;
-        
+
 
 	//Check
 	if (!listeners.empty() && !encoding)
@@ -42,6 +42,31 @@ int AudioEncoderMultiplexerWorker::SetCodec(AudioCodec::Type codec)
         }
 
 	return 1;
+}
+
+//Phase 5 (nego_fmtp §6.3) : mêmes règles que le worker vidéo — les Properties ne
+//sont lues qu'à la création de l'encodeur, donc des bornes qui changent sur un
+//encodeur ouvert exigent un cycle Stop/Start.
+void AudioEncoderMultiplexerWorker::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
+{
+	//Bornes identiques : ne pas redémarrer pour rien.
+	if (negotiated == byCodec)
+		return;
+
+	negotiated = byCodec;
+
+	Log("-AudioEncoder: negotiated codec properties updated [%d codec(s)]\n",
+	    (int)byCodec.size());
+
+	if (encoding)
+	{
+		Stop();
+		if (!listeners.empty())
+		{
+			Log("-AudioEncoder: restarted encoder with negotiated properties.\n");
+			Start();
+		}
+	}
 }
 
 int AudioEncoderMultiplexerWorker::Start()
@@ -120,7 +145,8 @@ int AudioEncoderMultiplexerWorker::Encode()
 {
 	RTPPacket	packet(MediaFrame::Audio,codec,codec);
 	SWORD 		recBuffer[512];
-	AudioEncoder* 	encoder;
+	//NULL explicite : ce pointeur était lu non initialisé au premier tour de boucle.
+	AudioEncoder* 	encoder = NULL;
 	DWORD		frameTime=0;
 
 	Log(">Encode AudioEncoderMultiplexerWorker [%d,%s]\n",codec,AudioCodec::GetNameFor(codec));
@@ -137,7 +163,18 @@ int AudioEncoderMultiplexerWorker::Encode()
             {
                 if (encoder) delete encoder;
 
-                encoder = AudioCodecFactory::CreateEncoder(codec);
+                //Phase 5 : les bornes négociées de la patte émettrice s'appliquent
+                //à l'ouverture (Opus : FEC/DTX/CBR/maxaveragebitrate du pair).
+                Properties effective;
+                std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
+                if (itNeg != negotiated.end())
+                {
+                    effective = itNeg->second;
+                    Log("-AudioEncoder: opening with negotiated properties for %s [%d key(s)]\n",
+                        AudioCodec::GetNameFor(codec), (int)itNeg->second.size());
+                }
+
+                encoder = AudioCodecFactory::CreateEncoder(codec, effective);
                 if (encoder == NULL)
                     return Error("Could not create codec\n");
 

@@ -2,9 +2,15 @@
 #include <stdexcept>
 
 static BYTE BOMUTF8[]			= {0xEF,0xBB,0xBF};
+//U+FFFD REPLACEMENT CHARACTER : ce que T.140 §5.3 (et RFC 4103 §4.3 pour son
+//transport) demande d'insérer dans le flux quand une perte de session est
+//détectée — la seule trace qu'un utilisateur ait qu'il manque du texte.
+//Non const : RTPPacket::SetPayload prend un BYTE* nu.
+static BYTE REPLACEMENT_UTF8[]		= {0xEF,0xBF,0xBD};
 
 int WSEndpoint::wsPort = 0;
 char* WSEndpoint::wsHost = NULL;
+bool WSEndpoint::wsSecure = false;
 
 WSEndpoint::WSEndpoint(MediaFrame::Type type) : Port(type, MediaFrame::WS)
 {
@@ -41,6 +47,26 @@ void WSEndpoint::onOpen(WebSocket *ws)
 	old->Close();
     }
     _ws = ws->GetWeakPtr();
+
+    //Rejouer le texte arrivé avant que le navigateur ne soit là, dans l'ordre et
+    //sans les trames trop vieilles pour être encore du dialogue (§4.5).
+    if (!pending.empty())
+    {
+	const QWORD now = getDifTime(&clock)/1000;
+	size_t sent = 0, stale = 0;
+
+	for (std::list<std::pair<QWORD,std::string>>::const_iterator it = pending.begin();
+	     it != pending.end(); ++it)
+	{
+	    if (now - it->first > maxPendingAgeMs) { stale++; continue; }
+	    ws->SendMessage( it->second );
+	    sent++;
+	}
+
+	Log("WSEndpoint: replayed %u pending text frame(s) on connect (%u dropped as stale).\n",
+	    (unsigned) sent, (unsigned) stale);
+	pending.clear();
+    }
 }
 
 void WSEndpoint::onError(WebSocket *ws)
@@ -102,7 +128,11 @@ void WSEndpoint::onMessageEnd(WebSocket *ws)
 
 void WSEndpoint::onRTPPacket(RTPPacket &packet)
 {
-    if (!_ws.expired())
+    //Pas de garde sur la présence d'un WebSocket ici : le texte est décodé
+    //jusqu'à SendFrame, qui le met en attente si le navigateur n'est pas encore
+    //connecté (§4.5 de jsr309_text_over_wss.md). Jeter le paquet à l'entrée,
+    //comme avant, perdait la première phrase de chaque appel — celle où
+    //l'appelant se présente, entre le 200 OK et le handshake WebSocket.
     {
         if ( packet.GetMedia() == media->GetType() )
 		{
@@ -145,13 +175,9 @@ void WSEndpoint::onRTPPacket(RTPPacket &packet)
 		else
 		{
 			Error("WSEndpoint is associated with media %s. Cannot deliver %s packet.\n",
-				   MediaFrame::TypeToString(media->GetType()), 
+				   MediaFrame::TypeToString(media->GetType()),
 			   MediaFrame::TypeToString(packet.GetMedia()));
-		}	
-    }
-    else
-    {
-		Debug("WSEndpoint: no Websocket is associated yet.\n");
+		}
     }
 }
 
@@ -170,14 +196,54 @@ void WSEndpoint::onClose(WebSocket *ws)
     }
 }
 
+//T.140 §5.3 : une perte de session s'annonce par un U+FFFD dans le flux, du côté
+//qui SURVIT — l'utilisateur voit alors qu'il manque du texte, au lieu de lire
+//deux phrases collées. `toWsSide` dit de quel côté envoyer : vrai quand la perte
+//vient du RTP (onResetStream/onEndStream), faux quand c'est le WebSocket qui est
+//tombé (onClose) et que le pair RTP doit l'apprendre.
 void WSEndpoint::SendReplacementChar(bool toWsSide)
 {
     if (toWsSide)
     {
-        if (!_ws.expired())
-		{
-		}
+        //Vers le navigateur : un message WebSocket d'un seul caractère.
+        if (std::shared_ptr<WebSocket> ws = _ws.lock())
+        {
+            std::string msg((const char*) REPLACEMENT_UTF8, sizeof(REPLACEMENT_UTF8));
+            ws->SendMessage( msg );
+            Debug("WSEndpoint: sent U+FFFD to the websocket side.\n");
+        }
+        return;
     }
+
+    //Vers le côté RTP : par le même chemin que le texte ordinaire, redondance
+    //comprise — un U+FFFD perdu en route serait une perte annoncée que personne
+    //ne reçoit.
+    TextFrame lost(getDifTime(&clock)/1000, REPLACEMENT_UTF8, sizeof(REPLACEMENT_UTF8));
+
+    if (useRed)
+    {
+        RTPRedundantPacket *packet = RedCodec->Encode( &lost, payloadType);
+        if (packet)
+        {
+            packet->SetSeqNum(pseudoSeqNum++);
+            packet->SetSeqCycles(pseudoSeqCycle);
+            if (pseudoSeqNum == 0) pseudoSeqCycle++;
+            Multiplex(*packet);
+            delete packet;
+        }
+    }
+    else
+    {
+        RTPPacket packet(MediaFrame::Text, TextCodec::T140);
+        packet.SetTimestamp(getDifTime(&clock)/1000);
+        packet.SetPayload(REPLACEMENT_UTF8, sizeof(REPLACEMENT_UTF8));
+        packet.SetSeqNum(pseudoSeqNum++);
+        packet.SetSeqCycles(pseudoSeqCycle);
+        if (pseudoSeqNum == 0) pseudoSeqCycle++;
+        Multiplex(packet);
+    }
+
+    Debug("WSEndpoint: sent U+FFFD to the RTP side.\n");
 }
 
 void WSEndpoint::SetLocalPort(int port)
@@ -190,6 +256,16 @@ void WSEndpoint::SetLocalHost(char* host)
 {
 	//return 1;
 	wsHost = host;
+}
+
+void WSEndpoint::SetLocalSecure(bool secure)
+{
+	wsSecure = secure;
+}
+
+bool WSEndpoint::IsLocalSecure()
+{
+	return wsSecure;
 }
 
 int WSEndpoint::GetLocalPort()
@@ -247,7 +323,22 @@ int WSEndpoint::SendFrame(TextFrame &frame)
 	
     //Verrouiller la référence le temps de l'envoi (thread-safe vs destruction)
     if (std::shared_ptr<WebSocket> ws = _ws.lock())
+    {
         ws->SendMessage( msg );
+    }
+    else
+    {
+        //Pas encore de navigateur : garder la trame (§4.5 de
+        //jsr309_text_over_wss.md). Bornée en nombre ET en âge.
+        pending.push_back(std::make_pair((QWORD) getDifTime(&clock)/1000, msg));
+
+        if (pending.size() > maxPendingFrames)
+        {
+            pending.pop_front();
+            Log("WSEndpoint: pending text queue full, oldest frame dropped.\n");
+        }
+    }
+
 	return 0;
 }
 

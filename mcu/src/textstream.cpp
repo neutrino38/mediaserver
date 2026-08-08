@@ -231,6 +231,12 @@ int TextStream::StartReceiving(RTPMap& rtpMap)
 	//Set receving map
 	rtp.SetReceivingRTPMap(rtpMap);
 
+	//P7/S2 : nouveau cycle de reception => on rearme la notification « premier
+	//paquet RTP/SRTP recu », pour que « media etabli » soit signale une fois PAR
+	//cycle (un StopReceiving/StartReceiving le redeclenche) et pas une seule fois
+	//dans la vie du participant.
+	rtp.ArmRTPReceivedNotification();
+
 	//Estamos recibiendo
 	receivingText= TaskStarting;
 

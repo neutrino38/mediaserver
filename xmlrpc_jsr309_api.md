@@ -504,7 +504,7 @@ média `media` vers `endpointId`.
 | `EndpointSetRTPProperties` | `i sessionId, i endpointId, i media, S properties` | `[]` |
 | `EndpointStartSending` | `i sessionId, i endpointId, i media, s sendIp, i sendPort, S rtpMap` | `[]` |
 | `EndpointStopSending` | `i sessionId, i endpointId, i media` | `[]` |
-| `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap` | `[ int recvPort, S fmtpByPt ]` |
+| `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap [, S offer]` | `[ int recvPort, S fmtpByPt ]` |
 | `EndpointStopReceiving` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointRequestUpdate` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointAddICECandidate` | `i sessionId, i endpointId, i media, s candidate` | `[]` |
@@ -514,6 +514,29 @@ média `media` vers `endpointId`.
   ex. `"96"`) et **chaque valeur est un code codec entier** (`i`) selon
   `AudioCodec::Type` / `VideoCodec::Type` / `TextCodec::Type`. Exemple :
   `{ "0": 0, "8": 8, "101": 100 }` (PCMU, PCMA, telephone-event).
+- **`offer`** (`EndpointStartReceiving`, 5ᵉ paramètre, **optionnel** — P8a) : les
+  attributs codec de l'offre SDP, ceux que la `rtpMap` ne peut pas transporter.
+  Même contrat que le `StartReceiving` de l'API MCU (`MCU-API.md`). Un seul
+  membre aujourd'hui :
+
+  ```
+  offer = { "fmtp": { "<pt>": "<paramètres>" } }
+  ```
+
+  Les valeurs sont les paramètres **seuls** — exactement ce qui suit
+  `a=fmtp:<pt> `, sans le préfixe ni le numéro de PT. Les clés sont les PT **de
+  l'offre**. La résolution est **par payload type** : une offre navigateur
+  énumère le même H.264 sous plusieurs PT pour décrire autant de couples
+  (`profile-level-id`, `packetization-mode`), et chacun est répondu avec le
+  sien (RFC 6184 §8.2.2) — là où le canal `codec.<nomCodec>.fmtp` (ci-dessous)
+  écrase tout au dernier écrivain, une propriété par *codec*. Un `offer`
+  illisible ne coûte pas l'appel : le serveur le journalise et négocie contre
+  sa seule configuration ; un fmtp portant un PT absent de la `rtpMap` est
+  ignoré. Ancien contrôleur = paramètre absent, signature `(iiiS)` inchangée.
+
+  > C'est le contrôleur qui parse le SDP, jamais le serveur : passer le SDP brut
+  > mettrait ici un **second parseur SDP**, à une release de divergence du
+  > premier.
 - **`properties`** (`EndpointSetRTPProperties`) : struct XML-RPC clé→valeur, les
   deux **chaînes**. Deux familles de clés cohabitent :
   - **transport** (rtcp-mux, ssrc, tmmbr, extensions, `rtpTimeout`, `natLatch`…) :
@@ -550,14 +573,26 @@ média `media` vers `endpointId`.
 > `returnVal[0]` (le port) n'est pas impacté ; un client tolérant lit
 > `returnVal[1]` pour construire ses `a=fmtp` et déduire les PT acceptés.
 
-> 🔷 **Négociation entrante (`fmtp` distant) — encore en cours** (phase 5 de
-> `nego_fmtp.md`). Le **canal** existe déjà : `EndpointSetRTPProperties` accepte
-> une clé `codec.<nomCodec>.fmtp` portant les paramètres `fmtp` **reçus du pair**
-> (p. ex. `codec.h264.fmtp = "profile-level-id=42e01f;packetization-mode=1"`), et
-> ces clés sont bien stockées côté endpoint. En revanche leur **parsing** (pour
-> contraindre l'**émission** : borner notre encodeur au profil du pair) et le
-> câblage endpoint → producteur (transcodeur/mixer) restent à livrer (H.264 en
-> premier). Cf. §9.7 pour l'ordre d'appel exact selon le sens de l'appel.
+> 🔷 **Négociation entrante (`fmtp` distant).** Deux canaux :
+> le paramètre **`offer` d'`EndpointStartReceiving`** (P8a, ci-dessus) — **par
+> payload type**, consommé par le négociateur pour dériver le `fmtpByPt`
+> répondu, à préférer — et la clé `codec.<nomCodec>.fmtp` via
+> `EndpointSetRTPProperties` (p. ex.
+> `codec.h264.fmtp = "profile-level-id=42e01f;packetization-mode=1"`), **par
+> codec**, lue en repli quand `offer` ne dit rien pour un PT. Envoyer les deux
+> est légal ; à PT couvert par `offer`, `offer` gagne.
+>
+> **Émission bornée — livré (2026-08-06, phase 5 de `nego_fmtp.md`)** : les
+> `effectiveProps` issues de la négociation atteignent automatiquement le
+> producteur attaché à l'endpoint (`VideoTranscoder`, `AudioTranscoder`, ports
+> de mixer) — poussées à la négociation, à l'attach et à `StartSending`, quel
+> que soit l'ordre des appels ; l'encodeur (ré)ouvre avec elles. H.264 :
+> `profile-level-id` et `packetization-mode` du pair (mode 0 ⇒ slices bornées
+> au payload RTP + encodeur logiciel). Opus : `useinbandfec`/`usedtx`/`cbr`/
+> `maxaveragebitrate` déclarés par le pair. Un player ou un relais B2B n'a pas
+> d'encodeur : sans objet. Le contrôleur n'a **rien à faire** au-delà de
+> fournir le fmtp distant (`offer` ou `codec.<x>.fmtp`).
+> Cf. §9.7 pour l'ordre d'appel exact selon le sens de l'appel.
 - **`EndpointAddICECandidate`** (trickle ICE, Niveau 1) : `candidate` est une
   ligne d'attribut SDP `candidate:` (avec ou sans le préfixe `candidate:`), p.ex.
   `candidate:1 1 UDP 2130706431 192.168.1.5 54321 typ host`. Le serveur ne

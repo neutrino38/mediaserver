@@ -175,7 +175,7 @@ int MP4Streamer::SetVideoCodec(VideoCodec::Type codec)
 	return 1;
 }
 
-int MP4Streamer::SetAudioCodecTranscoded(AudioCodec::Type target)
+int MP4Streamer::SetAudioCodecTranscoded(AudioCodec::Type target, const Properties& props)
 {
 	std::lock_guard<std::mutex> lock(lifecycleMutex);
 
@@ -184,7 +184,7 @@ int MP4Streamer::SetAudioCodecTranscoded(AudioCodec::Type target)
 	if (playing.load())
 		return Error("MP4Streamer: cannot enable transcoding while playing\n");
 
-	if (reader->OpenAudioTranscoded(target) <= 0)
+	if (reader->OpenAudioTranscoded(target, props) <= 0)
 		return 0;
 
 	AudioCodec::Type ac;

@@ -10,6 +10,8 @@
 #include "tools.h"
 #include "RTPMultiplexer.h"
 #include "acumulator.h"
+//AV1Encoder::ClampToLevel (écrêtage cadence/taille, phase 5b nego_fmtp)
+#include "av1/av1codec.h"
 
 VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerSmoother()
 {
@@ -50,6 +52,7 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 	this->mode	  = mode;
 	this->bitrate	  = bitrate;
 	this->fps	  = fps;
+	this->configuredFps = fps;
 	this->intraPeriod = intraPeriod;
 	//Init limits
 	this->videoBitrateLimit		= bitrate;
@@ -74,9 +77,36 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 		Log("-VideoEncoder: restarted encoder.\n");
 		Start();
 	}
-	
+
 	//Exit
 	return 1;
+}
+
+//Phase 5 (nego_fmtp §6.3) : les bornes que la négociation SDP de la patte
+//émettrice impose à l'encodeur. Les Properties ne sont lues qu'à CreateEncoder,
+//donc des bornes qui changent sur un encodeur ouvert exigent un cycle
+//Stop/Start — le même que SetCodec, au prix d'un IDR frais, ce qui est
+//précisément ce qu'un changement de profil exige de toute façon.
+void VideoEncoderMultiplexerWorker::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
+{
+	//Bornes identiques : ne pas redémarrer l'encodeur pour rien (chaque push
+	//re-signalisation/attach/StartSending repasse ici).
+	if (negotiated == byCodec)
+		return;
+
+	negotiated = byCodec;
+
+	Log("-VideoEncoder: negotiated codec properties updated [%d codec(s)]\n",
+	    (int)byCodec.size());
+
+	//Même logique de reprise que SetCodec : un encodeur ouvert ré-ouvre avec
+	//les bornes à jour, un encodeur pas encore démarré les lira au Start().
+	Stop();
+	if (!listeners.empty() && codec != (VideoCodec::Type)-1)
+	{
+		Log("-VideoEncoder: restarted encoder with negotiated properties.\n");
+		Start();
+	}
 }
 
 int VideoEncoderMultiplexerWorker::Start()
@@ -201,6 +231,33 @@ int VideoEncoderMultiplexerWorker::Encode()
 	Acumulator fpsAcu(1000);
 	VideoEncoder* videoEncoder = NULL;
 
+	//Phase 5 (nego_fmtp §6.3) : les bornes négociées de la patte émettrice
+	//écrasent la config du contrôleur pour CE codec — le pair a déclaré ce
+	//qu'il sait décoder (profil H.264, packetization-mode, niveau AV1), et
+	//émettre au-dessus produit un flux négocié avec succès et décodé par
+	//personne. Fusionné AVANT la capture : l'écrêtage AV1 s'applique à elle.
+	Properties effective = params;
+	std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
+	if (itNeg != negotiated.end())
+	{
+		for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
+			effective[it->first] = it->second;
+
+		Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
+		    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
+	}
+
+	//Phase 5b : écrêtage cadence/taille au niveau AV1 déclaré par le pair
+	//(annexe A.3 — décidé le 2026-08-06 : écrêter, jamais refuser la vidéo).
+	//Repart de la CONFIG à chaque (ré)ouverture, pour suivre aussi une
+	//re-négociation qui assouplit la borne.
+	width  = GetWidth(mode);
+	height = GetHeight(mode);
+	fps    = configuredFps;
+
+	if (codec == VideoCodec::AV1)
+		AV1Encoder::ClampToLevel(effective, width, height, fps);
+
 	Log(">SendVideo [width:%d,size:%d,bitrate:%d,fps:%d,intra:%d]\n",width,height,bitrate,fps,intraPeriod);
 
 	//Comrpobamos que tengamos video de entrada
@@ -217,7 +274,7 @@ int VideoEncoderMultiplexerWorker::Encode()
 	//No wait for first
 	QWORD frameTime = 0;
 
-	videoEncoder = VideoCodecFactory::CreateEncoder(codec, params);
+	videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
 
 	//Comprobamos que se haya creado correctamente
 	if (videoEncoder == NULL)

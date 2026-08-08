@@ -31,6 +31,8 @@ public:
 	virtual void Update();
 	virtual void SetREMB(DWORD estimation);
 	virtual void RemoveListener(Joinable::Listener *listener);
+	//Phase 5 : les bornes négociées de la patte émettrice descendent à l'encodeur.
+	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);
 
 	//Virtuals from Joinable::Listener
 	virtual void onRTPPacket(RTPPacket &packet);

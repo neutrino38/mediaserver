@@ -1,8 +1,28 @@
 # Négociation des paramètres des codecs (fmtp SDP)
 
 > Statut : **conception figée** (décisions A–E actées, §8). Phases 1-4 FAITES
-> (2026-07-15) ; reste la phase 5 (négo entrante réelle : parsing du fmtp
-> distant + câblage encodeur).
+> (2026-07-15). **Phase 5 LIVRÉE côté JSR-309 (2026-08-06)** : l'ingestion du fmtp
+> distant est livrée pour **H.264** (`ParseFmtpParams`,
+> `H264Encoder::ResolveNegotiation`, RFC 6184 §8.2.2) et pour **Opus**
+> (`OPUSEncoder::ResolveNegotiation`, RFC 7587 §7 — annonce inchangée, émission
+> bornée) ; **VP8 est sans objet** (aucun paramètre qui s'y prête). Le **câblage
+> des `effectiveProps` vers le producteur réel** (§6.3) est fait :
+> `Joinable::SetNegotiatedCodecProperties` (no-op par défaut), poussé par
+> `Endpoint::Port` à la négociation, à l'attach et à `StartSending` (affinage par
+> le PT d'émission), consommé par les workers d'encodage audio et vidéo — fusion
+> par-dessus la config du contrôleur à l'ouverture de l'encodeur, redémarrage si
+> les bornes changent en cours d'encodage — et relayé par les deux transcodeurs.
+> **Phase 5b (AV1) LIVRÉE (2026-08-06)**, ses deux décisions actées : (1) le
+> `av1.level-idx` annoncé est **dérivé par le contrôleur** du profil de la
+> conférence (table A.3, poussé en `codec.av1.level-idx`) — le défaut serveur
+> reste 0/5/0 ; (2) quand le pair déclare moins que ce que la patte produit, on
+> **écrête cadence/taille** (`AV1Encoder::ClampToLevel`, appliqué par le worker
+> d'encodage à l'ouverture — jamais de refus de la vidéo).
+> `AV1Encoder::ResolveNegotiation` : annonce = notre capacité (asymétrie par
+> défaut, rien à refléter), émission = min composante par composante, défauts
+> 0/5/0 appliqués aux paramètres omis d'un fmtp présent.
+> **Reste ouvert** : la consommation MCU des `effectiveProps` (le `VideoStream`
+> du participant — avec la phase 6, spécifiée, non commencée).
 >
 > Le média serveur ne parle pas SIP : la signalisation et le SDP sont gérés par
 > un **contrôleur SIP** externe (p. ex. le projet elixip), qui pilote le média
@@ -282,19 +302,63 @@ returnVal = [
 - Clé = payload type (chaîne), valeur = **paramètres fmtp seuls**.
 - Un PT proposé mais non supporté **n'apparaît pas** (il a été filtré). Le
   contrôleur SIP déduit de `returnVal[1]` les PT réellement acceptés (décision D).
-- Un codec sans fmtp (PCMU, T140…) : **absent** de la struct (décision §8-E).
+- Un codec **sans** fmtp (PCMU, T140…) est **présent avec une valeur vide `""`**.
+  La **présence de la clé est le signal d'acceptation** ; l'absence signale
+  « filtré ». C'est ce que fait le code livré (`NegotiateReceiving` pousse tout
+  `result.codecs`, fmtp vide inclus — `Endpoint.cpp:551-555`) et ce dont dépend le
+  contrôleur SIP (`accepted_pts/2` côté elixip, plan
+  `mendooze_sdp_delegation_plan.md` §4 « Option A »).
+
+  > **Correction 2026-08-05.** Ce paragraphe disait l'inverse (« absent de la
+  > struct »), et la décision §8-E avec lui. Le code n'a jamais suivi cette règle
+  > et a bien fait : si on la lui appliquait, tout codec sans fmtp — PCMU, PCMA,
+  > T140 — disparaîtrait silencieusement des SDP du contrôleur, puisqu'il n'a pas
+  > d'autre source pour l'ensemble accepté. Le commentaire placé juste au-dessus de
+  > la boucle de sérialisation (`xmlrpcjsr309.cpp:1201-1203`) répète encore la
+  > règle périmée et doit être corrigé avec le prochain passage sur ce fichier.
 
 ### 5.3 Canal du fmtp distant (phase 5)
 
-Réutilise `EndpointSetRTPProperties` avec une convention de clé :
+Deux clés, selon ce que le contrôleur a à dire. La **résolution est par payload
+type** ; la clé par nom de codec n'est qu'un raccourci valable quand il n'y a qu'un
+PT par codec.
 
 ```
-codec.<nomCodec>.fmtp = "<paramètres fmtp reçus du pair>"
+pt.<pt>.fmtp        = "<paramètres fmtp reçus du pair pour CE payload type>"
+   ex. pt.109.fmtp = "profile-level-id=42e01f;packetization-mode=1"
+
+codec.<nomCodec>.fmtp = "<paramètres fmtp reçus du pair>"     (raccourci historique)
    ex. codec.h264.fmtp = "profile-level-id=42e01f;packetization-mode=1"
 ```
 
-Routé (§4.3) vers le stockage de l'endpoint, parsé par le négociateur, converti
-en `effectiveProps` (ex. `h264.profile-level-id`) pour l'encodeur d'émission.
+- **`pt.<pt>.fmtp`** est alimentée par le paramètre `offer` de `StartReceiving`
+  (chemin MCU, cf. MCU-API §`StartReceiving`), une entrée par PT de l'offre.
+- **`codec.<nomCodec>.fmtp`** est alimentée par `EndpointSetRTPProperties`
+  (chemin JSR-309), routée (§4.3) vers le stockage de l'endpoint, où
+  `StoreCodecProperties` la range débarrassée du préfixe `codec.`.
+- La clé par PT gagne quand les deux sont présentes, ce qui rend la migration d'un
+  contrôleur sans coordination possible.
+
+Le négociateur parse la valeur, en tire le fmtp **annoncé** pour ce PT et les
+`effectiveProps` (ex. `h264.profile-level-id`, `h264.packetization-mode`) qui
+bornent l'encodeur d'émission.
+
+> **Pourquoi par PT — corrigé le 2026-08-06.** La clé par nom de codec, seule, ne
+> peut porter qu'UNE résolution pour tous les PT d'un même codec. Une offre
+> navigateur énumère le même H.264 sous six ou sept PT, précisément pour décrire
+> autant de couples (profil, `packetization-mode`) : Chrome 138 en offre sept.
+> `RTPParticipant::StartReceiving` écrivait `h264.fmtp` dans une boucle sur les PT
+> — le dernier itéré gagnait — et le négociateur servait ce profil aux sept PT
+> acceptés. Six réponses décrivaient donc un codec que l'appelant n'avait pas
+> offert : libwebrtc refuse la réponse entière et l'application raccroche juste
+> après l'ACK. `H264Encoder::ResolveNegotiation` était correct — il annonce bien le
+> profil du pair — on lui passait simplement le mauvais pair.
+>
+> Le `packetization-mode` annoncé, codé en dur à `1`, relevait de la même erreur :
+> le mode fait partie de l'**identité** du payload type côté pair. Il est désormais
+> celui du pair pour ce PT, dans les deux jeux de propriétés (annoncé et effectif).
+> Reste à faire : le packetiseur n'honore pas encore le mode 0 (il émet du FU-A),
+> ce que `ResolveNegotiation` signale par un `Log`.
 
 ## 6. Dynamique d'appel (les deux sens)
 
@@ -405,12 +469,30 @@ l'encodeur du flux sortant. Le flux émis vers le pair provient de ce qui est
 B2B sans transcodage — la source directe (relais de paquets, aucun encodeur).
 
 Conséquence : les `effectiveProps` calculées au niveau de l'endpoint doivent
-**atteindre le producteur réel** du flux sortant. Le véhicule existe déjà
-(`VideoTranscoderSetCodec` / `*MixerPortSetCodec` acceptent des `Properties`),
-mais **le câblage endpoint→producteur reste à faire** — c'est la vraie
-difficulté de la phase 5, à traiter H.264 en premier. En relais B2B pur, les
+**atteindre le producteur réel** du flux sortant. En relais B2B pur, les
 `effectiveProps` sont sans objet : ce sont alors les deux pattes qui doivent
-avoir négocié des profils compatibles (orchestration côté contrôleur SIP).
+avoir négocié des profils compatibles (orchestration côté contrôleur SIP) ; un
+Player non plus n'a pas d'encodeur (son levier est la sélection de piste).
+
+**Câblage livré (2026-08-06)** — par l'interface `Joinable` plutôt que par
+`MediaSession`, pour survivre aux trois ordres {SetCodec, attach, négociation}
+que le contrôleur est libre de choisir :
+
+- `Joinable::SetNegotiatedCodecProperties(map<codec,Properties>)`, no-op par
+  défaut (Player, relais B2B) ;
+- `Endpoint::Port` pousse au `Joinable` attaché : à la fin de
+  `NegotiateReceiving` (premier PT accepté de chaque codec = le primaire de
+  l'offre), à l'`Attach`, et à `StartSending` — où le PT réellement émis affine
+  le choix (`RefineNegotiatedForSending` : sur une offre navigateur, plusieurs
+  PT du même H.264 portent des profils différents) ;
+- consommé par `VideoEncoderMultiplexerWorker` et
+  `AudioEncoderMultiplexerWorker` (fusion par-dessus la config du contrôleur à
+  l'ouverture — les bornes gagnent — et cycle Stop/Start si elles changent sur
+  un encodeur ouvert, au prix d'un IDR qu'un changement de profil exige de
+  toute façon), et relayé d'un cran par `VideoTranscoder`/`AudioTranscoder` ;
+- un producteur **partagé** entre plusieurs pattes reçoit les bornes de la
+  dernière qui a poussé : un même flux ne peut pas satisfaire deux bornes,
+  des bornes par patte exigent un producteur par patte (un transcodeur).
 
 C'est pourquoi le phasage isole le sens réception (phases 1-4, autonome, valeur
 immédiate) du sens émission (phase 5, dépendant de ce câblage).
@@ -468,6 +550,141 @@ immédiate) du sens émission (phase 5, dépendant de ce câblage).
 - Câblage endpoint → producteur (transcodeur/mixer) des `effectiveProps` (§6.3).
 - Passage du fmtp distant via propriété (§5.3), documenté dans `CODECS.md`.
 
+### Phase 5 — précision sur H.264 (décidée le 2026-08-05)
+
+L'ingestion doit implémenter **RFC 6184 §8.2.2**, pas un simple reflet. Les deux
+choses que le contrôleur confondait jusqu'ici sont séparées :
+
+- ce qu'on **annonce** = ce que *nous* savons décoder : même profil que l'offre
+  (profile_idc + flags de contrainte), et niveau **le nôtre** seulement si
+  `level-asymmetry-allowed=1` est présent dans l'offre *et* dans notre réponse ;
+  sinon (absent, ou `=0`) le niveau **de l'offre**.
+
+  **Sans asymétrie, on renvoie donc le `profile-level-id` de l'offre tel quel** :
+  les deux premiers octets sont fixés par la règle du profil, le troisième par celle
+  du niveau, il ne reste rien à choisir. Deux corollaires. **Si on ne sait pas décoder
+  le niveau offert, on annonce notre niveau MAXIMUM et on loggue** (`warning`, en
+  nommant le niveau offert, celui annoncé et le participant) — on ne retire **pas** le
+  PT. Écart assumé à la RFC 6184 §8.2.2, qui ne laisse que « refléter ou retirer » :
+  refuser la vidéo parce qu'un appelant a offert du niveau 5.1 est un échec plus dur
+  qu'annoncer 3.1 et fonctionner, et annoncer *en dessous* de l'offre est justement ce
+  dont un pair correct a besoin pour encoder à notre portée. Le log est la seule trace
+  qui relie « pas de vidéo sur cette patte » à sa cause. Cet assouplissement vaut pour
+  ce qu'on **annonce** (capacité de réception : sous-estimer est sans risque) et **pas**
+  pour ce qu'on **émet** — le niveau et le mode de paquetisation déclarés par le pair
+  sont des bornes dures de notre encodeur. Second corollaire :
+  `packetization-mode` n'est **pas** régi par cette règle. **Corrigé** : le mode
+  n'est plus codé en dur — `H264Encoder::WantedPacketizationMode` lit
+  `h264.packetization-mode` (absence = pas de contrainte = 1, décidé le
+  2026-08-06), le mode 0 borne chaque slice au payload RTP et force l'encodeur
+  logiciel (`WantsHardware`). Le mode qu'on **émet** est un mode que le pair a
+  déclaré, celui qu'on **annonce** sur un PT est celui que le PT portait dans
+  l'offre (`ResolveNegotiation` écrit le mode résolu dans les deux jeux) ;
+- ce qui **borne notre encodeur** = `min(notre capacité, le niveau déclaré par le
+  pair)` → `effectiveProps`. Le pair a dit ce qu'il sait décoder ; émettre au-dessus
+  produit un flux négocié avec succès et décodé par personne.
+
+Nous émettons `level-asymmetry-allowed=1` : un mixeur transcode dans les deux sens,
+donc le cas même pour lequel ce paramètre existe est le nôtre. `GetFmtpParams` gagne
+la logique de niveau et d'asymétrie ; `CODECS.md` gagne la clé. Conséquence utile :
+sur une offre **sans** `level-asymmetry-allowed` — le cas courant des postes SIP — la
+règle redonne le niveau de l'offre, donc la réponse reste identique à aujourd'hui,
+octet pour octet. Ce qui change ne concerne que les pattes WebRTC et gateway.
+- Point plus simple ici que côté JSR-309 : le producteur du flux sortant est le
+  `VideoStream` du participant, dont `SetVideoCodec` alimente directement
+  l'encodeur — le câblage difficile de §6.3 n'existe pas. Attention en revanche :
+  `SetRTPProperties` **fusionne** dans `videoProperties` alors que `SetVideoCodec`
+  **remplace** la map entière, donc les `negotiatedProps` doivent être appliquées du
+  côté `SetVideoCodec` ou réappliquées après lui.
+- Le contrôleur transmet aussi son intention côté feedback RTCP par les clés
+  transport existantes (`useNACK`, `useRtcpFIR`, `tmmbr`) : rien à ajouter.
+- `MCU-API.md` §6.7 à mettre à jour **avec le code**, pas avant : la doc de l'API
+  décrit le serveur tel qu'il est.
+
+### Phase 5b — AV1 : la négociation y est plus simple que H.264 (investigué le 2026-08-05)
+
+Source : [AV1 RTP Payload Format](https://aomediacodec.github.io/av1-rtp-spec/) (AOMedia),
+type média enregistré **`video/AV1`**, et l'annexe A.3 de la spec bitstream pour les
+niveaux. Trois paramètres fmtp, et **rien d'autre** :
+
+| Paramètre | Sens | Défaut si absent |
+|---|---|---|
+| `profile` | `seq_profile` le plus élevé que l'émetteur du SDP sait **décoder** | `0` (Main) |
+| `level-idx` | `seq_level_idx` le plus élevé qu'il sait décoder | `5` (niveau 3.1) |
+| `tier` | `seq_tier` le plus élevé qu'il sait décoder | `0` (Main) |
+
+`seq_level_idx` → niveau : `major = 2 + (idx >> 2)`, `minor = idx & 3`. Donc `5` = 3.1,
+`8` = 4.0, `9` = 4.1. `tier = 1` (High) n'existe qu'à partir du niveau 4.0 et ne change
+que les débits admissibles.
+
+**La différence de fond avec H.264 : l'asymétrie est le défaut, sans rien à signaler.**
+La spec dit que ces paramètres « *are asymmetrical and the answerer MAY declare its own
+media configuration if the answerer receiving capabilities are different from the
+offerer* ». Il n'y a **pas** d'équivalent de `level-asymmetry-allowed`, donc **aucune
+règle de reflet** : on annonce **toujours notre propre capacité**. Refléter les valeurs
+de l'appelant, comme le faisait le contrôleur en H.264, serait ici franchement faux. Et
+comme on ne reflète jamais, **l'échappatoire pragmatique du H.264 n'a pas d'équivalent
+AV1** : le cas « niveau offert non décodable » ne peut pas se produire.
+
+**Ce qui est normatif, en revanche, c'est le sens émission** : « *The AV1 stream sent by
+either the offerer or the answerer MUST be encoded with a profile, level and tier, lesser
+or equal to the values of the level-idx, profile and tier declared in the SDP by the
+receiving agent.* » D'où `effectiveProps` = **minimum composante par composante** entre
+notre capacité et celle déclarée par le pair.
+
+**Le piège, et il est courant.** Les défauts s'appliquent quand le pair n'envoie **pas**
+de fmtp : il déclare alors `level-idx=5`, soit le niveau 3.1, et c'est une contrainte
+**réelle**, pas une absence de contrainte. Or 3.1 plafonne à `MaxDisplayRate` 31 950 720
+échantillons/s : il couvre du 1280×720@30 (27 648 000) mais **pas** du 720p@60
+(55 296 000, qui exige 4.0) ni du 1080p. Un mixeur en 720p60 ou 1080p qui n'ingère rien
+émet donc au-dessus de ce que le pair a déclaré — exactement ce que le MUST ci-dessus
+interdit.
+
+**État du code.** `AV1Encoder::GetFmtpParams` (`av1/av1codec.cpp:269`) émet déjà nos
+trois paramètres depuis `av1.profile` / `av1.level-idx` / `av1.tier`, avec les défauts
+`0/5/0` — **conformes à la spec**. Le côté *annoncé* est donc déjà juste dans sa forme.
+Ce qui manque est **entièrement** le côté émission : aucune ingestion, donc aucun
+écrêtage. Le point d'accroche est prêt (`ResolveVideo`, branche `VideoCodec::AV1` dans
+`negotiator.cpp`) ; le resolver AV1 serait plus court que celui de H.264 puisqu'il n'a
+ni règle de profil à recopier ni asymétrie à arbitrer.
+
+**Deux décisions à prendre avant de l'écrire :**
+
+1. **`av1.level-idx` reste-t-il une config statique ?** Le défaut `5` (3.1) est cohérent
+   avec la conférence par défaut (HD720p à 15 i/s), et devient un **mensonge** dès qu'un
+   opérateur passe le mixeur en 720p60 ou 1080p : on annoncerait 3.1 en encodant du 4.0.
+   C'est mot pour mot l'incident H.264 du `profile-level-id`, transposé. L'alternative
+   est de **dériver** `level-idx` de la taille et du débit d'images réels du mixeur.
+2. **Que fait-on quand le pair déclare moins que ce que la mosaïque produit ?** Écrêter
+   l'encodeur pour cette patte (niveau par participant, l'analogue pragmatique du choix
+   H.264) ou refuser AV1 pour elle. L'écrêtage suppose que l'encodeur de sortie sait
+   descendre par participant — à vérifier avant de s'y engager.
+
+### Phase 6 — MCU : la même délégation sur l'API conférence
+Demandée le 2026-08-05 par le contrôleur kelixip, dont la conception détaillée est
+`docs/design/mcu_module.md` §16.3 (dépôt elixip) — à lire avant de commencer, elle
+fixe le contrat de fil.
+
+- `StartReceiving` (`xmlrpcmcu.cpp:2012`) gagne un **7e paramètre optionnel**
+  `offer` (struct `{"fmtp": {"<pt>": "<params>"}}`) et un **3e élément de retour**
+  `fmtpByPt` — `returnVal[0]` reste le port, `returnVal[1]` l'IP annoncée (S4), donc
+  `XmlRpcMcuClient` (mcuGold) et les contrôleurs actuels sont inchangés. Repli de
+  signature comme pour `role`/`proto` : `(iiiSiiS)` → `(iiiSii)` → `(iiiSi)`.
+- `MultiConf::StartReceiving` → `RTPParticipant` : appeler
+  `CodecNegotiator::Negotiate`, installer `acceptedMap` (map filtrée) au lieu de la
+  map proposée, mémoriser `negotiatedFmtp` + `negotiatedProps` par média. Décalque
+  de `Endpoint::Port::NegotiateReceiving`.
+- **Le contrôleur envoie `SetRTPProperties(codec.*)` AVANT `StartReceiving`**
+  (décidé le 2026-08-05, `mcu_module.md` §16.3.4 (a)), les clés transport après.
+  Sans cela le négociateur travaillerait sur une map de propriétés **vide** et
+  `H264Encoder::GetFmtpParams` annoncerait son défaut `42801F` — un bug de surcroît
+  intermittent, puisqu'un re-INVITE trouve la map peuplée par le cycle précédent.
+  C'est la même convention d'amorçage que `EndpointSetRTPProperties` côté JSR-309
+  (décisions A et C), donc **une seule convention d'entrée pour les deux API**.
+- **Découpage** : la tuyauterie (paramètre, retour, appel au négociateur, map
+  filtrée) est livrable **sans** la phase 5 — le contrôleur a un repli. L'ingestion
+  du `remoteFmtp` suit.
+
 ## 8. Décisions
 
 - **A. ACTÉ.** Dans les deux sens, `StartReceiving` reste avant `StartSending`.
@@ -487,8 +704,11 @@ immédiate) du sens émission (phase 5, dépendant de ce câblage).
   reconstruit la m-line et les `a=fmtp` depuis `returnVal[1]`. Le média serveur
   est l'autorité sur ce qu'il accepte.
 - **E. ACTÉ — paramètres seuls.** La struct renvoie `"<pt>": "<params>"` (sans
-  `a=fmtp:<pt> `). Un codec sans fmtp est **absent** de la struct. Le contrôleur
-  SIP formate la ligne SDP.
+  `a=fmtp:<pt> `). Le contrôleur SIP formate la ligne SDP. Un codec sans fmtp est
+  **présent avec une valeur vide** : la présence de la clé est le signal
+  d'acceptation, l'absence signale « filtré » (corrigé le 2026-08-05, §5.2 — la
+  formulation initiale « absent de la struct » contredisait le code livré et
+  aurait effacé PCMU/PCMA/T140 des SDP du contrôleur).
 
 ## Instructions pour CLAUDE
 

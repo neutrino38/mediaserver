@@ -185,10 +185,18 @@ int PipeVideoInput::SetFrame(PictPtr pic)
 	//Si estamos capturamos
 	if (capturing)
 	{
-		// Mise à l'échelle vers la taille de l'encodeur (le rescaler rend une
-		// simple référence si la trame est déjà à la bonne taille). Remplace
-		// FrameScaler ; graphe avfilter persistant.
-		last = resizer.Rescale(pic, videoWidth, videoHeight, false);
+		// Mise à l'échelle vers la taille de l'encodeur. Le graphe de la mosaïque a
+		// composé le canevas ; ce saut-ci est l'autre, du canevas vers CET encodeur, et
+		// il rend une simple référence quand les deux tailles coïncident déjà — ce qui
+		// est le cas normal, le contrôleur composant à la taille encodée.
+		//
+		// **Letterbox et non étirement** : quand les deux géométries diffèrent, la
+		// sortie doit garder la taille imposée par l'encodeur SANS déformer l'image.
+		// `Rescale(..., false)` étirait — un canevas 4:3 encodé en 16:9 élargissait
+		// chaque vignette de 33 %, y compris celles que la mosaïque avait pourtant
+		// correctement letterboxées dans leur slot (constaté le 2026-08-06, cf. D1 de
+		// mosaic_aspect_ratio_plan.md).
+		last = resizer.Letterbox(pic, videoWidth, videoHeight);
 
 		//Hay imagen
 		imgNew = true;

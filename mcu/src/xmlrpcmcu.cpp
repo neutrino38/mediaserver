@@ -2022,7 +2022,21 @@ MCU *mcu = (MCU *)user_data;
 	int proto;
 	int recPort = 0;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiiSii)", &confId,&partId,&media,&rtpMap,&role,&proto);
+	//P8a : `offer` (7e param) porte les attributs codec de l'offre — aujourd'hui son
+	//seul membre est "fmtp", une struct PT -> parametres. Struct plutot que fmtp nu
+	//pour que le negociateur puisse en demander plus sans un enieme parametre
+	//positionnel et son repli de signature.
+	xmlrpc_value *offer = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiiSiiS)", &confId,&partId,&media,&rtpMap,&role,&proto,&offer);
+
+	if (env->fault_occurred)
+	{
+	    // Try without the offer argument (pre-P8a controller)
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    offer = NULL;
+	    xmlrpc_parse_value(env, param_array, "(iiiSii)", &confId,&partId,&media,&rtpMap,&role,&proto);
+	}
 
 	if (env->fault_occurred)
 	{
@@ -2030,10 +2044,11 @@ MCU *mcu = (MCU *)user_data;
 	    xmlrpc_env_clean(env);
 	    xmlrpc_env_init(env);
 	    proto = MediaFrame::TCP;
+	    offer = NULL;
 		xmlrpc_parse_value(env, param_array, "(iiiSi)", &confId,&partId,&media,&rtpMap,&role);
-	
+
 	}
-	
+
 	//Get the rtp map
 	RTPMap map;
 
@@ -2067,8 +2082,46 @@ MCU *mcu = (MCU *)user_data;
 	if(!mcu->GetConferenceRef(confId,conf))
 		return xmlerror(env,"Conference does not exist");
 
-	//La borramos
-	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto);
+	//P8a : le fmtp de l'offre, extrait du membre "fmtp" de `offer` (struct PT ->
+	//parametres, les parametres SEULS sans "a=fmtp:<pt> "). Absent ou mal forme =>
+	//map vide, et le serveur annonce alors sa propre config.
+	std::map<int,std::string> offerFmtp;
+	if (offer)
+	{
+		xmlrpc_value* fmtpStruct = NULL;
+		xmlrpc_struct_find_value(env,offer,"fmtp",&fmtpStruct);
+		if (!env->fault_occurred && fmtpStruct)
+		{
+			int n = xmlrpc_struct_size(env,fmtpStruct);
+			for (int i=0;i<n && !env->fault_occurred;i++)
+			{
+				xmlrpc_value *key, *val;
+				const char *ptStr, *params;
+				xmlrpc_struct_read_member(env,fmtpStruct,i,&key,&val);
+				xmlrpc_parse_value(env,key,"s",&ptStr);
+				xmlrpc_parse_value(env,val,"s",&params);
+				if (!env->fault_occurred)
+					offerFmtp[atoi(ptStr)] = params;
+				xmlrpc_DECREF(key);
+				xmlrpc_DECREF(val);
+			}
+			xmlrpc_DECREF(fmtpStruct);
+		}
+		//Un `offer` illisible ne coute pas l'appel : on repart sur la config locale.
+		if (env->fault_occurred)
+		{
+			xmlrpc_env_clean(env);
+			xmlrpc_env_init(env);
+			offerFmtp.clear();
+			Log("StartReceiving: unreadable offer struct, negotiating against our own config\n");
+		}
+	}
+
+	//La borramos. `negotiatedFmtp` non NULL demande la variante negociee : la map
+	//installee est la map FILTREE, et `map` est reecrite avec elle.
+	std::map<int,std::string> negotiatedFmtp;
+	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto,
+	                                        &offerFmtp,&negotiatedFmtp);
 
 
 	//Salimos
@@ -2089,8 +2142,136 @@ MCU *mcu = (MCU *)user_data;
 	Log("StartReceiving recVideoPort=%i ip=%s\n",recVideoPort,announcedIp);
 
 	//Devolvemos el resultado. returnVal[0] reste le port (les clients qui ne lisent
-	//que lui sont inchangés) ; l'IP est ajoutée en returnVal[1].
-	return xmlok(env,xmlrpc_build_value(env,"(is)",recVideoPort,announcedIp));
+	//que lui sont inchangés) ; l'IP est ajoutée en returnVal[1] ; le fmtp négocié en
+	//returnVal[2] (P8a). Purement additif : mcuGold lit l'index 0, un contrôleur
+	//pré-S4 les index 0-1, et un contrôleur pré-P8a ignore simplement le troisième.
+	//
+	//Contrat de returnVal[2] : TOUT PT accepté est une clé, y compris les codecs
+	//SANS fmtp (valeur vide) ; un PT absent a été filtré. La présence de la clé EST
+	//le signal d'acceptation — c'est la seule source dont le contrôleur dispose pour
+	//connaître l'ensemble accepté, donc NE PAS filtrer les valeurs vides ici (ce
+	//serait faire disparaître PCMU, PCMA, G722 et T140 de ses SDP).
+	xmlrpc_value* fmtpStruct = xmlrpc_struct_new(env);
+	for (std::map<int,std::string>::const_iterator it=negotiatedFmtp.begin(); it!=negotiatedFmtp.end(); ++it)
+	{
+		char ptStr[16];
+		snprintf(ptStr,sizeof(ptStr),"%d",it->first);
+		xmlrpc_value* v = xmlrpc_string_new(env,it->second.c_str());
+		xmlrpc_struct_set_value(env,fmtpStruct,ptStr,v);
+		xmlrpc_DECREF(v);
+	}
+
+	xmlrpc_value* ret = xmlrpc_build_value(env,"(isS)",recVideoPort,announcedIp,fmtpStruct);
+	xmlrpc_DECREF(fmtpStruct);
+	return xmlok(env,ret);
+}
+
+/**
+ * ConfigureParticipantMediaConnection — S5
+ *
+ * Texte temps réel sur WebSocket pour un participant de conférence : bascule
+ * son plan texte du RTP vers un pont WebSocket à la couture du mixeur, et rend
+ * l'URL COMPLÈTE que le contrôleur publie dans son SDP (a=ws/a=wss). Miroir,
+ * sur cette API, du couple ConfigureMediaConnection + GetMediaCandidates
+ * JSR-309 — en un seul appel : l'URL est connue dès la configuration, et le
+ * contrôleur n'a pas à connaître la forme du chemin (/mcu/<confId>/<token>).
+ *
+ * Params (iiiis) : confId, partId, media (TEXT=2 seul accepté), proto (WS=2
+ * seul accepté), token (unique par (re)configuration ; une re-négociation en
+ * frappe un nouveau, l'ancien cesse de résoudre).
+ * Retour (s) : l'URL — schéma ws:// ou wss:// décidé par le SERVEUR
+ * (--websocket-secure, même port), jamais par le contrôleur.
+ *
+ * Après cet appel, StartReceiving/StartSending(TEXT) sur ce participant sont
+ * refusés (le texte ne vit plus en RTP) ; le contrôleur n'appelle ni l'un ni
+ * l'autre, ni SetTextCodec, pour cette patte.
+ */
+xmlrpc_value* ConfigureParticipantMediaConnection(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	int media;
+	int proto;
+	const char *token;
+	xmlrpc_parse_value(env, param_array, "(iiiis)", &confId,&partId,&media,&proto,&token);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred: bad arguments");
+
+	//Obtenemos la referencia
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	std::string base = conf->ConfigureParticipantMediaConnection(partId,(MediaFrame::Type)media,(MediaFrame::MediaProtocol)proto,std::string(token));
+
+	if (base.empty())
+		return xmlerror(env,"Could not configure media connection");
+
+	char url[512];
+	snprintf(url,sizeof(url),"%s/mcu/%d/%s",base.c_str(),confId,token);
+
+	xmlrpc_value* ret = xmlrpc_build_value(env,"(s)",url);
+	return xmlok(env,ret);
+}
+
+/**
+ * StartRTPTimeout — P7/S1
+ *
+ * Arme ou desarme le chien de garde d'inactivite RTP d'un media d'un
+ * participant. Miroir de EndpointStartRTPTimeout cote JSR-309.
+ *
+ * timeoutMs > 0 (re)configure le seuil ET arme, le chrono partant de MAINTENANT ;
+ * 0 desarme. Le controleur arme apres avoir envoye la reponse SDP, ce qui rend
+ * detectable le cas « repondu mais aucun media n'est jamais arrive » sans jamais
+ * surveiller la phase de sonnerie ; il desarme quand un media passe en garde
+ * (hold), sans quoi une mise en attente legitime se lirait comme une patte morte.
+ *
+ * `role` est optionnel, comme partout ailleurs sur cette API (defaut VIDEO_MAIN).
+ */
+xmlrpc_value* StartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	 //Parseamos
+	int confId;
+	int partId;
+	int media;
+	int timeoutMs;
+	int role;
+
+	xmlrpc_parse_value(env, param_array, "(iiiii)", &confId,&partId,&media,&timeoutMs,&role);
+
+	if (env->fault_occurred)
+	{
+	    // Try without role argument
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    role = MediaFrame::VIDEO_MAIN;
+	    xmlrpc_parse_value(env, param_array, "(iiii)", &confId,&partId,&media,&timeoutMs);
+	}
+
+	//Comprobamos si ha habido error
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
+	//Obtenemos la referencia
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	//Un timeout negatif vaut desarmement : le controleur n'a pas a connaitre la
+	//difference entre 0 et « valeur absurde ».
+	int res = conf->StartRTPTimeout(partId,(MediaFrame::Type)media,(DWORD)(timeoutMs>0?timeoutMs:0),(MediaFrame::MediaRole)role);
+
+	//Salimos
+	if(!res)
+		return xmlerror(env,"Could not arm the RTP timeout.");
+
+	//Devolvemos el resultado
+	return xmlok(env);
 }
 
 xmlrpc_value* StopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
@@ -2348,6 +2529,8 @@ XmlHandlerCmd mcuCmdList[] =
 	{"StopSending",StopSending},
 	{"StartReceiving",StartReceiving},
 	{"StopReceiving",StopReceiving},
+	{"ConfigureParticipantMediaConnection",ConfigureParticipantMediaConnection},
+	{"StartRTPTimeout",StartRTPTimeout},
 	{"SetAudioCodec",SetAudioCodec},
 	{"SetTextCodec",SetTextCodec},	
 	{"SetAppCodec",SetAppCodec},

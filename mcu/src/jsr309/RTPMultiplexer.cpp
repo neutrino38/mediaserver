@@ -31,6 +31,22 @@ RTPMultiplexer::~RTPMultiplexer()
 	//Destroy mutex
 	pthread_mutex_destroy(&mutex);
 }
+void RTPMultiplexer::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
+{
+	pthread_mutex_lock(&mutex);
+	negotiated = byCodec;
+	pthread_mutex_unlock(&mutex);
+}
+
+Properties RTPMultiplexer::GetNegotiatedProperties(int codec)
+{
+	pthread_mutex_lock(&mutex);
+	std::map<int,Properties>::const_iterator it = negotiated.find(codec);
+	Properties props = (it != negotiated.end()) ? it->second : Properties();
+	pthread_mutex_unlock(&mutex);
+	return props;
+}
+
 int  RTPMultiplexer::TryCodec(int codec)
 {
 	//Lock mutexk

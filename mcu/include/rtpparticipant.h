@@ -8,6 +8,8 @@
 #ifndef RTPPARTICIPANT_H
 #define	RTPPARTICIPANT_H
 #include <memory>
+#include <map>
+#include <string>
 #include "config.h"
 #include "participant.h"
 #include "videostream.h"
@@ -52,6 +54,20 @@ public:
 	int StartSending(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//P8a : variante negociee (mcu_module.md §16.3). Delegue la selection des codecs
+	//au media serveur au lieu de laisser le controleur SIP l'arbitrer seul.
+	//
+	//  offerFmtp         : le fmtp de l'offre, par PAYLOAD TYPE (vide si le
+	//                      controleur n'en transmet pas -> on annonce notre config).
+	//  rtpMap            : REMPLACEE par la map filtree, celle reellement installee.
+	//  negotiatedFmtpOut : le fmtp par PT ACCEPTE. Contrat : tout PT accepte est une
+	//                      cle, y compris les codecs SANS fmtp (valeur vide) ; un PT
+	//                      absent a ete filtre. La presence de la cle EST le signal
+	//                      d'acceptation, c'est la seule source du controleur.
+	int StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,
+	                   const std::map<int,std::string>& offerFmtp,
+	                   std::map<int,std::string>& negotiatedFmtpOut,
+	                   MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StartReceiving(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopReceiving(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetLocalCryptoSDES(MediaFrame::Type media,const char* suite, const char* key64,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -63,6 +79,12 @@ public:
 	
 	int SetMediaListener(MediaFrame::Listener *listener,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return video[role]->SetMediaListener(listener); }
 
+	//P7/S1 : (re)arme ou desarme le chien de garde d'inactivite RTP d'un media.
+	//timeoutMs > 0 arme (chrono a partir de maintenant), 0 desarme. Jamais appele
+	//sur le texte par le controleur : le T.140 est legitimement silencieux entre
+	//deux frappes et declencherait un faux positif.
+	int StartRTPTimeout(MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+
 	//RTPSession::Listener
 	virtual void onFPURequested(RTPSession *session);
 	virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate);
@@ -70,6 +92,11 @@ public:
 	virtual void onRequestFPU();
 	virtual void onNewStream( RTPSession *session, DWORD newSsrc, bool receiving );
 	virtual void onDTMF(DTMFMessage* dtmf);
+	//P7/S1-S2. La session porte son propre media et son role (RTPSession::
+	//GetMediaType/GetMediaRole), donc aucun besoin de comparer des pointeurs pour
+	//savoir laquelle des trois piles a parle.
+	virtual void onRTPTimeout( RTPSession *session );
+	virtual void onRTPPacketReceived( RTPSession *session );
 	
         virtual int DumpInfo(std::string & info);
 		

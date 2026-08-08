@@ -325,8 +325,13 @@ int RTPEndpoint::Attach(const std::shared_ptr<Joinable> & join)
 	joined = join;
 	//If it is not null
 	if (join)
+	{
 		//Join to the new one
 		join->AddListener(this);
+		//Phase 5 : bornes négociées poussées au producteur fraîchement attaché
+		//(l'ordre attach/négociation est libre côté contrôleur).
+		PushNegotiatedProps();
+	}
 
 	//OK
 	return 1;

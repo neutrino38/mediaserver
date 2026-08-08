@@ -32,6 +32,11 @@ public:
 	virtual void Update();
 	virtual void SetREMB(int bitrate);
 	virtual void RemoveListener(Listener *listener);
+	//Phase 5 (nego_fmtp §6.3) : bornes négociées par code codec, fusionnées
+	//par-dessus `params` à l'ouverture de l'encodeur. Redémarre l'encodeur si
+	//les bornes changent en cours d'encodage (les Properties ne sont lues qu'à
+	//CreateEncoder).
+	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);
 
 private:
 	int Start();
@@ -46,15 +51,22 @@ private:
 	VideoInput *input;
 	VideoCodec::Type codec;
 
-	int mode;	
-	int width;	
-	int height;	
+	int mode;
+	int width;
+	int height;
 	int fps;
+	//La cadence CONFIGURÉE (SetCodec), dont `fps` repart à chaque (ré)ouverture :
+	//l'écrêtage AV1 (phase 5b) doit suivre aussi une borne qui s'ASSOUPLIT.
+	int configuredFps;
 	int bitrate;
 	int intraPeriod;
 	int videoBitrateLimit;
 	int videoBitrateLimitCount;
 	Properties params;
+	//Bornes négociées par code codec (phase 5) : ce que le pair de la patte
+	//émettrice a déclaré savoir décoder. Fusionnées par-dessus `params` à
+	//l'ouverture — la config du contrôleur reste, les bornes gagnent.
+	std::map<int,Properties> negotiated;
 
 	pthread_t	thread;
 	pthread_mutex_t mutex;
