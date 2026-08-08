@@ -58,8 +58,13 @@ public :
 	static void SetLocalSecure(bool secure);
 	static bool IsLocalSecure();
 
-	int  	GetLocalPort();
-	char*  	GetLocalHost();
+	//Statiques : ils ne lisent que la configuration globale du serveur WS (un
+	//seul port/host pour tout le binaire, posés par main.cpp). L'API
+	//conférence (S5, MultiConf::ConfigureParticipantMediaConnection) les
+	//appelle sans instance ; l'appel via une instance (Endpoint::Port::
+	//GetLocalMediaHost) reste valide.
+	static int  	GetLocalPort();
+	static char*  	GetLocalHost();
 	
 	void SetUseRed(bool red){useRed = red;};
 	void SetPrimaryPayloadType(BYTE pt){payloadType = pt;};

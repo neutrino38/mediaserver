@@ -5,6 +5,10 @@
 #include "multiconf.h"
 #include "rtpparticipant.h"
 #include "rtmpparticipant.h"
+//S5 : uniquement pour la configuration globale du serveur WS (port/host/
+//--websocket-secure), posée par main.cpp sur ces statiques. Le plan média
+//JSR-309 de WSEndpoint n'est pas utilisé ici.
+#include "jsr309/WSEndpoint.h"
 
 /************************
 * MultiConf
@@ -738,7 +742,30 @@ int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 {
 	Log(">DestroyParticipant [%d]\n",partId);
 	bool confEmpty;
-	
+
+	//S5 : le pont texte-WS et ses tokens meurent avec le participant — le
+	//navigateur voit son WebSocket se fermer. End() joint le thread de tirage,
+	//donc hors verrou.
+	std::shared_ptr<ParticipantTextWS> textWS;
+	{
+		std::lock_guard<std::mutex> lock(textWSMutex);
+		TextWSBridges::iterator b = textWSBridges.find(partId);
+		if (b != textWSBridges.end())
+		{
+			textWS = b->second;
+			textWSBridges.erase(b);
+		}
+		for (TextWSTokens::iterator it = textWSTokens.begin(); it != textWSTokens.end(); )
+		{
+			if (it->second == (DWORD)partId)
+				it = textWSTokens.erase(it);
+			else
+				++it;
+		}
+	}
+	if (textWS)
+		textWS->End();
+
 	//End participant audio and video streams
 	int ret = part->End();
 
@@ -873,7 +900,15 @@ int MultiConf::End()
 		//Destroy it
 		if ( DestroyParticipant(it->first,it->second) == 0 ) ret = 0;
 	}
-	
+
+	//S5 : ceinture — DestroyParticipant a déjà retiré ponts et tokens, mais
+	//une conférence qui se termine ne doit rien laisser résoudre.
+	{
+		std::lock_guard<std::mutex> lock(textWSMutex);
+		textWSTokens.clear();
+		textWSBridges.clear();
+	}
+
 	
 	
 	//Remove all players (instantané protégé : DeletePlayer refait sa propre
@@ -1317,7 +1352,13 @@ int MultiConf::StartSending(int id,MediaFrame::Type media,char *sendIp,int sendP
 	int ret = 0;
 
 	Log("-StartSending %s [partId:%d]\n",MediaFrame::TypeToString(media),id);
-	
+
+	//S5 : le plan texte de ce participant est sur WebSocket — un StartSending
+	//RTP ici ouvrirait en silence un flux que personne n'écoute (le proto est
+	//ignoré pour les médias non-BFCP). Le contrôleur ne doit pas l'appeler.
+	if (media == MediaFrame::Text && TextOnWebSocket(id))
+		return Error("-StartSending: text is on WebSocket for participant %d, refusing RTP text.\n",id);
+
 	int mosaicId= sharedDocMixer.GetSharedMosaic();
 	//Use list
 	participantsLock.IncUse();
@@ -1386,8 +1427,13 @@ int MultiConf::StartReceiving(int id,MediaFrame::Type media,RTPMap& rtpMap,Media
 {
 	int ret = 0;
 	Participant::DocSharingMode docSharingMode;
-	
+
 	Log("-StartReceiving %s [partId:%d]\n",MediaFrame::TypeToString(media),id);
+
+	//S5 : même garde qu'au StartSending — le texte de ce participant vit sur
+	//le WebSocket, pas en RTP.
+	if (media == MediaFrame::Text && TextOnWebSocket(id))
+		return Error("-StartReceiving: text is on WebSocket for participant %d, refusing RTP text.\n",id);
 
 	//Use list
 	participantsLock.IncUse();
@@ -1504,6 +1550,151 @@ int MultiConf::StopReceiving(int id,MediaFrame::Type media,MediaFrame::MediaRole
 
 	//Exit
 	return ret;
+}
+
+/************************
+* ConfigureParticipantMediaConnection (S5)
+*	Texte temps réel sur WebSocket pour un participant : bascule son plan
+*	texte du RTP vers un pont ParticipantTextWS à la couture du mixeur, et
+*	enregistre le token d'URL. Rend la base `ws(s)://host:port` (schéma
+*	décidé par le serveur — décision B de jsr309_text_over_wss.md), chaîne
+*	vide en cas d'échec, auquel cas l'appel RTP reste intact.
+*************************/
+std::string MultiConf::ConfigureParticipantMediaConnection(int partId,MediaFrame::Type media,MediaFrame::MediaProtocol proto,const std::string &token)
+{
+	Log(">ConfigureParticipantMediaConnection [partId:%d,media:%s,proto:%d]\n",
+	    partId,MediaFrame::TypeToString(media),proto);
+
+	if (!inited)
+	{
+		Error("ConfigureParticipantMediaConnection: not inited\n");
+		return std::string();
+	}
+
+	//Périmètre exact de S5 : le texte, sur WebSocket. Tout le reste est RTP
+	//sur cette API.
+	if (media != MediaFrame::Text || proto != MediaFrame::WS)
+	{
+		Error("ConfigureParticipantMediaConnection: only TEXT over WS is supported on the conference API.\n");
+		return std::string();
+	}
+
+	if (token.empty())
+	{
+		Error("ConfigureParticipantMediaConnection: a token is required for WS.\n");
+		return std::string();
+	}
+
+	//L'adresse d'abord : sans adresse annonçable il n'y a pas d'URL à signer,
+	//et il ne faut alors RIEN basculer — le participant garde son texte RTP.
+	const char* host = RTPSession::GetAnnouncedIp();
+	if (WSEndpoint::GetLocalHost() && *WSEndpoint::GetLocalHost())
+		host = WSEndpoint::GetLocalHost();
+	if (!host || !*host)
+	{
+		Error("ConfigureParticipantMediaConnection: no announced address.\n");
+		return std::string();
+	}
+	//Le SCHÉMA vient du serveur : le TLS est activé sur le MÊME port
+	//(--websocket-secure), le contrôleur ne peut donc pas le deviner.
+	const char* scheme = WSEndpoint::IsLocalSecure() ? "wss" : "ws";
+	int port = WSEndpoint::GetLocalPort();
+
+	//Get the participant
+	participantsLock.IncUse();
+	RTPParticipantPtr part = GetRTPParticipant(partId);
+	participantsLock.DecUse();
+	if (!part)
+	{
+		Error("ConfigureParticipantMediaConnection: participant %d not found.\n",partId);
+		return std::string();
+	}
+
+	//Arrêter le demi-plan texte RTP (idempotent — il n'a le plus souvent
+	//jamais démarré : le contrôleur configure AVANT StartReceiving). Les
+	//pipes du mixeur restent vivants, le pont va les co-posséder.
+	part->StopReceiving(MediaFrame::Text);
+	part->StopSending(MediaFrame::Text);
+
+	{
+		std::lock_guard<std::mutex> lock(textWSMutex);
+
+		//Un pont existe déjà (re-négociation) : on le garde — le navigateur
+		//peut y être encore connecté — et seul le token change.
+		if (textWSBridges.find(partId) == textWSBridges.end())
+		{
+			std::shared_ptr<ParticipantTextWS> bridge =
+				std::make_shared<ParticipantTextWS>(textMixer.GetSharedInput(partId),
+								    textMixer.GetSharedOutput(partId));
+			if (!bridge->Init())
+			{
+				Error("ConfigureParticipantMediaConnection: could not start the text bridge.\n");
+				return std::string();
+			}
+			textWSBridges[partId] = bridge;
+		}
+
+		//Un token par (re)configuration : l'ancien cesse de résoudre —
+		//contrairement aux tokens JSR-309, jamais retirés (fuite connue,
+		//risque n°3 de jsr309_text_over_wss.md).
+		for (TextWSTokens::iterator it = textWSTokens.begin(); it != textWSTokens.end(); )
+		{
+			if (it->second == (DWORD)partId)
+				it = textWSTokens.erase(it);
+			else
+				++it;
+		}
+		textWSTokens[token] = partId;
+	}
+
+	char url[128];
+	if (port > 0)
+		snprintf(url,sizeof(url),"%s://%s:%d",scheme,host,port);
+	else
+		snprintf(url,sizeof(url),"%s://%s",scheme,host);
+
+	Log("<ConfigureParticipantMediaConnection [partId:%d] --> %s\n",partId,url);
+	return std::string(url);
+}
+
+/************************
+* onNewMediaConnection (S5)
+*	Une connexion WebSocket /mcu/<confId>/<token> résolue jusqu'à cette
+*	conférence : le token désigne le pont texte d'un participant, ou 404 —
+*	le miroir de MediaSession::onNewMediaConnection.
+*************************/
+void MultiConf::onNewMediaConnection(WebSocket *ws,const std::string &token)
+{
+	std::shared_ptr<ParticipantTextWS> bridge;
+
+	{
+		std::lock_guard<std::mutex> lock(textWSMutex);
+		TextWSTokens::const_iterator it = textWSTokens.find(token);
+		if (it != textWSTokens.end())
+		{
+			TextWSBridges::const_iterator b = textWSBridges.find(it->second);
+			if (b != textWSBridges.end())
+				bridge = b->second;
+		}
+	}
+
+	if (!bridge)
+	{
+		Error("MultiConf::onNewMediaConnection: no such token.\n");
+		ws->Reject(404,"No such token");
+		return;
+	}
+
+	ws->Accept(std::weak_ptr<WebSocket::Listener>(bridge));
+}
+
+/************************
+* TextOnWebSocket (S5)
+*************************/
+bool MultiConf::TextOnWebSocket(int partId)
+{
+	std::lock_guard<std::mutex> lock(textWSMutex);
+	return textWSBridges.find(partId) != textWSBridges.end();
 }
 
 /************************

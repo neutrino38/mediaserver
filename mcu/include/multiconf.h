@@ -16,11 +16,13 @@
 #include "audioencoder.h"
 #include "textencoder.h"
 #include "rtmpnetconnection.h"
-// #include "websockets.h"
+#include "participanttextws.h"
 #include "appmixer.h"
 #include "shareddocmixer.h"
 #include "dtmfmessage.h"
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 
 class RTMPParticipant;
@@ -159,6 +161,23 @@ public:
 	bool AddParticipantOutputToken(int partId,const std::wstring &token);
 	bool AddBroadcastToken(const std::wstring &token);
 
+	//S5 : texte temps réel sur WebSocket pour un participant de conférence —
+	//le miroir, sur cette API, du ConfigureMediaConnection JSR-309. Bascule le
+	//plan texte du participant du RTP vers un pont ParticipantTextWS (couture
+	//du mixeur), enregistre `token` pour la résolution de l'URL, et rend la
+	//base `ws://host:port` ou `wss://host:port` (schéma décidé par le serveur,
+	//jamais par le contrôleur). Chaîne vide en cas d'échec. Seul
+	//media=Text/proto=WS est accepté. Une re-configuration remplace le token
+	//du participant (l'ancien cesse de résoudre) et conserve le pont.
+	std::string ConfigureParticipantMediaConnection(int partId,MediaFrame::Type media,MediaFrame::MediaProtocol proto,const std::string &token);
+	//S5 : une connexion /mcu/<confId>/<token> acceptée par le handler du MCU.
+	//Résout le token vers le pont du participant, ou Reject(404).
+	void onNewMediaConnection(WebSocket *ws,const std::string &token);
+	//S5 : le plan texte de ce participant est-il sur WebSocket ? Garde
+	//StartSending/StartReceiving(TEXT), qui ouvriraient sinon un flux RTP
+	//muet en silence (le proto y est ignoré pour les médias non-BFCP).
+	bool TextOnWebSocket(int partId);
+
 	std::weak_ptr<RTMPParticipant> ConsumeParticipantOutputToken(const std::wstring &token);
 	RTMPMediaStream::Listener* ConsumeParticipantInputToken(const std::wstring &token);
 	RTMPMediaStream* ConsumeBroadcastToken(const std::wstring &token);
@@ -222,6 +241,15 @@ private:
 	ParticipantTokens	inputTokens;
 	ParticipantTokens	outputTokens;
 	BroadcastTokens		tokens;
+
+	//S5 : ponts texte-sur-WebSocket, par participant, et leurs tokens d'URL.
+	//Contrairement aux tokens JSR-309 (fuite connue), ceux-ci meurent avec le
+	//participant (DestroyParticipant). Un seul verrou pour les deux maps.
+	typedef std::map<std::string,DWORD> TextWSTokens;
+	typedef std::map<DWORD,std::shared_ptr<ParticipantTextWS>> TextWSBridges;
+	TextWSTokens		textWSTokens;
+	TextWSBridges		textWSBridges;
+	std::mutex		textWSMutex;
 	//Atributos
 	int		inited;
 	int		maxId;
