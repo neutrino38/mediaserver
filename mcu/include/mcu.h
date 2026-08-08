@@ -8,13 +8,18 @@
 #include "rtmpapplication.h"
 #include "xmlstreaminghandler.h"
 #include "uploadhandler.h"
+#include "websocketserver.h"
 
 
 
-class MCU : 
+class MCU :
 	public RTMPApplication,
 	public MultiConf::Listener,
-	public UploadHandler::Listener
+	public UploadHandler::Listener,
+	//S5 : la porte WebSocket de l'API conférence (texte temps réel d'un
+	//participant). Enregistrée par main.cpp sous le préfixe "/mcu", à côté du
+	//"/jsr309" historique.
+	public WebSocketServer::Handler
 {
 public:
 	//Codes partages avec TOUS les controleurs, mcuGold inclus : on AJOUTE en fin,
@@ -48,6 +53,10 @@ public:
 	int CreateEventQueue();
 	int DeleteEventQueue(int id);
 	int End();
+
+	//S5 : /mcu/<confId>/<token> — résout la conférence puis délègue au
+	//MultiConf::onNewMediaConnection, le miroir du handler JSR-309.
+	virtual void onWebSocketConnection(const HTTPRequest &request,WebSocket *ws);
 
 	int CreateConference(std::wstring tag,int queueId);
 	int GetConferenceRef(int id,std::shared_ptr<MultiConf> &conf);

@@ -786,6 +786,46 @@ Ouvre l'émission RTP d'un média vers une destination.
 - **Params** (sans role) `(iii)` : idem, `role` = VIDEO_MAIN.
 - **Retour** : vide.
 
+#### `ConfigureParticipantMediaConnection` (S5)
+Texte temps réel **sur WebSocket** pour un participant : bascule son plan texte
+du RTP vers un pont WebSocket branché sur le mixeur texte de la conférence, et
+rend l'**URL complète** que le contrôleur publie dans son SDP (`a=ws`/`a=wss`).
+Miroir, sur cette API, du couple `ConfigureMediaConnection` +
+`GetMediaCandidates` JSR-309 — en un seul appel.
+- **Params** `(iiiis)` : `confId`, `partId`, `media` (**TEXT=2 seul accepté**),
+  `proto` (**WS=2 seul accepté**), `token` (jeton d'URL, unique par
+  (re)configuration).
+- **Retour** : `(s)` = l'URL, `ws://host:port/mcu/<confId>/<token>` — ou
+  `wss://` si le serveur tourne en `--websocket-secure` : le **schéma est
+  décidé par le serveur** (TLS sur le même port), jamais par le contrôleur.
+  Hôte : `--websocket-host`, sinon `--public-ip`.
+
+Sémantique et contrat :
+- s'appelle **à la place** de `StartReceiving`/`StartSending`/`SetTextCodec`
+  pour le texte de cette patte — après la bascule, `StartReceiving` et
+  `StartSending` sur `TEXT` sont **refusés** (le texte ne vit plus en RTP) ;
+- une **re-négociation** rappelle la méthode avec un nouveau token : l'ancien
+  cesse de résoudre, le pont (et une éventuelle connexion navigateur) survit ;
+- le navigateur se connecte directement sur l'URL ; une reconnexion sur le même
+  token remplace la connexion précédente ;
+- le texte mixé avant la connexion du navigateur est conservé (borné : 32
+  trames / 5 s) et rejoué à l'ouverture ; un U+FFFD (T.140 §5.3) est injecté
+  vers le côté survivant quand une extrémité tombe ;
+- les tokens **meurent avec le participant** (`DeleteParticipant`) — pas de
+  fuite à la JSR-309 ;
+- en cas d'échec (`returnCode: 0`), **rien n'est basculé** : le participant
+  garde son plan texte RTP, et le contrôleur omet la section `m=text` de sa
+  réponse SDP.
+
+#### Porte WebSocket `/mcu/<confId>/<token>`
+Le serveur WebSocket (port `--websocket-port`, 9090 par défaut — le même que
+`/jsr309`) enregistre un handler sous le préfixe `/mcu`. La connexion est
+acceptée (101) si le token résout vers un participant de la conférence, rejetée
+404 sinon (token inconnu, conférence inconnue, participant détruit). Les
+messages WebSocket sont du texte UTF-8 nu, sans enveloppe : un message entrant
+part dans le mixeur texte, le mixage destiné à la patte (préfixé du nom du
+locuteur, comportement standard du mixeur) revient en messages sortants.
+
 ---
 
 ### 6.8 Sécurité (SRTP-SDES / DTLS / ICE-STUN)

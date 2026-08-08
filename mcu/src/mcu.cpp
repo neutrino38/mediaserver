@@ -4,6 +4,7 @@
 #include "log.h"
 #include "mcu.h"
 #include "rtmpparticipant.h"
+#include "stringparser.h"
 
 
 /**************************************
@@ -308,6 +309,70 @@ int MCU::GetConferenceList(ConferencesInfo& lst)
 	Log("<GetConferenceList\n");
 
 	return true;
+}
+
+/**************************************
+* onWebSocketConnection (S5)
+*	La porte WebSocket de l'API conférence : /mcu/<confId>/<token>. Résout la
+*	conférence (GetConferenceRef) puis délègue la résolution du token au
+*	MultiConf — le miroir exact de JSR309Manager::onWebSocketConnection.
+**************************************/
+void MCU::onWebSocketConnection(const HTTPRequest &request, WebSocket *ws)
+{
+	Log("MCU: incoming WebSocket connection to %s\n", request.GetRequestURI().c_str());
+
+	// The URL must look (assuming confId 1234 and token deadbeef) as follows:
+	//   /mcu/1234/deadbeef
+	std::string url = request.GetRequestURI();
+	StringParser parser(url);
+
+	if (!parser.MatchString("/mcu"))
+	{
+		ws->Reject(404, "Not found");
+		return;
+	}
+
+	if (!parser.ParseChar('/'))
+	{
+		Error("MCU::onWebSocketConnection() | bad URL: no /mcu/ => HTTP 400\n");
+		ws->Reject(400, "Bad Request");
+		return;
+	}
+
+	if (!parser.ParseInteger())
+	{
+		Error("MCU::onWebSocketConnection() | bad URL: missing conference ID.\n");
+		ws->Reject(400, "Bad Request");
+		return;
+	}
+
+	int confId = (int) parser.GetIntegerValue();
+
+	if (!parser.ParseChar('/'))
+	{
+		Error("MCU::onWebSocketConnection() | bad URL: no /mcu/confId/ => HTTP 400\n");
+		ws->Reject(400, "Bad Request no sep before token");
+		return;
+	}
+
+	if (!parser.ParseToken())
+	{
+		Error("MCU::onWebSocketConnection(): cannot extract token from URL %s\n", url.c_str());
+		ws->Reject(400, "Bad Request cannot extract token");
+		return;
+	}
+
+	std::string token = parser.GetValue();
+
+	std::shared_ptr<MultiConf> conf;
+	if (!GetConferenceRef(confId, conf))
+	{
+		Error("MCU::onWebSocketConnection() | no such conference %d\n", confId);
+		ws->Reject(404, "No such conference");
+		return;
+	}
+
+	conf->onNewMediaConnection(ws, token);
 }
 
 void MCU::onParticipantRequestFPU(MultiConf *conf,int partId)

@@ -476,6 +476,10 @@ int main(int argc,char **argv)
 	
 	//Add websocket handlers
 	wsServer.AddHandler("/jsr309", &jsr309Manager );
+	//S5 : la porte texte-sur-WebSocket de l'API conférence
+	//(/mcu/<confId>/<token>). Préfixes disjoints de /jsr309, le routage par
+	//préfixe du WebSocketServer les départage sans ambiguïté.
+	wsServer.AddHandler("/mcu", &mcu );
 	//Add the html status handler
 	server.AddHandler("/status/general",&status);
         server.AddHandler("/status/mcu",&mcustatus);

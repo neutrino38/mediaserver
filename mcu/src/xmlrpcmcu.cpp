@@ -2167,6 +2167,57 @@ MCU *mcu = (MCU *)user_data;
 }
 
 /**
+ * ConfigureParticipantMediaConnection — S5
+ *
+ * Texte temps réel sur WebSocket pour un participant de conférence : bascule
+ * son plan texte du RTP vers un pont WebSocket à la couture du mixeur, et rend
+ * l'URL COMPLÈTE que le contrôleur publie dans son SDP (a=ws/a=wss). Miroir,
+ * sur cette API, du couple ConfigureMediaConnection + GetMediaCandidates
+ * JSR-309 — en un seul appel : l'URL est connue dès la configuration, et le
+ * contrôleur n'a pas à connaître la forme du chemin (/mcu/<confId>/<token>).
+ *
+ * Params (iiiis) : confId, partId, media (TEXT=2 seul accepté), proto (WS=2
+ * seul accepté), token (unique par (re)configuration ; une re-négociation en
+ * frappe un nouveau, l'ancien cesse de résoudre).
+ * Retour (s) : l'URL — schéma ws:// ou wss:// décidé par le SERVEUR
+ * (--websocket-secure, même port), jamais par le contrôleur.
+ *
+ * Après cet appel, StartReceiving/StartSending(TEXT) sur ce participant sont
+ * refusés (le texte ne vit plus en RTP) ; le contrôleur n'appelle ni l'un ni
+ * l'autre, ni SetTextCodec, pour cette patte.
+ */
+xmlrpc_value* ConfigureParticipantMediaConnection(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	int media;
+	int proto;
+	const char *token;
+	xmlrpc_parse_value(env, param_array, "(iiiis)", &confId,&partId,&media,&proto,&token);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred: bad arguments");
+
+	//Obtenemos la referencia
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	std::string base = conf->ConfigureParticipantMediaConnection(partId,(MediaFrame::Type)media,(MediaFrame::MediaProtocol)proto,std::string(token));
+
+	if (base.empty())
+		return xmlerror(env,"Could not configure media connection");
+
+	char url[512];
+	snprintf(url,sizeof(url),"%s/mcu/%d/%s",base.c_str(),confId,token);
+
+	xmlrpc_value* ret = xmlrpc_build_value(env,"(s)",url);
+	return xmlok(env,ret);
+}
+
+/**
  * StartRTPTimeout — P7/S1
  *
  * Arme ou desarme le chien de garde d'inactivite RTP d'un media d'un
@@ -2478,6 +2529,7 @@ XmlHandlerCmd mcuCmdList[] =
 	{"StopSending",StopSending},
 	{"StartReceiving",StartReceiving},
 	{"StopReceiving",StopReceiving},
+	{"ConfigureParticipantMediaConnection",ConfigureParticipantMediaConnection},
 	{"StartRTPTimeout",StartRTPTimeout},
 	{"SetAudioCodec",SetAudioCodec},
 	{"SetTextCodec",SetTextCodec},	
