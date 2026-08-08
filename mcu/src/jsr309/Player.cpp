@@ -61,20 +61,15 @@ void Player::NegotiateCodecs()
 	}
 	// Phase 2 — transcodage : aucun codec du fichier n'est jouable en l'état
 	// (typiquement fichier AAC), on décode et on ré-encode vers un codec accepté
-	// par le pair. SetAudioCodecTranscoded échoue si le fichier n'a aucune piste
-	// audio décodable.
-	//
-	// v1 : cibles de transcodage limitées à PCMU/PCMA (validées : les encodeurs
-	// G711 maison acceptent une tranche arbitraire). Les encodeurs ffmpeg
-	// (G722/GSM/AMR/OPUS) ont une sémantique de taille de trame que le
-	// découpage actuel ne satisfait pas encore -> exclus tant que non validés.
-	static const AudioCodec::Type xcodecs[] = { AudioCodec::PCMU, AudioCodec::PCMA };
+	// par le pair, avec les bornes négociées de l'endpoint (phase 5 : opus
+	// useinbandfec, maxaveragebitrate…). Échoue si aucune piste audio décodable.
+	static const AudioCodec::Type xcodecs[] = { AudioCodec::OPUS, AudioCodec::PCMU, AudioCodec::PCMA };
 	if (!audioDone)
 	{
 		for (unsigned i = 0; i < sizeof(xcodecs)/sizeof(xcodecs[0]); i++)
 		{
 			if (audio.TryCodec((int)xcodecs[i]) == (int)xcodecs[i] &&
-			    SetAudioCodecTranscoded(xcodecs[i]))
+			    SetAudioCodecTranscoded(xcodecs[i], audio.GetNegotiatedProperties((int)xcodecs[i])))
 				break;
 		}
 	}

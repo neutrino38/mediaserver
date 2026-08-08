@@ -61,8 +61,9 @@ public:
 	// Active le transcodage audio : lit la piste audio source du fichier (AAC
 	// compris) et produit `target` (codec accepté par le pair). Repli quand
 	// aucun codec du fichier n'est jouable en passthrough. Après Open, avant
-	// Play. @return 1 si activé, 0 sinon (pas de source décodable / en lecture).
-	int SetAudioCodecTranscoded(AudioCodec::Type target);
+	// Play. `props` : bornes négociées passées à l'encodeur cible (phase 5).
+	// @return 1 si activé, 0 sinon (pas de source décodable / en lecture).
+	int SetAudioCodecTranscoded(AudioCodec::Type target, const Properties& props = Properties());
 	double GetDuration();
 	DWORD GetVideoWidth();
 	DWORD GetVideoHeight();
