@@ -2,7 +2,7 @@
 #define _TEXTMIXER_H_
 #include <pthread.h>
 #include <use.h>
-#include "wait.h"
+#include "worker.h"
 #include "text.h"
 #include "textmixerworker.h"
 #include "pipetextinput.h"
@@ -14,7 +14,7 @@
 #include <memory>
 using namespace std;
 
-class TextMixer
+class TextMixer : public Worker
 {
 public:
 	TextMixer();
@@ -42,13 +42,10 @@ public:
 	int End();
 
 protected:
-	//Mix thread
-	int MixText();
+	//Mix thread (corps du Worker)
+	virtual int Run();
 
 private:
-	//Mixer thread launcher
-	static void * startMixingText(void *par);
-
 	struct TextSource
 	{
 		DWORD id;
@@ -75,9 +72,6 @@ private:
 	TextSources	sources;
 	TextWorkers	workers;
 	TextPrivates	privates;
-	//Threads y cadencement (tick 200 ms interruptible par End)
-	pthread_t 	mixTextThread;
-	Wait		mixTickWait;
 	int		mixingText;
 	Use		lstTextsUse;
 };

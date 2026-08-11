@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <condition_variable>
 #include <mutex>
+#include "worker.h"
 #include <video.h>
 #include <use.h>
 #include "pipevideoinput.h"
@@ -14,7 +15,7 @@
 #include <list>
 #include <memory>
 
-class VideoMixer 
+class VideoMixer : public Worker
 {
 public:
 	enum VADMode
@@ -68,14 +69,12 @@ public:
 	static void SetVADDefaultChangePeriod(DWORD ms);
 
 protected:
-	int MixVideo();
+	//Corps du Worker (boucle de composition)
+	virtual int Run();
 	int DumpMosaic(DWORD id,Mosaic* mosaic);
 	int UpdateMosaic(Mosaic* mosaic);
 	int GetPosition(int mosaicId,int id);
 	
-private:
-	static void * startMixingVideo(void *par);
-
 private:
 
 	//Tipos
@@ -108,7 +107,6 @@ private:
 	Mosaic	*defaultMosaic;
 
 	//Threads, mutex y condiciones
-	pthread_t 	mixVideoThread;
 	//Verrou PARTAGÉ avec les PipeVideoOutput (pointeurs passés au ctor) :
 	//tenu pendant toute la passe de composition, signalé par les pipes à
 	//chaque nouvelle trame. Design à verrou partagé — pas le motif Wait.

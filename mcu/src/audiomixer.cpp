@@ -35,25 +35,10 @@ AudioMixer::AudioMixer()
 ************************/
 AudioMixer::~AudioMixer()
 {
+	//Contrat Worker : arreter le thread avant de detruire l'etat derive
+	StopThread();
 }
 
-/***********************************
-* startMixingAudio
-*	Crea el thread de mezclado de audio
-************************************/
-void *AudioMixer::startMixingAudio(void *par)
-{
-	Log("-MixAudioThread [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	AudioMixer *am = (AudioMixer *)par;
-
-	//Bloqueamos las se�ales
-	blocksignals();
-	
-	//Ejecutamos
-	pthread_exit((void *)(intptr_t)am->MixAudio());
-}
 
 //Cadencement du mixeur : outils timespec sur CLOCK_MONOTONIC (insensible aux
 //recalages NTP de l'horloge murale, contrairement à gettimeofday/msleep).
@@ -71,7 +56,7 @@ static inline QWORD tsDiffUsec(const timespec &from,const timespec &to)
 * MixAudio
 *	Mezcla los audios
 ************************************/
-int AudioMixer::MixAudio()
+int AudioMixer::Run()
 {
 	DWORD step = 10;
 	QWORD prev = 0;
@@ -286,7 +271,7 @@ int AudioMixer::Init(bool vad,DWORD rate)
 	defaultSidebar = sidebars[id];
 
 	//Y arrancamoe el thread
-	createPriorityThread(&mixAudioThread,startMixingAudio,this,0);
+	StartThread();
 
 	return 1;
 }
@@ -307,8 +292,8 @@ int AudioMixer::End()
 		//Terminamos la mezcla
 		mixingAudio = 0;
 
-		//Y esperamos
-		pthread_join(mixAudioThread,NULL);
+		//Y esperamos (reveille aussi le tick via le Wait du Worker)
+		StopThread();
 	}
 
 	//Lock

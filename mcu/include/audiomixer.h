@@ -2,6 +2,7 @@
 #define _AUDIOMIXER_H_
 #include <pthread.h>
 #include <use.h>
+#include "worker.h"
 #include <audio.h>
 #include "pipeaudioinput.h"
 #include "pipeaudiooutput.h"
@@ -9,7 +10,7 @@
 #include <map>
 #include <memory>
 
-class AudioMixer : public VADProxy
+class AudioMixer : public VADProxy, public Worker
 {
 public:
 	AudioMixer();
@@ -41,12 +42,8 @@ public:
 	virtual DWORD GetVAD(int id);
         int DumpMixerInfo(int sidebarId, std::string & info);
 protected:
-	//Mix thread
-	int MixAudio();
-
-private:
-	//Mixer thread launcher
-	static void * startMixingAudio(void *par);
+	//Mix thread (corps du Worker)
+	virtual int Run();
 
 private:
 
@@ -66,7 +63,6 @@ private:
 	typedef std::map<int,Sidebar *>		Sidebars;
 
 private:
-	pthread_t 	mixAudioThread;
 	int		mixingAudio;
 	Use		lstAudiosUse;
 	

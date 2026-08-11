@@ -92,31 +92,15 @@ VideoMixer::VideoMixer(const std::wstring &tag) : eventSource(tag)
 ************************/
 VideoMixer::~VideoMixer()
 {
-}
-
-/***********************
-* startMixingVideo
-*	Helper thread function
-************************/
-void * VideoMixer::startMixingVideo(void *par)
-{
-        Log("-MixVideoThread [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	VideoMixer *vm = (VideoMixer *)par;
-
-	//Bloqueamos las seï¿½ales
-	blocksignals();
-
-	//Ejecutamos
-	pthread_exit((void *)(intptr_t)vm->MixVideo());
+	//Contrat Worker : arrêter le thread avant de détruire l'état dérivé
+	StopThread();
 }
 
 /************************
-* MixVideo
-*	Thread de mezclado de video
+* Run
+*	Thread de mezclado de video (corps du Worker)
 *************************/
-int VideoMixer::MixVideo()
+int VideoMixer::Run()
 {
 	int forceUpdate = 0;
 	DWORD version = 0;
@@ -610,7 +594,7 @@ int VideoMixer::Init(Mosaic::Type comp,int size, const char * logoFile)
 	mixingVideo = true;
 
 	//Y arrancamoe el thread
-	createPriorityThread(&mixVideoThread,startMixingVideo,this,0);
+	StartThread();
 
 	return 1;
 }
@@ -639,7 +623,7 @@ int VideoMixer::End()
 		}
 
 		//Y esperamos
-		pthread_join(mixVideoThread,NULL);
+		StopThread();
 	}
 
 	//Protegemos la lista

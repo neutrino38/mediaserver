@@ -23,31 +23,15 @@ TextMixer::TextMixer()
 ************************/
 TextMixer::~TextMixer()
 {
+	//Contrat Worker : arrêter le thread avant de détruire l'état dérivé
+	StopThread();
 }
 
 /***********************************
-* startMixingText
-*	Crea el thread de mezclado de text
+* Run
+*	Mezcla los texts (corps du Worker)
 ************************************/
-void *TextMixer::startMixingText(void *par)
-{
-	Log("-MixTextThread [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	TextMixer *am = (TextMixer *)par;
-
-	//Bloqueamos las se�ales
-	blocksignals();
-	
-	//Ejecutamos
-	pthread_exit((void *)(intptr_t)am->MixText());
-}
-
-/***********************************
-* MixText
-*	Mezcla los texts
-************************************/
-int TextMixer::MixText()
+int TextMixer::Run()
 {
 	wchar_t buffer[1024];
 	DWORD size=1024;
@@ -113,9 +97,8 @@ int TextMixer::MixText()
 		//Un lock
 		lstTextsUse.DecUse();
 
-		//Tick de 200 ms, interruptible par End() (l'ancien msleep ne l'était
-		//pas : l'arrêt attendait la fin du sommeil)
-		mixTickWait.WaitSignal(200);
+		//Tick de 200 ms, interruptible par End()/StopThread()
+		wait.WaitSignal(200);
 	}
 
 	//Know for each worker
@@ -139,11 +122,8 @@ int TextMixer::Init()
 	// Estamos mzclando
 	mixingText = true;
 
-	//Réarme le tick si on ré-Init après un End (Cancel est collant)
-	mixTickWait.Reset();
-
-	//Y arrancamoe el thread
-	createPriorityThread(&mixTextThread,startMixingText,this,0);
+	//Y arrancamoe el thread (réarme le Wait interne)
+	StartThread();
 
 	return 1;
 }
@@ -162,11 +142,8 @@ int TextMixer::End()
 		//Terminamos la mezcla
 		mixingText = 0;
 
-		//Réveille le tick tout de suite (arrêt immédiat)
-		mixTickWait.Cancel();
-
-		//Y esperamos
-		pthread_join(mixTextThread,NULL);
+		//Réveille le tick et joint (arrêt immédiat)
+		StopThread();
 	}
 
 	//Borramos los texts restantes. DeleteMixer EFFACE l'entrée de la map :
