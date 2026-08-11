@@ -1,4 +1,112 @@
-# Expiration des MediaSession JSR309 par inactivité — conception (solution a)
+# Expiration des MediaSession JSR309 par inactivité — conception
+
+> **RÉVISION 2026-08-11 — nouvelle direction retenue : solution (c), « vitalité
+> par event queue »** (idée mainteneur), décrite au §7. Elle rend inutiles le
+> ping applicatif et l'armement opt-in de la solution (a) ci-dessous, qui reste
+> documentée comme historique de conception (sa mécanique de balayeur, §3.3,
+> est reprise telle quelle par la solution (c)). Des questions restent ouvertes
+> — ne pas implémenter sans nouvel arbitrage.
+
+## 7. Solution (c) — vitalité par event queue (direction retenue, 2026-08-11)
+
+### 7.1 L'idée
+
+Associer la durée de vie d'une session à celle de son event queue : le
+long-poll du client sur `/events/jsr309/<queueId>` est un **heartbeat gratuit**
+(elixip se reconnecte en ≤ 1 s après une coupure, et le serveur émet un
+keep-alive toutes les ~30 s). Si plus personne ne polle la queue d'une session
+pendant **60 s**, le client est mort → grand nettoyage : destruction des
+sessions liées à la queue, puis de la queue.
+
+Avantages sur la solution (a) : zéro changement côté elixip (pas de
+`MediaSessionPing`), zéro RPC de plus, pas de faux positif sur les conférences
+« calmes » côté contrôle (le poller, lui, est toujours là), pas d'armement
+opt-in à oublier.
+
+### 7.2 Faits vérifiés (code elixip + mcu, 2026-08-11)
+
+- **elixip ouvre bien une queue PAR session** (voie mendooze/JSR309) : chaque
+  scénario d'appel fait `media_connect()` → un GenServer `MediaServer.Mendooze`
+  PAR APPEL → `EventQueueCreate` à l'init (une queue par connexion=par appel) →
+  `MediaSessionCreate(sess_tag, queue_id)` avec CETTE queue
+  (`MediaServerMendoozeConn.ex:344`). kelixip choisit même le MCU du pool par
+  appel (`mediaserver_instance`).
+- **L'association existe DÉJÀ côté mcu** : `MediaSessionEntry.queueId`
+  (`JSR309Manager.h:65`, posé par `CreateMediaSession(tag,queueId)`,
+  `JSR309Manager.cpp:143`). Tous les événements de la session partent vers
+  cette queue (`DeliverEvent` → `eventMngr->AddEvent(entry.queueId, event)`).
+  L'association est UNIDIRECTIONNELLE (la queue ne connaît pas ses sessions —
+  le balayeur fera le scan inverse sur la map sessions) et NON VALIDÉE
+  (`MediaSessionCreate` ne vérifie pas que la queue existe).
+- **La présence d'un poller est déjà observable** : le handler long-poll
+  (`XmlStreamingHandler::ProcessRequest`) fait `queue->IncUse()/DecUse()`
+  autour de sa boucle — il suffit d'horodater le dernier détachement.
+- **Queues NON associées à une session — c'est normal, trois familles** :
+  1. les sondes keepalive du pool elixip (`Kelix.MediaPool`, purpose
+     `:health_check`) : à chaque cycle, `EventQueueCreate` → poll bref →
+     `EventQueueDelete` → déconnexion, JAMAIS de session (elles sondent la
+     chaîne XML-RPC + long-poll de bout en bout) ;
+  2. fenêtre transitoire de tout appel normal : la queue naît à `connect()`,
+     la session au premier usage média — une queue d'appel est « nue » entre
+     les deux (et le reste si l'appel échoue avant le média) ;
+  3. pathologiques : session supprimée sans sa queue (queue orpheline jusqu'à
+     l'`EventQueueDelete`), ou queue supprimée avant la session (queueId
+     pendouillant : les événements partent dans le vide — et FUITENT,
+     cf. §3.3 : `AddEvent` inconnu retourne 0 sans détruire l'événement,
+     défaut préexistant à corriger).
+
+### 7.3 Mécanique (esquisse)
+
+- `XmlEventQueue` : horodater (`steady_clock`) le dernier détachement de
+  poller (DecUse du handler) ; « pollée » = IncUse actif OU détachement récent.
+- Balayeur périodique (10 s — reprendre la mécanique §3.3, aujourd'hui en
+  `Worker`) : toute queue **sans poller depuis > 60 s** → détruire les
+  sessions dont `entry.queueId` pointe dessus (extraction sous lock,
+  `End()` hors lock, exactement §3.3) puis la queue elle-même. Couvre du même
+  coup les queues nues abandonnées (sondes crashées, appels avortés).
+- `DeleteEventQueue` explicite (chemin propre d'elixip) : déclencher le MÊME
+  nettoyage immédiatement (c'est la « cascade EventQueueDelete » du §6).
+- La reconnexion du poller annule le compte à rebours d'elle-même (re-IncUse).
+  Cohérence des seuils : retry elixip 1 s, décrochage elixip 90 s, keep-alive
+  serveur 30 s → 60 s serveur = deux keep-alives manqués, aucun faux positif.
+- L'événement 7 (`MediaSessionExpiredEvent`, §2.1) devient à peu près inutile
+  (la queue est morte, personne ne le lirait) — log serveur seulement.
+
+### 7.4 Points à arbitrer (questions ouvertes mainteneur)
+
+- Contrat pour les clients à queue PARTAGÉE (jsr309impl Java : UNE queue pour
+  toutes ses sessions) : 60 s sans poll y emporte TOUT — correct si le client
+  est mort, mais à documenter comme changement de contrat.
+- Le 60 s : configurable (`--jsr309-queue-expires <s>`, 0 = désactivé) ?
+- Faut-il conserver en complément l'armement (a) pour les déploiements sans
+  long-poll permanent ?
+
+### 7.5 « Plan walking dead » — équivalent pour Medooze 2.0 / MOTELI (RabbitMQ)
+
+Le transport RabbitMQ (elixip 2.0, `moteli_*.proto`) n'a pas de long-poll :
+il faut un équivalent de la preuve de vie pour tuer les sessions zombies.
+Pistes à instruire (aucune décidée) :
+
+1. **Publication `mandatory` sur la clé d'événements de la session** : si la
+   queue AMQP du contrôleur n'existe plus (connexion elixip morte → queues
+   `exclusive`/`auto-delete` supprimées par le broker), le broker renvoie un
+   `basic.return` → le mcu arme le temporisateur 60 s. Le broker fait office
+   de détecteur de vie — c'est l'analogue le plus direct du long-poll.
+2. **Keepalive applicatif** : message `SessionPing` périodique dans le schéma
+   moteli (équivaut au `MediaSessionPing` de la solution (a) — simple,
+   transport-agnostique, mais du trafic et du code elixip en plus).
+3. **TTL broker** : queue d'événements déclarée avec `x-expires` côté
+   contrôleur ; le mcu vérifie périodiquement son existence
+   (`queue.declare passive`) — dépend des droits et de la topologie déclarée
+   par elixip.
+
+Contrainte CLAUDE.md à respecter le moment venu : tout ajout au contrat
+`/jsr309` (ou `/mcu`) doit être répercuté dans les schémas protobuf MOTELI v2
+d'elixip dans le même jeu de changements.
+
+---
+
+# Solution (a) historique — expiration par inactivité XML-RPC
 
 > Objectif : empêcher la fuite des `MediaSession` JSR309 (endpoints, mixers, threads
 > d'encodage/décodage, ports RTP) quand le client de contrôle (elixip) meurt ou perd la trace
