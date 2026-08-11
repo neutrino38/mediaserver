@@ -1,237 +1,171 @@
-/* 
+/*
  * File:   waitqueue.h
  * Author: Sergio
  *
  * Created on 28 de septiembre de 2011, 0:20
+ *
+ * File d'attente bloquante (T pointeur), réécrite sur std::mutex /
+ * std::condition_variable (chantier modernisation n°2). Sémantique historique
+ * PRÉSERVÉE (figée par mcu/tests/test_wait_primitives.cpp) :
+ *   - un Add() qui précède le Wait() n'est JAMAIS perdu (la file est re-testée
+ *     avant de dormir) ;
+ *   - Cancel() est collant : tout Wait ultérieur échoue, même file non vide
+ *     (Pop/Peek directs restent servis), jusqu'à Reset() qui efface le cancel
+ *     ET vide la file ;
+ *   - Wait(0) = attente infinie ; Pop/Peek sur file vide = NULL.
+ * Corrections vs l'implémentation pthread d'origine :
+ *   - Cancel() réveille TOUS les waiters (pthread_cond_signal n'en réveillait
+ *     qu'un) ;
+ *   - le destructeur annule puis DRAINE les waiters avant de libérer
+ *     mutex/condition (l'ancien les détruisait sous un waiter = UB) ;
+ *   - Skip() sur file vide est un no-op (l'ancien pop_front() = UB).
  */
 
 #ifndef WAITQUEUE_H
 #define	WAITQUEUE_H
 #include "config.h"
 #include "use.h"
-#include "tools.h"
-#include "log.h"
-#include <errno.h>
-#include <list>
 
-template<typename T> 
+#include <chrono>
+#include <condition_variable>
+#include <list>
+#include <mutex>
+
+template<typename T>
 class WaitQueue : public Use
 {
 public:
-	WaitQueue<T>()
-	{
-		//No canceled
-		cancel = false;
-		//Crete mutex
-		pthread_mutex_init(&mutex,NULL);
-		//Create condition
-		pthread_cond_init(&cond,NULL);
-	}
+	WaitQueue() = default;
+	WaitQueue(const WaitQueue&) = delete;
+	WaitQueue& operator=(const WaitQueue&) = delete;
 
-	virtual ~WaitQueue<T>()
+	virtual ~WaitQueue()
 	{
-		//Destroy mutex
-		pthread_mutex_destroy(&mutex);
-		pthread_cond_destroy(&cond);
+		//Annule puis draine les waiters avant de libérer mutex/condition
+		std::unique_lock<std::mutex> lock(mutex);
+		cancel = true;
+		cond.notify_all();
+		drained.wait(lock, [this] { return waiters == 0; });
 	}
 
 	void Add(T obj)
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Add event
+		std::lock_guard<std::mutex> lock(mutex);
 		events.push_back(obj);
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-
-		//Signal
-		pthread_cond_signal(&cond);
+		cond.notify_one();
 	}
 
 	void Cancel()
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Canceled
+		std::lock_guard<std::mutex> lock(mutex);
 		cancel = true;
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-
-		//Signal condition
-		pthread_cond_signal(&cond);
+		cond.notify_all();
 	}
 
+	//timeout en ms, 0 = infini. true si la file a (eu) quelque chose ou si
+	//signalé ; false si timeout ou annulé.
 	bool Wait(DWORD timeout)
 	{
-		int ret = 0;
-		timespec ts;
+		std::unique_lock<std::mutex> lock(mutex);
 
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//if we are cancel
+		//Déjà annulé : échec immédiat
 		if (cancel)
-		{
-			//Unlock
-			pthread_mutex_unlock(&mutex);
-			//canceled
 			return false;
-		}
-		//Check if we have already somethin in queue
+
+		//Un Add antérieur n'est jamais perdu
 		if (!events.empty())
-		{
-			//Unlock
-			pthread_mutex_unlock(&mutex);
-			//canceled
 			return true;
-		}
 
-		//Check if we have a time
+		WaiterScope scope(*this);
+
+		bool ok;
 		if (timeout)
+			ok = (cond.wait_for(lock, std::chrono::milliseconds(timeout)) == std::cv_status::no_timeout);
+		else
 		{
-			//Calculate timeout
-			calcTimout(&ts,timeout);
-
-			//Wait with time out
-			ret = pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Check if there is an errot different than timeout
-			if (ret && ret!=ETIMEDOUT)
-				//Print error
-				Error("-WaitQueue cond timedwait error [%d,%d]\n",ret,errno);
-		} else {
-			//Wait with out timout
-			ret=pthread_cond_wait(&cond,&mutex);
-			//Check error
-			if (ret)
-				//Print error
-				Error("-WaitQueue cond timedwait error [%rd,%d]\n",ret,errno);
+			cond.wait(lock);
+			ok = true;
 		}
-		
-		//If we have been cancel
-		if (cancel)
-			//Not ok
-			ret = 1;
 
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-
-		//canceled
-		return !ret;
+		return ok && !cancel;
 	}
 
 	T Peek()
 	{
 		T val = NULL;
-
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Get event
+		std::lock_guard<std::mutex> lock(mutex);
 		if (!events.empty())
-			//Retreive firs
 			val = events.front();
-
-		//UnLock
-		pthread_mutex_unlock(&mutex);
-
 		return val;
 	}
 
 	T Pop()
 	{
 		T val = NULL;
-		
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Get event
+		std::lock_guard<std::mutex> lock(mutex);
 		if (!events.empty())
 		{
-			//Retreive firs
 			val = events.front();
-			//And remove it from queue
 			events.pop_front();
 		}
-
-		//UnLock
-		pthread_mutex_unlock(&mutex);
-
 		return val;
 	}
 
 	void Skip()
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//And remove it from queue
-		events.pop_front();
-
-		//UnLock
-		pthread_mutex_unlock(&mutex);
+		std::lock_guard<std::mutex> lock(mutex);
+		//No-op sur file vide (l'historique faisait pop_front d'une liste vide)
+		if (!events.empty())
+			events.pop_front();
 	}
 
 	void Clear()
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//And remove all from queue
+		std::lock_guard<std::mutex> lock(mutex);
 		events.clear();
-
-		//UnLock
-		pthread_mutex_unlock(&mutex);
 	}
 
 	void Reset()
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//And remove all from queue
+		std::lock_guard<std::mutex> lock(mutex);
 		events.clear();
-
-		//And remove cancel
 		cancel = false;
-		
-		//UnLock
-		pthread_mutex_unlock(&mutex);
 	}
 
 	DWORD Length()
 	{
-		//REturn objets in queu
-            DWORD len;
-            pthread_mutex_lock(&mutex);
-            len = events.size();
-            pthread_mutex_unlock(&mutex);
-	    return len;
+		std::lock_guard<std::mutex> lock(mutex);
+		return events.size();
 	}
 
-        bool IsCanceled()
+	bool IsCanceled()
 	{
-	    bool ret;
-	    pthread_mutex_lock(&mutex);
-	    ret = cancel;
-	    pthread_mutex_unlock(&mutex);
-
-	    return ret; 
+		std::lock_guard<std::mutex> lock(mutex);
+		return cancel;
 	}
 
 private:
+	//Comptage RAII des waiters : garantit le drain du destructeur même sur
+	//sortie anticipée. Construit/détruit sous le verrou de la méthode.
+	struct WaiterScope
+	{
+		WaitQueue& q;
+		WaiterScope(WaitQueue& q) : q(q) { ++q.waiters; }
+		~WaiterScope()
+		{
+			if (--q.waiters == 0)
+				q.drained.notify_all();
+		}
+	};
+
 	typedef std::list<T> ObjectList;
 
-private:
-	//The event list
-	ObjectList	events;
-	bool		cancel;
-	pthread_mutex_t	mutex;
-	pthread_cond_t  cond;
+	ObjectList		events;
+	bool			cancel	= false;
+	int			waiters	= 0;
+	std::mutex		mutex;
+	std::condition_variable	cond;
+	std::condition_variable	drained;
 };
 
 #endif	/* WAITQUEUE_H */
-

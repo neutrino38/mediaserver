@@ -1,64 +1,79 @@
-/* 
+/*
  * File:   rtpbuffer.h
  * Author: Sergio
  *
  * Created on 24 de diciembre de 2012, 10:27
+ *
+ * Jitter buffer réordonnanceur, réécrit sur std::mutex /
+ * std::condition_variable (chantier modernisation n°2). Sémantique historique
+ * PRÉSERVÉE (figée par mcu/tests/test_wait_primitives.cpp) : livraison en
+ * séquence étendue (cycles<<16|seq), trou livré après maxWaitTime compté
+ * depuis l'ARRIVÉE du candidat, retardataire livré dès son arrivée pendant un
+ * Wait bloqué, paquet plus vieux que `next` détruit (Add()==false), resynchro
+ * au 21e hors-séquence consécutif, HurryUp() court-circuite l'attente,
+ * Cancel() collant jusqu'à Reset().
+ * Corrections vs l'implémentation pthread d'origine :
+ *   - l'attente de comblement d'un trou est PASSIVE (l'ancienne échéance
+ *     mélangeait ms et µs → timedwait toujours expiré → attente active) ;
+ *   - un doublon de numéro de séquence est détruit (l'ancien écrasait le
+ *     pointeur en map sans delete = fuite) — l'original, arrivé plus tôt,
+ *     est conservé ;
+ *   - le changement de SSRC est détecté en mémorisant le dernier SSRC VU
+ *     (l'ancien lisait le dernier paquet EN FILE : tout changement survenant
+ *     file vide passait par le drop « tardif ») ;
+ *   - le destructeur annule puis DRAINE un éventuel Wait avant de libérer
+ *     quoi que ce soit ; Length() et HurryUp() sont verrouillés.
  */
 
 #ifndef RTPBUFFER_H
 #define	RTPBUFFER_H
-#include <errno.h>
-#include <pthread.h>
 #include "rtp.h"
 
-class RTPBuffer 
+#include <chrono>
+#include <condition_variable>
+#include <map>
+#include <mutex>
+
+class RTPBuffer
 {
 public:
-	RTPBuffer()
-	{
-		//NO wait time
-		maxWaitTime = 0;
-		//No hurring up
-		hurryUp = false;
-		//No canceled
-		cancel = false;
-		//No next
-		next = (DWORD)-1;
-		//Crete mutex
-		pthread_mutex_init(&mutex,NULL);
-		//Create condition
-		pthread_cond_init(&cond,NULL);
-		bigJumps = 0;
-	}
+	RTPBuffer() = default;
+	RTPBuffer(const RTPBuffer&) = delete;
+	RTPBuffer& operator=(const RTPBuffer&) = delete;
 
 	virtual ~RTPBuffer()
 	{
-		//Free packets
+		//Annule puis draine un éventuel Wait avant de libérer les paquets
+		{
+			std::unique_lock<std::mutex> lock(mutex);
+			cancel = true;
+			cond.notify_all();
+			drained.wait(lock, [this] { return waiters == 0; });
+		}
 		Clear();
-		//Destroy mutex
-		pthread_mutex_destroy(&mutex);
 	}
 
 	virtual bool Add(RTPTimedPacket *rtp)
 	{
 		//Get seq num
 		DWORD extseqn = rtp->GetExtSeqNum();
-		
-		//Lock
-		pthread_mutex_lock(&mutex);
 
-		if( packets.size() > 0 )
+		std::unique_lock<std::mutex> lock(mutex);
+
+		//Changement de source : dernier SSRC VU (pas le dernier en file, qui
+		//manquait tout changement survenant file vide)
+		if (hasSsrc && rtp->GetSSRC() != lastSsrc)
 		{
-			if( packets.rbegin()->second->GetSSRC() != rtp->GetSSRC() )
-			{
-				next = (DWORD)-1;
-			}
+			next = (DWORD)-1;
+			bigJumps = 0;
 		}
+		lastSsrc = rtp->GetSSRC();
+		hasSsrc = true;
 
 		//If already past
-		if( next != (DWORD)-1 && extseqn < next )
+		if (next != (DWORD)-1 && extseqn < next)
 		{
-			if( ++bigJumps > 20 )
+			if (++bigJumps > 20)
 			{
 				Log("Too many out of sequence packet. Resyncing.\n");
 				next = (DWORD)-1;
@@ -69,12 +84,9 @@ public:
 				WORD cycl = rtp->GetSeqCycles();
 				WORD seqn = rtp->GetSeqNum();
 
-				//Unlock
-				//Delete packet
 				//Skip it and lost forever
-				pthread_mutex_unlock(&mutex);
-				delete(rtp);
-				rtp = NULL;
+				lock.unlock();
+				delete rtp;
 				return Error("-Out of order non recoverable packet [next:%d, seq:%d, maxWaitTime=%d,%d,%d]\n"
 					, next
 					, extseqn
@@ -85,32 +97,26 @@ public:
 			}
 		}
 
-		//Add event
-		packets[extseqn] = rtp;
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
+		//Doublon : conserver l'original (arrivé plus tôt), détruire l'entrant
+		//(l'historique écrasait le pointeur sans delete = fuite)
+		if (!packets.emplace(extseqn, rtp).second)
+		{
+			lock.unlock();
+			delete rtp;
+			return true;
+		}
 
 		//Signal
-		pthread_cond_signal(&cond);
+		cond.notify_one();
 
 		return true;
 	}
 
 	void Cancel()
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Canceled
+		std::lock_guard<std::mutex> lock(mutex);
 		cancel = true;
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
-
-		//Signal condition
-		pthread_cond_signal(&cond);
-		//Debug("-rtpbuffer: canceled %p.\n", this);
+		cond.notify_all();
 	}
 
 	RTPPacket* Wait()
@@ -118,69 +124,53 @@ public:
 		//NO packet
 		RTPTimedPacket* rtp = NULL;
 
-		//Get default wait time
-		DWORD timeout = maxWaitTime;
+		std::unique_lock<std::mutex> lock(mutex);
 
-		//Lock
-		pthread_mutex_lock(&mutex);
+		WaiterScope scope(*this);
+
 		//While we have to wait
 		while (!cancel)
 		{
 			//Check if we have somethin in queue
 			if (!packets.empty())
 			{
-
 				//Get first
 				RTPOrderedPackets::iterator it = packets.begin();
 				//Get first seq num
 				DWORD seq = it->first;
 				//Get packet
 				RTPTimedPacket* candidate = it->second;
-				if (!candidate )
+				if (!candidate)
 					break;
-				//Get time of the packet
+				//Get time of the packet and now, in ms
 				QWORD time = candidate->GetTime();
+				QWORD now  = getTime() / 1000;
 
 				//Check if first is the one expected or wait if not
-				if (next==(DWORD)-1 || seq==next || time+maxWaitTime<getTime()/1000 || hurryUp)
+				if (next == (DWORD)-1 || seq == next || now >= time + maxWaitTime || hurryUp)
 				{
 					//We have it!
 					rtp = candidate;
 					//Update next
-					next = seq+1;
+					next = seq + 1;
 					//Remove it
 					packets.erase(it);
 					//Return it!
 					break;
 				}
 
-				//We have to wait
-				timespec ts;
-				//Calculate until when we have to sleep
-				ts.tv_sec  = (time_t) ((time+maxWaitTime) / 1e6) ;
-				ts.tv_nsec = (long) ((time+maxWaitTime) - ts.tv_sec*1e6);
-				
-				//Wait with time out
-				int ret = pthread_cond_timedwait(&cond,&mutex,&ts);
-				//Check if there is an errot different than timeout
-				if (ret && ret!=ETIMEDOUT)
-					//Print error
-					Error("-WaitQueue cond timedwait error [%d,%d]\n",ret,errno);
-				
-			} else {
+				//Attente PASSIVE jusqu'à l'échéance du candidat (réveillée
+				//avant si le paquet manquant arrive)
+				cond.wait_for(lock, std::chrono::milliseconds(time + maxWaitTime - now));
+			}
+			else
+			{
 				//Not hurryUp more
 				hurryUp = false;
-				//Wait until we have a new rtp pacekt
-				int ret = pthread_cond_wait(&cond,&mutex);
-				//Check error
-				if (ret)
-					//Print error
-					Error("-WaitQueue cond timedwait error [%rd,%d]\n",ret,errno);
+				//Wait until we have a new rtp packet
+				cond.wait(lock);
 			}
 		}
-		
-		//Unlock
-		pthread_mutex_unlock(&mutex);
 
 		//canceled
 		return rtp;
@@ -188,79 +178,89 @@ public:
 
 	void Clear()
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//And remove all from queue
+		std::lock_guard<std::mutex> lock(mutex);
 		ClearPackets();
-
-		//UnLock
-		pthread_mutex_unlock(&mutex);
 	}
 
 	void HurryUp()
 	{
-		//Set flag
+		std::lock_guard<std::mutex> lock(mutex);
 		hurryUp = true;
-		pthread_cond_signal(&cond);
+		cond.notify_all();
 	}
 
 	void Reset(bool clear = true)
 	{
-		//Lock
-		pthread_mutex_lock(&mutex);
+		std::lock_guard<std::mutex> lock(mutex);
 
 		//And remove cancel
 		cancel = false;
-		
+
 		//And remove all from queue
-		if (clear) 
+		if (clear)
 		{
 			ClearPackets();
 			//No next
 			next = (DWORD)-1;
+			//Oublier la source suivie
+			hasSsrc = false;
 		}
-		
+
 		bigJumps = 0;
-		
-		//UnLock
-		pthread_mutex_unlock(&mutex);
 	}
 
 	DWORD Length()
 	{
-		//REturn objets in queu
+		std::lock_guard<std::mutex> lock(mutex);
 		return packets.size();
 	}
+
 	void SetMaxWaitTime(DWORD maxWaitTime)
 	{
+		std::lock_guard<std::mutex> lock(mutex);
 		this->maxWaitTime = maxWaitTime;
 	}
+
 private:
+	//Appelé sous le verrou
 	void ClearPackets()
 	{
 		//For each item, list shall be locked before
-		for (RTPOrderedPackets::iterator it=packets.begin(); it!=packets.end(); ++it)
+		for (RTPOrderedPackets::iterator it = packets.begin(); it != packets.end(); ++it)
 			//Delete rtp
 			delete(it->second);
 		//Clear all list
 		packets.clear();
 	}
 
-private:
+	//Comptage RAII des waiters : garantit le drain du destructeur même sur
+	//sortie anticipée. Construit/détruit sous le verrou de la méthode.
+	struct WaiterScope
+	{
+		RTPBuffer& b;
+		WaiterScope(RTPBuffer& b) : b(b) { ++b.waiters; }
+		~WaiterScope()
+		{
+			if (--b.waiters == 0)
+				b.drained.notify_all();
+		}
+	};
+
 	typedef std::map<DWORD,RTPTimedPacket*> RTPOrderedPackets;
 
-private:
 	//The event list
 	RTPOrderedPackets	packets;
-	bool			cancel;
-	bool			hurryUp;
-	pthread_mutex_t		mutex;
-	pthread_cond_t		cond;
-	DWORD			next;
-	DWORD			maxWaitTime;
-	int			bigJumps;
+	bool			cancel	 = false;
+	bool			hurryUp	 = false;
+	int			waiters	 = 0;
+	std::mutex		mutex;
+	std::condition_variable	cond;
+	std::condition_variable	drained;
+	DWORD			next	 = (DWORD)-1;
+	DWORD			maxWaitTime = 0;
+	int			bigJumps = 0;
+	DWORD			lastSsrc = 0;
+	bool			hasSsrc	 = false;
 };
 
 #endif	/* RTPBUFFER_H */
-

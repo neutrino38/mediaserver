@@ -19,24 +19,34 @@
  *     tardif détruit (Add()==false), resynchro au 21e hors-séquence, remise à
  *     zéro sur changement de SSRC (si un paquet est encore en file), HurryUp().
  *
- * Défauts CONNUS non testés (comportement indéfini, à corriger pendant la
- * migration, pas à figer) :
- *   - WaitQueue::Skip() sur file vide = pop_front() d'une liste vide (UB).
- *   - ~Wait() signale la condition puis détruit le mutex : UB si un waiter est
- *     encore dans WaitSignal().
- *   - RTPBuffer::Wait() : le timespec du pthread_cond_timedwait est calculé en
- *     mélangeant ms et µs → échéance toujours passée → attente active (spin)
- *     pendant le comblement d'un trou. Le comportement fonctionnel (livraison
- *     après maxWaitTime) reste correct et c'est LUI qui est figé ici.
- *   - RTPBuffer : le changement de SSRC n'est détecté que si la file est non
- *     vide (test SsrcChangeOnEmptyBufferDropsPacket : défaut caractérisé).
+ * En plus de la caractérisation, la fin du fichier porte des tests CIBLES
+ * (rouges sur l'implémentation pthread historique, verts après la rénovation
+ * std::mutex/std::condition_variable) qui spécifient la correction des défauts
+ * découverts :
+ *   - WaitQueue::Skip() sur file vide = pop_front() d'une liste vide (UB) →
+ *     doit devenir un no-op (SkipOnEmptyIsSafeAndSkipsHead).
+ *   - ~Wait()/~WaitQueue() détruisaient mutex/cond avec un waiter encore
+ *     dedans (UB) → le destructeur doit annuler PUIS drainer les waiters
+ *     (DestroyWhileWaiterInsideIsSafe).
+ *   - Cancel() réveillait UN seul waiter (pthread_cond_signal) → doit tous
+ *     les réveiller (CancelWakesAllWaiters).
+ *   - RTPBuffer::Wait() mélangeait ms et µs dans son timespec → échéance
+ *     toujours passée → attente ACTIVE pendant le comblement d'un trou →
+ *     l'attente doit être passive (GapWaitDoesNotBurnCpu, mesure CPU thread).
+ *   - RTPBuffer : un doublon de seq écrasait le pointeur en map sans delete →
+ *     plus de fuite (DuplicateDoesNotLeak, sous-classe compteur d'instances).
+ *   - RTPBuffer : changement de SSRC non détecté si la file est vide → doit
+ *     être détecté en mémorisant le dernier SSRC vu, plus en lisant la file
+ *     (SsrcChangeOnEmptyBufferDropsPacket devenu ...IsAccepted).
  *
  * Les seuils temporels sont volontairement larges (marges ±) pour rester
  * déterministes sur machine chargée.
  */
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <ctime>
 #include <thread>
 
 #include "wait.h"
@@ -398,11 +408,10 @@ TEST(RtpBufferPrimitive, SsrcChangeWithPendingPacketResets)
 	buf.Cancel();	// ne pas bloquer sur le 101 restant
 }
 
-// DÉFAUT CARACTÉRISÉ : si la file est VIDE au moment du changement de SSRC,
-// la détection (qui compare au dernier paquet en file) ne joue pas, et le
-// paquet de la nouvelle source est droppé comme « tardif ». À corriger lors
-// de la migration (mémoriser le dernier SSRC vu plutôt que lire la file).
-TEST(RtpBufferPrimitive, SsrcChangeOnEmptyBufferDropsPacket)
+// CIBLE (défaut historique corrigé) : le changement de SSRC est détecté MÊME
+// file vide — le dernier SSRC vu est mémorisé, il n'est plus lu depuis la
+// file. L'ancienne implémentation droppait ce paquet comme « tardif ».
+TEST(RtpBufferPrimitive, SsrcChangeOnEmptyBufferIsAccepted)
 {
 	RTPBuffer buf;
 	EXPECT_TRUE(buf.Add(MakePacket(100, 0xAAAA)));
@@ -410,8 +419,12 @@ TEST(RtpBufferPrimitive, SsrcChangeOnEmptyBufferDropsPacket)
 	ASSERT_NE(p, (RTPPacket*)NULL);
 	delete p;
 
-	// Nouvelle source : droppé faute de paquet en file pour comparer le SSRC.
-	EXPECT_FALSE(buf.Add(MakePacket(5, 0xBBBB)));
+	// Nouvelle source, numérotation plus basse : acceptée (resynchro).
+	EXPECT_TRUE(buf.Add(MakePacket(5, 0xBBBB)));
+	p = buf.Wait();
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 5);
+	delete p;
 }
 
 // HurryUp : vide le buffer sans attendre le comblement des trous.
@@ -611,6 +624,234 @@ TEST(RtpBufferPrimitive, CancelUnblocksWait)
 	ASSERT_NE(p, (RTPPacket*)NULL);
 	EXPECT_EQ(p->GetSeqNum(), 1);
 	delete p;
+}
+
+// =============================================================================
+// Tests CIBLES — spécifient la correction des défauts découverts.
+// Rouges sur l'implémentation pthread historique, verts après rénovation.
+// =============================================================================
+
+// CPU consommée par CE thread (et lui seul), en ms.
+static long ThreadCpuMs()
+{
+	timespec ts;
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+	return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+// Paquet instrumenté : compteur d'instances vivantes (le dtor de RTPPacket est
+// virtuel, le delete du buffer passe donc bien par ici).
+struct TrackedPacket : public RTPTimedPacket
+{
+	static inline std::atomic<int> alive{0};
+	TrackedPacket(WORD seq, DWORD ssrc = 0x11111111)
+		: RTPTimedPacket(MediaFrame::Audio, 0)
+	{
+		SetSeqNum(seq);
+		SetSSRC(ssrc);
+		++alive;
+	}
+	~TrackedPacket() override { --alive; }
+};
+
+// CIBLE : plus de fuite sur doublon de numéro de séquence (l'implémentation
+// historique écrasait le pointeur en map sans delete).
+TEST(RtpBufferPrimitive, DuplicateDoesNotLeak)
+{
+	TrackedPacket::alive = 0;
+	{
+		RTPBuffer buf;
+		EXPECT_TRUE(buf.Add(new TrackedPacket(1)));
+		EXPECT_TRUE(buf.Add(new TrackedPacket(2)));
+		buf.Add(new TrackedPacket(2));	// doublon
+		EXPECT_TRUE(buf.Add(new TrackedPacket(3)));
+
+		for (WORD expected = 1; expected <= 3; ++expected)
+		{
+			RTPPacket* p = buf.Wait();
+			ASSERT_NE(p, (RTPPacket*)NULL);
+			EXPECT_EQ(p->GetSeqNum(), expected);
+			delete p;
+		}
+		EXPECT_EQ(buf.Length(), (DWORD)0);
+	}
+	// Tout ce qui est entré est sorti ou a été détruit par le buffer.
+	EXPECT_EQ(TrackedPacket::alive.load(), 0);
+}
+
+// Le destructeur libère les paquets encore en file (déjà vrai : filet).
+TEST(RtpBufferPrimitive, DestructorFreesPendingPackets)
+{
+	TrackedPacket::alive = 0;
+	{
+		RTPBuffer buf;
+		EXPECT_TRUE(buf.Add(new TrackedPacket(1)));
+		EXPECT_TRUE(buf.Add(new TrackedPacket(2)));
+		EXPECT_TRUE(buf.Add(new TrackedPacket(3)));
+	}
+	EXPECT_EQ(TrackedPacket::alive.load(), 0);
+}
+
+// CIBLE : l'attente de comblement d'un trou doit être PASSIVE. L'implémentation
+// historique calcule son échéance en mélangeant ms et µs → timedwait toujours
+// expiré → spin : ~300 ms de CPU pour 300 ms d'attente.
+TEST(RtpBufferPrimitive, GapWaitDoesNotBurnCpu)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(300);
+	EXPECT_TRUE(buf.Add(MakePacket(1)));
+	RTPPacket* p = buf.Wait();	// next = 2
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	delete p;
+
+	EXPECT_TRUE(buf.Add(MakePacket(3)));	// le 2 manque
+	Clock::time_point t0 = Clock::now();
+	long cpu0 = ThreadCpuMs();
+	p = buf.Wait();				// bloque ~300 ms
+	long cpuMs = ThreadCpuMs() - cpu0;
+	long wallMs = ElapsedMs(t0);
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 3);
+	EXPECT_GE(wallMs, 100);			// on a bien attendu…
+	EXPECT_LT(cpuMs, 100);			// …sans brûler le CPU
+	delete p;
+}
+
+// CIBLE : Cancel() doit réveiller TOUS les waiters (l'implémentation historique
+// fait pthread_cond_signal = un seul ; les autres attendent leur plein timeout).
+TEST(WaitPrimitive, CancelWakesAllWaiters)
+{
+	Wait w;
+	std::atomic<long> elapsed[3];
+	std::atomic<int> result[3];
+	std::thread th[3];
+	for (int i = 0; i < 3; ++i)
+	{
+		elapsed[i] = -1;
+		th[i] = std::thread([&w, &elapsed, &result, i]() {
+			Clock::time_point t0 = Clock::now();
+			result[i] = w.WaitSignal(3000) ? 1 : 0;
+			elapsed[i] = ElapsedMs(t0);
+		});
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	w.Cancel();
+	for (int i = 0; i < 3; ++i)
+		th[i].join();
+	for (int i = 0; i < 3; ++i)
+	{
+		EXPECT_EQ(result[i].load(), 0) << "waiter " << i;
+		EXPECT_LT(elapsed[i].load(), 1500) << "waiter " << i << " a attendu son plein timeout";
+	}
+}
+
+TEST(WaitQueuePrimitive, CancelWakesAllWaiters)
+{
+	WaitQueue<int*> q;
+	std::atomic<long> elapsed[3];
+	std::thread th[3];
+	for (int i = 0; i < 3; ++i)
+	{
+		elapsed[i] = -1;
+		th[i] = std::thread([&q, &elapsed, i]() {
+			Clock::time_point t0 = Clock::now();
+			q.Wait(3000);
+			elapsed[i] = ElapsedMs(t0);
+		});
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	q.Cancel();
+	for (int i = 0; i < 3; ++i)
+		th[i].join();
+	for (int i = 0; i < 3; ++i)
+		EXPECT_LT(elapsed[i].load(), 1500) << "waiter " << i << " a attendu son plein timeout";
+}
+
+// CIBLE : détruire l'objet pendant qu'un waiter est dans WaitSignal doit être
+// SÛR — le destructeur annule puis draine les waiters avant de libérer
+// mutex/condition. (Historique : Signal + destroy immédiat = UB.)
+TEST(WaitPrimitive, DestroyWhileWaiterInsideIsSafe)
+{
+	Wait* w = new Wait();
+	std::atomic<int> result{-1};
+	std::atomic<long> waited{-1};
+	std::thread waiter([&]() {
+		Clock::time_point t0 = Clock::now();
+		result = w->WaitSignal(4000) ? 1 : 0;
+		waited = ElapsedMs(t0);
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	delete w;	// doit annuler + drainer, pas détruire sous le waiter
+	waiter.join();
+	EXPECT_EQ(result.load(), 0);	// réveillé en « annulé »
+	EXPECT_LT(waited.load(), 2000);	// sans attendre le plein timeout
+}
+
+TEST(WaitQueuePrimitive, DestroyWhileWaiterInsideIsSafe)
+{
+	WaitQueue<int*>* q = new WaitQueue<int*>();
+	std::atomic<int> result{-1};
+	std::atomic<long> waited{-1};
+	std::thread waiter([&]() {
+		Clock::time_point t0 = Clock::now();
+		result = q->Wait(4000) ? 1 : 0;
+		waited = ElapsedMs(t0);
+	});
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
+	delete q;
+	waiter.join();
+	EXPECT_EQ(result.load(), 0);
+	EXPECT_LT(waited.load(), 2000);
+}
+
+// CIBLE : Skip() sur file vide doit être un no-op (historique : pop_front d'une
+// liste vide = UB) ; sur file non vide il élimine la tête.
+TEST(WaitQueuePrimitive, SkipOnEmptyIsSafeAndSkipsHead)
+{
+	static int a = 1, b = 2;
+	WaitQueue<int*> q;
+	q.Skip();			// file vide : ne doit rien faire
+	EXPECT_EQ(q.Length(), (DWORD)0);
+
+	q.Add(&a);
+	q.Add(&b);
+	q.Skip();			// élimine la tête (a)
+	EXPECT_EQ(q.Length(), (DWORD)1);
+	EXPECT_EQ(q.Pop(), &b);
+}
+
+// Tempête producteurs multiples : rien n'est perdu (l'ordre inter-producteurs
+// n'est pas défini, on compte).
+TEST(WaitQueuePrimitive, MultipleProducersLoseNothing)
+{
+	enum { P = 4, PER = 100 };
+	static int values[P * PER];
+	WaitQueue<int*> q;
+	std::thread producers[P];
+	for (int t = 0; t < P; ++t)
+		producers[t] = std::thread([&q, t]() {
+			for (int i = 0; i < PER; ++i)
+			{
+				values[t * PER + i] = t * PER + i;
+				q.Add(&values[t * PER + i]);
+				if (i % 16 == 0)
+					std::this_thread::yield();
+			}
+		});
+
+	int got = 0;
+	while (got < P * PER)
+	{
+		ASSERT_TRUE(q.Wait(5000)) << "après " << got << " éléments";
+		while (int* v = q.Pop())
+		{
+			ASSERT_NE(v, (int*)NULL);
+			++got;
+		}
+	}
+	EXPECT_EQ(got, P * PER);
+	for (int t = 0; t < P; ++t)
+		producers[t].join();
 }
 
 } // namespace
