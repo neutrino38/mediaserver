@@ -22,6 +22,9 @@ JSR309Manager::JSR309Manager()
 
 JSR309Manager::~JSR309Manager()
 {
+	//Contrat EventQueueSweeper/Worker : le destructeur dérivé doit avoir arrêté
+	//le thread — DeleteQueueOwners n'existe plus quand ~Worker s'exécute
+	StopSweeper();
 }
 
 
@@ -29,24 +32,29 @@ JSR309Manager::~JSR309Manager()
 * Init
 *	Inicializa la JSR309Manager
 **************************************/
-int JSR309Manager::Init(XmlStreamingHandler *eventMngr)
+int JSR309Manager::Init(XmlStreamingHandler *eventMngr,int queueExpiresSecs)
 {
 	timeval tv;
 
 	//Bloqueamos
-	std::lock_guard<std::mutex> lock(mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Estamos iniciados
-	inited = true;
+		//Estamos iniciados
+		inited = true;
 
-	//Get secs
-	gettimeofday(&tv,NULL);
+		//Get secs
+		gettimeofday(&tv,NULL);
 
-	//El id inicial
-	maxId = (tv.tv_sec & 0x7FFF) << 16;
+		//El id inicial
+		maxId = (tv.tv_sec & 0x7FFF) << 16;
 
-	//Store event mngr
-	this->eventMngr = eventMngr;
+		//Store event mngr
+		this->eventMngr = eventMngr;
+	}
+
+	//Arme le balayeur hors verrou (il prend ce même mutex à son premier tour)
+	StartSweeper(eventMngr,queueExpiresSecs,"JSR309Manager");
 
 	//Salimos
 	return 1;
@@ -59,6 +67,11 @@ int JSR309Manager::Init(XmlStreamingHandler *eventMngr)
 int JSR309Manager::End()
 {
 	Log(">End JSR309Manager\n");
+
+	//Arrête le balayeur AVANT de vider la liste, et hors de tout verrou : le
+	//join ne doit jamais se faire sous un mutex que le thread peut vouloir
+	//prendre (il prend `mutex` à chaque tour)
+	StopSweeper();
 
 	//Extrae las sesiones bajo lock y las termina fuera : End() puede esperar
 	//threads (recorders, players) que necesitan otros mutex.
@@ -104,10 +117,68 @@ int JSR309Manager::DeleteEventQueue(int id)
 		//Error
 		return Error("Event manager not set!\n");
 
-	//Create it
+	//NB : les sessions rattachées à cette file ne sont PAS détruites ici. Le
+	//balayeur constatera que leur queueId ne désigne plus rien et ARMERA le
+	//délai de grâce (cf. eventqueuesweeper.h, signal 2) : le client garde ainsi
+	//une chance de se reconnecter avant de perdre ses sessions.
 	return eventMngr->DestroyEventQueue(id);
 }
 
+/**************************************
+* CollectQueueIds
+*	Files référencées par les sessions (EventQueueSweeper)
+**************************************/
+void JSR309Manager::CollectQueueIds(std::set<int>& ids)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+
+	for (MediaSessions::iterator it=sessions.begin(); it!=sessions.end(); ++it)
+		if (it->second.queueId > 0)
+			ids.insert(it->second.queueId);
+}
+
+/**************************************
+* DeleteQueueOwners
+*	Détruit les sessions liées à une file d'événements (EventQueueSweeper)
+**************************************/
+int JSR309Manager::DeleteQueueOwners(int queueId,const char *reason)
+{
+	//Extrait les entrées sous verrou : une fois hors de la map, personne ne
+	//peut plus en obtenir de nouvelle référence (même principe que
+	//DeleteMediaSession)
+	std::vector<MediaSessionEntry> expired;
+
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+
+		for (MediaSessions::iterator it=sessions.begin(); it!=sessions.end(); )
+		{
+			if (it->second.queueId == queueId)
+			{
+				expired.push_back(std::move(it->second));
+				it = sessions.erase(it);
+			} else
+				++it;
+		}
+	}
+
+	//Terminaison HORS verrou : End() joint des threads (recorders, players)
+	//qui peuvent vouloir ce même mutex
+	for (std::vector<MediaSessionEntry>::iterator it=expired.begin(); it!=expired.end(); ++it)
+	{
+		Log("-JSR309Manager: suppression de la session %d [tag:%ls,queue:%d] : %s\n",
+			it->id,it->tag.c_str(),queueId,reason);
+
+		if (it->sess)
+			it->sess->End();
+	}
+
+	//Le dernier shared_ptr détruit chaque session, hors verrou lui aussi
+	int count = (int)expired.size();
+	expired.clear();
+
+	return count;
+}
 
 /**************************************
 * CreateMediaSession
@@ -289,8 +360,12 @@ int JSR309Manager::DeliverEvent(int sessionId, JSR309Event *event)
 	event->SetSessionTag(tag);
 
 	if (mngr)
-		//Send new event (la file prend possession)
-		mngr->AddEvent(queueId,event);
+	{
+		//Send new event (la file prend possession)... sauf si la file n'existe
+		//plus : AddEvent rend 0 SANS détruire l'événement (fuite historique)
+		if (!mngr->AddEvent(queueId,event))
+			delete event;
+	}
 	else
 		delete event;
 

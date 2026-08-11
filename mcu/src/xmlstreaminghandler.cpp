@@ -8,6 +8,13 @@
 #include "use.h"
 
 
+XmlEventQueue::XmlEventQueue()
+{
+	//Le compte à rebours d'expiration démarre à la création : le client a
+	//`idle` pour venir poller la file qu'il vient de demander.
+	lastPoller = std::chrono::steady_clock::now();
+}
+
 XmlEventQueue::~XmlEventQueue()
 {
 	//Drainer un éventuel WaitForEvent avant de détruire la liste (les
@@ -55,6 +62,35 @@ xmlrpc_value* XmlEventQueue::PeekXMLEvent(xmlrpc_env *env)
 			//Retreive firs
 			return events.front()->GetXmlValue(env);
 		return NULL;
+	});
+}
+
+void XmlEventQueue::AttachPoller()
+{
+	Locked([&] {
+		pollers++;
+		//Horodater aussi à l'attache : si le poller reste des heures, la file
+		//n'est de toute façon pas expirable tant que pollers > 0
+		lastPoller = std::chrono::steady_clock::now();
+	});
+}
+
+void XmlEventQueue::DetachPoller()
+{
+	Locked([&] {
+		if (pollers > 0) pollers--;
+		//Départ du dernier poller : c'est d'ici que court le délai de grâce
+		lastPoller = std::chrono::steady_clock::now();
+	});
+}
+
+bool XmlEventQueue::IsPolled(std::chrono::milliseconds idle)
+{
+	return Locked([&] {
+		//Poller attaché : vivant, sans discussion
+		if (pollers > 0) return true;
+		//Sinon : détachement (ou création) assez récent ?
+		return (std::chrono::steady_clock::now() - lastPoller) <= idle;
 	});
 }
 
@@ -180,6 +216,37 @@ int XmlStreamingHandler::AddEvent(DWORD id,XmlEvent *event)
 
 
 
+std::vector<DWORD> XmlStreamingHandler::GetIdleQueues(std::chrono::milliseconds idle)
+{
+	std::vector<DWORD> idles;
+
+	//We are using the list (interdit toute modification de la map le temps du
+	//parcours : les écrivains passent par listUse.WaitUnusedAndLock)
+	listUse.IncUse();
+
+	for (EventQueues::iterator it = queues.begin(); it!=queues.end(); ++it)
+		if (!it->second->IsPolled(idle))
+			idles.push_back(it->first);
+
+	//Not using it anymore
+	listUse.DecUse();
+
+	return idles;
+}
+
+bool XmlStreamingHandler::HasQueue(DWORD id)
+{
+	//We are using the list
+	listUse.IncUse();
+
+	bool found = (queues.find(id)!=queues.end());
+
+	//Not using it anymore
+	listUse.DecUse();
+
+	return found;
+}
+
 int XmlStreamingHandler::DestroyEventQueue(DWORD id)
 {
 	Log("-Destroy event queue [id:%d]\n",id);
@@ -271,6 +338,10 @@ int XmlStreamingHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 	//Inc queue usage
 	queue->IncUse();
 
+	//Ce long-poll est la preuve de vie du client : tant qu'il est attaché, la
+	//file (et les sessions qui lui sont liées) ne peut pas expirer.
+	queue->AttachPoller();
+
 	//Not using it anymore
 	listUse.DecUse();
 
@@ -328,6 +399,10 @@ int XmlStreamingHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 
 	//End it
 	ResponseWriteEnd(ses);
+
+	//Plus de poller : le délai de grâce d'expiration démarre ici (la
+	//reconnexion du client, en principe sous la seconde, le réarme)
+	queue->DetachPoller();
 
 	//Dec queue usage
 	queue->DecUse();

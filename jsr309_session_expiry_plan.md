@@ -1,11 +1,30 @@
-# Expiration des MediaSession JSR309 par inactivité — conception
+# Expiration des sessions JSR309 et des conférences MCU par inactivité — conception
 
 > **RÉVISION 2026-08-11 — nouvelle direction retenue : solution (c), « vitalité
 > par event queue »** (idée mainteneur), décrite au §7. Elle rend inutiles le
 > ping applicatif et l'armement opt-in de la solution (a) ci-dessous, qui reste
 > documentée comme historique de conception (sa mécanique de balayeur, §3.3,
-> est reprise telle quelle par la solution (c)). Des questions restent ouvertes
-> — ne pas implémenter sans nouvel arbitrage.
+> est reprise telle quelle par la solution (c)).
+>
+> **IMPLÉMENTÉE le 2026-08-11** (branche `fix/c++-renovation`) : arbitrage des
+> questions ouvertes du §7.4 rendu par le mainteneur — expiration **active par
+> défaut à 60 s**, réglable par `--event-queue-expires <s>` (0 = désactivée),
+> et **solution (a) NON retenue** (aucune méthode XML-RPC ni type d'événement
+> ajouté, donc contrat de fil `/jsr309` inchangé et rien à répercuter dans les
+> protobuf MOTELI v2). État de livraison détaillé au §7.6.
+>
+> **ÉTENDUE À L'API MCU le 2026-08-11** (même session) : la politique est
+> factorisée dans `EventQueueSweeper` (`mcu/include/eventqueuesweeper.h`), dont
+> `JSR309Manager` (ses `MediaSession`) ET `MCU` (ses conférences) héritent. Deux
+> précisions du mainteneur à cette occasion :
+>
+> 1. **`EventQueueDelete` ARME le délai de grâce, il ne détruit plus rien
+>    immédiatement** — « pour laisser une chance à la reconnexion ». Cela révise
+>    la « cascade immédiate » esquissée au §7.3 et livrée le matin même, et
+>    comble du même coup le trou du `queueId` pendouillant.
+> 2. **La portée du nettoyage est la responsabilité du contrôleur** : c'est à
+>    lui d'assumer les conséquences de son découpage de files. kelixip passera à
+>    une file par conférence ; mcuGold n'est plus utilisé.
 
 ## 7. Solution (c) — vitalité par event queue (direction retenue, 2026-08-11)
 
@@ -72,14 +91,27 @@ opt-in à oublier.
 - L'événement 7 (`MediaSessionExpiredEvent`, §2.1) devient à peu près inutile
   (la queue est morte, personne ne le lirait) — log serveur seulement.
 
-### 7.4 Points à arbitrer (questions ouvertes mainteneur)
+### 7.4 Points arbitrés (2026-08-11, mainteneur)
 
 - Contrat pour les clients à queue PARTAGÉE (jsr309impl Java : UNE queue pour
   toutes ses sessions) : 60 s sans poll y emporte TOUT — correct si le client
-  est mort, mais à documenter comme changement de contrat.
-- Le 60 s : configurable (`--jsr309-queue-expires <s>`, 0 = désactivé) ?
-- Faut-il conserver en complément l'armement (a) pour les déploiements sans
-  long-poll permanent ?
+  est mort. **Documenté** comme changement de contrat (`xmlrpc_jsr309_api.md`
+  §5 « Le long-poll est la preuve de vie du client », `readme.md`).
+- Le 60 s : **configurable**, `--event-queue-expires <s>`, 0 = désactivé,
+  **actif par défaut** (`XmlEventQueue::DefaultExpiresSecs`).
+- Armement (a) en complément : **NON retenu** — pas de `MediaSessionPing`, pas
+  de `MediaSessionSetTimeout`, pas d'événement d'expiration. Un déploiement
+  sans long-poll permanent doit désarmer le mécanisme (`0`).
+- **`EventQueueDelete` explicite : ARMEMENT du délai, pas destruction** (2e
+  arbitrage du 2026-08-11) — les objets rattachés à une file détruite ne partent
+  qu'à l'échéance du délai de grâce, pour laisser une chance à la reconnexion.
+  C'est le « signal 2 » de `eventqueuesweeper.h`, et il couvre AUSSI le cas d'un
+  `queueId` > 0 qui n'a jamais désigné de file.
+- **Extension à l'API MCU : oui, même mécanisme, même option, même délai.** La
+  portée (une conférence, ou toutes celles d'une file partagée) est la
+  responsabilité du contrôleur, qui choisit son découpage de files ; `MCU-API.md`
+  §5 et §7.1 recommandent désormais une file par conférence. Un `queueId` ≤ 0
+  (défaut du transport MOTELI) reste hors d'atteinte du balayeur.
 
 ### 7.5 « Plan walking dead » — équivalent pour Medooze 2.0 / MOTELI (RabbitMQ)
 
@@ -103,6 +135,46 @@ Pistes à instruire (aucune décidée) :
 Contrainte CLAUDE.md à respecter le moment venu : tout ajout au contrat
 `/jsr309` (ou `/mcu`) doit être répercuté dans les schémas protobuf MOTELI v2
 d'elixip dans le même jeu de changements.
+
+### 7.6 État de livraison (2026-08-11)
+
+Fichiers touchés :
+
+| Fichier | Changement |
+|---|---|
+| `mcu/include/xmlstreaminghandler.h`, `mcu/src/xmlstreaminghandler.cpp` | `XmlEventQueue` : `DefaultExpiresSecs` (60, délai commun à toutes les API), `AttachPoller`/`DetachPoller`/`IsPolled(idle)` (compteur de pollers + horodatage `steady_clock` du dernier détachement, sous le verrou de `::Wait` via `Locked`) ; horodatage initialisé à la CRÉATION (les files nues expirent aussi) ; `GetIdleQueues(idle)` (rend des **ids** seulement) et `HasQueue(id)`, tous deux sous `listUse.IncUse()` ; `ProcessRequest` encadre sa boucle de long-poll par `AttachPoller`/`DetachPoller` |
+| `mcu/include/eventqueuesweeper.h` **(nouveau)** | `EventQueueSweeper` : toute la politique, en-tête seul (aucun `.o` à ajouter aux `OBJS`). `private Worker` → tick annulable `wait.WaitSignal`, période = `min(grâce, 10 s)`. **Signal 1** : `GetIdleQueues` → `DeleteQueueOwners` → `DestroyEventQueue`. **Signal 2** : `CollectQueueIds` → pour un `queueId` que `HasQueue` ne connaît plus, ARMEMENT (map `orphans`, horodatée) puis destruction à l'échéance ; purge des `orphans` que plus aucun objet ne référence. Contrat documenté : `StartSweeper`/`StopSweeper` hors verrou du service, `StopSweeper` en premier dans `End()` |
+| `mcu/src/jsr309/JSR309Manager.{h,cpp}` | `private EventQueueSweeper` + `CollectQueueIds`/`DeleteQueueOwners` (extraction sous verrou, `End()` + destruction HORS verrou, mécanique du §3.3) ; `Init(eventMngr, queueExpiresSecs=60)` arme le balayeur hors verrou ; `End()` fait `StopSweeper()` en PREMIER et hors verrou ; `DeleteEventQueue` ne détruit plus les sessions (armement par le balayeur) ; fuite historique corrigée dans `DeliverEvent` (retour d'`AddEvent` non testé) |
+| `mcu/include/mcu.h`, `mcu/src/mcu.cpp` | même greffe pour les conférences : `private EventQueueSweeper`, `Init(eventMngr, queueExpiresSecs=60)`, `CollectQueueIds`/`DeleteQueueOwners` (qui **libère aussi le `tag`**, sans quoi il bloquerait la map des tags par laquelle passent tous les événements de participant) ; `DeleteEventQueue` en armement ; `MCU::End()` réaligné sur le motif « extraction sous verrou, `End()` dehors » (il terminait les conférences SOUS le mutex, alors qu'un `conf->End()` joint des threads qui le veulent — p.ex. `onParticipantMediaTimeout`) et vide `tags` ; `inited` enfin initialisé ; 4 fuites d'événements corrigées (retour d'`AddEvent` non testé dans les handlers FPU / doc sharing / media timeout / media connected) |
+| `mcu/src/main.cpp` | option `--event-queue-expires <s>` (défaut `XmlEventQueue::DefaultExpiresSecs`), passée à `jsr309Manager.Init` **et** `mcu.Init`, documentée dans `--help` |
+| `mcu/tests/test_jsr309_session_expiry.cpp` | 13 tests : vitalité de la file (file neuve dans la grâce, jamais pollée → expire, poller attaché → protège indéfiniment, détachement → relance le compte à rebours, ré-attache → l'annule, dernier poller gagne), recensement `GetIdleQueues`, balayeur nominal, **référence en vol qui survit** (shared_ptr), `EventQueueDelete` → armement sans destruction, destruction à l'échéance, session à `queueId` 0 jamais balayée, délai 0 = désarmé, `End()` joint le balayeur |
+| `mcu/tests/test_mcu_conference_expiry.cpp` **(nouveau)** | 7 tests, mêmes propriétés côté conférences + **libération du `tag`** (nominal et à l'arrêt) |
+| `xmlrpc_jsr309_api.md`, `MCU-API.md`, `readme.md`, `CLAUDE.md` | contrat côté client des deux API (§5, §6.1/6.2, §9.6 pour JSR-309 ; §5, §6.1, §7.1 pour MCU — où le montage « file partagée » est désormais signalé comme point de défaillance unique), option CLI + traces de log, invariant dans les conventions |
+
+Écarts assumés par rapport à l'esquisse du §7.3 :
+
+- **pas d'événement d'expiration** (l'ancien `MediaSessionExpiredEvent` du §2.1
+  n'existe pas ; le code 7 est de toute façon pris par `EndpointConnectedEvent`) :
+  log serveur seulement, comme le prévoyait le §7.3 ;
+- **`DeleteEventQueue` arme au lieu de détruire** (arbitrage du §7.4) : le §7.3
+  parlait de « déclencher le MÊME nettoyage immédiatement » ;
+- **balayeur bâti sur `Worker`** (`worker.h`) plutôt que sur un `std::thread` +
+  `condition_variable` maison comme au §3.3 — même sémantique (tick annulable,
+  join hors verrou), motif déjà factorisé par le chantier `wait.h` — et
+  **politique factorisée** entre les deux services (`EventQueueSweeper`) plutôt
+  que recopiée.
+
+Trou résiduel connu, réduit : un objet créé avec un `queueId` **≤ 0** n'est
+rattaché à aucune file et échappe au balayeur — comme il échappe déjà à
+l'émission de ses événements. C'est le cas par défaut du transport MOTELI
+(`eventListenerId` absent → 0, `rabbitmqmcu.cpp`), donc **le nettoyage des
+conférences pilotées par RabbitMQ reste entièrement à faire** (§7.5). En
+revanche un `queueId` > 0 qui ne désigne aucune file EST désormais traité (le
+signal 2 l'arme puis le détruit) : le contrôleur doit passer un `queueId` réel.
+
+Validation manuelle restante : recette en appel réel (coupure du long-poll →
+nettoyage constaté ; reconnexion sous 1 s → aucun faux positif ; côté MCU,
+kelixip doit d'abord passer à une file par conférence).
 
 ---
 

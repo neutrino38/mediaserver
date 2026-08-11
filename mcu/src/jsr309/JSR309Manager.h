@@ -11,8 +11,10 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include "config.h"
 #include "MediaSession.h"
+#include "eventqueuesweeper.h"
 #include "xmlstreaminghandler.h"
 #include "websocketserver.h"
 
@@ -21,19 +23,24 @@
 //renvoie le chemin complet "/events/jsr309/<queueId>" au client — gap 6).
 #define JSR309_EVENTS_PREFIX "/events/jsr309"
 
-class JSR309Manager : 
+class JSR309Manager :
 	public MediaSession::Listener,
-	public WebSocketServer::Handler
+	public WebSocketServer::Handler,
+	//Expiration des sessions dont la file d'événements n'est plus lue
+	private EventQueueSweeper
 {
 public:
 	// NB : l'énumération des types d'événements est définie de façon unique dans
 	// JSR309Event::Events (JSR309Event.h). Ne pas la dupliquer ici (contrat de fil
 	// partagé avec elixip).
+
 public:
 	JSR309Manager();
 	virtual ~JSR309Manager();
 
-	int Init(XmlStreamingHandler *eventMngr);
+	//queueExpiresSecs : délai de grâce sans poller (0 = expiration désactivée,
+	//comportement historique)
+	int Init(XmlStreamingHandler *eventMngr,int queueExpiresSecs = XmlEventQueue::DefaultExpiresSecs);
 	int End();
 
 	int CreateEventQueue();
@@ -68,6 +75,14 @@ private:
 	};
 
 	typedef std::map<int,MediaSessionEntry> MediaSessions;
+
+private:
+	//EventQueueSweeper : files référencées par les sessions...
+	virtual void CollectQueueIds(std::set<int>& ids);
+	//... et destruction de toutes les sessions dont l'entrée pointe vers cette
+	//file (extraction sous verrou, End() hors verrou comme DeleteMediaSession).
+	//Rend le nombre de sessions détruites.
+	virtual int DeleteQueueOwners(int queueId,const char *reason);
 
 private:
 	XmlStreamingHandler *eventMngr;

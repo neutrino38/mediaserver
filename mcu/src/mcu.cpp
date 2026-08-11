@@ -15,6 +15,8 @@ MCU::MCU()
 {
 	//No event mngr
 	eventMngr = NULL;
+	//Not inited
+	inited = false;
 }
 
 /**************************************
@@ -32,25 +34,29 @@ MCU::~MCU()
 * Init
 *	Inicializa la mcu
 **************************************/
-int MCU::Init(XmlStreamingHandler *eventMngr)
+int MCU::Init(XmlStreamingHandler *eventMngr,int queueExpiresSecs)
 {
 	timeval tv;
-	
+
 	//Bloqueamos
-	std::lock_guard<std::mutex> lock(mutex);
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Estamos iniciados
-	inited = true;
+		//Estamos iniciados
+		inited = true;
 
-	//Get secs
-	gettimeofday(&tv,NULL);
-	
-	//El id inicial
-	maxId = (tv.tv_sec & 0x1FFF);
+		//Get secs
+		gettimeofday(&tv,NULL);
 
-	//Store event mngr
-	this->eventMngr = eventMngr;
+		//El id inicial
+		maxId = (tv.tv_sec & 0x1FFF);
 
+		//Store event mngr
+		this->eventMngr = eventMngr;
+	}
+
+	//Arme le balayeur hors verrou (il prend ce même mutex à chaque tour)
+	StartSweeper(eventMngr,queueExpiresSecs,"MCU");
 
 	//Salimos
 	return 1;
@@ -64,19 +70,29 @@ int MCU::End()
 {
 	Log(">End MCU\n");
 
-	//Bloqueamos
-	std::lock_guard<std::mutex> lock(mutex);
+	//Arrête le balayeur AVANT de vider la liste, et hors de tout verrou : le
+	//join ne doit jamais se faire sous un mutex que le thread peut vouloir
+	//prendre (il prend `mutex` à chaque tour)
+	StopSweeper();
 
-	//Dejamos de estar iniciados
-	inited = false;
+	//Extrae las conferencias bajo lock y las termina fuera : conf->End() joint
+	//des threads (participants, mixeurs) qui peuvent vouloir CE mutex — p.ex.
+	//onParticipantMediaTimeout. Les terminer sous le verrou pouvait bloquer.
+	Conferences ended;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Paramos las conferencias
-	for (Conferences::iterator it=conferences.begin(); it!=conferences.end(); ++it)
-		//End it (el shared_ptr se encarga de destruir la conferencia)
+		//Dejamos de estar iniciados
+		inited = false;
+
+		//Vaciamos las listas
+		ended.swap(conferences);
+		tags.clear();
+	}
+
+	//Paramos las conferencias fuera del lock ; el ultimo shared_ptr las destruye
+	for (Conferences::iterator it=ended.begin(); it!=ended.end(); ++it)
 		it->second.conf->End();
-
-	//LImpiamos las listas
-	conferences.clear();
 
 	Log("<End MCU\n");
 
@@ -102,8 +118,69 @@ int MCU::DeleteEventQueue(int id)
 		//Error
 		return Error("Event manager not set!\n");
 
-	//Create it
+	//NB : les conférences rattachées à cette file ne sont PAS détruites ici. Le
+	//balayeur constatera que leur queueId ne désigne plus rien et ARMERA le
+	//délai de grâce (cf. eventqueuesweeper.h, signal 2) : le contrôleur garde
+	//ainsi une chance de se reconnecter avant de perdre ses conférences.
 	return eventMngr->DestroyEventQueue(id);
+}
+
+/**************************************
+* CollectQueueIds
+*	Files référencées par les conférences (EventQueueSweeper)
+**************************************/
+void MCU::CollectQueueIds(std::set<int>& ids)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+
+	for (Conferences::iterator it=conferences.begin(); it!=conferences.end(); ++it)
+		if (it->second.queueId > 0)
+			ids.insert(it->second.queueId);
+}
+
+/**************************************
+* DeleteQueueOwners
+*	Détruit les conférences liées à une file d'événements (EventQueueSweeper)
+**************************************/
+int MCU::DeleteQueueOwners(int queueId,const char *reason)
+{
+	//Extrait les entrées sous verrou : une fois hors de la map, personne ne
+	//peut plus en obtenir de nouvelle référence (même principe que
+	//DeleteConference)
+	std::vector<std::shared_ptr<MultiConf> > expired;
+
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+
+		for (Conferences::iterator it=conferences.begin(); it!=conferences.end(); )
+		{
+			if (it->second.queueId == queueId)
+			{
+				Log("-MCU: suppression de la conference %d [tag:%ls,queue:%d] : %s\n",
+					it->first,it->second.conf->GetTag().c_str(),queueId,reason);
+
+				//Le tag doit partir avec la conférence, sinon il bloque la map
+				//des tags (et les événements se routent par tag)
+				tags.erase(it->second.conf->GetTag());
+
+				expired.push_back(std::move(it->second.conf));
+				it = conferences.erase(it);
+			} else
+				++it;
+		}
+	}
+
+	//Terminaison HORS verrou : End() joint des threads (participants, mixeurs)
+	//qui peuvent vouloir ce même mutex
+	for (std::vector<std::shared_ptr<MultiConf> >::iterator it=expired.begin(); it!=expired.end(); ++it)
+		if (*it)
+			(*it)->End();
+
+	//Le dernier shared_ptr détruit chaque conférence, hors verrou lui aussi
+	int count = (int)expired.size();
+	expired.clear();
+
+	return count;
 }
 
 /**************************************
@@ -390,8 +467,13 @@ void MCU::onParticipantRequestFPU(MultiConf *conf,int partId)
 
 	//Check Event and event queue
 	if (eventMngr && it->second.queueId>0)
-		//Send new event
-		eventMngr->AddEvent(it->second.queueId, new ::PlayerRequestFPUEvent(it->first,conf->GetTag(),partId));
+	{
+		//Send new event (la file prend possession... sauf si elle n'existe plus :
+		//AddEvent rend 0 SANS detruire l'evenement)
+		XmlEvent *event = new ::PlayerRequestFPUEvent(it->first,conf->GetTag(),partId);
+		if (!eventMngr->AddEvent(it->second.queueId,event))
+			delete event;
+	}
 }
 
 /**********************
@@ -415,9 +497,12 @@ void MCU::onParticipantMediaTimeout(MultiConf *conf,int partId,MediaFrame::Type 
 
 	//Check Event and event queue
 	if (eventMngr && it->second.queueId>0)
-		//Send new event
-		eventMngr->AddEvent(it->second.queueId,
-			new ::ParticipantMediaEvent(MCU::ParticipantMediaTimeout,it->first,conf->GetTag(),partId,(int)media,(int)role));
+	{
+		//Send new event (la file prend possession... sauf si elle n'existe plus)
+		XmlEvent *event = new ::ParticipantMediaEvent(MCU::ParticipantMediaTimeout,it->first,conf->GetTag(),partId,(int)media,(int)role);
+		if (!eventMngr->AddEvent(it->second.queueId,event))
+			delete event;
+	}
 }
 
 void MCU::onParticipantMediaConnected(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role)
@@ -435,9 +520,12 @@ void MCU::onParticipantMediaConnected(MultiConf *conf,int partId,MediaFrame::Typ
 
 	//Check Event and event queue
 	if (eventMngr && it->second.queueId>0)
-		//Send new event
-		eventMngr->AddEvent(it->second.queueId,
-			new ::ParticipantMediaEvent(MCU::ParticipantMediaConnected,it->first,conf->GetTag(),partId,(int)media,(int)role));
+	{
+		//Send new event (la file prend possession... sauf si elle n'existe plus)
+		XmlEvent *event = new ::ParticipantMediaEvent(MCU::ParticipantMediaConnected,it->first,conf->GetTag(),partId,(int)media,(int)role);
+		if (!eventMngr->AddEvent(it->second.queueId,event))
+			delete event;
+	}
 }
 
 void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status)
@@ -455,8 +543,12 @@ void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring
 
 	//Check Event and event queue
 	if (eventMngr && it->second.queueId>0)
-		//Send new event
-		eventMngr->AddEvent(it->second.queueId, new ::PlayerRequestDocSharingEvent(it->first,conf->GetTag(), partId, status ) );
+	{
+		//Send new event (la file prend possession... sauf si elle n'existe plus)
+		XmlEvent *event = new ::PlayerRequestDocSharingEvent(it->first,conf->GetTag(),partId,status);
+		if (!eventMngr->AddEvent(it->second.queueId,event))
+			delete event;
+	}
 }
 
 int MCU::onFileUploaded(const char* url, const char *filename)
