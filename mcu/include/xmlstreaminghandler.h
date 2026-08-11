@@ -6,6 +6,7 @@
 #include "config.h"
 #include "xmlrpcserver.h"
 #include "use.h"
+#include "wait.h"
 
 
 class XmlEvent
@@ -15,26 +16,27 @@ public:
 	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env) = 0;
 };
 
-class XmlEventQueue : public Use
+//File d'événements du long-poll XML-RPC, bâtie sur la primitive Wait
+//(cf. wait.h). SÉMANTIQUE PIÈGE préservée (test_wait_sites.cpp) :
+//WaitForEvent rend true MÊME sur timeout (déclencheur du keep-alive), et
+//false SEULEMENT si annulée à l'ENTRÉE (Cancel en deux temps).
+class XmlEventQueue : public Use, protected ::Wait
 {
 public:
-	XmlEventQueue();
+	XmlEventQueue() = default;
 	virtual ~XmlEventQueue();
 	void AddEvent(XmlEvent *event);
-	void Cancel();
+	using ::Wait::Cancel;
 	bool WaitForEvent(DWORD timeout);
 	xmlrpc_value* PeekXMLEvent(xmlrpc_env *env);
 	void PopEvent();
-	
+
 private:
 	typedef std::list<XmlEvent*> EventList;
 
 private:
 	//The event list
 	EventList events;
-	bool		cancel;
-	pthread_mutex_t	mutex;
-	pthread_cond_t  cond;
 };
 
 class XmlStreamingHandler :

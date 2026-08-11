@@ -8,19 +8,11 @@
 #include "use.h"
 
 
-XmlEventQueue::XmlEventQueue()
-{
-	cancel = false;
-	//Create mutex
-	pthread_mutex_init(&mutex,NULL);
-	//Create condition
-	pthread_cond_init(&cond,0);
-
-}
 XmlEventQueue::~XmlEventQueue()
 {
-	//Lock
-	pthread_mutex_lock(&mutex);
+	//Drainer un éventuel WaitForEvent avant de détruire la liste (les
+	//prédicats la consultent) ; le ~Wait refera à blanc.
+	CancelAndDrain();
 
 	//While events
 	while (!events.empty())
@@ -30,113 +22,54 @@ XmlEventQueue::~XmlEventQueue()
 		//And remove it froom server
 		events.pop_front();
 	}
-
-	//UnLock
-	pthread_mutex_unlock(&mutex);
-
-	//Destroy event
-	pthread_mutex_destroy(&mutex);
-	//Destroy condition
-	pthread_cond_destroy(&cond);
 }
 
 void XmlEventQueue::AddEvent(XmlEvent *event)
 {
-	//Lock
-	pthread_mutex_lock(&mutex);
-
 	//Add event
-	events.push_back(event);
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
+	Locked([&] { events.push_back(event); });
 
 	//Signal
-	pthread_cond_signal(&cond);
-}
-
-void XmlEventQueue::Cancel()
-{
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//Canceled
-	cancel = true;
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	//Signal condition
-	pthread_cond_signal(&cond);
+	Signal();
 }
 
 bool XmlEventQueue::WaitForEvent(DWORD timeout)
 {
-	timespec ts;
-
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//if we are cancel
-	if (cancel)
-	{
-		//Unlock
-		pthread_mutex_unlock(&mutex);
+	//if we are cancel : false SEULEMENT à l'entrée
+	if (IsCanceled())
 		//canceled
 		return false;
-	}
 
-	//If there are no events in the queue
-	if (events.empty())
-	{
-		//Calculate timeout
-		calcTimout(&ts,timeout);
+	//Attendre un événement ; timeout et Cancel-pendant-l'attente rendent
+	//true quand même (keep-alive du long-poll, Cancel en deux temps)
+	WaitUntil(timeout, [this] { return !events.empty(); });
 
-		//Esperamos la condicion
-		pthread_cond_timedwait(&cond,&mutex,&ts);
-	}
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
-	//There are events in the queue
 	return true;
 }
 
 xmlrpc_value* XmlEventQueue::PeekXMLEvent(xmlrpc_env *env)
 {
-	xmlrpc_value* val = NULL;
-
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//Get event
-	if (!events.empty())
-		//Retreive firs
-		val = events.front()->GetXmlValue(env);
-
-	//UnLock
-	pthread_mutex_unlock(&mutex);
-
-	return val;
+	return Locked([&]() -> xmlrpc_value* {
+		//Get event
+		if (!events.empty())
+			//Retreive firs
+			return events.front()->GetXmlValue(env);
+		return NULL;
+	});
 }
 
 void XmlEventQueue::PopEvent()
 {
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//Get event
-	if (!events.empty())
-	{
-		//delet first
-		delete(events.front());
-		//And remove it froom server
-		events.pop_front();
-	}
-
-	//UnLock
-	pthread_mutex_unlock(&mutex);
+	Locked([&] {
+		//Get event
+		if (!events.empty())
+		{
+			//delet first
+			delete(events.front());
+			//And remove it froom server
+			events.pop_front();
+		}
+	});
 }
 
 /**************************************

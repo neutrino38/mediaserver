@@ -34,8 +34,9 @@ private:
 	static void *run(void *par);
 private:
 	pthread_t	thread;
-	pthread_mutex_t mutex;
-	pthread_cond_t	cond;
+	//Sommeil cadencé annulable entre deux paquets d'une même trame
+	//(::Wait : la méthode Wait() masque le nom de la classe de base)
+	::Wait		pacer;
 	bool		inited;
 	WaitQueue<RTPPacketSched*> queue;
 };

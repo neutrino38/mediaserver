@@ -32,8 +32,8 @@ private:
 private:
 	RTPSession	*session;
 	pthread_t	thread;
-	pthread_mutex_t mutex;
-	pthread_cond_t	cond;
+	//Sommeil cadencé annulable entre deux paquets d'une même trame
+	Wait		pacer;
 	bool		inited;
 	WaitQueue<RTPPacketSched*> queue;
 };

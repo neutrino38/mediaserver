@@ -16,10 +16,6 @@ RTPMultiplexerSmoother::RTPMultiplexerSmoother() : RTPMultiplexer()
 {
 	//NO session
 	inited = false;
-	
-	//Create objects
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
 }
 
 RTPMultiplexerSmoother::~RTPMultiplexerSmoother()
@@ -31,10 +27,6 @@ RTPMultiplexerSmoother::~RTPMultiplexerSmoother()
 	while(queue.Length()>0)
 		//Delete first
 		delete(queue.Pop());
-	
-	//Clean object
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 
@@ -49,7 +41,9 @@ int RTPMultiplexerSmoother::Start()
 	
 	//We are inited
 	inited = true;
+	//Réarmer file et cadenceur après un éventuel Stop (Cancel collant)
 	queue.Reset();
+	pacer.Reset();
 	//Run
 	createPriorityThread(&thread,run,this,1);
 
@@ -172,7 +166,7 @@ int RTPMultiplexerSmoother::Cancel()
 	queue.Cancel();
 
 	//Cancel waiting
-	pthread_cond_signal(&cond);
+	pacer.Cancel();
 
 	//exit
 	return 1;
@@ -248,17 +242,12 @@ int RTPMultiplexerSmoother::Run()
 		//Update sending time
 		sendingTime = sched->GetSendingTime();
 
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Calculate timeout
-		calcAbsTimeout(&wait,&prev,sendingTime);
-
-		//Wait next or stopped
-		pthread_cond_timedwait(&cond,&mutex,&wait);
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
+		//Dormir jusqu'à l'échéance prev+sendingTime (annulable)
+		{
+			QWORD elapsed = getDifTime(&prev)/1000;
+			if (sendingTime > elapsed)
+				pacer.WaitSignal(sendingTime - elapsed);
+		}
 
 		//If it was last
 		if (sched->GetMark())

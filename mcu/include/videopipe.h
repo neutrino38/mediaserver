@@ -8,13 +8,19 @@
 #ifndef VIDEOPIPE_H
 #define	VIDEOPIPE_H
 
-#include <pthread.h>
 #include "video.h"
 #include "videorescaler.h"
+#include "wait.h"
 
+//Pont poussé/tiré entre mixeur et encodeur vidéo, bâti sur la primitive Wait
+//(cf. wait.h). SÉMANTIQUE PIÈGE préservée (test_wait_sites.cpp) : sur timeout
+//sans nouvelle image, GrabFrame RELIVRE la dernière trame (gel d'image) ;
+//End() pendant un grab rend encore `last`, le NULL n'arrive qu'au grab
+//suivant.
 class VideoPipe :
 	public VideoOutput,
-	public VideoInput
+	public VideoInput,
+	protected ::Wait
 {
 public:
 	VideoPipe();
@@ -45,11 +51,10 @@ private:
 	int videoSize;
 	int videoFPS;
 	int imgNew;
-	int inited;
+	int inited = false;
 	int capturing;
-
-	pthread_mutex_t newPicMutex;
-	pthread_cond_t  newPicCond;
+	//Réveil explicite du grab en cours (CancelGrabFrame), consommé à l'entrée
+	bool wakeGrab = false;
 };
 
 #endif	/* VIDEOPIPE_H */
