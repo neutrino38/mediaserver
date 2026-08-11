@@ -1,5 +1,6 @@
 #ifndef _RTPSESSION_H_
 #define _RTPSESSION_H_
+#include "worker.h"
 #include <sys/socket.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,7 +25,8 @@
 
 class RTPSession : 
 	public RemoteRateEstimator::Listener,
-	public DTLSConnection::Listener
+	public DTLSConnection::Listener,
+	public Worker
 {
 public:
 	class Listener
@@ -242,7 +244,6 @@ private:
 	void OnICEConnectivityConfirmed(sockaddr_in* from); //réponse valide reçue -> débloque
 
 private:
-	static  void* run(void *par);
 protected:
 	
 
@@ -355,7 +356,8 @@ private:
 	int 	simRtcpSocket;
 	int 	simPort;
 	int	simRtcpPort;
-	pollfd	ufds[2];
+	//[RTP, RTCP, eventfd de reveil du Wait herite (Worker)]
+	pollfd	ufds[3];
 	bool	inited;
 	bool	running;
 
@@ -425,7 +427,6 @@ private:
 	bool	natRtcpCorrected;
 	bool	NatCorrectable(in_addr_t announced);
 	static bool IsRFC1918(in_addr_t addr);
-	pthread_t thread;
 	std::mutex mutex;	
 
 	//Tipos

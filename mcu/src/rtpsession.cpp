@@ -295,7 +295,6 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	memset(&sendAddr,       0,sizeof(struct sockaddr_in));
 	memset(&sendRtcpAddr,   0,sizeof(struct sockaddr_in));
 	//No thread
-	setZeroThread(&thread);
 	running = false;
 	//No stimator
 	remoteRateEstimator = NULL;
@@ -592,10 +591,9 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	//Store values
 	iceRemoteUsername = strdup(username);
 	iceRemotePwd = strdup(pwd);
-	//P3 : réveille le thread Run pour (ré)évaluer l'émission de checks STUN sortants
-	//dès que la destination sera connue (pair ICE-lite qui n'initie jamais).
-	if (thread)
-		pthread_kill(thread,SIGIO);
+	//P3 : réveille le thread Run (eventfd du Wait, jamais perdu) pour (ré)évaluer
+	//l'émission de checks STUN sortants dès que la destination sera connue.
+	wait.Signal();
 	//Ok
 	return 1;
 }
@@ -934,9 +932,8 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 		Log("-ArmRTPTimeout: watchdog armé à %u ms [%p]\n",timeoutMs,this);
 
 		//Si le thread dort dans poll(-1) (watchdog jusqu'ici désarmé), on le réveille
-		//(SIGIO -> EINTR) pour qu'il reprenne l'attente bornée sans attendre un paquet.
-		if (thread)
-			pthread_kill(thread,SIGIO);
+		//via l'eventfd pour qu'il reprenne l'attente bornée sans attendre un paquet.
+		wait.Signal();
 	}
 	else
 	{
@@ -975,10 +972,9 @@ void RTPSession::RequestDTLSClientHandshake()
 	if (!dtls.IsInited() || !dtls.IsClientRole())
 		return;
 
-	//Réveille le thread Run (poll -> EINTR via SIGIO) pour qu'il pilote le handshake
-	//sans attendre un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
-	if (thread)
-		pthread_kill(thread,SIGIO);
+	//Réveille le thread Run (eventfd) pour qu'il pilote le handshake sans attendre
+	//un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
+	wait.Signal();
 }
 
 void RTPSession::DriveDTLSClientHandshake()
@@ -1251,8 +1247,7 @@ void RTPSession::ArmNATPriming()
 	gettimeofday(&natPrimingLast,NULL);
 
 	//Réveille le thread Run (s'il tourne) pour qu'il cadence la suite de la rafale
-	if (thread)
-		pthread_kill(thread,SIGIO);
+	wait.Signal();
 }
 
 void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
@@ -2321,23 +2316,19 @@ void RTPSession::Start()
 	running = true;
 
 	//Create thread
-	createPriorityThread(&thread,run,this,0);
+	StartThread();
 }
 
 void RTPSession::Stop()
 {
-	//Check thred
-	if (thread)
+	//Check running
+	if (running)
 	{
 		//Not running
 		running = false;
-		
-		//Signal the pthread this will cause the poll call to exit
-		pthread_kill(thread,SIGIO);
-		//Wait thread to close
-		pthread_join(thread,NULL);
-		//Nulifi thread
-		thread = 0;
+
+		//Réveille le poll (eventfd du Wait hérité) et joint le thread
+		StopThread();
                 DeleteStreams();
 	}
 
@@ -2356,20 +2347,6 @@ void RTPSession::Stop()
 * run
 *       Helper thread function
 ************************/
-void * RTPSession::run(void *par)
-{
-        Log("-RTPSession thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTPSession *sess = (RTPSession *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)sess->Run());
-}
-
 /***************************
  * Run
  * 	Server running thread
@@ -2393,8 +2370,9 @@ int RTPSession::Run()
 	fsflags |= O_NONBLOCK;
 	fcntl(simRtcpSocket,F_SETFL,fsflags);
 
-	//Catch all IO errors
-	signal(SIGIO,EmptyCatch);
+	//Réveil inter-thread : eventfd du Wait hérité (remplace le SIGIO historique)
+	ufds[2].fd = wait.GetPollFd();
+	ufds[2].events = POLLIN;
 
 	//Le chrono d'inactivité ne court que lorsqu'il est armé (ArmRTPTimeout, au SDP
 	//answer) : rien à amorcer ici.
@@ -2438,7 +2416,7 @@ int RTPSession::Run()
 					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
 
 		//Wait for events
-		int nready = poll(ufds,2,waitMs);
+		int nready = poll(ufds,3,waitMs);
 		if(nready<0)
 		{
 			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler

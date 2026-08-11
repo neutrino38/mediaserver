@@ -137,8 +137,9 @@ int RTPEndpoint::StopReceiving()
 	//Cancel grab
 	DeleteStreams();
 
-	//Cancel any pending IO
-	pthread_kill(thread,SIGIO);
+	//NB : l'ancien pthread_kill(SIGIO) ici était MORT : le thread bloque dans
+	//l'attente du jitter buffer (cv), pas dans poll ; c'est le Cancel des streams
+	//(DeleteStreams ci-dessus) qui le réveille réellement.
 
         //Y unimos
 	pthread_join(thread,NULL);
