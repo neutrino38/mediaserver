@@ -434,6 +434,159 @@ TEST(RtpBufferPrimitive, HurryUpBypassesReorderWait)
 	delete p;
 }
 
+// LE scénario central du jitter buffer : Wait() bloque sur un trou (le 2
+// manque), et le paquet manquant arrive PENDANT l'attente → il est livré
+// aussitôt, sans attendre le plein maxWaitTime.
+TEST(RtpBufferPrimitive, MissingPacketArrivingDuringWaitIsDeliveredImmediately)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(5000);
+	EXPECT_TRUE(buf.Add(MakePacket(1)));
+	RTPPacket* p = buf.Wait();	// next = 2
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	delete p;
+
+	EXPECT_TRUE(buf.Add(MakePacket(3)));	// le 2 manque encore
+	std::thread straggler([&buf]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		buf.Add(MakePacket(2));	// le retardataire arrive pendant le Wait
+	});
+
+	Clock::time_point t0 = Clock::now();
+	p = buf.Wait();
+	long ms = ElapsedMs(t0);
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 2);	// livré dès son arrivée…
+	EXPECT_LT(ms, 2000);		// …pas au bout des 5000 ms
+	delete p;
+	straggler.join();
+
+	p = buf.Wait();			// puis le 3, sans attente (seq == next)
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 3);
+	delete p;
+}
+
+// Un tardif injecté PENDANT qu'un Wait bloque sur un trou est éliminé sans
+// perturber ni l'ordre ni la livraison du reste.
+TEST(RtpBufferPrimitive, LatePacketDuringWaitDoesNotDisruptOrder)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(400);
+	EXPECT_TRUE(buf.Add(MakePacket(5)));
+	RTPPacket* p = buf.Wait();	// next = 6
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	delete p;
+
+	EXPECT_TRUE(buf.Add(MakePacket(8)));	// trou : 6 et 7 manquent
+	std::thread mixed([&buf]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		buf.Add(MakePacket(3));	// tardif (3 < 6) : droppé
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		buf.Add(MakePacket(6));	// le 6 arrive, le 7 jamais
+	});
+
+	p = buf.Wait();			// le 6, dès son arrivée
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 6);
+	delete p;
+	mixed.join();
+
+	p = buf.Wait();			// le 8, après ~maxWaitTime (7 abandonné)
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 8);
+	delete p;
+	// Le tardif 3 n'apparaît jamais : plus rien en file.
+	EXPECT_EQ(buf.Length(), (DWORD)0);
+}
+
+// Doublon de numéro de séquence : livré UNE seule fois (l'écriture dans la map
+// écrase l'entrée). DÉFAUT documenté : l'ancien pointeur est écrasé SANS
+// delete → fuite mémoire silencieuse sur doublon, à corriger à la migration.
+TEST(RtpBufferPrimitive, DuplicateSeqDeliveredOnce)
+{
+	RTPBuffer buf;
+	EXPECT_TRUE(buf.Add(MakePacket(1)));
+	EXPECT_TRUE(buf.Add(MakePacket(2)));
+	EXPECT_TRUE(buf.Add(MakePacket(2)));	// doublon (fuite de l'original)
+	EXPECT_TRUE(buf.Add(MakePacket(3)));
+
+	for (WORD expected = 1; expected <= 3; ++expected)
+	{
+		RTPPacket* p = buf.Wait();
+		ASSERT_NE(p, (RTPPacket*)NULL);
+		EXPECT_EQ(p->GetSeqNum(), expected);
+		delete p;
+	}
+	EXPECT_EQ(buf.Length(), (DWORD)0);	// pas de second « 2 » fantôme
+}
+
+// Passage du cycle 16 bits (65534, 65535, 0, 1) : l'ordre suit le numéro de
+// séquence ÉTENDU (cycles<<16 | seq), comme le pose RTPSession à la réception.
+TEST(RtpBufferPrimitive, SequenceWrapAcrossCycles)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(2000);
+	RTPTimedPacket* p1 = MakePacket(65534); p1->SetSeqCycles(0);
+	RTPTimedPacket* p2 = MakePacket(65535); p2->SetSeqCycles(0);
+	RTPTimedPacket* p3 = MakePacket(0);     p3->SetSeqCycles(1);
+	RTPTimedPacket* p4 = MakePacket(1);     p4->SetSeqCycles(1);
+	// Arrivée en désordre de part et d'autre du wrap.
+	EXPECT_TRUE(buf.Add(p1));
+	EXPECT_TRUE(buf.Add(p3));
+	EXPECT_TRUE(buf.Add(p2));
+	EXPECT_TRUE(buf.Add(p4));
+
+	const WORD expected[4] = { 65534, 65535, 0, 1 };
+	for (int i = 0; i < 4; ++i)
+	{
+		RTPPacket* p = buf.Wait();
+		ASSERT_NE(p, (RTPPacket*)NULL);
+		EXPECT_EQ(p->GetSeqNum(), expected[i]) << "position " << i;
+		delete p;
+	}
+}
+
+// Rafale produite en désordre local (paires permutées) pendant que le
+// consommateur lit : tout ressort strictement en séquence, rien n'est perdu.
+TEST(RtpBufferPrimitive, ShuffledStreamComesOutInOrder)
+{
+	enum { N = 200 };
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(1000);
+
+	// Amorce : consommer le 1 pour fixer next=2 AVANT le désordre — sinon le
+	// tout premier Wait (next==-1) livre ce qu'il trouve et le test dépendrait
+	// de la course producteur/consommateur.
+	EXPECT_TRUE(buf.Add(MakePacket(1)));
+	RTPPacket* first = buf.Wait();
+	ASSERT_NE(first, (RTPPacket*)NULL);
+	EXPECT_EQ(first->GetSeqNum(), 1);
+	delete first;
+
+	std::thread producer([&buf]() {
+		// 3,2, 5,4, 7,6… : chaque paire arrive permutée.
+		for (WORD base = 2; base + 1 <= N; base += 2)
+		{
+			buf.Add(MakePacket(base + 1));
+			buf.Add(MakePacket(base));
+			if (base % 16 == 2)
+				std::this_thread::yield();
+		}
+	});
+
+	// Les paires produisent 2..N-1 (base+1 <= N avec base pair).
+	for (WORD expected = 2; expected < N; ++expected)
+	{
+		RTPPacket* p = buf.Wait();
+		ASSERT_NE(p, (RTPPacket*)NULL) << "paquet " << expected << " jamais livré";
+		ASSERT_EQ(p->GetSeqNum(), expected);
+		delete p;
+	}
+	producer.join();
+	EXPECT_EQ(buf.Length(), (DWORD)0);
+}
+
 TEST(RtpBufferPrimitive, CancelUnblocksWait)
 {
 	RTPBuffer buf;
