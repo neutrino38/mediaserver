@@ -41,10 +41,7 @@ public:
 	{
 		//Annule puis draine : on ne libère mutex/condition qu'une fois le
 		//dernier waiter effectivement sorti de WaitSignal/WaitUntil
-		std::unique_lock<std::mutex> lock(mutex);
-		cancel = true;
-		cond.notify_all();
-		drained.wait(lock, [this] { return waiters == 0; });
+		CancelAndDrain();
 	}
 
 	void Signal()
@@ -60,6 +57,19 @@ public:
 		std::lock_guard<std::mutex> lock(mutex);
 		cancel = true;
 		cond.notify_all();
+	}
+
+	//Réarme après un Cancel (le cancel est collant sinon)
+	void Reset()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		cancel = false;
+	}
+
+	bool IsCanceled()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		return cancel;
 	}
 
 	//timeout en ms, 0 = infini. true si signalé (ou réveil intempestif,
@@ -120,6 +130,19 @@ public:
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		return f();
+	}
+
+protected:
+	//Annule et attend la sortie du dernier waiter. Idempotent. Une classe
+	//dérivée dont les waiters consultent SES membres (prédicats WaitUntil)
+	//DOIT l'appeler dans son propre destructeur, avant que ses membres ne
+	//soient détruits — le ~Wait le refera à blanc.
+	void CancelAndDrain()
+	{
+		std::unique_lock<std::mutex> lock(mutex);
+		cancel = true;
+		cond.notify_all();
+		drained.wait(lock, [this] { return waiters == 0; });
 	}
 
 private:

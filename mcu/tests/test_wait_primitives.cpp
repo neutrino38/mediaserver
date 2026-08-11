@@ -142,6 +142,46 @@ TEST(WaitPrimitive, SignalThenCancelReportsSignal)
 	EXPECT_FALSE(w.WaitSignal(100));
 }
 
+// Reset() réarme après un Cancel (sinon collant).
+TEST(WaitPrimitive, ResetRearmsAfterCancel)
+{
+	Wait w;
+	w.Cancel();
+	EXPECT_FALSE(w.WaitSignal(50));
+
+	w.Reset();
+	std::thread signaler([&w]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		w.Signal();
+	});
+	EXPECT_TRUE(w.WaitSignal(5000));
+	signaler.join();
+}
+
+// WaitUntil/Locked : attente sur prédicat évalué sous le verrou, état partagé
+// muté sous le même verrou.
+TEST(WaitPrimitive, WaitUntilPredicateUnderLock)
+{
+	Wait w;
+	int shared = 0;
+	std::thread t([&]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		w.Locked([&] { shared = 42; });
+		w.Signal();
+	});
+	EXPECT_TRUE(w.WaitUntil(5000, [&] { return shared == 42; }));
+	t.join();
+
+	// Timeout si le prédicat ne devient jamais vrai.
+	Clock::time_point t0 = Clock::now();
+	EXPECT_FALSE(w.WaitUntil(150, [] { return false; }));
+	EXPECT_GE(ElapsedMs(t0), 100);
+
+	// Annulé → false immédiat, même prédicat vrai.
+	w.Cancel();
+	EXPECT_FALSE(w.WaitUntil(5000, [] { return true; }));
+}
+
 // =============================================================================
 // WaitQueue<T> (waitqueue.h) — file d'attente bloquante (T pointeur)
 // =============================================================================
