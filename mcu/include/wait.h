@@ -76,6 +76,13 @@ public:
 	//comme l'historique) ; false si timeout ou annulé.
 	bool WaitSignal(DWORD timeout)
 	{
+		return WaitSignal(std::chrono::milliseconds(timeout));
+	}
+
+	//Variante à précision fine (jusqu'à la ns) pour les cadenceurs ;
+	//durée nulle = attente infinie. Mêmes retours que la variante ms.
+	bool WaitSignal(std::chrono::nanoseconds timeout)
+	{
 		std::unique_lock<std::mutex> lock(mutex);
 
 		//Déjà annulé : échec immédiat
@@ -85,8 +92,8 @@ public:
 		WaiterScope scope(*this);
 
 		bool ok;
-		if (timeout)
-			ok = (cond.wait_for(lock, std::chrono::milliseconds(timeout)) == std::cv_status::no_timeout);
+		if (timeout.count())
+			ok = (cond.wait_for(lock, timeout) == std::cv_status::no_timeout);
 		else
 		{
 			cond.wait(lock);
