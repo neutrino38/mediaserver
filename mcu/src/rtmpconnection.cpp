@@ -46,9 +46,6 @@ RTMPConnection::RTMPConnection(Listener *listener)
 	thread = 0;
 	//Set initial time
 	gettimeofday(&startTime,0);
-	//Init mutex
-	pthread_mutex_init(&mutex,0);
-        pthread_cond_init(&cond,0);
 	//Create output chunk streams for control
 	chunkOutputStreams[2] = new RTMPChunkOutputStream(2);
 	//Create output chunk streams for command
@@ -71,9 +68,6 @@ RTMPConnection::~RTMPConnection()
 	for (RTMPChunkOutputStreams::iterator it=chunkOutputStreams.begin(); it!=chunkOutputStreams.end(); ++it)
 		//Delete it
 		delete(it->second);
-	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
-        pthread_cond_destroy(&cond);
 }
 
 int RTMPConnection::Init(int fd)
@@ -119,7 +113,7 @@ void RTMPConnection::Stop()
 		//No socket
 		socket = FD_INVALID;
 
-                pthread_cond_signal(&cond);
+                writeWait.Cancel(); // reveille le writer : la connexion s'arrete
 	}
 }
 
@@ -310,7 +304,7 @@ int RTMPConnection::Run()
 void RTMPConnection::SignalWriteNeeded()
 {
 	//lock now
-    pthread_cond_signal(&cond);
+    writeWait.Locked([this] { writePending = true; }); writeWait.Signal();
 	//Check thred
 //	if (threadw)
 		//Signal the pthread this will cause the poll call to exit
@@ -937,17 +931,15 @@ int RTMPConnection::WriteData()
             len = SerializeChunkData(dataout,size);
             if (len == 0)
             {
-                // No data ? wait for signal
-                pthread_mutex_lock(&mutex);
-                int ret = pthread_cond_wait(&cond, &mutex);
-                pthread_mutex_unlock(&mutex);
-                if (ret < 0)
-                {
-                    // Error we stop the loop
-                    Error("rtmpcnx: cond_wait error in write thread. Stopping connection.\n");
-                    running = false;
+                // No data ? attendre SignalWriteNeeded ou l'arret. Le flag
+                // writePending sous le verrou ferme la course historique du
+                // reveil perdu ; l'ancien test "ret < 0" etait mort
+                // (pthread_cond_wait ne renvoie jamais negatif) et le mutex
+                // n'etait jamais initialise.
+                writeWait.WaitUntil(0, [this] { return writePending || !running; });
+                writeWait.Locked([this] { writePending = false; });
+                if (!running)
                     break;
-                }
                 len = SerializeChunkData(dataout,size);
             }
             //Un Lock mutex            

@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-PipeVideoOutput::PipeVideoOutput(pthread_mutex_t* mutex, pthread_cond_t* cond)
+PipeVideoOutput::PipeVideoOutput(std::mutex* mutex, std::condition_variable* cond)
 {
 	//Nos quedamos con los mutex
 	videoMixerMutex = mutex;
@@ -50,20 +50,19 @@ int PipeVideoOutput::NextFrame(PictPtr pic)
 		//Exit
 		return Error("-PipeVideoOutput calling NextFrame without been inited\n");
 
-	//Bloqueamos
-	pthread_mutex_lock(videoMixerMutex);
+	{
+		//Bloqueamos
+		std::lock_guard<std::mutex> g(*videoMixerMutex);
 
-	// Publie une référence de la trame (zéro-copie, plus de memcpy).
-	last = pic;
+		// Publie une référence de la trame (zéro-copie, plus de memcpy).
+		last = pic;
 
-	//Ponemos el cambio
-	isChanged = true;
+		//Ponemos el cambio
+		isChanged = true;
 
-	//Se�alizamos
-	pthread_cond_signal(videoMixerCond);
-
-	//Y desbloqueamos
-	pthread_mutex_unlock(videoMixerMutex);
+		//Se�alizamos
+		videoMixerCond->notify_one();
+	}
 
 	return true;
 }
@@ -77,14 +76,14 @@ int PipeVideoOutput::SetVideoSize(int width,int height)
 
 	//Lock
 	Log("-SetVideoSize: inbound video size changed to %dx%d.\n", width, height);
-	pthread_mutex_lock(videoMixerMutex);
+	{
+		std::lock_guard<std::mutex> g(*videoMixerMutex);
 
-	//Store size
-	videoWidth = width;
-	videoHeight= height;
-	sizeChange = true;
-	//Unlock
-	pthread_mutex_unlock(videoMixerMutex);
+		//Store size
+		videoWidth = width;
+		videoHeight= height;
+		sizeChange = true;
+	}
 
 	//Changed
 	return 1;

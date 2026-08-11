@@ -1,6 +1,8 @@
 #ifndef _VIDEOMIXER_H_
 #define _VIDEOMIXER_H_
 #include <pthread.h>
+#include <condition_variable>
+#include <mutex>
 #include <video.h>
 #include <use.h>
 #include "pipevideoinput.h"
@@ -107,8 +109,11 @@ private:
 
 	//Threads, mutex y condiciones
 	pthread_t 	mixVideoThread;
-	pthread_cond_t  mixVideoCond;
-	pthread_mutex_t mixVideoMutex;
+	//Verrou PARTAGÉ avec les PipeVideoOutput (pointeurs passés au ctor) :
+	//tenu pendant toute la passe de composition, signalé par les pipes à
+	//chaque nouvelle trame. Design à verrou partagé — pas le motif Wait.
+	std::condition_variable	mixVideoCond;
+	std::mutex		mixVideoMutex;
 	int		mixingVideo;
 	QWORD		ini;
 	Use		lstVideosUse;
