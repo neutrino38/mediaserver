@@ -1,108 +1,98 @@
 #ifndef _USE_H_
 #define _USE_H_
-#include <pthread.h>
-#include <errno.h>
 #include "tools.h"
 
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 
+/*
+ * Compteur d'usage lecteurs/écrivain historique du mcu, réécrit sur
+ * std::mutex/std::condition_variable (dernier îlot pthread de la
+ * synchronisation). Sémantique historique PRÉSERVÉE, figée par
+ * mcu/tests/test_use.cpp :
+ *  - IncUse RÉENTRANT (simple compteur, tout thread, plusieurs fois) ;
+ *  - PAS de priorité écrivain : les IncUse passent PENDANT qu'un
+ *    WaitUnusedAndLock attend — seule la section effectivement tenue les
+ *    bloque (c'est pour ces deux points que std::shared_mutex est
+ *    disqualifié : réentrance lecteur indéfinie, préférence écrivain) ;
+ *  - écrivains sérialisés entre eux par le second mutex `lock` ;
+ *  - WaitUnusedAndLock RETOURNE EN TENANT mutex+lock (relâchés par Unlock,
+ *    depuis le MÊME thread) — d'où le unique_lock::release() ;
+ *  - variante timée : 1 = verrouillé, 0 = timeout (tout est relâché).
+ *    L'ancien -1 (erreur système pthread) disparaît : les appelants testent
+ *    « != 1 » ou la vérité, 0 les couvre.
+ */
 class Use
 {
 public:
-	Use()
-	{
-		pthread_mutex_init(&mutex,NULL);
-		pthread_mutex_init(&lock,NULL);
-		pthread_cond_init(&cond,NULL);
-		cont = 0;
-	};
-
-	~Use()
-	{
-		pthread_mutex_destroy(&mutex);
-		pthread_mutex_destroy(&lock);
-		pthread_cond_destroy(&cond);
-	};
+	Use() = default;
+	~Use() = default;
 
 	void IncUse()
 	{
-		pthread_mutex_lock(&mutex);
+		std::lock_guard<std::mutex> guard(mutex);
 		cont ++;
-		pthread_mutex_unlock(&mutex);
 	}
 
 	void DecUse()
 	{
-		pthread_mutex_lock(&mutex);
+		std::lock_guard<std::mutex> guard(mutex);
 		if (cont > 0) cont --;
-		pthread_cond_signal(&cond);
-		pthread_mutex_unlock(&mutex);
-	};
+		cond.notify_one();
+	}
 
 	bool WaitUnusedAndLock()
 	{
-		pthread_mutex_lock(&lock);
-		pthread_mutex_lock(&mutex);
-		while(cont)
-		{
-			if ( pthread_cond_wait(&cond,&mutex) != 0)
-			{
-				// Error, signal this to the app.
-                                Unlock();
-				return false;
-			}
-		}
+		lock.lock();
+		std::unique_lock<std::mutex> guard(mutex);
+		cond.wait(guard, [this] { return cont == 0; });
+		//Rester verrouillé au retour : Unlock() relâchera
+		guard.release();
 		return true;
-	};
+	}
 
         /**
-         * Wait during x mis
-         * @param timeout timeout to wait in ms
-         * @return 1 = Ok, lockled, 0 = timeout, -1 = system error
+         * Wait during x ms
+         * @param timeout timeout to wait in ms (0 = infini)
+         * @return 1 = Ok, locked ; 0 = timeout (tout est relâché)
          **/
         int WaitUnusedAndLock(DWORD timeout)
 	{
-                int ret = 0;
-            	timespec ts;
+		lock.lock();
+		std::unique_lock<std::mutex> guard(mutex);
 
-		pthread_mutex_lock(&lock);
-		pthread_mutex_lock(&mutex);
-
-		while(cont)
+		if (timeout)
 		{
-                    if (timeout)
-                    {
-                            //Calculate timeout
-                            calcTimout(&ts,timeout);
-
-                            //Wait with time out
-                            ret = pthread_cond_timedwait(&cond,&mutex,&ts);
-                    }
-                    else
-                    {
-                            ret = pthread_cond_wait(&cond,&mutex);
-                    }
-
-
-                    if ( ret )
-                    {
-                        Unlock();
-                        return  ( ret == ETIMEDOUT ) ? 0 : -1;
-                    }
+			if (!cond.wait_for(guard, std::chrono::milliseconds(timeout),
+					[this] { return cont == 0; }))
+			{
+				//Timeout : tout relâcher (le guard relâche mutex)
+				guard.unlock();
+				lock.unlock();
+				return 0;
+			}
 		}
+		else
+			cond.wait(guard, [this] { return cont == 0; });
+
+		//Rester verrouillé au retour : Unlock() relâchera
+		guard.release();
 		return 1;
-	};
+	}
 
 	void Unlock()
 	{
-		pthread_mutex_unlock(&mutex);
-		pthread_mutex_unlock(&lock);
-	};
+		mutex.unlock();
+		lock.unlock();
+	}
 
 private:
-	pthread_mutex_t	mutex;
-	pthread_mutex_t	lock;
-	pthread_cond_t 	cond;
-	int		cont;
+	std::mutex		mutex;
+	//Sérialise les écrivains entre eux (tenu de WaitUnusedAndLock à Unlock)
+	std::mutex		lock;
+	std::condition_variable	cond;
+	int			cont = 0;
 };
 
 #endif
