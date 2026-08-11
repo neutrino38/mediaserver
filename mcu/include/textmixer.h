@@ -2,6 +2,7 @@
 #define _TEXTMIXER_H_
 #include <pthread.h>
 #include <use.h>
+#include "wait.h"
 #include "text.h"
 #include "textmixerworker.h"
 #include "pipetextinput.h"
@@ -74,9 +75,9 @@ private:
 	TextSources	sources;
 	TextWorkers	workers;
 	TextPrivates	privates;
-	//Threads, mutex y condiciones
+	//Threads y cadencement (tick 200 ms interruptible par End)
 	pthread_t 	mixTextThread;
-	pthread_mutex_t	mixTextMutex;
+	Wait		mixTickWait;
 	int		mixingText;
 	Use		lstTextsUse;
 };

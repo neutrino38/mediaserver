@@ -15,8 +15,6 @@
 ************************/
 TextMixer::TextMixer()
 {
-	//Creamos  los mutex
-	pthread_mutex_init(&mixTextMutex,0);
 }
 
 /***********************
@@ -25,8 +23,6 @@ TextMixer::TextMixer()
 ************************/
 TextMixer::~TextMixer()
 {
-	//Liberamos los mutex
-	pthread_mutex_destroy(&mixTextMutex);
 }
 
 /***********************************
@@ -116,9 +112,10 @@ int TextMixer::MixText()
 
 		//Un lock
 		lstTextsUse.DecUse();
-		
-		//Sleep 200 ms
-		msleep(200*1000);
+
+		//Tick de 200 ms, interruptible par End() (l'ancien msleep ne l'était
+		//pas : l'arrêt attendait la fin du sommeil)
+		mixTickWait.WaitSignal(200);
 	}
 
 	//Know for each worker
@@ -142,6 +139,9 @@ int TextMixer::Init()
 	// Estamos mzclando
 	mixingText = true;
 
+	//Réarme le tick si on ré-Init après un End (Cancel est collant)
+	mixTickWait.Reset();
+
 	//Y arrancamoe el thread
 	createPriorityThread(&mixTextThread,startMixingText,this,0);
 
@@ -156,23 +156,25 @@ int TextMixer::End()
 {
 	Log(">End textmixer\n");
 
-	//Borramos los texts
-	TextSources::iterator it;
-
 	//Terminamos con la mezcla
 	if (mixingText)
 	{
 		//Terminamos la mezcla
 		mixingText = 0;
 
+		//Réveille le tick tout de suite (arrêt immédiat)
+		mixTickWait.Cancel();
+
 		//Y esperamos
 		pthread_join(mixTextThread,NULL);
 	}
 
-	//Recorremos la lista
-	for (it =sources.begin();it!=sources.end();it++)
+	//Borramos los texts restantes. DeleteMixer EFFACE l'entrée de la map :
+	//itérer dessus pendant la suppression invalidait l'itérateur (UB, crash
+	//constaté par TextMixerSite.ForwardsTextToOtherParticipantOnly).
+	while (!sources.empty())
 		//Borramos el text
-		DeleteMixer((*it).first);
+		DeleteMixer(sources.begin()->first);
 
 	Log("<End textmixer\n");
 	
