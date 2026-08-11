@@ -21,17 +21,11 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	sendFPU = false;
 	codec = (VideoCodec::Type)-1;
         useInputSize = false;
-	//Create objects
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
 }
 
 VideoEncoderMultiplexerWorker::~VideoEncoderMultiplexerWorker()
 {
 	End();
-	//Clean object
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 int VideoEncoderMultiplexerWorker::Init(VideoInput *input)
@@ -160,7 +154,7 @@ int VideoEncoderMultiplexerWorker::Stop()
 		input->CancelGrabFrame();
 
 		//Cancel sending
-		pthread_cond_signal(&cond);
+		pacer.Signal();
 
 		//Esperamos
 		pthread_join(thread,NULL);
@@ -410,9 +404,6 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//Check
 		if (frameTime)
 		{
-			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
 			//Calculate slept time
 			QWORD sleep = frameTime;
 			//Remove extra sleep from prev
@@ -422,12 +413,10 @@ int VideoEncoderMultiplexerWorker::Encode()
 			else
 				//Do not overflow
 				sleep = 1;
-			//Calculate timeout
-			calcAbsTimeoutNS(&ts,&prev,sleep);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Dormir jusqu'à l'échéance prev+sleep (µs, réveillé par Stop)
+			QWORD elapsed = getDifTime(&prev);
+			int canceled = (sleep > elapsed)
+				&& pacer.WaitSignal(std::chrono::microseconds(sleep - elapsed));
 			//Check if we have been canceled
 			if (canceled)
 				//Exit

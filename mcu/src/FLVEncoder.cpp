@@ -36,7 +36,6 @@ FLVEncoder::FLVEncoder()
 	aacSpecificConfig = NULL;
 	//Mutex
 	pthread_mutex_init(&mutex,0);
-	pthread_cond_init(&cond,0);
 }
 
 FLVEncoder::~FLVEncoder()
@@ -55,7 +54,6 @@ FLVEncoder::~FLVEncoder()
 
 	//Mutex
 	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 int FLVEncoder::Init(AudioInput* audioInput,VideoInput *videoInput, TextInput *textInput)
@@ -628,15 +626,9 @@ int FLVEncoder::EncodeVideo()
 		//Check
 		if (frameTime)
 		{
-			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
-			//Calculate timeout
-			calcAbsTimeout(&ts,&prev,frameTime);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Dormir jusqu'à l'échéance prev+frameTime (réveillable)
+			QWORD elapsed = getDifTime(&prev)/1000;
+			int canceled = (frameTime > elapsed) && pacer.WaitSignal((DWORD)(frameTime - elapsed));
 			//Check if we have been canceled
 			if (canceled)
 				//Exit

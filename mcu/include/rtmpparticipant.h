@@ -131,9 +131,9 @@ private:
 	pthread_t 	sendTextThread;
 	pthread_t 	sendVideoThread;
 	pthread_t 	sendAudioThread;
-	pthread_mutex_t	mutex;
-	pthread_cond_t	cond;
-	
+	//Cadence de la boucle d'envoi vidéo, réveillée par StopSendingVideo
+	::Wait		pacer;
+
 	//Controlamos si estamos mandando o no
 	bool	sendingVideo;
 	bool 	receivingVideo;

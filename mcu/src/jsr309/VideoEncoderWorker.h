@@ -69,8 +69,8 @@ private:
 	std::map<int,Properties> negotiated;
 
 	pthread_t	thread;
-	pthread_mutex_t mutex;
-	pthread_cond_t	cond;
+	//Cadence de la boucle d'encodage (précision µs), réveillée par Stop
+	::Wait		pacer;
 	bool	encoding;
 	bool	sendFPU;
         bool    useInputSize;

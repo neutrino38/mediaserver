@@ -43,9 +43,7 @@ RTMPParticipant::RTMPParticipant(DWORD partId) :
 	//NOt attached
 	attached = NULL;
 	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
 	pthread_mutex_init(&attachedMutex,NULL);
-	pthread_cond_init(&cond,0);
 }
 
 RTMPParticipant::~RTMPParticipant()
@@ -53,8 +51,6 @@ RTMPParticipant::~RTMPParticipant()
 	//End it just in case
 	End();
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 	pthread_mutex_destroy(&attachedMutex);
 }
 
@@ -265,7 +261,7 @@ int  RTMPParticipant::StopSendingVideo()
 		videoInput->CancelGrabFrame();
 		Log("-StopSendingVideo: interrupted video input\n");
 		//Cancel sending
-		pthread_cond_signal(&cond);
+		pacer.Signal();
 
 		//Esperamos
 		Log("-StopSendingVideo: joining videothread %lx\n", sendVideoThread);
@@ -630,15 +626,10 @@ int RTMPParticipant::SendVideo()
 		//Check
 		if (frameTime)
 		{
-			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
-			//Calculate timeout
-			calcAbsTimeout(&ts,&prev,frameTime);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Dormir jusqu'à l'échéance prev+frameTime (réveillé par
+			//StopSendingVideo)
+			QWORD elapsed = getDifTime(&prev)/1000;
+			int canceled = (frameTime > elapsed) && pacer.WaitSignal((DWORD)(frameTime - elapsed));
 			//Check if we have been canceled
 			if (canceled)
 				//Exit
