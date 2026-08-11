@@ -79,7 +79,7 @@ int RTMPServer::Init(int port)
 	inited = 1;
 
 	//Create threads
-	createPriorityThread(&serverThread,run,this,0);
+	StartThread();
 
 	//Return ok
 	return 1;
@@ -277,24 +277,6 @@ void RTMPServer::DeleteAllConnections()
 
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-void * RTMPServer::run(void *par)
-{
-        Log("-RTMP Server Thread [%d]\n",getpid());
-
-        //Obtenemos el parametro
-        RTMPServer *ses = (RTMPServer *)par;
-
-        //Bloqueamos las señales
-        blocksignals();
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)ses->Run());
-}
-
 
 /************************
 * End
@@ -320,9 +302,7 @@ int RTMPServer::End()
 	server = FD_INVALID;
 
 	//Wait for server thread to close
-        Log("Joining server thread [%d,%d]\n",serverThread,inited);
-        pthread_join(serverThread,NULL);
-        Log("Joined server thread [%d]\n",serverThread);
+	StopThread();
 
 	//Delete connections
 	DeleteAllConnections();

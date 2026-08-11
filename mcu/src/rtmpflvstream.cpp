@@ -94,7 +94,7 @@ bool RTMPFLVStream::Play(std::wstring& url)
 	SendCommand(L"onStatus", new RTMPNetStatusEvent(L"NetStream.Play.Start",L"status",L"Playback started") );
 	
 	//Start thread
-	createPriorityThread(&thread,play,this,0);
+	StartThread();
 
 	return true;
 }
@@ -259,8 +259,8 @@ bool RTMPFLVStream::Close()
 	} else {
 		//Stop	
 		playing = false;
-		//Join thread
-		pthread_join(thread,NULL);
+		//Join thread (sans risque si jamais lance, contrairement au join historique)
+		StopThread();
 	}
 
 	//Close file
@@ -394,19 +394,6 @@ int RTMPFLVStream::PlayFLV()
 	return 0;
 }
 
-void* RTMPFLVStream::play(void *par)
-{
-	Log("-PlayTrhead [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	RTMPFLVStream *flv = (RTMPFLVStream *)par;
-
-	//Bloqueamos las señales
-	blocksignals();
-
-	//Ejecutamos
-	pthread_exit((void *)(intptr_t)flv->PlayFLV());
-}
 
 bool RTMPFLVStream::Seek(DWORD time)
 {

@@ -24,7 +24,6 @@ WebSocketServer::WebSocketServer()
 	inited = 0;
 	serverPort = 0;
 	server = FD_INVALID;
-	wakeupfd = FD_INVALID;
 	nextConnId = 0;
 	secure = false;
 }
@@ -84,10 +83,6 @@ int WebSocketServer::Init(int port)
 		Log("-WebSocket Server: secure mode (wss://) enabled\n");
 	}
 
-	//Create the wakeup eventfd (réveil inter-thread, non bloquant)
-	wakeupfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
-	if (wakeupfd<0)
-		return Error("Can't create wakeup eventfd. errno = %d.\n", errno);
 
 	//Create socket
 	server = socket(AF_INET, SOCK_STREAM, 0);
@@ -110,7 +105,7 @@ int WebSocketServer::Init(int port)
 	inited = 1;
 
 	//Create threads
-	createPriorityThread(&serverThread,run,this,0);
+	StartThread();
 
 	//Return ok
 	return 1;
@@ -122,9 +117,8 @@ int WebSocketServer::Init(int port)
  **************************/
 void WebSocketServer::DrainWakeup()
 {
-	uint64_t v;
-	//eventfd non bloquant : une lecture remet le compteur à 0
-	while (read(wakeupfd, &v, sizeof(v)) > 0) {}
+	//eventfd du Wait hérité (Worker) : une lecture remet le compteur à 0
+	wait.Drain();
 }
 
 /***************************
@@ -160,7 +154,7 @@ init:
 
 		pollfd lu; lu.fd = server;   lu.events = POLLIN|POLLHUP|POLLERR; lu.revents = 0;
 		ufds.push_back(lu);
-		pollfd wu; wu.fd = wakeupfd; wu.events = POLLIN;                 wu.revents = 0;
+		pollfd wu; wu.fd = wait.GetPollFd(); wu.events = POLLIN;         wu.revents = 0;
 		ufds.push_back(wu);
 
 		for (Connections::iterator it=connections.begin(); it!=connections.end(); ++it)
@@ -318,26 +312,6 @@ void WebSocketServer::CloseConnection(uint64_t connId)
 	recentlyClosed.push_back(conn);
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-void * WebSocketServer::run(void *par)
-{
-        Log("-WebSocket Server Thread [%d]\n",getpid());
-
-        //Obtenemos el parametro
-        WebSocketServer *ses = (WebSocketServer *)par;
-
-        //Bloqueamos las señales
-        blocksignals();
-
-        //Ejecutamos
-        ses->Run();
-	//Exit
-	return NULL;
-}
-
 
 /************************
 * End
@@ -366,17 +340,8 @@ int WebSocketServer::End()
 	//Invalidate
 	server = FD_INVALID;
 
-	//Wait for server thread to close
-        Log("Joining server thread [%lu]\n",(unsigned long)serverThread);
-        pthread_join(serverThread,NULL);
-        Log("Joined server thread\n");
-
-	//Fermer l'eventfd de réveil
-	if (wakeupfd!=FD_INVALID)
-	{
-		close(wakeupfd);
-		wakeupfd = FD_INVALID;
-	}
+	//Wait for server thread to close (le Wait du Worker est aussi réveillé)
+	StopThread();
 
 	//Détruire les connexions restantes
 	connections.clear();
@@ -410,11 +375,7 @@ void WebSocketServer::onUpgradeRequest(WebSocketConnection* conn)
 
 void WebSocketServer::onWakeupNeeded()
 {
-	//Réveille le thread serveur bloqué dans poll(). Thread-safe (write eventfd).
-	if (wakeupfd==FD_INVALID)
-		return;
-	uint64_t one = 1;
-	//Si le compteur eventfd est saturé (EAGAIN), un réveil est déjà en attente : OK.
-	if (write(wakeupfd, &one, sizeof(one)) < 0 && errno!=EAGAIN)
-		Error("WebSocketServer: wakeup write failed [errno:%d]\n",errno);
+	//Réveille le thread serveur bloqué dans poll() via l'eventfd du Wait
+	//hérité (Worker). Thread-safe.
+	wait.Signal();
 }

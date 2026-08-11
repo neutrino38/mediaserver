@@ -29,7 +29,7 @@ int ParticipantTextWS::Init()
 		return Error("ParticipantTextWS::Init: already started.\n");
 
 	pulling = TaskStarting;
-	createPriorityThread(&pullThread,startPullingText,this,1);
+	StartThread();
 
 	Log("ParticipantTextWS: mixer<->websocket text bridge started.\n");
 	return 1;
@@ -44,7 +44,7 @@ int ParticipantTextWS::End()
 		pulling = TaskStopping;
 		//Unblock GetFrame
 		mixerInput->Cancel();
-		pthread_join(pullThread,NULL);
+		StopThread();
 	}
 	pulling = TaskIdle;
 
@@ -55,14 +55,6 @@ int ParticipantTextWS::End()
 	pending.clear();
 
 	return 1;
-}
-
-void * ParticipantTextWS::startPullingText(void *par)
-{
-	ParticipantTextWS *bridge = (ParticipantTextWS*) par;
-	blocksignals();
-	bridge->PullText();
-	pthread_exit(0);
 }
 
 int ParticipantTextWS::PullText()

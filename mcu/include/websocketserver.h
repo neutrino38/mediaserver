@@ -1,5 +1,6 @@
 #ifndef _WebSocketServer_H_
 #define _WebSocketServer_H_
+#include "worker.h"
 #include "pthread.h"
 #include <map>
 #include <vector>
@@ -18,7 +19,7 @@
  * Les WebSocketConnection sont des machines à état passives possédées ici via
  * shared_ptr (plus de thread ni de poll() par-connexion, plus de liste zombies).
  */
-class WebSocketServer : public WebSocketConnection::Listener
+class WebSocketServer : public WebSocketConnection::Listener, public Worker
 {
 public:
 	class Handler
@@ -52,7 +53,6 @@ private:
 	//Map possédante : connId → connexion. Manipulée UNIQUEMENT par le thread serveur.
 	typedef std::map<uint64_t,std::shared_ptr<WebSocketConnection>> Connections;
 
-        static void * run(void *par);
 
 	void CreateConnection(int fd);
 	void CloseConnection(uint64_t connId);
@@ -62,7 +62,6 @@ private:
 	int inited;
 	int serverPort;
 	int server;		//socket d'écoute
-	int wakeupfd;		//eventfd de réveil inter-thread
 	uint64_t nextConnId;
 
 	bool        secure;	//wss:// activé ?
@@ -75,7 +74,6 @@ private:
 	//pour laisser s'écouler d'éventuels appels externes en vol (cf. §3.3 du plan).
 	std::vector<std::shared_ptr<WebSocketConnection>> recentlyClosed;
 
-	pthread_t serverThread;
 };
 
 
