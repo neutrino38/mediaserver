@@ -1,5 +1,6 @@
 #ifndef _BROADCASTER_H_
 #define _BROADCASTER_H_
+#include <mutex>
 #include <map>
 #include <string>
 #include <memory>
@@ -70,7 +71,7 @@ private:
 	PublishedBroadcasts	published;
 	BroadcastTokens		tokens;
 	DWORD			maxId;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	bool inited;
 };
 

@@ -1,6 +1,7 @@
 #ifndef _AUDIOSTREAM_H_
 #define _AUDIOSTREAM_H_
 
+#include <mutex>
 #include <pthread.h>
 #include <vector>
 #include <memory>
@@ -92,7 +93,7 @@ private:
 	pthread_t 	recAudioThread;
 	pthread_t 	sendAudioThread;
 
-	pthread_mutex_t mutex;
+	std::mutex mutex;
 
 	//Controlamos si estamos mandando o no
 	enum TaskState 	sendingAudio;

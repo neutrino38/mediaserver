@@ -1,5 +1,6 @@
 #ifndef AUDIOENCODER_H_
 #define	AUDIOENCODER_H_
+#include <mutex>
 #include "audio.h"
 #include "worker.h"
 #include <set>
@@ -35,7 +36,7 @@ private:
 	Listeners		listeners;
 	AudioInput*		audioInput;
 	AudioCodec::Type	audioCodec;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	int			encodingAudio;
 };
 

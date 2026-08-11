@@ -6,6 +6,7 @@
  */
 
 
+#include <mutex>
 #include <string>
 
 #include "config.h"
@@ -70,7 +71,7 @@ private:
 	typedef std::map<int,struct BFCPInfo> Transactions;
 	
 	Transactions transactions;
-	pthread_mutex_t	mutex;
+	std::mutex	mutex;
 	
 	
 	

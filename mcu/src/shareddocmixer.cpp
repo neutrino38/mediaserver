@@ -24,7 +24,6 @@ SharedDocMixer::SharedDocMixer()
 	sharedMosaic	= -1;
 	confId			= 0;
 	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
 }
 
 SharedDocMixer::~SharedDocMixer()
@@ -39,7 +38,6 @@ SharedDocMixer::~SharedDocMixer()
 	bfcp_server 	= NULL;
 	
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 	sharedMosaic	= -1;
 	confId			= 0;
 }
@@ -150,10 +148,10 @@ int SharedDocMixer::RefuseDocSharingRequest(int confId, ParticipantPtr part)
 					{
 						res =  bfcp_server->FloorRequestRespons(part->GetPartId(), part->GetPartId() , bfcpinfo.transactionId ,  bfcpinfo.floorRequestID , BFCP_REVOKED , 0 , BFCP_NORMAL_PRIORITY , false );
 						//Lock
-						pthread_mutex_lock(&mutex);
+						std::unique_lock<std::mutex> mutexLock(mutex);
 						transactions.erase(part->GetPartId());
 						//Unlock
-						pthread_mutex_unlock(&mutex);
+						mutexLock.unlock();
 					}
 				}
 				break;
@@ -174,7 +172,7 @@ int SharedDocMixer::StopSharing()
 	
 	ParticipantPtr p;
 
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	
 	ParticipantPtr currentPart = this->part.lock();
     if ( currentPart != NULL )
@@ -183,7 +181,7 @@ int SharedDocMixer::StopSharing()
 		p->use.IncUse();
 		this->part.reset();
 
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 
 		conf->onRequestDocSharing(p->GetPartId(),L"NONE");
 	
@@ -194,9 +192,9 @@ int SharedDocMixer::StopSharing()
 		if (GetBfcpInfo(p->GetPartId(),bfcpinfo))
 		{
 			bfcp_server->FloorRequestRespons( p->GetPartId() ,p->GetPartId() , bfcpinfo.transactionId ,  bfcpinfo.floorRequestID, BFCP_REVOKED , 0 , BFCP_NORMAL_PRIORITY , true );
-			pthread_mutex_lock(&mutex);			
+			mutexLock.lock();
 			transactions.erase(p->GetPartId());
-			 pthread_mutex_unlock(&mutex);
+			 mutexLock.unlock();
 		
 		}
 		p->use.DecUse();
@@ -204,7 +202,7 @@ int SharedDocMixer::StopSharing()
 	}
 	else
 	{
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 	}
 	
 
@@ -503,10 +501,10 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
 					bfcp_server->FloorRequestRespons( currentPart->GetPartId(), currentPart->GetPartId() , bfcpinfo.transactionId ,  bfcpinfo.floorRequestID, BFCP_REVOKED , 0 , BFCP_NORMAL_PRIORITY , false );
 					
 					//Lock
-					pthread_mutex_lock(&mutex);
+					std::unique_lock<std::mutex> mutexLock(mutex);
 					transactions.erase(currentPart->GetPartId());
 					//Unlock
-					pthread_mutex_unlock(&mutex);
+					mutexLock.unlock();
 					
 				}
 				
@@ -514,11 +512,11 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
 				bfcpinfo.transactionId 	= p_FsmEvent->TransactionID;
 				bfcpinfo.bfcp_status	= BFCP_PENDING;
 				
-				//Lock
-				pthread_mutex_lock(&mutex);
+				//Lock (la déclaration du bloc REVOKED est hors de portée)
+				std::unique_lock<std::mutex> mutexLock(mutex);
 				transactions[p_FsmEvent->userID] = bfcpinfo;
 				//Unlock
-				pthread_mutex_unlock(&mutex);
+				mutexLock.unlock();
 				
 				conf->onRequestDocSharing(p_FsmEvent->userID ,L"WAITING_ACCEPT");
 			}
@@ -533,10 +531,10 @@ bool SharedDocMixer::OnBfcpServerEvent(BFCP_fsm::e_BFCP_ACT p_evt , BFCP_fsm::st
 				
 				StopSharing(currentPart);
 				//Lock
-				pthread_mutex_lock(&mutex);
+				std::unique_lock<std::mutex> mutexLock(mutex);
 				transactions.erase(p_FsmEvent->userID);
 				//Unlock
-				pthread_mutex_unlock(&mutex);
+				mutexLock.unlock();
 			}
         }
         break ; 
@@ -604,13 +602,13 @@ void SharedDocMixer::SetSharedMosaic(int mosaicId)
 bool SharedDocMixer::GetBfcpInfo(int partId,struct SharedDocMixer::BFCPInfo &info)
 {
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 						
 	//Find transaction
 	Transactions::iterator it = transactions.find(partId);
 	
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	//If not found
 	
 	if (it == transactions.end())

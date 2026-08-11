@@ -1,5 +1,6 @@
 #ifndef _RTMP_CHUNK_H_
 #define _RTMP_CHUNK_H_
+#include <mutex>
 #include "config.h"
 #include "rtmp.h"
 #include "rtmpmessage.h"
@@ -48,7 +49,7 @@ private:
 	RTMPMessage* message;
 	DWORD pos;
 	BYTE* msgBuffer;
-	pthread_mutex_t mutex;
+	std::mutex mutex;
 };
 
 class RTMPChunkInputStream : public RTMPChunkStreamInfo

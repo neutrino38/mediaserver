@@ -131,7 +131,6 @@ RTMPChunkOutputStream::RTMPChunkOutputStream(DWORD chunkStreamId) : RTMPChunkStr
 	//Store own id
 	this->chunkStreamId = chunkStreamId;
 	//Init mutex
-	pthread_mutex_init(&mutex,0);
 }
 
 RTMPChunkOutputStream::~RTMPChunkOutputStream()
@@ -147,7 +146,6 @@ RTMPChunkOutputStream::~RTMPChunkOutputStream()
 		delete(message);
 	}
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 bool RTMPChunkOutputStream::SendMessage(RTMPMessage *msg)
@@ -155,7 +153,7 @@ bool RTMPChunkOutputStream::SendMessage(RTMPMessage *msg)
 	bool ret = true;
 
 	//lock now
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Check it is not null
 	if(msg)
 	{
@@ -168,14 +166,14 @@ bool RTMPChunkOutputStream::SendMessage(RTMPMessage *msg)
 		messages.push_back(msg);
 	}
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	return ret;
 }
 
 DWORD RTMPChunkOutputStream::GetNextChunk(BYTE *data,DWORD size,DWORD maxChunkSize)
 {
 	//lock now
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Message basic header
 	RTMPChunkBasicHeader header;
 	//Set chunk stream id
@@ -194,7 +192,7 @@ DWORD RTMPChunkOutputStream::GetNextChunk(BYTE *data,DWORD size,DWORD maxChunkSi
 		if (messages.empty())
 		{
 			//Unlock
-			pthread_mutex_unlock(&mutex);
+			mutexLock.unlock();
 			//No more data to send here
 			return 0;
 		}
@@ -330,7 +328,7 @@ DWORD RTMPChunkOutputStream::GetNextChunk(BYTE *data,DWORD size,DWORD maxChunkSi
 		delete (chunkHeader);
 
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	//Return copied data
 	return headersLen+payloadLen;	
@@ -339,11 +337,11 @@ DWORD RTMPChunkOutputStream::GetNextChunk(BYTE *data,DWORD size,DWORD maxChunkSi
 bool RTMPChunkOutputStream::HasData()
 {
 	//lock now
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Return true if we are sending a message or we have more in the queue
 	bool ret =  message || !messages.empty();
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	
 	return ret;
 }
@@ -355,7 +353,7 @@ bool RTMPChunkOutputStream::ResetStream(DWORD id)
 	bool abort = false;
 	
 	//lock now
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Iterate the messages
 	RTMPMessages::iterator it = messages.begin();
 	//remove any message from the stream
@@ -387,7 +385,7 @@ bool RTMPChunkOutputStream::ResetStream(DWORD id)
 		abort = true;
 	}
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	
 	//NOt needed to abort
 	return abort;

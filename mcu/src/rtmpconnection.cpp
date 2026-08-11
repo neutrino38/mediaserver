@@ -227,8 +227,6 @@ int RTMPConnection::Run()
 	//Set no delay option
 	//int flag = 1;
         //setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
-	//Catch all IO errors
-	signal(SIGIO,EmptyCatch);
 
 	//Run until ended
 	pingReqPending = false;
@@ -893,7 +891,6 @@ int RTMPConnection::WriteData()
     unsigned int size = sizeof(dataout);
 	//unsigned int len = 0;
 
-    signal(SIGIO,EmptyCatch);
     //ufwrite[0].fd = socket;
     //ufwrite[0].events = POLLOUT | POLLERR | POLLHUP;
     while (running)
@@ -1424,7 +1421,6 @@ bool RTMPConnection::onMediaFrame(DWORD streamId,RTMPMediaFrame *frame)
 		ts = getDifTime(&startTime)/1000;
 
 	//Dependign on the streams
-        //pthread_mutex_lock(&mutex);
         lock.IncUse();
         RTMPChunkOutputStreams::iterator it = chunkOutputStreams.find(chkid);
         if ( it != chunkOutputStreams.end() )
@@ -1440,7 +1436,6 @@ bool RTMPConnection::onMediaFrame(DWORD streamId,RTMPMediaFrame *frame)
             chunkOutputStreams[chkid] = s;
             lock.Unlock();
         }
-        //pthread_mutex_unlock(&mutex);
         
         
         ret = s->SendMessage(new RTMPMessage(streamId,ts,frame->Clone()));

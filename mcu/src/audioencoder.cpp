@@ -25,7 +25,6 @@ AudioEncoderWorker::AudioEncoderWorker()
 	//Set default codec to PCMU
 	audioCodec=AudioCodec::PCMU;
 	//Create mutex
-	pthread_mutex_init(&mutex,0);
 }
 
 /*******************************
@@ -39,7 +38,6 @@ AudioEncoderWorker::~AudioEncoderWorker()
 		//End
 		End();
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 /***************************************
@@ -219,7 +217,7 @@ int AudioEncoderWorker::Encode()
 			frame.AddRtpPacket(0,len,NULL,0,false);
 		 
 			//Lock
-			pthread_mutex_lock(&mutex);
+			std::unique_lock<std::mutex> mutexLock(mutex);
 
 			//For each listener
 			for (Listeners::iterator it=listeners.begin(); it!=listeners.end(); ++it)
@@ -233,7 +231,7 @@ int AudioEncoderWorker::Encode()
 			}
 
 			//unlock
-			pthread_mutex_unlock(&mutex);
+			mutexLock.unlock();
 		}
 		
 	}
@@ -258,13 +256,13 @@ int AudioEncoderWorker::Encode()
 bool AudioEncoderWorker::AddListener(MediaFrame::Listener *listener)
 {
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Add to set
 	listeners.insert(listener);
 
 	//unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return true;
 }
@@ -272,7 +270,7 @@ bool AudioEncoderWorker::AddListener(MediaFrame::Listener *listener)
 bool AudioEncoderWorker::RemoveListener(MediaFrame::Listener *listener)
 {
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Search
 	Listeners::iterator it = listeners.find(listener);
@@ -283,7 +281,7 @@ bool AudioEncoderWorker::RemoveListener(MediaFrame::Listener *listener)
 		listeners.erase(it);
 
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return true;
 }

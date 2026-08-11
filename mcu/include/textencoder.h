@@ -1,5 +1,6 @@
 #ifndef TEXTENCODER_H_
 #define	TEXTENCODER_H_
+#include <mutex>
 #include "text.h"
 #include "worker.h"
 #include <set>
@@ -30,7 +31,7 @@ private:
 private:
 	Listeners		listeners;
 	TextInput*		textInput;
-	pthread_mutex_t		mutex;
+	std::mutex		mutex;
 	int			encodingText;
 };
 

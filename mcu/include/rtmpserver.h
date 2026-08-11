@@ -1,5 +1,6 @@
 #ifndef _RTMPSERVER_H_
 #define _RTPMSERVER_H_
+#include <mutex>
 #include "worker.h"
 #include "pthread.h"
 #include "rtmpstream.h"
@@ -45,7 +46,7 @@ private:
 	Connections connections;
 	Connections zombies;
 	ApplicationMap applications;
-	pthread_mutex_t	sessionMutex;
+	std::mutex	sessionMutex;
 };
 
 #endif

@@ -9,7 +9,6 @@
 Broadcaster::Broadcaster() 
 {
 	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
 }
 
 /**************************************
@@ -19,7 +18,6 @@ Broadcaster::Broadcaster()
 Broadcaster::~Broadcaster()
 {
 	//Destruimos el mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 
@@ -30,7 +28,7 @@ Broadcaster::~Broadcaster()
 bool Broadcaster::Init()
 {
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Estamos iniciados
 	inited = true;
@@ -39,7 +37,7 @@ bool Broadcaster::Init()
 	maxId=100;
 
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	//Salimos
 	return inited;
@@ -54,7 +52,7 @@ bool Broadcaster::End()
 	Log(">End Broadcaster\n");
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Dejamos de estar iniciados
 	inited = false;
@@ -68,7 +66,7 @@ bool Broadcaster::End()
 	broadcasts.clear();
 
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	Log("<End Broadcaster\n");
 
@@ -101,13 +99,13 @@ DWORD Broadcaster::CreateBroadcast(const std::wstring &name,const std::wstring &
 	entry.session 	= session;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//a�adimos a la lista
 	broadcasts[sessionId] = entry;
 
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return sessionId;
 }
@@ -123,7 +121,7 @@ bool Broadcaster::PublishBroadcast(DWORD id,const std::wstring &pin)
 	bool res = false;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Get the broadcaster session entry
 	BroadcastEntries::iterator it = broadcasts.find(id);
@@ -166,7 +164,7 @@ bool Broadcaster::PublishBroadcast(DWORD id,const std::wstring &pin)
 
 end:
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	Log("<PublishBroadcast\n");
 
@@ -182,13 +180,13 @@ bool Broadcaster::AddBroadcastToken(DWORD id, const std::wstring &token)
 	Log("-AddBroadcastToken [id:%d,token:\"%ls\"]\n",id,token.c_str());
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Check if the pin is already in use
 	if (tokens.find(token)!=tokens.end())
 	{
 		//Desbloqueamos
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 		//Broadcast not found
 		return Error("Token already in use\n");
 	}
@@ -197,7 +195,7 @@ bool Broadcaster::AddBroadcastToken(DWORD id, const std::wstring &token)
 	tokens[token] = id;
 
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return true;
 }
@@ -213,7 +211,7 @@ bool Broadcaster::UnPublishBroadcast(DWORD id)
 	bool res = false;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Get the broadcaster session entry
 	BroadcastEntries::iterator it = broadcasts.find(id);
@@ -247,7 +245,7 @@ bool Broadcaster::UnPublishBroadcast(DWORD id)
 
 end:
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	Log("<PublishBroadcast\n");
 
@@ -263,7 +261,7 @@ DWORD Broadcaster::GetPublishedBroadcastId(const std::wstring &pin)
 	DWORD sessionId = 0;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Check if there is already a pin like that
 	PublishedBroadcasts::iterator it = published.find(pin);
@@ -274,7 +272,7 @@ DWORD Broadcaster::GetPublishedBroadcastId(const std::wstring &pin)
 		sessionId = it->second;
 
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	//Return session id
 	return sessionId;
@@ -286,7 +284,7 @@ DWORD Broadcaster::GetTokenBroadcastId(const std::wstring &token)
 	DWORD sessionId = 0;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Check if there is already a pin like that
 	BroadcastTokens::iterator it = tokens.find(token);
@@ -301,7 +299,7 @@ DWORD Broadcaster::GetTokenBroadcastId(const std::wstring &token)
 	}
 
 	//Desbloqueamos
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	Log("<GetTokenBroadcastId [sessionId:\"%d\"]\n",sessionId);
 
@@ -318,7 +316,7 @@ bool Broadcaster::GetBroadcastRef(DWORD id,std::shared_ptr<BroadcastSession> &se
 	Log(">GetBroadcastRef [%d]\n",id);
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Find session reference
 	BroadcastEntries::iterator it = broadcasts.find(id);
@@ -327,7 +325,7 @@ bool Broadcaster::GetBroadcastRef(DWORD id,std::shared_ptr<BroadcastSession> &se
 	if (it==broadcasts.end())
 	{
 		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 		//Y salimos
 		return Error("Session no encontrada [%d]\n",id);
 	}
@@ -336,7 +334,7 @@ bool Broadcaster::GetBroadcastRef(DWORD id,std::shared_ptr<BroadcastSession> &se
 	session = it->second.session;
 
 	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	Log("<GetBroadcastRef \n");
 
@@ -354,7 +352,7 @@ bool Broadcaster::DeleteBroadcast(DWORD id)
 	std::shared_ptr<BroadcastSession> session;
 
 	//Bloqueamos
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Find sessionerence
 	BroadcastEntries::iterator it = broadcasts.find(id);
@@ -363,7 +361,7 @@ bool Broadcaster::DeleteBroadcast(DWORD id)
 	if (it==broadcasts.end())
 	{
 		//Desbloquamos el mutex
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 
 		//Y salimos
 		return Error("Session no encontrada [%d]\n",id);
@@ -382,7 +380,7 @@ bool Broadcaster::DeleteBroadcast(DWORD id)
 	broadcasts.erase(it);
 
 	//Desbloquamos el mutex
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	//End : idempotente, y seguro aunque un handler siga teniendo una referencia —
 	//el ultimo shared_ptr destruira el objeto.

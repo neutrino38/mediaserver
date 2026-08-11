@@ -22,7 +22,6 @@ RTMPServer::RTMPServer()
 	server = FD_INVALID;
 
 	//Create mutx
-	pthread_mutex_init(&sessionMutex,0);
 }
 
 
@@ -37,7 +36,6 @@ RTMPServer::~RTMPServer()
 		//End it anyway
 		End();
 	//Destroy mutex
-	pthread_mutex_destroy(&sessionMutex);
 }
 
 /************************
@@ -212,13 +210,13 @@ void RTMPServer::CreateConnection(int fd)
 	rtmp->Init(fd);
 
 	//Lock list
-	pthread_mutex_lock(&sessionMutex);
+	std::unique_lock<std::mutex> sessionMutexLock(sessionMutex);
 
 	//Append
 	connections.push_back(rtmp);
 
 	//Unlock
-	pthread_mutex_unlock(&sessionMutex);
+	sessionMutexLock.unlock();
 
 	Log("<Creating connection [0x%x]\n",rtmp);
 }
@@ -230,7 +228,7 @@ void RTMPServer::CreateConnection(int fd)
 void RTMPServer::CleanZombies()
 {
 	//Lock list
-	pthread_mutex_lock(&sessionMutex);
+	std::unique_lock<std::mutex> sessionMutexLock(sessionMutex);
 
 	//Zombie iterator
 	for (Connections::iterator it=zombies.begin();it!=zombies.end();++it)
@@ -243,7 +241,7 @@ void RTMPServer::CleanZombies()
 	zombies.clear();
 
 	//Unlock list
-	pthread_mutex_unlock(&sessionMutex);
+	sessionMutexLock.unlock();
 	
 }
 
@@ -256,7 +254,7 @@ void RTMPServer::DeleteAllConnections()
 	Log(">Delete all connections\n");
 
 	//Lock list
-	pthread_mutex_lock(&sessionMutex);
+	std::unique_lock<std::mutex> sessionMutexLock(sessionMutex);
 
 	//Connection iterator
 	for (Connections::iterator it=connections.begin();it!=connections.end();++it)
@@ -271,7 +269,7 @@ void RTMPServer::DeleteAllConnections()
 	connections.clear();
 
 	//Unlock list
-	pthread_mutex_unlock(&sessionMutex);
+	sessionMutexLock.unlock();
 
 	Log("<Delete all connections\n");
 
@@ -357,7 +355,7 @@ void RTMPServer::onDisconnect(RTMPConnection *con)
 	con->Stop();
 	
 	//Lock list
-	pthread_mutex_lock(&sessionMutex);
+	std::unique_lock<std::mutex> sessionMutexLock(sessionMutex);
 
 	//Connection iterator
 	for (Connections::iterator it=connections.begin();it!=connections.end();++it)
@@ -383,5 +381,5 @@ void RTMPServer::onDisconnect(RTMPConnection *con)
 	}
 
 	//Unlock list
-	pthread_mutex_unlock(&sessionMutex);
+	sessionMutexLock.unlock();
 }

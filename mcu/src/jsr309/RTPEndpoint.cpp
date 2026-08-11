@@ -303,8 +303,6 @@ void* RTPEndpoint::run(void *par)
 	RTPEndpoint *end = (RTPEndpoint *)par;
         //Block signal in thread
 	blocksignals();
-	//Catch
-	signal(SIGIO,EmptyCatch);
 	//Run
 	end->Run();
 	//Exit

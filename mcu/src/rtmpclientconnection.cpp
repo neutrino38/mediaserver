@@ -236,8 +236,6 @@ int RTMPClientConnection::Run()
 	//Set no delay option
 	int flag = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
-	//Catch all IO errors
-	signal(SIGIO,EmptyCatch);
 
 	//Create C01 and send it
 	c01.SetRTMPVersion(3);

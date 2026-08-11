@@ -11,7 +11,6 @@
 RTPMultiplexer::RTPMultiplexer()
 {
 	//Create mutex
-	pthread_mutex_init(&mutex,NULL);
 	//No "no listener" log emitted yet
 	lastNoListenerTs = 0;
 	noListenerCount = 0;
@@ -20,42 +19,41 @@ RTPMultiplexer::RTPMultiplexer()
 RTPMultiplexer::~RTPMultiplexer()
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//C-13 (lien A) : le lien retour `joined` de chaque listener est désormais un
 	//weak_ptr. La destruction de cette source (dernier shared_ptr relâché) fait
 	//expirer ces weak_ptr : le Detach ultérieur du listener lock() dans le vide et
 	//ne déréférence plus cet objet libéré. Plus besoin de notifier onJoinableEnded.
 	listeners.clear();
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 void RTPMultiplexer::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
 {
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	negotiated = byCodec;
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 Properties RTPMultiplexer::GetNegotiatedProperties(int codec)
 {
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	std::map<int,Properties>::const_iterator it = negotiated.find(codec);
 	Properties props = (it != negotiated.end()) ? it->second : Properties();
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	return props;
 }
 
 int  RTPMultiplexer::TryCodec(int codec)
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Aucun endpoint attaché : on ne peut rien affirmer sur le codec.
 	if (listeners.empty())
 	{
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 		return -1;
 	}
 
@@ -72,7 +70,7 @@ int  RTPMultiplexer::TryCodec(int codec)
 	}
 
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return result;
 }
@@ -80,7 +78,7 @@ int  RTPMultiplexer::TryCodec(int codec)
 void RTPMultiplexer::Multiplex(RTPPacket &packet)
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Iterate
 	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
 		//Update
@@ -100,31 +98,31 @@ void RTPMultiplexer::Multiplex(RTPPacket &packet)
 		}
 	}
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 void RTPMultiplexer::ResetStream()
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Iterate
 	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
 		//Update
 		(*it)->onResetStream();
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 void RTPMultiplexer::EndStream()
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Iterate
 	for (Listeners::iterator it = listeners.begin(); it!=listeners.end(); ++it)
 		//Update
 		(*it)->onEndStream();
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 void RTPMultiplexer::AddListener(Listener *listener)
@@ -132,17 +130,17 @@ void RTPMultiplexer::AddListener(Listener *listener)
 	//reset it
 	listener->onResetStream();
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Apend
 	listeners.insert(listener);
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 void RTPMultiplexer::RemoveListener(Listener *listener)
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Find it
 	Listeners::iterator it = listeners.find(listener);
 	//If present
@@ -150,7 +148,7 @@ void RTPMultiplexer::RemoveListener(Listener *listener)
 		//erase it
 		listeners.erase(it);
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 void RTPMultiplexer::Update()

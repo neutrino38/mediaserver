@@ -2,6 +2,7 @@
 #define BFCPUSER_H
 
 
+#include <mutex>
 #include "bfcp/BFCPMessage.h"
 #include "websocketconnection.h"
 #include <pthread.h>
@@ -42,7 +43,7 @@ private:
 	// Note that just the floors within the last received FloorQuery are considered.
 	std::vector<int> queriedFloorIds;
 	// Mutex for blocking access to the transport.
-	pthread_mutex_t mutex;
+	std::mutex mutex;
 };
 
 
