@@ -85,21 +85,9 @@ int AudioEncoderMultiplexerWorker::Start()
 	encoding = 1;
 
 	//launc thread
-	createPriorityThread(&thread,startEncoding,this,0);
+	StartThread();
 
 	return 1;
-}
-void * AudioEncoderMultiplexerWorker::startEncoding(void *par)
-{
-	Log("AudioEncoderMultiplexerWorkerThread [%d]\n",getpid());
-	//Get worker
-	AudioEncoderMultiplexerWorker *worker = (AudioEncoderMultiplexerWorker *)par;
-	//Block all signals
-	blocksignals();
-	//Run
-	worker->Encode();
-	//Exit
-	return NULL;;
 }
 
 int AudioEncoderMultiplexerWorker::Stop()
@@ -116,7 +104,7 @@ int AudioEncoderMultiplexerWorker::Stop()
 		input->CancelRecBuffer();
 
 		//Esperamos
-		pthread_join(thread,NULL);
+		StopThread();
 	}
 
 	Log("<Stop AudioEncoderMultiplexerWorker\n");

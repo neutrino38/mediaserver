@@ -91,22 +91,13 @@ int AudioDecoderJoinableWorker::Start()
 	//Start decoding
 	decoding = 1;
 
+	//Rearmer la file apres un eventuel Stop (Cancel collant)
+	packets.Reset();
+
 	//launc thread
-	createPriorityThread(&thread,startDecoding,this,0);
+	StartThread();
 
 	return 1;
-}
-void * AudioDecoderJoinableWorker::startDecoding(void *par)
-{
-	Log("AudioDecoderJoinableWorkerThread [%d]\n",getpid());
-	//Get worker
-	AudioDecoderJoinableWorker *worker = (AudioDecoderJoinableWorker *)par;
-	//Block all signals
-	blocksignals();
-	//Run
-	worker->Decode();
-	//Exit
-	return NULL;;
 }
 
 int  AudioDecoderJoinableWorker::Stop()
@@ -123,7 +114,7 @@ int  AudioDecoderJoinableWorker::Stop()
 		packets.Cancel();
 
 		//Esperamos
-		pthread_join(thread,NULL);
+		StopThread();
 	}
 
 	Log("<StopAudioDecoderJoinableWorker\n");

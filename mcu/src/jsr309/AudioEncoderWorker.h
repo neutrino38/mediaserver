@@ -9,11 +9,13 @@
 #define	AUDIOENCODERWORKER_H
 #include "medkit/codecs.h"
 #include "audio.h"
+#include "worker.h"
 #include "RTPMultiplexer.h"
 
 
 class AudioEncoderMultiplexerWorker :
-	public RTPMultiplexer
+	public RTPMultiplexer,
+	public Worker
 {
 public:
 	AudioEncoderMultiplexerWorker();
@@ -36,14 +38,12 @@ private:
 	int Stop();
 protected:
 	int Encode();
-
-private:
-	static void *startEncoding(void *par);
+	//Corps du Worker
+	virtual int Run() { return Encode(); }
 
 private:
 	AudioInput *input;
 	AudioCodec::Type codec;
-	pthread_t thread;
 	bool encoding;
 	//Bornes négociées par code codec (phase 5), fusionnées à l'ouverture.
 	std::map<int,Properties> negotiated;

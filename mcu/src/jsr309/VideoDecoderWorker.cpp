@@ -68,22 +68,13 @@ int VideoDecoderJoinableWorker::Start()
 	//Start decoding
 	decoding = 1;
 
+	//Rearmer la file apres un eventuel Stop (Cancel collant)
+	packets.Reset();
+
 	//launc thread
-	if (useThread) createPriorityThread(&thread,startDecoding,this,0);
+	if (useThread) StartThread();
 
 	return 1;
-}
-void * VideoDecoderJoinableWorker::startDecoding(void *par)
-{
-	Log("VideoDecoderJoinableWorkerThread [%d]\n",getpid());
-	//Get worker
-	VideoDecoderJoinableWorker *worker = (VideoDecoderJoinableWorker *)par;
-	//Block all signals
-	blocksignals();
-	//Run
-	worker->Decode();
-	//Exit
-	return NULL;
 }
 
 
@@ -101,7 +92,7 @@ int  VideoDecoderJoinableWorker::Stop()
                 if (useThread)
                 {
                     packets.Cancel();
-                    pthread_join(thread,NULL);
+                    StopThread();
                 }
                 else
                 {

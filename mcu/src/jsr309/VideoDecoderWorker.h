@@ -10,11 +10,13 @@
 
 #include "medkit/codecs.h"
 #include "video.h"
+#include "worker.h"
 #include "waitqueue.h"
 #include "Joinable.h"
 
 class VideoDecoderJoinableWorker:
-	public Joinable::Listener
+	public Joinable::Listener,
+	public Worker
 {
 public:
 	VideoDecoderJoinableWorker(bool useThread = true);
@@ -37,16 +39,16 @@ private:
 	int Stop();
 protected:
 	int Decode();
+	//Corps du Worker
+	virtual int Run() { return Decode(); }
 
 private:
-	static void *startDecoding(void *par);
         void DecodePacket(RTPPacket* pkt);
 
 private:
 	VideoOutput *output;
         VideoInput  *input;
 	WaitQueue<RTPPacket*> packets;
-	pthread_t thread;
 	bool decoding;
 
         /* decoding variables */
