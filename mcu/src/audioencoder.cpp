@@ -84,15 +84,6 @@ int AudioEncoderWorker::Init(AudioInput *input)
 * startencodingAudio
 *	Helper function
 ***************************************/
-void * AudioEncoderWorker::startEncoding(void *par)
-{
-	AudioEncoderWorker *conf = (AudioEncoderWorker *)par;
-	blocksignals();
-	Log("Encoding audio [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->Encode());
-}
-
-
 /***************************************
 * StartSending
 *	Comienza a mandar a la ip y puertos especificados
@@ -109,7 +100,7 @@ int AudioEncoderWorker::StartEncoding()
 	encodingAudio=1;
 
 	//Start thread
-	createPriorityThread(&encodingAudioThread,startEncoding,this,1);
+	StartThread();
 
 	Log("<StartSending audio [%d]\n",encodingAudio);
 
@@ -146,7 +137,7 @@ int AudioEncoderWorker::StopEncoding()
 		audioInput->CancelRecBuffer();
 
 		//Y esperamos
-		pthread_join(encodingAudioThread,NULL);
+		StopThread();
 	}
 
 	Log("<StopEncoding Audio\n");

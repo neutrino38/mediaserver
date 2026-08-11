@@ -1,9 +1,10 @@
 #ifndef TEXTENCODER_H_
 #define	TEXTENCODER_H_
 #include "text.h"
+#include "worker.h"
 #include <set>
 
-class TextEncoder
+class TextEncoder : public Worker
 {
 public:
 	TextEncoder();
@@ -20,11 +21,8 @@ public:
 
 protected:
 	int Encode();
-
-
-private:
-	//Funciones propias
-	static void *startEncoding(void *par);
+	//Corps du Worker
+	virtual int Run() { return Encode(); }
 
 private:
 	typedef std::set<MediaFrame::Listener*> Listeners;
@@ -33,7 +31,6 @@ private:
 	Listeners		listeners;
 	TextInput*		textInput;
 	pthread_mutex_t		mutex;
-	pthread_t		encodingTextThread;
 	int			encodingText;
 };
 

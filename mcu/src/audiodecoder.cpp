@@ -46,22 +46,15 @@ int AudioDecoderWorker::Start()
 	//Start decoding
 	decoding = 1;
 
+	//Rearmer la file apres un eventuel Stop (Cancel collant :
+	//l'historique redemarrait sur une file annulee)
+	packets.Reset();
+
 	//launc thread
-	createPriorityThread(&thread,startDecoding,this,0);
+	StartThread();
 
 	return 1;
 }
-void * AudioDecoderWorker::startDecoding(void *par)
-{
-	Log("AudioDecoderThread [%d]\n",getpid());
-	//Get worker
-	AudioDecoderWorker *worker = (AudioDecoderWorker *)par;
-	//Block all signals
-	blocksignals();
-	//Run
-	pthread_exit((void *)(intptr_t)worker->Decode());
-}
-
 int  AudioDecoderWorker::Stop()
 {
 	Log(">StopAudioDecoder\n");
@@ -76,7 +69,7 @@ int  AudioDecoderWorker::Stop()
 		packets.Cancel();
 
 		//Esperamos
-		pthread_join(thread,NULL);
+		StopThread();
 	}
 
 	Log("<StopAudioDecoder\n");

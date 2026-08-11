@@ -9,11 +9,12 @@
 #define	RTPSMOOTHER_H
 
 #include "config.h"
+#include "worker.h"
 #include "waitqueue.h"
 #include "rtp.h"
 #include "rtpsession.h"
 
-class RTPSmoother
+class RTPSmoother : public Worker
 {
 public:
 	RTPSmoother();
@@ -24,16 +25,11 @@ public:
 	int End();
 
 protected:
-	int Run();
+	//Corps du Worker
+	virtual int Run();
 
 private:
-	//Funciones propias
-	static void *run(void *par);
-private:
 	RTPSession	*session;
-	pthread_t	thread;
-	//Sommeil cadencé annulable entre deux paquets d'une même trame
-	Wait		pacer;
 	bool		inited;
 	WaitQueue<RTPPacketSched*> queue;
 };

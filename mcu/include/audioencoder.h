@@ -1,9 +1,10 @@
 #ifndef AUDIOENCODER_H_
 #define	AUDIOENCODER_H_
 #include "audio.h"
+#include "worker.h"
 #include <set>
 
-class AudioEncoderWorker
+class AudioEncoderWorker : public Worker
 {
 public:
 	AudioEncoderWorker();
@@ -21,11 +22,10 @@ public:
 
 protected:
 	int Encode();
-
+	//Corps du Worker
+	virtual int Run() { return Encode(); }
 
 private:
-	//Funciones propias
-	static void *startEncoding(void *par);
 	AudioEncoder* CreateAudioEncoder(AudioCodec::Type type);
 
 private:
@@ -36,7 +36,6 @@ private:
 	AudioInput*		audioInput;
 	AudioCodec::Type	audioCodec;
 	pthread_mutex_t		mutex;
-	pthread_t		encodingAudioThread;
 	int			encodingAudio;
 };
 

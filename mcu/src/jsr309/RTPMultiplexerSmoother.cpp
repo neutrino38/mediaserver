@@ -41,11 +41,10 @@ int RTPMultiplexerSmoother::Start()
 	
 	//We are inited
 	inited = true;
-	//Réarmer file et cadenceur après un éventuel Stop (Cancel collant)
+	//Réarmer la file après un éventuel Stop (Cancel collant)
 	queue.Reset();
-	pacer.Reset();
-	//Run
-	createPriorityThread(&thread,run,this,1);
+	//Run (réarme le Wait du Worker)
+	StartThread();
 
 	return 1;
 }
@@ -166,7 +165,7 @@ int RTPMultiplexerSmoother::Cancel()
 	queue.Cancel();
 
 	//Cancel waiting
-	pacer.Cancel();
+	wait.Cancel();
 
 	//exit
 	return 1;
@@ -187,28 +186,16 @@ int RTPMultiplexerSmoother::Stop()
 	Cancel();
 
 	//Wait
-	pthread_join(thread,NULL);
+	StopThread();
 
 	Log("<RTPMultiplexerSmoother stopped\n");
 
 	return 1;
 }
 
-void* RTPMultiplexerSmoother::run(void *par)
-{
-        Log("RTPMultiplexerSmootherThread [%d]\n",getpid());
-        //Get endpoint
-	RTPMultiplexerSmoother *smooth = (RTPMultiplexerSmoother *)par;
-	//Run 
-        smooth->Run();
-	//Exit
-	return NULL;
-}
-
 int RTPMultiplexerSmoother::Run()
 {
 	timeval prev;
-	timespec wait;
 	DWORD	sendingTime = 0;
 	
 	int count =0;
@@ -246,7 +233,7 @@ int RTPMultiplexerSmoother::Run()
 		{
 			QWORD elapsed = getDifTime(&prev)/1000;
 			if (sendingTime > elapsed)
-				pacer.WaitSignal(sendingTime - elapsed);
+				wait.WaitSignal(sendingTime - elapsed);
 		}
 
 		//If it was last

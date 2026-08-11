@@ -9,13 +9,15 @@
 #define	RTPMULTIPLEXERSMOOTHER_H
 
 #include "config.h"
+#include "worker.h"
 #include "waitqueue.h"
 #include "rtp.h"
 #include "RTPMultiplexer.h"
 
 
 class RTPMultiplexerSmoother :
-	public RTPMultiplexer
+	public RTPMultiplexer,
+	public Worker
 {
 public:
 	RTPMultiplexerSmoother();
@@ -27,16 +29,10 @@ public:
 	int Stop();
 
 protected:
-	int Run();
+	//Corps du Worker
+	virtual int Run();
 
 private:
-	//Funciones propias
-	static void *run(void *par);
-private:
-	pthread_t	thread;
-	//Sommeil cadencé annulable entre deux paquets d'une même trame
-	//(::Wait : la méthode Wait() masque le nom de la classe de base)
-	::Wait		pacer;
 	bool		inited;
 	WaitQueue<RTPPacketSched*> queue;
 };

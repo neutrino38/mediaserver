@@ -63,15 +63,6 @@ int TextEncoder::Init(TextInput *input)
 * startencodingText
 *	Helper function
 ***************************************/
-void * TextEncoder::startEncoding(void *par)
-{
-	TextEncoder *conf = (TextEncoder *)par;
-	blocksignals();
-	Log("Encoding text [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->Encode());
-}
-
-
 /***************************************
 * StartSending
 *	Comienza a mandar a la ip y puertos especificados
@@ -88,7 +79,7 @@ int TextEncoder::StartEncoding()
 	encodingText=1;
 
 	//Start thread
-	createPriorityThread(&encodingTextThread,startEncoding,this,1);
+	StartThread();
 
 	Log("<StartSending text [%d]\n",encodingText);
 
@@ -129,7 +120,7 @@ int TextEncoder::StopEncoding()
 		textInput->Cancel();
 
 		//Y esperamos
-		pthread_join(encodingTextThread,NULL);
+		StopThread();
 	}
 
 	Log("<StopEncoding Text\n");

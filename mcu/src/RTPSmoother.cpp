@@ -46,13 +46,12 @@ int RTPSmoother::Init(RTPSession *session)
 	//We are inited
 	inited = true;
 
-	//Réarmer file et cadenceur après un éventuel End (Cancel collant —
+	//Réarmer la file après un éventuel End (Cancel collant —
 	//l'historique ne le faisait pas : re-Init = boucle folle sur file annulée)
 	queue.Reset();
-	pacer.Reset();
 
-	//Run
-	createPriorityThread(&thread,run,this,1);
+	//Run (réarme le Wait du Worker)
+	StartThread();
 
 	return 1;
 }
@@ -174,7 +173,7 @@ int RTPSmoother::Cancel()
 	queue.Cancel();
 
 	//Cancel waiting
-	pacer.Cancel();
+	wait.Cancel();
 
 	//exit
 	return 1;
@@ -193,18 +192,9 @@ int RTPSmoother::End()
 	Cancel();
 
 	//Wait
-	pthread_join(thread,NULL);
+	StopThread();
 
 	return 1;
-}
-
-void* RTPSmoother::run(void *par)
-{
-        Log("RTPSmootherThread [%d]\n",getpid());
-        //Get endpoint
-	RTPSmoother *smooth = (RTPSmoother *)par;
-	//Run 
-        pthread_exit((void *)(intptr_t)smooth->Run());
 }
 
 int RTPSmoother::Run()
@@ -247,7 +237,7 @@ int RTPSmoother::Run()
 				//Dormir jusqu'à l'échéance prev+sendingTime (annulable)
 				QWORD elapsed = getDifTime(&prev)/1000;
 				if (sendingTime > elapsed)
-					pacer.WaitSignal(sendingTime - elapsed);
+					wait.WaitSignal(sendingTime - elapsed);
 			}
 		} else {
 			//Update time of the previous frame
