@@ -15,3 +15,9 @@ mcu.key
 test/websocket/wstest.server.log
 test/websocket/wstest.crt
 test/websocket/wstest.key
+
+# Artefacts d'essais manuels à la racine (enregistrements, captures, logs)
+/*.mp4
+/*.pcap
+/*.log
+mcu/.dep.inc

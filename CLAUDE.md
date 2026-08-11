@@ -62,6 +62,7 @@ The `mcu` binary itself has no automated test suite (`rtmptest` is a standalone 
 
 Entry point `mcu/src/main.cpp` starts several servers that all share the conference engine:
 - **XML-RPC server** (`xmlrpcserver`, `xmlhandler`) — the primary control API. Command tables (`mcuCmdList`, `broadcasterCmdList`, `mediagatewayCmdList`, `jsr309CmdList`) map RPC method names to handlers in `xmlrpcmcu.cpp`, `xmlrpcbroadcaster.cpp`, etc.
+  **Any change to the `/mcu` or `/jsr309` XML-RPC API (methods, params, return values, enums, events) MUST also update the MOTELI v2 protobuf schemas** in the elixip repo (`apps/elixip2/priv/proto/moteli_*.proto`) in the same change set — they are the elixip 2.0 RabbitMQ transport of the same contract (design: elixip `docs/design/moteli-reboot.md`), and must never lag the HTTP one.
 - **RTMP server** (`rtmpserver`) and **WebSocket server** (`websocketserver`) for Flash/web media transport.
 - Optional **RabbitMQ/moteli** backend (`src/moteli/`, `-DMOTELI`) carrying protobuf messages (`mcu.proto`) for the MOTELI project.
 
