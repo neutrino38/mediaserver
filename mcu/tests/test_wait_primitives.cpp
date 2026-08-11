@@ -49,6 +49,8 @@
 #include <ctime>
 #include <thread>
 
+#include <poll.h>
+
 #include "wait.h"
 #include "waitqueue.h"
 #include "rtpbuffer.h"
@@ -180,6 +182,100 @@ TEST(WaitPrimitive, WaitUntilPredicateUnderLock)
 	// Annulé → false immédiat, même prédicat vrai.
 	w.Cancel();
 	EXPECT_FALSE(w.WaitUntil(5000, [] { return true; }));
+}
+
+// =============================================================================
+// Wait + poll() — réveil par eventfd (GetPollFd/Drain), le remplaçant du
+// pthread_kill(SIGIO) pour les boucles de transport
+// =============================================================================
+
+// Poll une milliseconde max sur le fd de réveil ; rend true si POLLIN.
+static bool PollWake(int fd, int timeoutMs)
+{
+	pollfd p;
+	p.fd = fd;
+	p.events = POLLIN;
+	p.revents = 0;
+	return poll(&p, 1, timeoutMs) > 0 && (p.revents & POLLIN);
+}
+
+// LE test clé : contrairement au SIGIO historique (et à la sémantique cv de
+// WaitSignal), un réveil émis AVANT l'entrée dans poll() n'est pas perdu —
+// l'eventfd a une mémoire.
+TEST(WaitPollFd, SignalBeforePollIsNotLost)
+{
+	Wait w;
+	int fd = w.GetPollFd();
+	ASSERT_GE(fd, 0);
+
+	w.Signal();	// personne ne poll encore
+
+	Clock::time_point t0 = Clock::now();
+	EXPECT_TRUE(PollWake(fd, 5000));	// réveil immédiat quand même
+	EXPECT_LT(ElapsedMs(t0), 1000);
+}
+
+TEST(WaitPollFd, SignalWakesBlockedPoll)
+{
+	Wait w;
+	int fd = w.GetPollFd();
+	ASSERT_GE(fd, 0);
+
+	std::thread signaler([&w]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		w.Signal();
+	});
+	Clock::time_point t0 = Clock::now();
+	EXPECT_TRUE(PollWake(fd, 5000));
+	EXPECT_LT(ElapsedMs(t0), 4000);
+	signaler.join();
+}
+
+TEST(WaitPollFd, CancelWakesPollAndIsSticky)
+{
+	Wait w;
+	int fd = w.GetPollFd();
+
+	std::thread canceler([&w]() {
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		w.Cancel();
+	});
+	EXPECT_TRUE(PollWake(fd, 5000));
+	canceler.join();
+	w.Drain();
+	EXPECT_TRUE(w.IsCanceled());	// la boucle vérifie le flag après Drain
+}
+
+// Sans Drain, le poll suivant re-signalerait ; après Drain, il s'endort.
+TEST(WaitPollFd, DrainClearsPendingWakeup)
+{
+	Wait w;
+	int fd = w.GetPollFd();
+
+	w.Signal();
+	EXPECT_TRUE(PollWake(fd, 1000));
+	EXPECT_TRUE(PollWake(fd, 0));	// toujours prêt : pas encore drainé
+	w.Drain();
+	EXPECT_FALSE(PollWake(fd, 100));	// purgé : plus rien
+}
+
+// Reset purge aussi un réveil en attente (réarmement complet).
+TEST(WaitPollFd, ResetDrainsPendingWakeup)
+{
+	Wait w;
+	int fd = w.GetPollFd();
+
+	w.Cancel();		// écrit dans l'eventfd + cancel collant
+	w.Reset();		// efface le cancel ET purge l'eventfd
+	EXPECT_FALSE(w.IsCanceled());
+	EXPECT_FALSE(PollWake(fd, 100));
+}
+
+// Le fd est stable (une seule création paresseuse).
+TEST(WaitPollFd, PollFdIsStable)
+{
+	Wait w;
+	EXPECT_EQ(w.GetPollFd(), w.GetPollFd());
 }
 
 // =============================================================================
