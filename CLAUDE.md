@@ -55,7 +55,20 @@ tail -f /var/log/mcu.log                     # suivre l'exécution (aussi : jour
 
 Le RPM installe le binaire dans `/opt/ives/bin/mediaserver`, l'unité systemd dans `%{_unitdir}/mediaserver.service`, ses options dans `/etc/sysconfig/mediaserver`, la configuration dans `/etc/mediaserver/`. stdout/stderr sont ajoutés à `/var/log/mcu.log` par systemd (`StandardOutput`/`StandardError`).
 
-Le binaire `mcu` a sa **propre suite de tests GoogleTest** dans `mcu/tests/` : `make -f mcu/Makefile.rpm check` (compile puis exécute), `make -f mcu/Makefile.rpm tests` (compile seulement, produit `tests/runtests`). Elle a remplacé les harnais manuels `rtmptest`/`wstest`. Conception et organisation dans `TEST.md` (racine), mémo de lancement dans `mcu/tests/README.md`. Le **sous-module `libmedikit` a la sienne** dans `third_party/fontventa/libmedikit/tests/` (tests unitaires et adverses du négociateur, des codecs, des parseurs, et lecture/aller-retour MP4) : `make -C third_party/fontventa/libmedikit check` (nécessite le `gtest` système ; bâtit `libmedkit.a` avec `ASTERISK=no`). Voir son `tests/README.md` et `libmedikit_tests_plan.md` à la racine.
+Le binaire `mcu` a sa **propre suite de tests GoogleTest** dans `mcu/tests/`. **Se lancer depuis `mcu/`** — `$(OBJS)` porte des noms d'objets nus, donc `make -f mcu/Makefile.rpm …` depuis la racine échoue sur `No rule to make target 'httpparser.o'` (et crée un `media/` parasite à la racine) :
+
+```sh
+cd mcu
+make -f Makefile.rpm check       # compile puis exécute
+make -f Makefile.rpm tests       # compile seulement -> tests/runtests
+```
+
+> **Tag `:ipv6` — tests à SAUTER jusqu'à l'implémentation d'IPv6.** `mcu/tests/test_ipv6.cpp` porte une suite **adverse** de conformité IPv6 (notations, forme canonique RFC 5952, plages, `::ffff:` v4-mapped, dual-stack, ICE, STUN, URL/SDP, DNS AAAA, écoutes TCP) qui **doit échouer aujourd'hui** : elle décrit la cible décrite dans `ipv6.md`, pas l'existant. GoogleTest n'acceptant pas `:` dans un nom (c'est le séparateur de `--gtest_filter`), le tag est porté par une **double convention** : suites préfixées `IPv6` (sélection) + tests préfixés `DISABLED_` (exclusion par défaut). Conséquences pratiques :
+> - `cd mcu && make -f Makefile.rpm check` **ne les joue pas** — c'est voulu, ne pas « réparer » les échecs ;
+> - `cd mcu && make -f Makefile.rpm check-ipv6` les joue tous (`--gtest_filter='IPv6*' --gtest_also_run_disabled_tests`) : c'est le **tableau de bord** du chantier, à consulter avant/après chaque étape ;
+> - au moment de la migration, retirer les préfixes `DISABLED_` au fur et à mesure ; garder les suites `IPv6*`.
+>
+> Deux tests de cette suite doivent passer **avant comme après** (garde-fous anti-régression IPv4) : `IPv6DualStack.LaSocketRtpEntendToujoursLIPv4` et `IPv6Url.LAdresseV4NEstPasEncadree`. Elle a remplacé les harnais manuels `rtmptest`/`wstest`. Conception et organisation dans `TEST.md` (racine), mémo de lancement dans `mcu/tests/README.md`. Le **sous-module `libmedikit` a la sienne** dans `third_party/fontventa/libmedikit/tests/` (tests unitaires et adverses du négociateur, des codecs, des parseurs, et lecture/aller-retour MP4) : `make -C third_party/fontventa/libmedikit check` (nécessite le `gtest` système ; bâtit `libmedkit.a` avec `ASTERISK=no`). Voir son `tests/README.md` et `libmedikit_tests_plan.md` à la racine.
 
 ## Architecture
 
