@@ -34,7 +34,10 @@ public:
 	int Attach(const std::shared_ptr<Joinable> & join);
 	int Dettach();
 
-private:
+	//Publics comme leurs équivalents d'AudioDecoderJoinableWorker, et pour le
+	//même appelant : en mode pont, VideoTranscoder démarre ce worker SANS
+	//l'attacher à la source (c'est lui qui reçoit les paquets et n'en passe au
+	//décodeur que quand l'arbitrage retombe sur le transcodage).
 	int Start();
 	int Stop();
 protected:

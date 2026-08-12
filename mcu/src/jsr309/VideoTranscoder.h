@@ -49,6 +49,11 @@ public:
 	const std::wstring& GetName() { return tag;	}
 
 private:
+	//Retire le transcodeur des listeners de la source courante, s'il y est.
+	//Appelé par Attach, Dettach et End : en mode pont c'est LUI qui est inscrit
+	//comme listener, donc c'est lui qui doit se retirer.
+	void UnlistenSource();
+
 	VideoEncoderMultiplexerWorker	encoder;
 	VideoDecoderJoinableWorker	decoder;
 	VideoPipe	pipe;
@@ -57,6 +62,10 @@ private:
 	int		state;		// 0 = probing, 1 = transcoding, 2 = bridging
 	int		recCodec;	// dernier codec entrant observé
 	bool		allowBridging;
+	//Source écoutée en mode pont (lien retour non possédant, comme
+	//VideoDecoderJoinableWorker::joined). Vide en mode transcodage seul : c'est
+	//alors le décodeur qui est inscrit auprès de la source, et lui qui se retire.
+	std::weak_ptr<Joinable>	joined;
 };
 
 #endif	/* VIDEOTRANSCODER_H */

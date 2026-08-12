@@ -67,6 +67,12 @@ int VideoTranscoder::SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrat
 int VideoTranscoder::End()
 {
 	Log("-End VideoTranscoder [%ls]\n",tag.c_str());
+	//AVANT d'arrêter quoi que ce soit : en mode pont la source tient un
+	//Joinable::Listener* sur NOUS. VideoTranscoderDelete appelle End() sans
+	//passer par Dettach(), et le shared_ptr détruit l'objet en sortie de portée
+	//— la source publierait alors dans un objet libéré. La sûreté mémoire ne
+	//doit pas dépendre de l'ordre des appels du contrôleur.
+	UnlistenSource();
 	//End encoder and decoder
 	encoder.End();
 	decoder.End();
@@ -175,17 +181,72 @@ void VideoTranscoder::SetNegotiatedCodecProperties(const std::map<int,Properties
 	encoder.SetNegotiatedCodecProperties(byCodec);
 }
 
+void VideoTranscoder::UnlistenSource()
+{
+	//lock() : la source est-elle encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->RemoveListener(this);
+
+	joined.reset();
+}
+
 //Returning 0 here made every VideoTranscoderAttachToEndpoint/Dettach XML-RPC
 //call answer an error while the attach had in fact happened — a controller that
 //checks the status tears the call down over a success.
+//
+//Même forme qu'AudioTranscoder::Attach, et pour la même raison : en mode pont
+//c'est le TRANSCODEUR qui doit voir chaque paquet, puisque c'est onRTPPacket qui
+//arbitre relais ou transcodage sur le codec réellement reçu. Brancher la source
+//directement sur le décodeur, comme le faisait cette fonction, ne « désactive »
+//pas le pont — il rend l'arbitrage inatteignable : onRTPPacket n'est jamais
+//appelé, TryCodec jamais interrogé, `state` reste à 0, et tout le chemin pont
+//est du code mort. Le symptôme n'est pas une perte de performance mais une perte
+//de média : le 2026-08-12, un appel AV1 ↔ AV1 (les deux pattes s'accordant sur
+//AV1, donc relayable tel quel) a décodé en libdav1d un flux qu'aucun
+//dépaquetiseur AV1 ne préparait — « Unknown OBU type 11 », pas une image
+//décodée, pas une image ré-encodée, appel établi et écran noir des deux côtés,
+//avec en prime deux encodeurs SVT-AV1 ouverts pour rien. L'audio, lui, passait :
+//AudioTranscoder::Attach honore allowBridging depuis toujours.
 int VideoTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 {
-	decoder.Attach(join);
+	//Transcodage seul : la source alimente le décodeur, comme avant.
+	if (!allowBridging)
+	{
+		decoder.Attach(join);
+		return 1;
+	}
+
+	//Une source précédente ne doit pas continuer à nous publier des paquets.
+	UnlistenSource();
+
+	joined = join;
+
+	//Le mode se rejuge sur le premier paquet de la NOUVELLE source : son codec
+	//n'a aucune raison d'être celui de la précédente.
+	state = 0;
+	recCodec = -1;
+
+	//Le décodeur n'est plus alimenté par la source mais à la main, depuis
+	//onRTPPacket, quand l'arbitrage retombe sur le transcodage. Il faut donc
+	//démarrer son worker sans l'attacher (exactement ce que fait l'audio).
+	decoder.Start();
+
+	if (join)
+		join->AddListener(this);
+
 	return 1;
 }
 
 int VideoTranscoder::Dettach()
 {
+	//En mode pont, c'est nous qui sommes inscrit auprès de la source : sans ce
+	//retrait elle garderait un pointeur sur cet objet, et continuerait à publier
+	//dedans après le détachement.
+	UnlistenSource();
+
+	//En mode transcodage seul, c'est le décodeur qui était inscrit et qui se
+	//retire ; en mode pont, il n'était pas attaché et Dettach() se réduit à
+	//l'arrêt de son worker — ce qu'on veut dans les deux cas.
 	decoder.Dettach();
 	return 1;
 }
