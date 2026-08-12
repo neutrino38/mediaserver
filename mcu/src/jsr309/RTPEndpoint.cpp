@@ -21,7 +21,11 @@ RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Po
 	prevts = 0;
 	timestamp = 0;
         //No codec
-        codec = -1;
+        codec = NoCodec;
+	//Aucun codec refusé pour l'instant
+	unmappedCodec = NoCodec;
+	unmappedTs    = 0;
+	unmappedCount = 0;
 	//Get freg
 	switch(type)
 	{
@@ -178,6 +182,50 @@ int RTPEndpoint::StopSending()
 	return 1;
 }
 
+//Voir la déclaration : borne la retentative ET le journal. Retenter a du sens (une
+//renégociation peut ajouter le PT à la rtpMap de sortie) ; le faire à chaque
+//paquet non, puisque RTPSession::SetSendingCodec journalise une Error par appel —
+//sur de la vidéo, c'est le journal noyé à 30 lignes par seconde et par flux.
+bool RTPEndpoint::TrySendingCodec(DWORD wanted)
+{
+	struct timeval tv;
+	gettimeofday(&tv,0);
+	const QWORD nowMs = (QWORD)tv.tv_sec*1000 + tv.tv_usec/1000;
+
+	//Déjà refusé il y a moins d'une seconde : on jette sans redemander.
+	if (wanted == unmappedCodec && nowMs - unmappedTs < 1000)
+	{
+		unmappedCount++;
+		return false;
+	}
+
+	if (RTPSession::SetSendingCodec(wanted))
+	{
+		//Sortie du trou : le dire, sinon la reprise après renégociation est
+		//invisible alors que l'entrée dans le trou est bruyante.
+		if (unmappedCodec != NoCodec)
+			Log("-RTPEndpoint: %s desormais dans la rtpMap de sortie, emission reprise"
+			    " apres %u paquet(s) jete(s)\n",
+			    GetNameForCodec(type,wanted), unmappedCount);
+
+		unmappedCodec = NoCodec;
+		unmappedCount = 0;
+		return true;
+	}
+
+	unmappedCount++;
+
+	Log("-RTPEndpoint: %s hors de la rtpMap de sortie negociee, %u paquet(s) jete(s)."
+	    " Les emettre sous le PT precedent ferait decoder du bruit au pair.\n",
+	    GetNameForCodec(type,wanted), unmappedCount);
+
+	unmappedCodec = wanted;
+	unmappedTs    = nowMs;
+	unmappedCount = 0;
+
+	return false;
+}
+
 int  RTPEndpoint::TryCheckCodec(int codec)
 {
     if ( RTPSession::SetSendingCodec(codec) )
@@ -215,10 +263,23 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
         //Check type
         if (packet.GetCodec()!=codec)
         {
+		//Un endpoint ne peut étiqueter que ce que sa rtpMap de sortie NÉGOCIÉE
+		//porte. Le verdict de SetSendingCodec était ignoré ici : en cas d'échec il
+		//laisse le PT PRÉCÉDENT dans l'en-tête, et le paquet partait quand même —
+		//des octets d'un codec sous l'étiquette d'un autre. Le pair ne voit aucune
+		//erreur : il lit le PT, croit savoir ce qu'il décode, et décode du bruit.
+		//
+		//Et le pire n'était pas là : `codec` était mis à jour AVANT l'appel, donc
+		//dès le paquet suivant `packet.GetCodec() == codec` faisait sauter tout le
+		//bloc. L'échec était journalisé UNE fois, puis plus rien — ni retentative
+		//après une renégociation qui ajouterait le PT, ni trace des milliers de
+		//paquets mal étiquetés qui suivaient.
+		if (!TrySendingCodec(packet.GetCodec()))
+			//Rien de juste à émettre : ne pas mentir sur l'étiquette.
+			return;
+
                 //Store it
                 codec = packet.GetCodec();
-		//Set it
-                RTPSession::SetSendingCodec(codec);
 	}
 
 	//Get diference from latest frame

@@ -72,10 +72,20 @@ private:
 	//(aucun paquet RTP lu). C'était le cas jusqu'au 2026-08-12.
 	int MultiplexLoop();
 
+	//Bascule le PT d'émission sur `wanted`, ou rend false si la rtpMap de sortie
+	//négociée ne le porte pas — auquel cas l'appelant ne DOIT pas émettre le
+	//paquet. Borne le harcèlement : un codec refusé le reste jusqu'à une
+	//renégociation, et RTPSession::SetSendingCodec journalise une Error par appel.
+	bool TrySendingCodec(DWORD wanted);
+
 	//Funciones propias
 	static void *run(void *par);
 
 private:
+	//Sentinelle « aucun codec » de `codec` et d'`unmappedCodec` : c'est déjà celle
+	//qu'onResetStream écrit.
+	static const DWORD NoCodec = (DWORD)-1;
+
 	pthread_t thread;
 	DWORD codec;
 	DWORD timestamp;
@@ -84,6 +94,11 @@ private:
 	DWORD prevts;
 	bool reseted;
 	bool tsTransparency;
+	//Dernier codec refusé par la rtpMap de sortie, l'instant du refus, et les
+	//paquets jetés depuis le dernier journal.
+	DWORD unmappedCodec;
+	QWORD unmappedTs;
+	DWORD unmappedCount;
 };
 
 class ExternalFIRRequestedEvent: public JSR309Event
