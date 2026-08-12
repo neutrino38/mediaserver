@@ -134,8 +134,10 @@ static std::string DetectAnnouncedIp()
 	for (int i=0; localHost->h_addr_list[i]!=0; i++)
 	{
 		struct in_addr addr;
-		//Copie
-		addr.s_addr = *(u_long *) localHost->h_addr_list[i];
+		//Copie : une entrée de h_addr_list fait h_length octets (4 en AF_INET),
+		//pas sizeof(u_long) — le déréférencement en u_long lisait 8 octets sur LP64,
+		//donc 4 octets hors du buffer de la résolveuse.
+		memcpy(&addr.s_addr,localHost->h_addr_list[i],sizeof(addr.s_addr));
 		//En texte
 		const char* host = inet_ntoa(addr);
 
@@ -858,8 +860,17 @@ bool RTPSession::NatCorrectable(in_addr_t announced)
 ***********************************/
 int RTPSession::SetRemotePort(char *ip,int sendPort)
 {
-	//Get ip addr
-	DWORD ipAddr = inet_addr(ip);
+	struct in_addr remote;
+
+	//Une adresse illisible ne doit PAS devenir une destination. inet_addr rendait
+	//INADDR_NONE aussi bien sur une erreur de format que sur l'adresse de diffusion,
+	//et ce retour n'était pas testé : la destination devenait 255.255.255.255 et le
+	//mediaserver émettait le flux en BROADCAST sur le LAN, sans un mot dans le log.
+	//inet_pton distingue les deux cas ; tous les appelants traitent déjà 0 en erreur.
+	if (!ip || inet_pton(AF_INET,ip,&remote)!=1)
+		return Error("-SetRemotePort: adresse invalide [%s]\n",ip?ip:"(null)");
+
+	DWORD ipAddr = remote.s_addr;
 
 	//Un contrôleur qui passe 0.0.0.0 demande explicitement le latch : il ne connaît
 	//pas la vraie adresse du pair et s'en remet à la source réellement observée.
@@ -1748,8 +1759,11 @@ int RTPSession::ReadRTCP()
 
 			//Do NAT
 			sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
-			//Set port
-			sendRtcpAddr.sin_port = from_addr.sin_addr.s_addr;
+			//Set port : c'est bien sin_port qu'il faut recopier. La ligne prenait
+			//sin_addr.s_addr, donc le port RTCP de destination valait deux octets de
+			//l'ADRESSE du pair — le RTCP partait dans le vide dès qu'un binding STUN
+			//arrivait sur la socket RTCP (ICE sans rtcp-mux).
+			sendRtcpAddr.sin_port = from_addr.sin_port;
 		}
 
 		//Delete message
@@ -1935,7 +1949,10 @@ int RTPSession::ReadRTP()
 					{
 						// Do symetric RTP 
 						sendAddr.sin_addr.s_addr = recIP;
-						sendAddr.sin_port = ntohs(recPort);
+						//recPort est en ordre HÔTE, sin_port se stocke en ordre RÉSEAU :
+						//htons, comme dans le test juste au-dessus (même résultat sur les
+						//deux architectures, mais la conversion était écrite à l'envers).
+						sendAddr.sin_port = htons(recPort);
 					}
 				}
 

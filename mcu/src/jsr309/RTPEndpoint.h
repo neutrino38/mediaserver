@@ -62,10 +62,16 @@ public:
 		tsTransparency = transparent;
 	}
 	
-protected:
-	int Run();
-
 private:
+	//Corps du thread de démultiplexage (pthread créé par StartReceiving).
+	//
+	//NE PAS le renommer `Run()` : `RTPSession` dérive de `Worker`, dont `Run()`
+	//est virtuel pur et porte la boucle poll des sockets RTP/RTCP. Un `Run()` ici
+	//OVERRIDE celui de `RTPSession` — le thread du Worker exécutait alors cette
+	//boucle-ci, et la boucle poll ne tournait JAMAIS pour un endpoint JSR-309
+	//(aucun paquet RTP lu). C'était le cas jusqu'au 2026-08-12.
+	int MultiplexLoop();
+
 	//Funciones propias
 	static void *run(void *par);
 

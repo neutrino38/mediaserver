@@ -231,7 +231,14 @@ private:
 	void ReSendPacket(int seq);
 
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
-	int Run();
+
+	//Corps du thread hérité de Worker : la boucle poll des sockets RTP/RTCP.
+	//`override` EXPLICITE, et non décoratif : une classe dérivée qui déclarerait
+	//un `int Run()` le remplacerait silencieusement, et la boucle poll ne
+	//tournerait plus du tout pour elle. C'est arrivé avec RTPEndpoint (corrigé le
+	//2026-08-12 en renommant sa boucle en MultiplexLoop). Le mot-clé ne l'empêche
+	//pas côté dérivé, mais il documente le contrat au bon endroit.
+	int Run() override;
 
 	//P2 (offreur WebRTC) : pilotage du handshake DTLS en rôle CLIENT
 	void FlushDTLS();                    //vide write_bio DTLS vers sendAddr

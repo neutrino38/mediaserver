@@ -740,8 +740,13 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 
 char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFrame::Type media ) 
 {
-	
-    char url[50];
+	//Aucun tampon de taille fixe ici. `host` peut venir de --websocket-host, une
+	//chaîne libre jamais validée : toute borne choisie d'avance serait un pari.
+	//L'URL se compose donc dans un std::string, qui ne peut ni déborder ni
+	//tronquer, et le strdup final honore le contrat de sortie (l'appelant fait
+	//free(), cf. xmlrpcjsr309.cpp GetMediaCandidates).
+	//L'historique : un `char url[50]` rempli par sprintf, qui débordait la pile
+	//sur un simple nom de domaine un peu long.
 	//Réglage global du serveur (--public-ip, sinon auto-détectée) : l'adresse
 	//annoncée n'est plus redérivée ici à chaque appel, et elle est désormais
 	//corrigeable derrière un NAT.
@@ -785,16 +790,12 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 		if ( protocol == MediaFrame::WS && WSEndpoint::IsLocalSecure() )
 			scheme = "wss";
 
+		std::string url = std::string(scheme) + "://" + host;
 		if (port > 0)
-		{
-			sprintf(url, "%s://%s:%d", scheme, host, port );
-		}
-		else
-		{
-			sprintf(url, "%s://%s", scheme, host );
-		}
-		Log("urL = %s\n", url);
-		return strdup(url);
+			url += ":" + std::to_string(port);
+
+		Log("urL = %s\n", url.c_str());
+		return strdup(url.c_str());
 	}
 	else	
 	{

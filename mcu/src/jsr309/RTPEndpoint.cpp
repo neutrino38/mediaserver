@@ -85,13 +85,18 @@ int RTPEndpoint::End()
         //Detach if joined
 	//Detach();
 
-        //Stop
-        RTPSession::End();
-
-	//If receiving
+	//ORDRE : arrêter le consommateur AVANT de détruire la source. StopReceiving
+	//baisse `receiving`, réveille la boucle de démultiplexage (DeleteStreams) et
+	//joint son thread ; ce n'est qu'ensuite que la session peut être démontée.
+	//L'ordre inverse laissait le thread de démultiplexage appeler GetPacket() sur
+	//une session en cours de destruction.
 	if (receiving)
 		//Stop it
 		StopReceiving();
+
+        //Stop
+        RTPSession::End();
+
 	return 0;
 }
 
@@ -260,7 +265,7 @@ void RTPEndpoint::onEndStream()
 	joined.reset();
 }
 
-int RTPEndpoint::Run()
+int RTPEndpoint::MultiplexLoop()
 {
         while(receiving)
         {
@@ -303,8 +308,8 @@ void* RTPEndpoint::run(void *par)
 	RTPEndpoint *end = (RTPEndpoint *)par;
         //Block signal in thread
 	blocksignals();
-	//Run
-	end->Run();
+	//Run : la boucle de démultiplexage, PAS Worker::Run() (cf. RTPEndpoint.h)
+	end->MultiplexLoop();
 	//Exit
 	return NULL;
 }
