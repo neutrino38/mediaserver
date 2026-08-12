@@ -450,4 +450,111 @@ TEST(AudioBridgingTest, WithoutTheFlagEverythingIsDecodedAsBefore)
 	transcoder.End();
 }
 
+// Le câblage côté audio. `AudioTranscoder::Attach` a toujours honoré le drapeau
+// — c'est le modèle sur lequel la version vidéo a été refaite — mais son
+// `Dettach()` portait la MÊME asymétrie que la vidéo avant correction : il ne
+// retirait pas le transcodeur des listeners de la source. Or ce chemin est celui
+// de l'audio de TOUS les appels b2bua, où le contrôleur détache et détruit à
+// chaque raccrochage.
+
+TEST(AudioBridgingTest, AttachPutsTheTranscoderOnThePath)
+{
+	std::wstring name = L"tr-audio";
+	AudioTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(/*allowBriding=*/true));
+
+	RecordingSink sink({ AudioCodec::OPUS });
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+	EXPECT_TRUE(source->HasListener(&transcoder));
+
+	RTPPacket packet = MakeAudioPacket(AudioCodec::OPUS, 21, 48000);
+	source->Publish(packet);
+
+	ASSERT_EQ(1u, sink.received.size());
+	EXPECT_EQ(0, memcmp(kMagic, sink.received[0].payload.data(), sizeof(kMagic)));
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+TEST(AudioBridgingTest, DettachTakesTheTranscoderOffTheSource)
+{
+	std::wstring name = L"tr-audio";
+	AudioTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(/*allowBriding=*/true));
+
+	RecordingSink sink({ AudioCodec::OPUS });
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+	ASSERT_TRUE(source->HasListener(&transcoder));
+
+	ASSERT_EQ(1, transcoder.Dettach());
+
+	EXPECT_FALSE(source->HasListener(&transcoder))
+		<< "une source qui garde le pointeur publie dans un objet detache";
+
+	RTPPacket packet = MakeAudioPacket(AudioCodec::OPUS, 22, 48000);
+	source->Publish(packet);
+	EXPECT_TRUE(sink.received.empty());
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+TEST(AudioBridgingTest, EndAlsoTakesTheTranscoderOffTheSource)
+{
+	// `MediaSession::AudioTranscoderDelete` appelle End() sans Dettach(), et le
+	// destructeur l'appelle aussi : c'est de la sûreté mémoire.
+	std::wstring name = L"tr-audio";
+	auto source = std::make_shared<FakeSource>();
+
+	{
+		AudioTranscoder transcoder(name);
+		ASSERT_EQ(1, transcoder.Init(/*allowBriding=*/true));
+		ASSERT_EQ(1, transcoder.Attach(source));
+		ASSERT_EQ(1u, source->ListenerCount());
+
+		transcoder.End();
+		EXPECT_EQ(0u, source->ListenerCount());
+	}
+
+	// Le transcodeur est détruit ici : la source ne doit plus rien porter sur lui,
+	// sans quoi le paquet suivant déréférence de la mémoire libérée.
+	EXPECT_EQ(0u, source->ListenerCount());
+	RTPPacket packet = MakeAudioPacket(AudioCodec::OPUS, 23, 48000);
+	source->Publish(packet);
+}
+
+TEST(AudioBridgingTest, ReattachingMovesTheTranscoderToTheNewSource)
+{
+	std::wstring name = L"tr-audio";
+	AudioTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(/*allowBriding=*/true));
+
+	RecordingSink sink({ AudioCodec::OPUS });
+	transcoder.AddListener(&sink);
+
+	auto first  = std::make_shared<FakeSource>();
+	auto second = std::make_shared<FakeSource>();
+
+	ASSERT_EQ(1, transcoder.Attach(first));
+	ASSERT_EQ(1, transcoder.Attach(second));
+
+	EXPECT_FALSE(first->HasListener(&transcoder))
+		<< "l'ancienne source ne doit plus publier dans le transcodeur";
+	EXPECT_TRUE(second->HasListener(&transcoder));
+
+	RTPPacket packet = MakeAudioPacket(AudioCodec::OPUS, 24, 48000);
+	second->Publish(packet);
+	EXPECT_EQ(1u, sink.received.size());
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
 }  // namespace
