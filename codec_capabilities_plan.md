@@ -1,9 +1,22 @@
 # Plan — savoir demander au serveur quels codecs il porte
 
-Aujourd'hui personne ne peut poser la question, alors chaque couche y répond
-toute seule, avec une liste écrite à la main qui dérive. Le 2026-08-12 un appel
-AV1 ↔ AV1 est mort en 488 parce que le contrôleur offrait H.264/VP8 : trois
-listes, trois étages, aucune vraie.
+**Le principe d'abord** (posé dans `CLAUDE.md`) : ce que le serveur sait de
+lui-même, c'est à lui qu'on le demande. Il est la source de vérité sur ses propres
+capacités et ses propres verdicts ; un contrôleur le pilote, il ne le modélise
+pas. Le dépôt portait déjà cette règle pour l'adresse annoncée dans le SDP — une
+seule source, lue par les deux API de contrôle, jamais recopiée dans la
+configuration d'un contrôleur.
+
+Les codecs portés en sont le second cas, et il a coûté un appel : le 2026-08-12,
+un appel AV1 ↔ AV1 est mort en 488 parce que le contrôleur offrait H.264/VP8. Non
+parce qu'il avait tort de le croire, mais parce que **personne ne pouvait poser la
+question** — alors trois couches y ont répondu seules, avec trois listes écrites à
+la main, dont aucune n'était vraie.
+
+Ce plan ne corrige donc pas une liste : il rend la question posable, ce qui est la
+seule façon de ne pas la reposer dans six mois. Corollaire à retenir : **une
+capacité qui existe dans le code mais qu'aucune API ne permet d'interroger est un
+défaut** — c'est ce qui force le contrôleur à deviner.
 
 ## 1. L'état des lieux
 
