@@ -15,6 +15,11 @@ VideoTranscoder::VideoTranscoder(std::wstring &name)
 
 	//Not inited
 	inited = false;
+
+	//Pas encore un paquet vu : le mode sera décidé sur le premier
+	state = 0;
+	recCodec = -1;
+	allowBridging = false;
 }
 
 VideoTranscoder::~VideoTranscoder()
@@ -25,10 +30,11 @@ VideoTranscoder::~VideoTranscoder()
 		End();
 }
 
-int VideoTranscoder::Init(bool adaptative)
+int VideoTranscoder::Init(bool adaptative, bool allowBridging)
 {
-	Log("-Init VideoTranscoder [%ls,encoder:%p,decoder:%p]\n",tag.c_str(),&encoder,&decoder);
-	
+	Log("-Init VideoTranscoder [%ls,encoder:%p,decoder:%p,bridging:%d]\n",
+	    tag.c_str(),&encoder,&decoder,allowBridging);
+
 	//Init pipe
 	pipe.Init();
 	//Start encoder
@@ -38,6 +44,10 @@ int VideoTranscoder::Init(bool adaptative)
 	//Inited
 	inited = true;
         encoder.UseInputSize(adaptative);
+	//Mode pont autorisé ou non ; le mode reste à décider sur le premier paquet
+	this->allowBridging = allowBridging;
+	state = 0;
+	recCodec = -1;
 	//OK
 	return 1;
 }
@@ -88,9 +98,66 @@ void VideoTranscoder::RemoveListener(Joinable::Listener *listener)
 	encoder.RemoveListener(listener);
 }
 
+//Même politique que AudioTranscoder::onRTPPacket : le mode est décidé sur le
+//codec RÉELLEMENT reçu, pas sur ce que le plan de contrôle a annoncé, et il est
+//rejugé dès que ce codec change. `RTPMultiplexer::TryCodec` interroge tous les
+//puits attachés — et `RTPEndpoint::TryCheckCodec` bascule au passage le codec
+//d'émission du puits — donc un « oui » signifie que le paquet peut sortir tel
+//quel.
 void VideoTranscoder::onRTPPacket(RTPPacket &packet)
 {
-	decoder.onRTPPacket(packet);
+	if (!allowBridging)
+	{
+		decoder.onRTPPacket(packet);
+		return;
+	}
+
+	if (recCodec != packet.GetCodec() || state == 0)
+	{
+		int previous = state;
+		int ret = encoder.TryCodec(packet.GetCodec());
+
+		if (ret == packet.GetCodec())
+		{
+			state = 2;
+			Log("-VideoTranscoder: switched to bridged mode for codec %s.\n",
+			    VideoCodec::GetNameFor((VideoCodec::Type) packet.GetCodec()));
+		}
+		else
+		{
+			state = 1;
+			Log("-VideoTranscoder: switched to transcoder mode for codec %s.\n",
+			    VideoCodec::GetNameFor((VideoCodec::Type) packet.GetCodec()));
+
+			//LA différence avec l'audio. Reprendre l'encodage en cours de flux ne
+			//suffit pas pour de la vidéo : le puits vient de recevoir des paquets
+			//relayés et attend la suite d'un flux qui change de source. Sans image
+			//clé il affiche du bruit jusqu'à la prochaine intra périodique du
+			//codeur — le gel classique. On force donc la FPU dès que l'encodeur
+			//reprend la main, ce que fait déjà VideoTranscoderFPU par XML-RPC.
+			//
+			//Reste hors de notre portée : le DÉCODEUR a lui aussi besoin d'une
+			//intra, mais de la SOURCE, et c'est l'endpoint amont qui la demande
+			//(RTCP FIR/PLI). Sur un vrai changement de codec le pair en émet une
+			//de lui-même ; la transition est loggée pour que le contraire se voie.
+			if (previous != 0)
+				encoder.Update();
+		}
+
+		recCodec = packet.GetCodec();
+	}
+
+	switch (state)
+	{
+		case 2: // pont : ni décodeur ni encodeur dans le chemin
+			encoder.Multiplex(packet);
+			break;
+
+		case 1:
+		default:
+			decoder.onRTPPacket(packet);
+			break;
+	}
 }
 void VideoTranscoder::onResetStream()
 {

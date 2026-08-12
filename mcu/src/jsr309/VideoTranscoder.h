@@ -22,7 +22,10 @@ public:
 	VideoTranscoder(std::wstring &name);
 	virtual ~VideoTranscoder();
 
-	int Init(bool adpatative = false);
+	//`allowBridging` : autorise le mode pont, comme AudioTranscoder — quand le
+	//puits sait porter le codec qui arrive, le paquet est relayé tel quel au lieu
+	//d'être décodé puis ré-encodé. Décidé par paquet, pas par le plan de contrôle.
+	int Init(bool adpatative = false, bool allowBridging = false);
 	int SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod, Properties & properties);
 	int End();
 
@@ -51,6 +54,9 @@ private:
 	VideoPipe	pipe;
 	std::wstring	tag;
 	bool		inited;
+	int		state;		// 0 = probing, 1 = transcoding, 2 = bridging
+	int		recCodec;	// dernier codec entrant observé
+	bool		allowBridging;
 };
 
 #endif	/* VIDEOTRANSCODER_H */
