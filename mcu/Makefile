@@ -235,9 +235,17 @@ mcu.pb.o: mcu.pb.cc
 ############################################
 all: mkdirs $(TARGETS) 
 
-mkdirs:  
-	mkdir -p $(BUILD)
-	mkdir -p $(BIN)
+# Les repertoires de sortie sont des cibles-fichiers a part entiere : les cibles
+# qui en ont besoin les prennent en prerequis ORDER-ONLY (apres la barre |), de
+# sorte que leur mtime — qui change a chaque fichier ecrit dedans — n'entre pas
+# dans la comparaison de dates. C'est ce qui evite le relien systematique.
+$(BUILD) $(BIN):
+	mkdir -p $@
+
+# `mkdirs` reste pour les cibles pas encore converties (all, wstest) : il ne fait
+# plus le mkdir lui-meme, il le delegue aux regles ci-dessus.
+mkdirs: | $(BUILD) $(BIN)
+
 clean:
 	rm -f $(BUILDOBJSMCU)
 	rm -f $(BUILDOBJSFS)
@@ -252,8 +260,18 @@ install:
 #MCU
 ############################################
 
-mcu: mkdirs $(OBJSMCU)
-	$(CXX) -o $(BIN)/$@ $(BUILDOBJSMCU) $(LDFLAGS) $(VADLD)
+# `mcu` n'est qu'un alias : le vrai produit est $(BIN)/mcu, et c'est LUI qui doit
+# porter la regle. Ecrire `mcu: ...` avec une recette qui produit $(BIN)/mcu
+# laissait make chercher un fichier `mcu` dans ce repertoire, ne pas le trouver,
+# et donc RELIER a chaque appel meme sans un seul objet recompile.
+# Les prerequis restent les noms nus des objets : VPATH les resout vers $(BUILD),
+# et c'est la seule forme que la regle de motif %.o sait construire sur un arbre
+# neuf (cf. DEPFLAGS -MT $@, qui nomme aussi les cibles a nu).
+.PHONY: mcu
+mcu: $(BIN)/mcu
+
+$(BIN)/mcu: $(OBJSMCU) | $(BUILD) $(BIN)
+	$(CXX) -o $@ $(BUILDOBJSMCU) $(LDFLAGS) $(VADLD)
 
 rtmptest: $(OBJSRTMPTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS)
@@ -289,7 +307,10 @@ BUILDOBJSTEST = $(addprefix $(BUILD)/,$(OBJS))
 # make check TEST_PCAP=/chemin/vers.pcap).
 TEST_PCAP    ?= $(abspath tests/fixtures/rtp_rtcp.pcap)
 
-tests/runtests: mkdirs $(OBJS) $(TESTSRCS)
+# $(BUILD) en prerequis ORDER-ONLY, pas `mkdirs` : celui-ci n'etant pas un fichier,
+# il etait toujours plus recent que tests/runtests et forcait la recompilation de
+# TOUTE la suite gtest a chaque `make check`, meme sans modification.
+tests/runtests: $(OBJS) $(TESTSRCS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) -DTEST_PCAP_FILE='"$(TEST_PCAP)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
 		-o tests/runtests $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
