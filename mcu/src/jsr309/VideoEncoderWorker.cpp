@@ -268,25 +268,21 @@ int VideoEncoderMultiplexerWorker::Encode()
 	//No wait for first
 	QWORD frameTime = 0;
 
-	videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
-
-	//Comprobamos que se haya creado correctamente
-	if (videoEncoder == NULL)
-	{
-		//error
-		Error("Can't create video encoder\n");
-		encoding = false;
-	}
-	else
-	{
-		//Send at higher bitrate first frame, but skip frames after that so sending bitrate is kept
-                // DIsabled by IVES - to check later
-		videoEncoder->SetFrameRate(fps,current,intraPeriod);
-		//Iniciamos el tamama�o del encoder
- 		videoEncoder->SetSize(width,height);
-	
-		Log("-Created %s video encoder.\n", VideoCodec::GetNameFor(codec));
-	}
+	//L'encodeur n'est PAS créé ici, mais à la première image réellement
+	//capturée (plus bas dans la boucle).
+	//
+	//En mode pont (VideoTranscoder::onRTPPacket, state == 2) les paquets sont
+	//relayés tels quels : le décodeur n'est jamais appelé, le pipe ne reçoit
+	//donc aucune image, et GrabFrame(0) — attente infinie — gare ce thread
+	//sans consommer de CPU. Ouvrir l'encodeur d'avance revenait à instancier
+	//un codec que ce mode n'utilisera jamais. Sur un appel AV1 <-> AV1, le cas
+	//précis où les deux pattes pontent, c'étaient deux encodeurs SVT-AV1
+	//ouverts pour rien — et le crash de libSvtAv1Enc 0.9.0 avec, puisque leurs
+	//init/deinit se percutent (cf. libmedikit medkit/ffcodeclock.h).
+	//
+	//Le mode n'est arbitré qu'au PREMIER PAQUET RTP reçu, donc après le
+	//démarrage de ce thread : impossible de le consulter ici. La présence
+	//d'une image dans le pipe est le signal juste, et il est déjà disponible.
 
 	//The time of the first one
 	gettimeofday(&first,NULL);
@@ -301,7 +297,9 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//Nos quedamos con el puntero antes de que lo cambien
 		PictPtr pic;
 
-                if (useInputSize && input->HasNativeSizeChanged() )
+                //`videoEncoder` peut être nul : il n'est créé qu'à la première
+                //image (cf. plus haut), et ce bloc le déréférence.
+                if (videoEncoder && useInputSize && input->HasNativeSizeChanged() )
                 {
                     DWORD nativeWidth = input->GetNativeWidth();
                     DWORD nativeHeight = input->GetNativeHeight();
@@ -344,6 +342,37 @@ int VideoEncoderMultiplexerWorker::Encode()
 		if (!pic || codec == -1)
 			//Exit
 			continue;
+
+		//Une image est arrivée : le pont est écarté, il faut vraiment encoder.
+		if (!videoEncoder)
+		{
+			videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
+
+			//Comprobamos que se haya creado correctamente
+			if (videoEncoder == NULL)
+			{
+				//error
+				Error("Can't create video encoder\n");
+				encoding = false;
+				break;
+			}
+
+			//Send at higher bitrate first frame, but skip frames after that so sending bitrate is kept
+			// DIsabled by IVES - to check later
+			videoEncoder->SetFrameRate(fps,current,intraPeriod);
+			//Iniciamos el tamama�o del encoder
+			videoEncoder->SetSize(width,height);
+
+			Log("-Created %s video encoder.\n", VideoCodec::GetNameFor(codec));
+
+			//Cette image-ci est abandonnée : elle a servi à décider qu'un
+			//encodeur était nécessaire. Repasser par le haut de la boucle rend
+			//au tour suivant l'ordre d'origine — ajustement à la taille native
+			//(useInputSize) AVANT l'encodage — au lieu de le dupliquer ici.
+			//Une image perdue à l'établissement est sans conséquence : le flux
+			//démarre de toute façon sur l'IDR que produit le premier encodage.
+			continue;
+		}
 
 		//Check if we need to send intra
 		if (sendFPU)
