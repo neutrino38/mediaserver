@@ -24,15 +24,9 @@ BFCPINCLUDE     = $(BFCPDIR)/include
 # codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
 VADWEBRTC       = yes
 PROTOC		= ../staticdeps/bin/protoc
-DISTRO          = $(shell head -1 /etc/redhat-release | awk \
-                      '{if ($$0 ~ /Fedora/) {print "fc"} else if ($$0 ~ /CentOS release 5/) {print "el5"} else if ($$0 ~ /CentOS release 6/) {print "el6"}}' )
 #DEBUG
-#OPTS=-msse -msse2 -msse3 -D__SSE2__  
+#OPTS=-msse -msse2 -msse3 -D__SSE2__
 OPTS=-std=gnu++17 -Werror=return-type -Werror=delete-non-virtual-dtor -Werror=int-to-pointer-cast
-
-ifeq ($(FEWSTATICDEPS),yes)
-    OPTS+= -DFEWSTATICDEPS -I/usr/include/ffmpeg
-endif
 
 ifeq ($(GPROF),yes)
         OPTS+= -g -O0 -pg
@@ -153,48 +147,65 @@ endif
 MAGICKCFLAGS    := $(shell pkg-config --cflags Magick++)
 MAGICKLIBS      := $(shell pkg-config --libs Magick++)
 
-INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(BFCPINCLUDE) -I/usr/include/ffmpeg
+INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(BFCPINCLUDE)
 
-# libmedikit est desormais OBLIGATOIRE (plus de mode sans-medkit) : les codecs
-# proviennent du sous-module. En-tetes (medkit/, astmedkit/) et archive pris
-# dans l'arbre du sous-module, sans install dans /opt/ives. -I$(MEDKITDIR) place
-# AVANT -Iinclude/ pour que les en-tetes du sous-module priment (et que les
-# inclusions <g722/...>/<amr/...> visent le codec medkit, pas l'homonyme mcu/src).
-INCLUDE := -I$(MEDKITDIR) $(INCLUDE)
-MEDKITLIB = $(MEDKITDIR)/libmedkit.a
+###################################
+# libmedkit + ffmpeg, par pkg-config
+###################################
+# Le sous-module publie libmedkit.pc a la racine de son arbre — chemins absolus
+# vers le clone, motif « uninstalled » des autotools — et y declare ffmpeg en
+# Requires:, ffvideocodec.h incluant <libavcodec/avcodec.h>. Ses -I et ses -l
+# arrivent donc avec : le mcu n'ecrit plus /usr/include/ffmpeg et n'enumere plus
+# les -lav*. Batir contre un autre ffmpeg ne demande alors qu'un
+# PKG_CONFIG_PATH, ce dont le portage ffmpeg 9 a besoin (voir, a la racine,
+# ffmpeg9_migration_plan.md).
+#
+# Trois modules restent en propre au mcu, que libmedkit n'utilise pas :
+# libavfilter (mosaiques), libavdevice et libpostproc.
+MEDKITPCDIR = $(abspath $(MEDKITDIR))
+PKGMODULES  = libmedkit libavfilter libavdevice libpostproc
+PKGCFLAGS  := $(shell PKG_CONFIG_PATH=$(MEDKITPCDIR):$$PKG_CONFIG_PATH pkg-config --cflags $(PKGMODULES) 2>/dev/null)
+PKGLIBS    := $(shell PKG_CONFIG_PATH=$(MEDKITPCDIR):$$PKG_CONFIG_PATH pkg-config --libs   $(PKGMODULES) 2>/dev/null)
 
-LDFLAGS+= $(BFCPLIBS) -L$(ADDLIBPATH)/lib 
-LDFLAGS+= $(MEDKITLIB)
+# libmedkit.pc n'existe qu'une fois le sous-module bati : l'ordre est garanti
+# par install.ksh, pas par un `make` lance a la main sur un arbre neuf. Repli
+# explicite et bruyant, plutot que des flags vides dont l'erreur — un en-tete
+# introuvable — n'aurait aucun rapport visible avec sa cause.
+ifeq ($(strip $(PKGLIBS)),)
+$(warning pkg-config n'a pas resolu [$(PKGMODULES)] : repli sur les chemins en dur.)
+$(warning Batir d'abord le sous-module : make -C $(MEDKITDIR) all ASTERISK=no)
+PKGCFLAGS := -I$(MEDKITDIR) -I/usr/include/ffmpeg
+PKGLIBS   := $(MEDKITDIR)/libmedkit.a -lavcodec -lswscale -lavformat -lavutil -lswresample -lavfilter -lavdevice -lpostproc
+endif
+
+# Les -I de libmedkit passent AVANT -Iinclude/ : les en-tetes du sous-module
+# doivent primer, pour que les inclusions <g722/...> / <amr/...> visent le codec
+# medkit et non son homonyme dans mcu/src.
+INCLUDE := $(PKGCFLAGS) $(INCLUDE)
+
+LDFLAGS+= $(BFCPLIBS) -L$(ADDLIBPATH)/lib
+# libmedkit.a d'abord, puis ce dont elle depend : pour une archive, l'ordre du
+# lien decide. pkg-config rend deja -lmedkit avant les -lav*.
+LDFLAGS+= $(PKGLIBS)
 
 ifeq ($(MOTELI),yes)
-	LDFLAGS += -lamqpcpp -lrabbitmq -lprotobuf 
+	LDFLAGS += -lamqpcpp -lrabbitmq -lprotobuf
 endif
 
-ifeq ($(FEWSTATICDEPS),yes)
-    # Use of dynamic libs (on FC20 ...)
-    LDFLAGS += -Wl,-Bstatic -lssl -lcrypto -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -Wl,-Bdynamic -lsrtp2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 -lpthread $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
-	LDXMLFLAGS+= -lxmlrpc_abyss -lxmlrpc_server -lxmlrpc -lxmlrpc_util
-else
-    # Usin static libs (CentOS)
-ifeq ($(DISTRO), el5)   
-	LDFLAGS += -Wl,-Bstatic -lmp4v2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lfdk-aac -lx264 -lvpx -lg722_1 -lspeex -Wl,-Bdynamic -lsrtp2 -lmp4v2 $(MAGICKLIBS) -lbz2 -lopencore-amrnb -lopencore-amrwb
-else 
-	# AMR-NB/WB : fournis par libmedkit via libavcodec (encodeurs libopencore_amrnb
-	# / libvo_amrwbenc lies dynamiquement dans libavcodec.so). Plus de -lopencore-amr*.
-	# x264 : plus de lien direct ; l'encodeur H264 de libmedkit passe par
-	# libavcodec (h264_vaapi si dispo, libx264 en repli).
-	LDFLAGS += -lsrtp2 -lavcodec -lswscale -lavfilter -lswresample -lavformat -lavutil -lavdevice -lpostproc -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz
-endif
-	# OpenSSL : libs dynamiques du systeme (AlmaLinux 9) au lieu des .a statiques
-	# (plus de build openssl dans staticdeps).
-	# XML : xmlrpc-c est bati avec le backend libxml2 ; xmlParseChunk vient donc de
-	# la libxml2 systeme (-lxml2), pas des archives expat libxmlrpc_xmlparse/xmltok
-	# (non produites dans ce mode).
-	# xmlrpc-c : paquet systeme (xmlrpc-c-devel, depot crb) lie dynamiquement,
-	# plus de build source dans staticdeps. Backend libxml2 (idem qu'avant).
-	LDXMLFLAGS+=  -lxmlrpc_abyss -lxmlrpc_server -lxmlrpc -lxmlrpc_util -lxml2 -lssl -lcrypto -lpthread
-endif
-    
+# Lien dynamique sur les paquets systeme AlmaLinux 9, sans alternative. Les
+# branches DISTRO (fc / el5 / el6) et FEWSTATICDEPS ont ete supprimees : la
+# detection ne reconnaissait meme pas AlmaLinux — elle tombait dans le `else`,
+# seul chemin reellement emprunte depuis le portage — et le spec est reserve a
+# AlmaLinux 9. Les codecs que ces branches liaient en direct (-lx264, -lvpx,
+# -lspeex, -lfdk-aac, -lg722_1, -lopencore-amr*) arrivent tous par libavcodec,
+# via libmedkit.
+LDFLAGS += -lsrtp2 -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz
+
+# xmlrpc-c : paquet systeme (xmlrpc-c-devel, depot crb) lie dynamiquement, bati
+# avec le backend libxml2 — xmlParseChunk vient donc de la libxml2 systeme
+# (-lxml2), et non des archives expat libxmlrpc_xmlparse/xmltok. OpenSSL : libs
+# dynamiques du systeme, plus de build openssl dans staticdeps.
+LDXMLFLAGS+= -lxmlrpc_abyss -lxmlrpc_server -lxmlrpc -lxmlrpc_util -lxml2 -lssl -lcrypto -lpthread
 
 LDFLAGS+= $(LDXMLFLAGS)
 
@@ -270,8 +281,8 @@ flashstreamer: $(OBJSFS) $(OBJS)
 # rtmptest.o / wstest.o) + gtest systeme. gtest_main fournit main(). REMPLACE les
 # harnais manuels rtmptest.cpp (couche chunk RTMP) et wstest.cpp (serveur d'echo
 # WebSocket) par des tests autonomes et assertifs.
-# Usage : make -f Makefile.rpm check   (build + execution)
-#         make -f Makefile.rpm tests   (build seul -> tests/runtests)
+# Usage : make check   (build + execution)
+#         make tests   (build seul -> tests/runtests)
 # NB : PAS de -lgtest_main. La suite fournit son propre main() (tests/test_env.cpp)
 # car libwebrtc_audio_processing.so (VAD) exporte un symbole `main` parasite qui,
 # .so contre .so, l'emportait sur celui de libgtest_main dans la resolution

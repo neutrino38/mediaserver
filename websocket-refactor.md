@@ -377,7 +377,7 @@ le hot path** ; il se réduit aux 3 risques résiduels ci-dessous.
 - **`SIGPIPE`** : déjà ignoré globalement dans `main.cpp` (`signal(SIGPIPE, SIG_IGN)`), OK.
 - **Cohérence smart-pointers** : suivre le modèle « map possède `shared_ptr`, handlers via copie,
   erase sous verrou puis destruction hors verrou » du projet.
-- **Piège Makefile** : `mcu/Makefile.rpm` ne suit pas les headers → `rm` les `.o` concernés avant
+- **Piège Makefile** : `mcu/Makefile` ne suit pas les headers → `rm` les `.o` concernés avant
   rebuild.
 
 ## 7. Alternatives écartées / notes
@@ -392,7 +392,7 @@ le hot path** ; il se réduit aux 3 risques résiduels ci-dessous.
 
 **Harnais automatisé `test/websocket/` (FAIT en Phase 0, 7/7 PASS)** — voir `test/websocket/README.md` :
 - `mcu/src/wstest.cpp` : serveur d'écho autonome (target Makefile `wstest`, hors `TARGETS` par
-  défaut, `make -C mcu -f Makefile.rpm wstest`). Réutilise `TextEchoWebsocketHandler`, **aucune
+  défaut, `make -C mcu -f Makefile wstest`). Réutilise `TextEchoWebsocketHandler`, **aucune
   dépendance JSR309/RTP** → exerce purement `WebSocketServer/Connection/Transport`.
 - `ws_client.py` : client WS en Python pur (stdlib) — handshake RFC 6455, écho texte/UTF-8/16 bits,
   ordre de 3 messages, ping/pong, close. Accepte déjà `--tls` pour la Phase 2.

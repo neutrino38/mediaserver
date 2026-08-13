@@ -92,7 +92,7 @@ function clean
 
 	# Nettoyage du binaire et des objets du mediaserver.
 	cd mcu
-	make -f Makefile.rpm clean
+	make clean
 	cd "$BASESRCDIR"
 
 	# Nettoyage des objets et archives des sous-modules (libmedkit + libbfcp),
@@ -196,7 +196,7 @@ function local_compile
 
 	# xmlrpc-c : plus construit depuis les sources. On s'appuie desormais sur le
 	# paquet systeme xmlrpc-c-devel (AlmaLinux 9, depot crb) : memes en-tetes,
-	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile.rpm LDXMLFLAGS).
+	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile LDXMLFLAGS).
 
 	# g722_1 / SIREN : plus construit. Le codec G.722.1 a ete retire du
 	# mediaserver et de libmedikit (plus aucune reference a -lg722_1).
@@ -218,7 +218,7 @@ function local_compile
 
 	mkdir -p bin/debug
 	cd mcu
-	make -f Makefile.rpm mcu
+	make mcu
 }
 
 function compile_rabbitmq
@@ -263,7 +263,7 @@ function compile_libmedkit
 {
 	# Construit libmedkit.a DANS l'arbre du sous-module (cible 'all', pas
 	# d'install dans /opt/ives). Le mediaserver s'y lie directement via
-	# MEDKITDIR/USEMEDKIT dans mcu/Makefile.rpm. Voir almalinux9_port_plan.md.
+	# MEDKITDIR/USEMEDKIT dans mcu/Makefile. Voir almalinux9_port_plan.md.
 	MEDIASERVERPATH=$PWD
 	MEDKITDIR=$MEDIASERVERPATH/third_party/fontventa/libmedikit
 	if [ ! -d "$MEDKITDIR" ]
@@ -298,7 +298,7 @@ function compile_libbfcp
 {
 	# Construit libbfcp DANS l'arbre du sous-module (cible 'all', pas d'install
 	# dans /opt/ives). Le mediaserver s'y lie directement via BFCPDIR dans
-	# mcu/Makefile.rpm. On produit les deux variantes (dbg + rel) pour couvrir
+	# mcu/Makefile. On produit les deux variantes (dbg + rel) pour couvrir
 	# les deux valeurs de DEBUG du build mcu.
 	MEDIASERVERPATH=$PWD
 	BFCPDIR=$MEDIASERVERPATH/third_party/libbfcp

@@ -117,7 +117,7 @@ $ nm -D --defined-only /usr/lib64/libavformat.so.59 | grep -c ff_rtp
 0                                                     # symboles non exportés
 ```
 
-La bibliothèque est **déjà liée** — `mcu/Makefile.rpm:186` (`-lavformat`) et
+La bibliothèque est **déjà liée** — `mcu/Makefile:186` (`-lavformat`) et
 `third_party/fontventa/libmedikit/Makefile:138`. Le code est donc dans notre
 processus, mais hors d'atteinte : ni en-tête, ni symbole.
 

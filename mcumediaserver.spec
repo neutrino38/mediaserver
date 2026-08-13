@@ -28,7 +28,7 @@ echo Clean du repertoire $RPM_BUILD_ROOT
 [ "$RPM_BUILD_ROOT" != "/" ] && rm -rf "$RPM_BUILD_ROOT"
 cd %_topdir
 cd ../mcu
-make -f Makefile.rpm clean
+make clean
 
 %prep
 cd %_topdir

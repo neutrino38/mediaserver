@@ -88,7 +88,7 @@ Once the dependencies and submodule archives already exist, you can rebuild
 just the C++ binary with:
 
 ```sh
-make -f mcu/Makefile.rpm mcu
+make -C mcu mcu
 ```
 
 ### Building the submodules individually

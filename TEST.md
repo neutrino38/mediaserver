@@ -14,8 +14,8 @@ couvre la conception, l'organisation et les défauts mis au jour.
 Depuis le répertoire `mcu/` (là où `install.ksh` invoque `make`) :
 
 ```sh
-make -f Makefile.rpm check     # compile puis exécute toute la suite
-make -f Makefile.rpm tests     # compile seulement (produit tests/runtests)
+make check     # compile puis exécute toute la suite
+make tests     # compile seulement (produit tests/runtests)
 ./tests/runtests               # relancer sans recompiler
 ./tests/runtests --gtest_filter='RtmpChunk.*'   # filtrer une suite
 GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
@@ -25,7 +25,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 
 - **GoogleTest système** : `gtest` (`pkg-config gtest`). Sur AlmaLinux 9 :
   `dnf install gtest-devel`.
-- La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `Makefile.rpm`,
+- La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `mcu/Makefile`,
   soit tout sauf `main.o`/`rtmptest.o`/`wstest.o`), qui doivent donc avoir été
   bâtis au préalable — le plus simple est de lancer d'abord un
   `./install.ksh localcompile` (qui bâtit aussi les sous-modules libmedikit et

@@ -5,7 +5,7 @@
 > **Suivi.** Les bugs que cet audit a mis au jour et qui étaient **réels dès
 > aujourd'hui, en IPv4** ont été corrigés (§11). Une suite de tests adverses
 > décrivant la cible IPv6 existe et est **volontairement en échec** :
-> `make -f mcu/Makefile.rpm check-ipv6` (voir §12). Aucun support IPv6 n'a été
+> `make -C mcu check-ipv6` (voir §12). Aucun support IPv6 n'a été
 > ajouté : l'arbitrage du §7 reste ouvert.
 
 Ce document **recense**, il ne migre pas. Il liste, zone par zone, tout ce qui
@@ -570,12 +570,12 @@ la cible de ce document, pas l'existant.
 
 ```sh
 cd mcu
-make -f Makefile.rpm check-ipv6      # les joue tous
-make -f Makefile.rpm check           # ne les joue PAS (c'est voulu)
+make check-ipv6      # les joue tous
+make check           # ne les joue PAS (c'est voulu)
 ```
 
 **Depuis `mcu/`, pas depuis la racine** : `$(OBJS)` porte des noms d'objets nus,
-donc `make -f mcu/Makefile.rpm …` échoue sur `No rule to make target
+donc `make -C mcu …` échoue sur `No rule to make target
 'httpparser.o'` — et crée au passage un `media/` parasite à la racine.
 
 Le tag est porté par une double convention de nommage — GoogleTest refuse `:` dans

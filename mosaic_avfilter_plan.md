@@ -504,7 +504,7 @@ extension API JSR309), pas dans la refonte mosaïques.
 
 ## 7. Plan d'implémentation par phases (build vert à chaque phase)
 
-Compilation : `cd /home/ebuu/mediaserver/mcu && make -f Makefile.rpm mcu` ;
+Compilation : `cd /home/ebuu/mediaserver/mcu && make mcu` ;
 `./install.ksh libmedkit` quand libmedikit est touchée. **PIÈGE connu** : le Makefile
 ne suit pas les headers → `rm` des `.o` concernés (mcu **et** libmedikit) après tout
 changement de header partagé (`medkit/video.h`, `mosaic.h`).
@@ -527,7 +527,7 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
 - `mcu/include/mosaiccompositor.h` + `mcu/src/mosaiccompositor.cpp` : structures §3.2,
   interface §3.3, chemin **CPU uniquement** (le GPU vient en Phase 5) ; `BuildGraph`
   génère la chaîne §1.3 par `avfilter_graph_parse_ptr` ; `Compose` push+pull §4/§6.
-- Ajouter `mosaiccompositor.o` à `OBJS` dans `mcu/Makefile.rpm` (ligne 90).
+- Ajouter `mosaiccompositor.o` à `OBJS` dans `mcu/Makefile` (ligne 90).
 - **Détails d'implémentation** : buffersrc créés par `avfilter_graph_create_filter`
   (pour poser plus tard `hw_frames_ctx` par entrée), corps de chaîne (scale + cascade
   overlay) par `avfilter_graph_parse_ptr` ; labels ouverts = buffersrc côté `outputs`,
@@ -538,7 +538,7 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   absolue de l'overlay participant = GetLeft/GetTop du slot). `Configure` : structure
   GPU-d'abord/repli-CPU en place (`gpuBroken`), `BuildGraph(true)` renvoie false
   jusqu'en Phase 5.
-- **Validation** : build vert (`make -f Makefile.rpm mcu`) ; test autonome
+- **Validation** : build vert (`make mcu`) ; test autonome
   `scratchpad/compositest.cpp` (façon `negotest`) 4/4 : 2x2 (luma par slot),
   letterbox (fond visible dans les bandes), reconfiguration paresseuse 2x2→no-op→1x1,
   30 ticks consécutifs (1 trame/tick, pas d'EAGAIN).
@@ -588,7 +588,7 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   vide + `nullptr`). **PIÈGE name-hiding confirmé** : appeler `Update(PictPtr)` via
   le type dérivé échoue (masqué par `Update(BYTE*)`) — videomixer appelle via
   `Mosaic*`, OK ; le test passe par une réf `Mosaic&`.
-- **Validation** : build vert (`make -f Makefile.rpm mcu`) ; test autonome
+- **Validation** : build vert (`make mcu`) ; test autonome
   `scratchpad/mosaictest.cpp` (via `Mosaic&`, lié aux `.o` mosaïque + libmedkit)
   18/18 : remplissage 2x2 (luma par quadrant), cache intra-tick (même `PictPtr`),
   invalidation par `Update`, `Clean`→fond gris, letterbox 16:9 dans slot 4:3 (bandes
@@ -638,12 +638,12 @@ changement de header partagé (`medkit/video.h`, `mosaic.h`).
   `Overlay::Display` + buffers `image*`, includes `framescaler.h` de
   `mosaic.h/partedmosaic.h/asymmetricmosaic.h/pipmosaic.h`.
 - **Déplacer `VideoRescaler` dans libmedikit** (`medkit/videorescaler.h` +
-  `videorescaler.cpp`, ajout à `OBJS` du Makefile libmedikit ; `mcu/Makefile.rpm`
+  `videorescaler.cpp`, ajout à `OBJS` du Makefile libmedikit ; `mcu/Makefile`
   retire `videorescaler.o`, `mcu/include/videorescaler.h` devient un simple
   `#include <medkit/videorescaler.h>` ou disparaît) et **porter
   `libmedikit/transcoder.cpp`** (dernier utilisateur de `FrameScaler`,
   `transcoder.cpp:26,251`) sur `VideoRescaler`.
-- Supprimer `framescaler.{h,cpp}` **des deux arbres** (`mcu` : Makefile.rpm lignes
+- Supprimer `framescaler.{h,cpp}` **des deux arbres** (`mcu` : Makefile lignes
   90 et 98 `framescaler.o` ; libmedikit : Makefile ligne 101) — ensemble, pour ne
   jamais laisser une seule des deux copies (risque de double définition/ODR).
 - `rm` de **tous** les `.o` (mcu + libmedikit), rebuild complet

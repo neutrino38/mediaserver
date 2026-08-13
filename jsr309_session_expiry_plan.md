@@ -419,7 +419,7 @@ Aucun changement de `MediaSession.*` : le mécanisme vit entièrement dans le ma
 n'a pas besoin de connaître son horodatage).
 
 Ordre de commit suggéré : (1+2) événement, (3+4) manager+balayeur, (5+6) API. Build vert exigé à
-chaque étape (`make -f mcu/Makefile.rpm mcu`).
+chaque étape (`make -C mcu mcu`).
 
 ---
 

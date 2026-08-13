@@ -12,8 +12,8 @@ et `mcu/src/wstest.cpp` par des tests autonomes, déterministes et assertifs.
 Depuis le répertoire `mcu/` (là où `install.ksh` invoque `make`) :
 
 ```sh
-make -f Makefile.rpm check     # compile puis exécute toute la suite
-make -f Makefile.rpm tests     # compile seulement (produit tests/runtests)
+make check     # compile puis exécute toute la suite
+make tests     # compile seulement (produit tests/runtests)
 ./tests/runtests               # relancer sans recompiler
 ```
 
@@ -34,7 +34,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 
 - **GoogleTest système** : `gtest` (`pkg-config gtest`). Sur AlmaLinux 9 :
   `dnf install gtest-devel`.
-- La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `Makefile.rpm`),
+- La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `mcu/Makefile`),
   qui doivent avoir été bâtis au préalable : lancer d'abord `./install.ksh localcompile`.
 
 > **Piège du `main` parasite.** La suite fournit son **propre `main()`**

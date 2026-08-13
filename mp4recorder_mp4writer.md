@@ -304,7 +304,7 @@ mp4format.o: astmedkit/mp4format.h medkit/mp4writer.h medkit/mp4reader.h medkit/
 Renommer physiquement les fichiers : `git mv mp4recorder.cpp mp4writer.cpp` et
 `git mv medkit/mp4recorder.h medkit/mp4writer.h`.
 
-### 5.2 mcu (`mcu/Makefile.rpm`)
+### 5.2 mcu (`mcu/Makefile`)
 
 **Aucun changement de liste d'objets nécessaire.** `mp4recorder.o` reste dans
 `OBJS` (l.87) — c'est toujours `mcu/src/mp4recorder.cpp` qui est compilé, mais
@@ -361,7 +361,7 @@ vérifier en test manuel (pas de suite automatisée — cf. CLAUDE.md) :
    - `mcu/include/mp4recorder.h` : supprimer `class mp4track`, forward-declarer
      `mp4writer`, réduire `MP4Recorder`
    - `mcu/src/mp4recorder.cpp` : version §3.2
-   - `make -f mcu/Makefile.rpm mcu` → vert
+   - `make -C mcu mcu` → vert
 3. **Vérifications comportementales** (§6) — test manuel : enregistrer une
    conférence, `ffprobe` + lecture VLC (audio, vidéo, synchro, tags).
 4. **Trancher `mediamixer.cpp`** (risque #4) si concerné par la cible.

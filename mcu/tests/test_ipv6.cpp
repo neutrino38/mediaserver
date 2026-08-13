@@ -19,7 +19,7 @@
  *   ./tests/runtests                                     # les saute (défaut)
  *   ./tests/runtests --gtest_filter='IPv6*' \
  *                    --gtest_also_run_disabled_tests     # les joue, tous
- *   make -f mcu/Makefile.rpm check-ipv6                  # idem, raccourci
+ *   make -C mcu check-ipv6                  # idem, raccourci
  *
  * Le jour de la migration : retirer les préfixes `DISABLED_`, garder les suites
  * `IPv6*`. Rien d'autre à toucher.

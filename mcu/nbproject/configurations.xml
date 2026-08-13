@@ -397,7 +397,7 @@
                    projectFiles="false"
                    kind="IMPORTANT_FILES_FOLDER">
       <itemPath>m:/media/Makefile</itemPath>
-      <itemPath>Makefile.rpm</itemPath>
+      <itemPath>Makefile</itemPath>
       <itemPath>media-Makefile.mk</itemPath>
     </logicalFolder>
   </logicalFolder>

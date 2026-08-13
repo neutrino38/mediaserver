@@ -172,22 +172,27 @@ PKG_CONFIG_PATH=third_party/fontventa/libmedikit pkg-config --cflags --libs libm
 
 Bâtir contre un autre ffmpeg ne demande donc plus qu'un `PKG_CONFIG_PATH`.
 
-### 4.2 mcu — **reste à faire**
+### 4.2 mcu — **fait**
 
-| Fichier | Ligne | Contenu |
-|---|---|---|
-| `mcu/Makefile.rpm` | 34, 156 | `-I/usr/include/ffmpeg` — **en dur** (deux fois) |
-| `mcu/Makefile.rpm` | 186 | branche `else` (AlmaLinux 9) : `-lavcodec -lswscale -lavfilter …` |
+`mcu/Makefile.rpm` a été renommé **`mcu/Makefile`** (le `-f` disparaît des
+commandes) et consomme `libmedkit.pc` via
+`PKG_CONFIG_PATH=$(abspath $(MEDKITDIR))`, complété par les trois modules qu'il
+utilise en propre et que libmedikit n'a pas : `libavfilter` (mosaïques),
+`libavdevice`, `libpostproc`. Plus aucun `-I/usr/include/ffmpeg` ni aucune
+énumération de `-lav*`.
 
-Action : consommer `libmedkit.pc` (`PKG_CONFIG_PATH=$(MEDKITDIR)`), qui rend déjà
-les `-I` de ffmpeg par la chaîne `Requires:`, et compléter par `pkg-config` pour
-les modules que le mcu utilise en propre et que libmedikit n'a pas —
-`libavfilter`, `libavdevice`, `libpostproc`. C'est l'idiome du fichier, qui le
-fait déjà pour `Magick++`, `webrtc-audio-processing` et `gtest`.
+Les branches **`DISTRO`** (`fc`/`el5`/`el6`) et **`FEWSTATICDEPS`** ont été
+supprimées au passage : la détection ne reconnaissait pas AlmaLinux, elle tombait
+dans le `else`, seul chemin réellement emprunté. Il ne reste qu'une ligne de lien
+dynamique el9. Les codecs que ces branches liaient en direct (`-lx264`, `-lvpx`,
+`-lspeex`, `-lfdk-aac`, `-lg722_1`, `-lopencore-amr*`) arrivent tous par
+libavcodec via libmedkit.
 
-Sans ça, un ffmpeg installé sous un autre préfixe est silencieusement ignoré au
-profit des en-têtes système, avec des symboles qui ne correspondent plus à la
-bibliothèque liée — et le mcu, lui, se lie bien à la nouvelle.
+Mis à jour dans le même lot : `install.ksh`, `mcumediaserver.spec`, `CLAUDE.md`,
+`almalinux9_port_plan.md` §D, et les commandes `make` de la documentation.
+
+Il reste donc, pour bâtir contre un autre ffmpeg, **un seul `PKG_CONFIG_PATH` à
+poser** — des deux côtés.
 
 Packaging, à mettre à jour dans le même lot :
 
@@ -208,9 +213,9 @@ serveur qui démarre et ne sait pas encoder.
 1. **Avant tout** : lire le source SVT-AV1 retenu et trancher la précondition
    §2.1 (`lp_group` toujours global ? libéré inconditionnellement ?). C'est ce
    qui décide si le verrou part ou reste — et c'est cinq minutes de lecture.
-2. Paramétrer les chemins ffmpeg du **mcu** (§4.2) — libmedikit est déjà fait
-   (§4.1). Indépendant du reste, faisable tout de suite, et sans quoi on ne peut
-   même pas compiler contre la nouvelle version.
+2. ~~Paramétrer les chemins ffmpeg~~ — **fait des deux côtés** (§4.1 et §4.2) :
+   poser `PKG_CONFIG_PATH` vers le nouveau ffmpeg suffit désormais à bâtir
+   contre lui. C'était le prérequis de tout le reste.
 3. Porter `key_frame` (§1.1) et supprimer le code mort (§1.2).
 4. Compiler, faire passer les deux suites (§6).
 5. Re-régler AV1 (§3.1–3.3) **sur trafic réel**, pas sur banc.
@@ -224,7 +229,7 @@ serveur qui démarre et ne sait pas encoder.
 ```sh
 # Les deux suites, vertes avant et après (état de référence au 2026-08-13 :
 # mcu 199/199, libmedikit 121/121)
-cd mcu && make -f Makefile.rpm check
+cd mcu && make check
 make -C third_party/fontventa/libmedikit check
 ```
 
