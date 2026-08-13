@@ -174,6 +174,9 @@ int XmlStreamingHandler::CreateEventQueue()
 	//Unlock
 	listUse.Unlock();
 
+	Log("-Created event queue [id:%d]\n",id);
+	
+
 	//Return queue id
 	return id;
 }
@@ -248,9 +251,7 @@ bool XmlStreamingHandler::HasQueue(DWORD id)
 }
 
 int XmlStreamingHandler::DestroyEventQueue(DWORD id)
-{
-	Log("-Destroy event queue [id:%d]\n",id);
-	
+{	
 	//Get lock
 	listUse.WaitUnusedAndLock();
 
@@ -284,6 +285,8 @@ int XmlStreamingHandler::DestroyEventQueue(DWORD id)
 	//Delete queu
 	delete(queue);
 	
+	Log("-Destroyed event queue [id:%d]\n",id);
+
 	//Done
 	return 1;
 }

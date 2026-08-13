@@ -160,7 +160,7 @@ int XmlRpcServer::DispatchRequest(TSession *ses)
 	SessionGetRequestInfo(ses,(const TRequestInfo**)&req);
 
 	//Log it
-	Log("-Dispatching [%s]\n",req->uri);
+	//Log("-Dispatching [%s]\n",req->uri);
 
 
 	//Obtenemos la uri
