@@ -22,7 +22,6 @@ BFCPINCLUDE     = $(BFCPDIR)/include
 # libmedkit (sous-module) est desormais la source unique des codecs : liaison
 # inconditionnelle de libmedkit.a. Le mode sans-medkit a ete supprime (les .o de
 # codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
-VADWEBRTC       = yes
 PROTOC		= ../staticdeps/bin/protoc
 #DEBUG
 #OPTS=-msse -msse2 -msse3 -D__SSE2__
@@ -101,15 +100,10 @@ ifeq ($(FLASHSTREAMER),yes)
 	TARGETS += flashstreamer flashclient testflash
 endif
 
-ifeq ($(VADWEBRTC),yes)
-        # VAD via le paquet systeme webrtc-audio-processing (module APM).
-        VADINCLUDE = $(shell pkg-config --cflags webrtc-audio-processing)
-        VADLD = $(shell pkg-config --libs webrtc-audio-processing)
-        OPTS+= -DVADWEBRTC
-else
-        VADINCLUDE =
-        VADLD =
-endif
+# VAD via le paquet systeme webrtc-audio-processing (module APM).
+VADINCLUDE = $(shell pkg-config --cflags webrtc-audio-processing)
+VADLD = $(shell pkg-config --libs webrtc-audio-processing)
+OPTS+= -DVADWEBRTC
 
 ifeq ($(MOTELI),yes)
 	OPTS+= -DMOTELI=yes
