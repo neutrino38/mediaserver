@@ -27,7 +27,7 @@ public:
 	int Init(VideoInput *input);
 	int SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod, Properties & properties);
 	int End();
-        void UseInputSize(bool use) { useInputSize = use; }
+    void UseInputSize(bool use) { useInputSize = use; }
 	
 	//Joinable interface
 	virtual void AddListener(Listener *listener);
@@ -47,6 +47,7 @@ public:
 	//précédentes.
 	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);
 
+	inline VideoCodec::Type GetCodec() { return codec; }
 private:
 	int Start();
 	int Stop();

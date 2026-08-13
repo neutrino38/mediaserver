@@ -132,7 +132,9 @@ void VideoTranscoder::onRTPPacket(RTPPacket &packet)
 		else
 		{
 			state = 1;
-			Log("-VideoTranscoder: switched to transcoder mode for codec %s.\n",
+			auto outCodec = encoder.GetCodec();
+			Log("-VideoTranscoder: transcoding %s -> %s .\n",
+				VideoCodec::GetNameFor(outCodec),
 			    VideoCodec::GetNameFor((VideoCodec::Type) packet.GetCodec()));
 
 			//LA différence avec l'audio. Reprendre l'encodage en cours de flux ne
