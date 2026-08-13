@@ -272,19 +272,25 @@ function compile_libmedkit
 		exit 20
 	fi
 	echo "Compilation libmedkit (in-tree)"
-	# INCLUDE surcharge :
-	#  - ffmpeg : en-tetes dans /usr/include/ffmpeg (override par FFMPEGINC) ;
-	#  - mp4v2 : pas de paquet natif, en-tetes pris dans staticdeps/include
-	#    (build source IVeS), override par MP4V2INC.
+	# Plus de surcharge d'INCLUDE ici : les chemins d'en-tetes sont TOUS dans le
+	# Makefile du sous-module. ffmpeg y vient de pkg-config, staticdeps/include
+	# du defaut relatif (equivalent au chemin absolu qu'on injectait, make
+	# tournant en -C), et FFMPEGINC/MP4V2INC y restent utilisables comme
+	# variables d'environnement.
+	#
+	# Cet ecrasement etait actif ET nuisible : il masquait un `-I` sans argument
+	# du Makefile (CUSTOM_ASTPATH vide en build non-Asterisk), qui faisait avaler
+	# a gcc l'option suivante comme repertoire d'include. Un `make` direct dans le
+	# sous-module compilait donc SANS -DLOG_, contrairement au build officiel :
+	# deux verites pour un meme arbre, et la mauvaise etait la plus accessible.
+	#
 	# ASTERISK=no : on exclut les objets couples a Asterisk (transcoder, mp4format,
 	# framebuffer, frameutils, astlog), inutilisables hors module Asterisk et qui
 	# exigeraient asterisk-devel. Le mediaserver n'est pas un module Asterisk.
 	# On laisse le Makefile choisir la liste OBJS (source unique de verite : elle
 	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
 	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
-	make -C "$MEDKITDIR" all \
-		ASTERISK=no \
-		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}"
+	make -C "$MEDKITDIR" all ASTERISK=no
 	cd $MEDIASERVERPATH
 }
 
