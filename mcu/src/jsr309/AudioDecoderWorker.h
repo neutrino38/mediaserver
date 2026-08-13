@@ -46,7 +46,6 @@ private:
 	AudioOutput *output;
         PipeAudioInput  *input;
 	WaitQueue<RTPPacket*> packets;
-	bool decoding;
 	// Lien retour NON possédant vers la source (weak_ptr → lock() au site d'usage) :
 	// une source détruite fait échouer le lock() (C-13, lien A).
 	std::weak_ptr<Joinable> joined;

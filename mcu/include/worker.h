@@ -27,6 +27,8 @@
  *    redémarrage après StopThread() fonctionne. false si déjà lancé.
  *  - StopThread() lève le flag, annule `wait` (réveil immédiat de tout
  *    WaitSignal/WaitUntil en cours) et JOINT le thread. Idempotent.
+ *    Appelé DEPUIS le thread lui-même, il baisse le flag mais REFUSE de se
+ *    joindre (journalisé) : un join sur soi tuerait le processus sur un abort().
  *  - Run() boucle sur IsThreadRunning() et dort via `wait` — jamais de
  *    msleep/poll non réveillable.
  *  - Le destructeur DÉRIVÉ doit appeler StopThread() (ou avoir arrêté le
@@ -58,13 +60,13 @@ class Worker
 public:
 	virtual ~Worker()
 	{
-		//Filet : le dérivé aurait dû arrêter son thread (cf. contrat).
+		//Filet : le dérivé aurait dû arrêter son thread (cf. contrat). Passe par
+		//StopThread() plutôt que de rejouer sa séquence : un seul chemin de join,
+		//donc un seul endroit qui porte le garde-fou anti-auto-join.
 		if (thread.joinable())
 		{
 			Error("-Worker: thread encore actif a la destruction — le destructeur derive doit appeler StopThread()\n");
-			running = false;
-			wait.Cancel();
-			thread.join();
+			StopThread();
 		}
 	}
 
@@ -88,20 +90,41 @@ protected:
 
 	//Demande l'arrêt (flag + réveil de `wait`) et joint le thread.
 	//Idempotent, sans effet si le thread ne tourne pas.
+	//
+	//L'arrêt est demandé AVANT toute autre considération : même appelé sans thread,
+	//ou depuis le thread lui-même, `running` retombe et `wait` est annulé — donc la
+	//boucle de Run() sortira. Seul le join est conditionnel.
 	void StopThread()
 	{
-		if (!thread.joinable())
-			return;
 		running = false;
 		wait.Cancel();
-		thread.join();
+
+		//Un join() sur son PROPRE thread lève std::system_error (EDEADLK). Rien ne
+		//le rattrape ici, donc le processus meurt sur un abort() dont la trace ne
+		//nomme pas le coupable. Et le chemin existe : Stop() est appelé depuis des
+		//callbacks de Joinable::Listener (onEndStream, par exemple), qui s'exécutent
+		//sur le thread de la SOURCE — et une source peut être alimentée par notre
+		//propre boucle (un port de mixeur nourri par output->PlayBuffer()).
+		//
+		//Refuser et le dire est strictement meilleur que tomber : le drapeau est
+		//déjà baissé, la boucle sort d'elle-même, et le thread reste joignable — le
+		//prochain StartThread() le verra et refusera, ce qui laisse dans le journal
+		//les deux lignes qui racontent l'histoire au lieu d'un core sans contexte.
+		if (thread.get_id() == std::this_thread::get_id())
+		{
+			Error("-Worker: StopThread() appele depuis le thread lui-meme ; join() ignore\n");
+			return;
+		}
+
+		if (thread.joinable())
+			thread.join();
 	}
 
 	//Corps du thread. Boucler sur IsThreadRunning() et dormir via `wait`.
 	virtual int Run() = 0;
 
 	//Flag d'arrêt, à consulter dans la boucle de Run().
-	bool IsThreadRunning() const { return running; }
+	inline bool IsThreadRunning() const { return running; }
 
 	//Attente annulable par StopThread, réveillable par wait.Signal() ;
 	//état partagé sous wait.Locked(), prédicats via wait.WaitUntil().

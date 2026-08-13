@@ -21,6 +21,7 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	sendFPU = false;
 	codec = (VideoCodec::Type)-1;
         useInputSize = false;
+	negotiatedDirty = false;
 }
 
 VideoEncoderMultiplexerWorker::~VideoEncoderMultiplexerWorker()
@@ -78,29 +79,88 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 
 //Phase 5 (nego_fmtp §6.3) : les bornes que la négociation SDP de la patte
 //émettrice impose à l'encodeur. Les Properties ne sont lues qu'à CreateEncoder,
-//donc des bornes qui changent sur un encodeur ouvert exigent un cycle
-//Stop/Start — le même que SetCodec, au prix d'un IDR frais, ce qui est
-//précisément ce qu'un changement de profil exige de toute façon.
+//donc des bornes qui changent sur un encodeur ouvert exigent de le rouvrir.
+//
+//Ce qui a changé le 2026-08-13, et pourquoi : la réouverture se faisait ici, par
+//un Stop()/Start() synchrone. Or cet appel arrive du thread XML-RPC, qui tient le
+//verrou de la MediaSession pendant tout `EndpointStartReceiving` — donc le join du
+//thread d'encodage avait lieu SOUS ce verrou. Le jour où ce join n'est pas revenu
+//(`svt_av1_enc_deinit_handle` de SVT-AV1 0.9.0 se bloque sur un de ses threads
+//internes), la session entière a gelé, les threads de dispatch se sont empilés
+//derrière le verrou, la file d'acceptation a saturé, et le serveur a cessé
+//d'accepter tout en restant « actif » pour systemd.
+//
+//La réouverture est donc DÉPORTÉE dans la boucle : on mémorise et on lève un
+//drapeau. Le chemin dangereux n'est pas déplacé, il disparaît — plus aucun join
+//sous le verrou de session par ce chemin. Prix : un GOP émis avec les bornes
+//précédentes, ce qui est sans conséquence pour un profil ou un niveau.
 void VideoEncoderMultiplexerWorker::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
 {
-	//Bornes identiques : ne pas redémarrer l'encodeur pour rien (chaque push
-	//re-signalisation/attach/StartSending repasse ici).
-	if (negotiated == byCodec)
-		return;
+	bool encoderRunning;
 
-	negotiated = byCodec;
+	{
+		std::lock_guard<std::mutex> lock(negotiatedLock);
+
+		//Bornes identiques : ne rien faire (chaque push
+		//re-signalisation/attach/StartSending repasse ici).
+		if (negotiated == byCodec)
+			return;
+
+		negotiated = byCodec;
+		encoderRunning = encoding;
+	}
 
 	Log("-VideoEncoder: negotiated codec properties updated [%d codec(s)]\n",
 	    (int)byCodec.size());
 
-	//Même logique de reprise que SetCodec : un encodeur ouvert ré-ouvre avec
-	//les bornes à jour, un encodeur pas encore démarré les lira au Start().
+	if (encoderRunning)
+	{
+		//La boucle s'en charge : elle jettera son encodeur et le recréera avec les
+		//nouvelles bornes à la prochaine image. Rien à joindre depuis ici.
+		negotiatedDirty = true;
+		Log("-VideoEncoder: renegotiation deferred to the encoding loop\n");
+		return;
+	}
+
+	//Encodeur ARRÊTÉ : il n'y a pas de thread d'encodage à joindre, donc le chemin
+	//historique est sûr — et c'est lui qui démarre l'encodeur quand la négociation
+	//est ce qui le rend possible.
 	Stop();
 	if (!listeners.empty() && codec != (VideoCodec::Type)-1)
 	{
-		Log("-VideoEncoder: restarted encoder with negotiated properties.\n");
+		Log("-VideoEncoder: started encoder with negotiated properties.\n");
 		Start();
 	}
+}
+
+//Bornes effectives et géométrie : la config du contrôleur, écrasée pour CE codec
+//par ce que le pair a déclaré savoir décoder. Repart de la CONFIG à chaque appel,
+//pour suivre aussi une renégociation qui ASSOUPLIT la borne.
+void VideoEncoderMultiplexerWorker::ComputeEffective(Properties& effective)
+{
+	effective = params;
+
+	{
+		std::lock_guard<std::mutex> lock(negotiatedLock);
+		std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
+		if (itNeg != negotiated.end())
+		{
+			for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
+				effective[it->first] = it->second;
+
+			Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
+			    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
+		}
+	}
+
+	width  = GetWidth(mode);
+	height = GetHeight(mode);
+	fps    = configuredFps;
+
+	//Phase 5b : écrêtage cadence/taille au niveau AV1 déclaré par le pair
+	//(annexe A.3 — décidé le 2026-08-06 : écrêter, jamais refuser la vidéo).
+	if (codec == VideoCodec::AV1)
+		AV1Encoder::ClampToLevel(effective, width, height, fps);
 }
 
 int VideoEncoderMultiplexerWorker::Start()
@@ -225,32 +285,18 @@ int VideoEncoderMultiplexerWorker::Encode()
 	Acumulator fpsAcu(1000);
 	VideoEncoder* videoEncoder = NULL;
 
-	//Phase 5 (nego_fmtp §6.3) : les bornes négociées de la patte émettrice
-	//écrasent la config du contrôleur pour CE codec — le pair a déclaré ce
-	//qu'il sait décoder (profil H.264, packetization-mode, niveau AV1), et
-	//émettre au-dessus produit un flux négocié avec succès et décodé par
-	//personne. Fusionné AVANT la capture : l'écrêtage AV1 s'applique à elle.
-	Properties effective = params;
-	std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
-	if (itNeg != negotiated.end())
-	{
-		for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
-			effective[it->first] = it->second;
+	//Bornes négociées de la patte émettrice fusionnées par-dessus la config, et
+	//géométrie qui en découle — le pair a déclaré ce qu'il sait décoder (profil
+	//H.264, packetization-mode, niveau AV1), et émettre au-dessus produit un flux
+	//négocié avec succès et décodé par personne. Calculé AVANT la capture :
+	//l'écrêtage AV1 s'applique à elle. Recalculable en cours de boucle, cf. le
+	//drapeau negotiatedDirty plus bas.
+	Properties effective;
+	ComputeEffective(effective);
 
-		Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
-		    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
-	}
-
-	//Phase 5b : écrêtage cadence/taille au niveau AV1 déclaré par le pair
-	//(annexe A.3 — décidé le 2026-08-06 : écrêter, jamais refuser la vidéo).
-	//Repart de la CONFIG à chaque (ré)ouverture, pour suivre aussi une
-	//re-négociation qui assouplit la borne.
-	width  = GetWidth(mode);
-	height = GetHeight(mode);
-	fps    = configuredFps;
-
-	if (codec == VideoCodec::AV1)
-		AV1Encoder::ClampToLevel(effective, width, height, fps);
+	//Le drapeau ne concerne que les bornes arrivées PENDANT que nous tournons :
+	//celles d'avant viennent d'être prises en compte.
+	negotiatedDirty = false;
 
 	Log(">SendVideo [width:%d,size:%d,bitrate:%d,fps:%d,intra:%d]\n",width,height,bitrate,fps,intraPeriod);
 
@@ -296,6 +342,37 @@ int VideoEncoderMultiplexerWorker::Encode()
 	{
 		//Nos quedamos con el puntero antes de que lo cambien
 		PictPtr pic;
+
+		//La négociation a changé pendant que nous tournions
+		//(SetNegotiatedCodecProperties). Les Properties ne sont lues qu'à
+		//CreateEncoder, donc on jette l'encodeur : la prochaine image le recrée avec
+		//les nouvelles bornes. C'est ce qui remplace le Stop/Start synchrone d'avant
+		//— celui-ci joignait CE thread depuis le thread XML-RPC qui tient le verrou
+		//de la MediaSession, et il n'en est pas revenu le 2026-08-13.
+		if (negotiatedDirty.exchange(false))
+		{
+			ComputeEffective(effective);
+
+			if (videoEncoder)
+			{
+				delete videoEncoder;
+				videoEncoder = NULL;
+			}
+
+			//La géométrie peut avoir bougé (écrêtage AV1 sur un niveau plus bas, ou
+			//plus haut) : la capture doit suivre, sinon l'encodeur recréé recevrait
+			//des images d'une autre taille que celle qu'il annonce.
+			if (!input->StartVideoCapture(width,height,fps))
+				Error("-VideoEncoder: failed to restart capture after renegotiation [%dx%d@%d]\n",
+				      width, height, fps);
+			else
+				Log("-VideoEncoder: applied renegotiated properties in-loop [%dx%d@%d]\n",
+				    width, height, fps);
+
+			//L'encodeur recréé doit émettre une intra : le puits vient de perdre la
+			//référence de son flux.
+			sendFPU = true;
+		}
 
                 //`videoEncoder` peut être nul : il n'est créé qu'à la première
                 //image (cf. plus haut), et ce bloc le déréférence.

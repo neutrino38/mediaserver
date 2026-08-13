@@ -141,4 +141,53 @@ TEST(WorkerBase, DestructionWhileRunningIsSafe)
 	EXPECT_LT(ElapsedMs(t0), 3000);
 }
 
+// Un Worker qui s'arrête depuis SA propre boucle. Le cas n'est pas théorique :
+// Stop() est appelé depuis des callbacks de Joinable::Listener (onEndStream), qui
+// tournent sur le thread de la SOURCE — et une source peut être alimentée par la
+// boucle elle-même (un port de mixeur nourri par output->PlayBuffer()).
+struct SelfStoppingWorker : public Worker
+{
+	std::atomic<int>  ticks{0};
+	std::atomic<bool> exited{false};
+
+	~SelfStoppingWorker() override { StopThread(); }
+
+	bool Start() { return StartThread(); }
+
+	int Run() override
+	{
+		while (IsThreadRunning())
+		{
+			++ticks;
+			// join() sur soi-même lève std::system_error (EDEADLK) : rien ne le
+			// rattrape, le processus meurt sur un abort(). StopThread doit refuser.
+			StopThread();
+			wait.WaitSignal(10);
+		}
+		exited = true;
+		return 0;
+	}
+};
+
+TEST(WorkerBase, StopFromInsideTheThreadRefusesToJoinInsteadOfAborting)
+{
+	Clock::time_point t0 = Clock::now();
+
+	SelfStoppingWorker w;
+	ASSERT_TRUE(w.Start());
+
+	// Le drapeau est baissé même si le join est refusé, donc la boucle sort d'elle
+	// même : c'est ce qui rend le refus sûr et pas seulement survivable.
+	Clock::time_point t1 = Clock::now();
+	while (!w.exited && ElapsedMs(t1) < 3000)
+		std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+	EXPECT_TRUE(w.exited) << "le flag doit retomber meme quand le join est refuse";
+	EXPECT_EQ(w.ticks, 1) << "une seule passe : StopThread a bien baisse le drapeau";
+
+	// Et le thread reste joignable, donc le destructeur — appelé depuis le thread
+	// principal, lui — le joint pour de bon sans laisser de thread orphelin.
+	EXPECT_LT(ElapsedMs(t0), 3000);
+}
+
 } // namespace
