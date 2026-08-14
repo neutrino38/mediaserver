@@ -2211,14 +2211,15 @@ int RTPSession::ReadRTP()
 					//Do nto authenticate
 						len = request->NonAuthenticatedFingerPrint(aux,size);
 
-					//Send it
-					if (!len)
-					{
+					//Send it — ou pas, si la sérialisation n'a rien produit. Ce cas
+					//sortait de la fonction par un `return 0` qui sautait les trois
+					//libérations ci-dessous : le tampon `aux`, la requête `request` et
+					//le message `stun` fuyaient à chaque binding request qu'on n'arrivait
+					//pas à signer. Rien à émettre n'est pas une raison de ne pas ranger.
+					if (len)
+						sendto(simSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+					else
 						Debug("ICE: packet empty no need to send it\n");
-						return 0;	
-					}
-					
-					sendto(simSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
 				}
 
 				//Clean memory
