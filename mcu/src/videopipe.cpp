@@ -138,8 +138,12 @@ DWORD VideoPipe::GetBufferSize()
 
 int VideoPipe::SetVideoSize(int width, int height)
 {
-	//Set current values
-	if ( width != inputWidth && height != inputHeight )
+	//|| et non && : un changement d'une SEULE dimension (640×480 → 640×360,
+	//le passage 4:3 → 16:9 typique) est un vrai changement de taille native.
+	//Le && historique le ratait : sizeChanged restait bas, l'encodeur en mode
+	//useInputSize gardait l'ancienne géométrie et le pipe étirait l'image en
+	//continu.
+	if ( width != inputWidth || height != inputHeight )
 	{
 		Log("VideoPipe: size changed to %d x %d\n", width, height );
 		inputWidth  = width;
