@@ -37,6 +37,14 @@ BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 #define NAT_PRIMING_BURST	3
 #define NAT_PRIMING_INTERVAL_MS	20
 
+//Durée (ms) pendant laquelle la map de réception PRÉCÉDENTE reste utilisable après
+//une renégociation. Elle couvre le trou de l'offre/réponse (RFC 3264 §8) : le pair
+//qui a offert continue d'émettre sous son ancienne numérotation jusqu'à recevoir la
+//réponse — un aller-retour SIP, plus le temps que met un B2BUA à obtenir celle de
+//l'autre jambe. Quelques secondes couvrent largement le cas ; au-delà, un pair qui
+//n'a toujours pas basculé a un vrai problème et ses paquets redeviennent des rebuts.
+#define RTP_MAP_FALLBACK_MS	5000
+
 //Cadence maximale (ms) des traces « payload type non négocié ». Le régime normal
 //qu'elles décrivent — l'offreur qui émet encore avec l'ancienne numérotation
 //pendant une renégociation — dure quelques centaines de millisecondes à 20-50
@@ -249,6 +257,12 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Empty types by defauilt
 	rtpMapIn = NULL;
 	rtpMapOut = NULL;
+	//Aucune renégociation encore vue : pas de map précédente à quoi se rattraper
+	rtpMapInPrev = NULL;
+	setZeroTime(&rtpMapInPrevSince);
+	salvagedType = 0;
+	salvagedCount = 0;
+	setZeroTime(&salvagedLast);
 	//Aucun paquet au payload type inconnu encore reçu (cf. OnUnknownPayloadType)
 	unknownPtType = 0;
 	unknownPtCount = 0;
@@ -340,6 +354,8 @@ RTPSession::~RTPSession()
 		remoteRateEstimator->SetListener(NULL);
 	if (rtpMapIn)
 		delete(rtpMapIn);
+	if (rtpMapInPrev)
+		delete(rtpMapInPrev);
 	if (rtpMapOut)
 		delete(rtpMapOut);
 	//Delete packets
@@ -763,23 +779,118 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const char* key64,int key
 
 void RTPSession::SetReceivingRTPMap(RTPMap &map)
 {
-	//If we already have one
-	if (rtpMapIn)
-		//Delete it
-		delete(rtpMapIn);
+	//L'ancienne map n'est pas détruite : elle DEVIENT la map de repli, le temps
+	//que le pair reçoive notre réponse et bascule sur la nouvelle numérotation
+	//(cf. rtpMapInPrev et CodecFromPreviousMap). Celle d'avant, elle, a fait son
+	//temps. Rien de concurrent ici : l'appelant arrête la réception avant de
+	//changer la map (Endpoint::StartReceiving), et c'est pour cette même course
+	//qu'il le fait.
+	if (rtpMapInPrev)
+		delete(rtpMapInPrev);
+	rtpMapInPrev = rtpMapIn;
+	if (rtpMapInPrev)
+		getUpdDifTime(&rtpMapInPrevSince);
 	//Clone it
 	rtpMapIn = new RTPMap(map);
 
-	//Nouvelle map = nouvel épisode : ce qui a été jeté sous l'ancienne
+	//Nouvelle map = nouvel épisode : ce qui a été jeté ou rattrapé sous l'ancienne
 	//numérotation est clos, et le premier paquet inattendu de la nouvelle doit
 	//se tracer tout de suite plutôt que d'être absorbé par le résumé en cours.
 	if (unknownPtCount)
 		Log("-RTP [%ls,%s,local:%d] renegotiated after dropping %u packet(s) with "
 		    "payload type %d absent from the receiving map\n",
-		    label.c_str(), MediaFrame::TypeToString(media), simPort,
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
 		    unknownPtCount, unknownPtType);
+	if (salvagedCount)
+		Log("-RTP [%ls,%s,local:%d] renegotiated after salvaging %u packet(s) sent "
+		    "under the previous payload type %d\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    salvagedCount, salvagedType);
 	unknownPtCount = 0;
 	setZeroTime(&unknownPtLast);
+	salvagedCount = 0;
+	setZeroTime(&salvagedLast);
+}
+
+//Le payload type sous lequel la map COURANTE porte ce codec, s'il y est encore.
+BYTE RTPSession::CurrentTypeForCodec(BYTE codec) const
+{
+	if (!rtpMapIn)
+		return RTPMap::NotFound;
+
+	for (RTPMap::const_iterator it=rtpMapIn->begin(); it!=rtpMapIn->end(); ++it)
+		if (it->second==codec)
+			return it->first;
+
+	return RTPMap::NotFound;
+}
+
+//Rattrapage de renégociation : un paquet arrive avec un payload type que la map
+//courante ne porte plus, mais que la PRÉCÉDENTE portait.
+//
+//C'est le trou de l'offre/réponse (RFC 3264 §8) : nous appliquons la nouvelle
+//numérotation dès que nous répondons, l'offreur ne bascule qu'en RECEVANT cette
+//réponse, et entre les deux il émet encore sous l'ancienne. Un re-INVITE de
+//Linphone qui renumérote ses payload types dynamiques ouvrait ainsi une fenêtre
+//de plusieurs centaines de millisecondes où tout était jeté — inaudible en audio,
+//VISIBLE en vidéo : le décodeur perd tout ce qui suit la dernière intra reçue, et
+//l'image reste figée jusqu'à la suivante.
+//
+//La garde est le codec, pas le payload type : le paquet n'est accepté que si son
+//ancien codec est TOUJOURS porté par la map courante (sous un autre numéro). Ce
+//qui est réparé est alors une renumérotation, rien d'autre — le flux qui traverse
+//est celui que la négociation en cours autorise, et l'aval le lit par
+//`packet->SetCodec()`, pas par le numéro resté dans l'en-tête. Un codec réellement
+//retiré de la négociation, lui, reste un rebut : le laisser passer ferait décoder
+//au pair d'en face un format qu'il vient de refuser.
+BYTE RTPSession::CodecFromPreviousMap(BYTE type)
+{
+	//Aucune renégociation, ou repli périmé
+	if (!rtpMapInPrev || isZeroTime(&rtpMapInPrevSince) ||
+	    (getDifTime(&rtpMapInPrevSince)/1000) > RTP_MAP_FALLBACK_MS)
+		return RTPMap::NotFound;
+
+	BYTE codec = rtpMapInPrev->GetCodecForType(type);
+	if (codec==RTPMap::NotFound)
+		return RTPMap::NotFound;
+
+	//Le codec doit toujours être négocié, sous un numéro ou un autre
+	BYTE current = CurrentTypeForCodec(codec);
+	if (current==RTPMap::NotFound)
+		return RTPMap::NotFound;
+
+	//Trace agrégée : le premier paquet rattrapé de l'épisode, puis un compte
+	bool first = (salvagedCount==0 || type!=salvagedType || isZeroTime(&salvagedLast));
+
+	if (!first && (getDifTime(&salvagedLast)/1000) < UNKNOWN_PT_LOG_PERIOD_MS)
+	{
+		salvagedCount++;
+		return codec;
+	}
+
+	if (first)
+	{
+		salvagedType = type;
+		salvagedCount = 1;
+
+		Log("-RTP [%ls,%s,local:%d] salvaging packets still sent with the previous "
+		    "payload type %d for %s (renumbered to %d by the renegotiation): the peer "
+		    "has not seen our answer yet\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    type, GetNameForCodec(media,codec), current);
+	}
+	else
+	{
+		salvagedCount++;
+
+		Log("-RTP [%ls,%s,local:%d] still salvaging the previous payload type %d "
+		    "(%s) — %u since the first one\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    type, GetNameForCodec(media,codec), salvagedCount);
+	}
+
+	getUpdDifTime(&salvagedLast);
+	return codec;
 }
 
 //Un paquet reçu dont le payload type n'est pas dans la map de réception.
@@ -813,7 +924,7 @@ int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& f
 		Error("-RTP received a packet whose payload type is not negotiated "
 		      "[pt:%d,ssrc:%x,media:%s,role:%d,label:%ls,local port:%d,from:%s:%d] "
 		      "— dropped (normal while a renegotiation is in flight)\n",
-		      type, ssrc, MediaFrame::TypeToString(media), role, label.c_str(), simPort,
+		      type, ssrc, MediaFrame::TypeToString(media), role, LabelForLog(), simPort,
 		      inet_ntoa(from.sin_addr), ntohs(from.sin_port));
 	}
 	else
@@ -822,7 +933,7 @@ int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& f
 
 		Error("-RTP [%ls,%s,local:%d] still dropping packets with the unnegotiated "
 		      "payload type %d [ssrc:%x] — %u since the first one\n",
-		      label.c_str(), MediaFrame::TypeToString(media), simPort,
+		      LabelForLog(), MediaFrame::TypeToString(media), simPort,
 		      type, ssrc, unknownPtCount);
 	}
 
@@ -2281,6 +2392,11 @@ int RTPSession::ReadRTP()
 	//Set initial codec
 	BYTE codec = rtpMapIn->GetCodecForType(type);
 
+	//Renumérotation en cours de renégociation : la map précédente répond encore
+	//pour le temps que le pair mette à recevoir notre réponse (§ CodecFromPreviousMap)
+	if (codec==RTPMap::NotFound)
+		codec = CodecFromPreviousMap(type);
+
 	//Check codec
 	if (codec==RTPMap::NotFound)
 		//Exit : le paquet est indécodable, on le jette. La trace est agrégée —
@@ -2299,6 +2415,10 @@ int RTPSession::ReadRTP()
 		BYTE t = red->GetPrimaryType();
 		//Map primary data codec
 		BYTE c = rtpMapIn->GetCodecForType(t);
+		//Le bloc primaire porte son propre payload type : il est renuméroté par la
+		//renégociation comme les autres, et le même rattrapage lui est dû.
+		if (c==RTPMap::NotFound)
+			c = CodecFromPreviousMap(t);
 		//Check codec
 		if (c==RTPMap::NotFound)
 		{
@@ -2316,6 +2436,10 @@ int RTPSession::ReadRTP()
 			BYTE t = red->GetRedundantType(i);
 			//Map redundant data codec
 			BYTE c = rtpMapIn->GetCodecForType(t);
+			//Idem pour chaque bloc redondant (RFC 4103) : ils portent le même
+			//payload type que le primaire d'un paquet antérieur.
+			if (c==RTPMap::NotFound)
+				c = CodecFromPreviousMap(t);
 			//Check codec
 			if (c==RTPMap::NotFound)
 			{

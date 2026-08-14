@@ -56,3 +56,4 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | — (géométrie des 12 dispositions + composition avfilter vérifiée pixel à pixel) |
 | `test_codec_type.cpp` | `CodecType` | — (le membre `type` d'un codec doit être lisible via un pointeur de base) |
 | `test_rtp_latching.cpp` | `RtpLatching` | — (latching RTP symétrique : où le média atterrit réellement, via un socket sonde en loopback) |
+| `test_rtp_renegotiation.cpp` | `RtpRenegotiation` | — (le trou de l'offre/réponse : un payload type renuméroté par un re-INVITE est rattrapé, un codec retiré ne l'est pas) |

@@ -213,6 +213,10 @@ public:
 	//processus et le même log.
 	void SetLabel(const std::wstring& l)	{ label = l;			}
 	const std::wstring& GetLabel()	const	{ return label;			}
+	//Ce que les traces impriment : une session sans patte (un test, un chemin qui
+	//n'est pas passé par un Endpoint) doit se lire comme telle plutôt que laisser
+	//un blanc entre deux virgules.
+	const wchar_t* LabelForLog()	const	{ return label.empty() ? L"unnamed" : label.c_str(); }
 
 	int SetLocalCryptoSDES(const char* suite, const char* key64);
 	int SetRemoteCryptoSDES(const char* suite, const char* key64,int keyRank=0);
@@ -238,6 +242,12 @@ private:
 	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
 	//unknownPtCount). Rend toujours 0 : l'appelant jette le paquet.
 	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from);
+	//Rattrapage de renégociation : le codec que la map de réception PRÉCÉDENTE
+	//donnait à ce payload type, ou RTPMap::NotFound (cf. rtpMapInPrev).
+	BYTE CodecFromPreviousMap(BYTE type);
+	//Le payload type sous lequel la map COURANTE porte ce codec, ou
+	//RTPMap::NotFound. Sert à la garde du rattrapage et à sa trace.
+	BYTE CurrentTypeForCodec(BYTE codec) const;
 	void ProcessRTCPPacket(RTCPCompoundPacket *packet, const char * fromAddr);
 	void ReSendPacket(int seq);
 
@@ -488,6 +498,19 @@ private:
 	//RTP Map types
 	RTPMap* rtpMapIn;
 	RTPMap* rtpMapOut;
+	//La map de réception PRÉCÉDENTE, gardée quelques secondes après une
+	//renégociation (cf. RTP_MAP_FALLBACK_MS), et l'instant où elle a été
+	//remplacée. C'est le trou de l'offre/réponse : entre le moment où nous
+	//appliquons la nouvelle numérotation et celui où l'offreur reçoit notre
+	//réponse, ses paquets portent encore l'ancienne. Les jeter, c'est perdre des
+	//centaines de millisecondes de flux — et en vidéo, tout ce qui suit la
+	//dernière intra reçue, donc une image figée jusqu'à la suivante.
+	RTPMap* rtpMapInPrev;
+	timeval	rtpMapInPrevSince;
+	//Traces agrégées du rattrapage, mêmes règles que unknownPt* ci-dessus.
+	BYTE	salvagedType;
+	DWORD	salvagedCount;
+	timeval	salvagedLast;
 	RTPMap	extMap;
 
 	DWORD	numSendPackets;
