@@ -206,6 +206,14 @@ public:
 	MediaFrame::Type 		GetMediaType()	const { return media;		}
 	MediaFrame::MediaRole 	GetMediaRole()	const { return role;		}
 
+	//Nom lisible de la patte qui porte cette session (le `name` de l'Endpoint
+	//JSR-309, p.ex. "cx-66-outbound"). Purement descriptif : il ne sert qu'aux
+	//traces. Sans lui, une erreur de réception ne dit ni de quel appel ni de
+	//quelle jambe elle vient — et un B2BUA en a deux par appel, sur le même
+	//processus et le même log.
+	void SetLabel(const std::wstring& l)	{ label = l;			}
+	const std::wstring& GetLabel()	const	{ return label;			}
+
 	int SetLocalCryptoSDES(const char* suite, const char* key64);
 	int SetRemoteCryptoSDES(const char* suite, const char* key64,int keyRank=0);
 	int SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint);
@@ -227,6 +235,9 @@ private:
 	void Stop();
 	int  ReadRTP();
 	int  ReadRTCP();
+	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
+	//unknownPtCount). Rend toujours 0 : l'appelant jette le paquet.
+	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from);
 	void ProcessRTCPPacket(RTCPCompoundPacket *packet, const char * fromAddr);
 	void ReSendPacket(int seq);
 
@@ -396,6 +407,19 @@ private:
 	BYTE*	recvKey;
 
 	char*	cname;
+	//Nom de la patte, pour les traces uniquement (cf. SetLabel).
+	std::wstring label;
+	//Agrégation des paquets reçus dont le payload type n'est pas dans rtpMapIn.
+	//C'est un état NORMAL et transitoire : entre l'offre et la réception de la
+	//réponse, l'offreur émet encore avec son ANCIENNE numérotation (RFC 3264
+	//§8), si bien qu'un re-INVITE qui renumérote — Linphone déplace OPUS de 96 à
+	//98 — fait tomber quelques centaines de millisecondes de paquets. Une Error
+	//par paquet, c'est ~200 lignes par renégociation pour un incident qui se
+	//résout tout seul : on trace le premier, puis un résumé compté au plus toutes
+	//les `unknownPtPeriod` ms.
+	BYTE	unknownPtType;
+	DWORD	unknownPtCount;
+	timeval	unknownPtLast;
 	char*	iceRemoteUsername;
 	char*	iceRemotePwd;
 	char*	iceLocalUsername;

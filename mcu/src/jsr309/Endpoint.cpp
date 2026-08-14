@@ -201,6 +201,11 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 			//Set map for RTP
 			if ( rtp )
 			{
+				//La session RTP trace ses propres incidents (paquet au payload
+				//type non négocié, NAT, crypto) depuis un thread de réception,
+				//loin de toute trace de contrôle : sans le nom de la patte, ces
+				//lignes ne se rattachent à aucun appel — et un B2BUA en a deux.
+				rtp->SetLabel(name);
 				//Re-signalisation offer/answer : arrêter la réception AVANT de
 				//changer la map (SetReceivingRTPMap fait delete/new sur rtpMapIn,
 				//course avec le thread RX) ; StartReceiving redémarre ensuite
@@ -671,7 +676,19 @@ char* Endpoint::Port::GetLocalMediaHost()
 			WSEndpoint * wsp = ( WSEndpoint * ) (this);
 			return wsp->GetLocalHost();
 		}
-		
+
+		//Un port RTP n'a pas d'hôte à lui : l'adresse annoncée est un réglage
+		//GLOBAL du serveur (--public-ip, sinon auto-détectée), que l'appelant a
+		//déjà lu par RTPSession::GetAnnouncedIp(). NULL n'est donc pas un échec,
+		//c'est la réponse — GetMediaCandidates le lit exactement comme tel
+		//(`if (wshost) host=wshost;`).
+		//Le `default` en tenait lieu, et journalisait une ERR : « Protocol 0 not
+		//supported » sortait à CHAQUE GetMediaCandidates d'un média RTP, c'est-à-
+		//dire sur le chemin nominal de tout appel, pour une valeur de retour dont
+		//l'appelant n'attendait rien.
+		case MediaFrame::RTP:
+			return NULL;
+
 		default:
 			Error(" Protocol %i  not supported. \n",proto);
 			return NULL;

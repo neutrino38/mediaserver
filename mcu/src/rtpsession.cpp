@@ -37,6 +37,13 @@ BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 #define NAT_PRIMING_BURST	3
 #define NAT_PRIMING_INTERVAL_MS	20
 
+//Cadence maximale (ms) des traces « payload type non négocié ». Le régime normal
+//qu'elles décrivent — l'offreur qui émet encore avec l'ancienne numérotation
+//pendant une renégociation — dure quelques centaines de millisecondes à 20-50
+//paquets/s : au-delà de la première ligne, ce qui compte est COMBIEN et jusqu'à
+//QUAND, pas une ligne par paquet. Cf. RTPSession::OnUnknownPayloadType.
+#define UNKNOWN_PT_LOG_PERIOD_MS	2000
+
 //srtp library initializers
 class SRTPLib
 {
@@ -242,6 +249,10 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Empty types by defauilt
 	rtpMapIn = NULL;
 	rtpMapOut = NULL;
+	//Aucun paquet au payload type inconnu encore reçu (cf. OnUnknownPayloadType)
+	unknownPtType = 0;
+	unknownPtCount = 0;
+	setZeroTime(&unknownPtLast);
 	//statistics
 	totalSendBytes = 0;
 	numSendPackets = 0;
@@ -758,6 +769,65 @@ void RTPSession::SetReceivingRTPMap(RTPMap &map)
 		delete(rtpMapIn);
 	//Clone it
 	rtpMapIn = new RTPMap(map);
+
+	//Nouvelle map = nouvel épisode : ce qui a été jeté sous l'ancienne
+	//numérotation est clos, et le premier paquet inattendu de la nouvelle doit
+	//se tracer tout de suite plutôt que d'être absorbé par le résumé en cours.
+	if (unknownPtCount)
+		Log("-RTP [%ls,%s,local:%d] renegotiated after dropping %u packet(s) with "
+		    "payload type %d absent from the receiving map\n",
+		    label.c_str(), MediaFrame::TypeToString(media), simPort,
+		    unknownPtCount, unknownPtType);
+	unknownPtCount = 0;
+	setZeroTime(&unknownPtLast);
+}
+
+//Un paquet reçu dont le payload type n'est pas dans la map de réception.
+//
+//Ce n'est pas une anomalie du serveur : pendant une renégociation, l'offreur
+//continue d'émettre avec l'ANCIENNE numérotation jusqu'à ce qu'il reçoive la
+//réponse (RFC 3264 §8) — un re-INVITE de Linphone qui déplace OPUS de 96 à 98
+//produit ainsi quelques centaines de millisecondes de paquets indécodables. Le
+//paquet est jeté (nous ne savons pas quel codec il porte), et la trace dit de
+//QUELLE patte, de QUEL média et de QUELLE source elle parle — la question à
+//laquelle l'ancienne ligne "-RTP packet type unknown [96]", répétée deux cents
+//fois sans un mot de contexte, ne répondait pas.
+int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from)
+{
+	//Une trace par épisode, puis un résumé compté. Un changement de payload type
+	//rouvre un épisode : c'est une autre cause, pas la suite de la même.
+	bool first = (unknownPtCount==0 || type!=unknownPtType || isZeroTime(&unknownPtLast));
+
+	if (!first && (getDifTime(&unknownPtLast)/1000) < UNKNOWN_PT_LOG_PERIOD_MS)
+	{
+		//Même épisode, trop tôt pour reparler : compter et se taire
+		unknownPtCount++;
+		return 0;
+	}
+
+	if (first)
+	{
+		unknownPtType = type;
+		unknownPtCount = 1;
+
+		Error("-RTP received a packet whose payload type is not negotiated "
+		      "[pt:%d,ssrc:%x,media:%s,role:%d,label:%ls,local port:%d,from:%s:%d] "
+		      "— dropped (normal while a renegotiation is in flight)\n",
+		      type, ssrc, MediaFrame::TypeToString(media), role, label.c_str(), simPort,
+		      inet_ntoa(from.sin_addr), ntohs(from.sin_port));
+	}
+	else
+	{
+		unknownPtCount++;
+
+		Error("-RTP [%ls,%s,local:%d] still dropping packets with the unnegotiated "
+		      "payload type %d [ssrc:%x] — %u since the first one\n",
+		      label.c_str(), MediaFrame::TypeToString(media), simPort,
+		      type, ssrc, unknownPtCount);
+	}
+
+	getUpdDifTime(&unknownPtLast);
+	return 0;
 }
 
 int RTPSession::SetLocalPort(int recvPort)
@@ -2213,8 +2283,9 @@ int RTPSession::ReadRTP()
 
 	//Check codec
 	if (codec==RTPMap::NotFound)
-		//Exit
-		return Error("-RTP packet type unknown [%d]\n",type);
+		//Exit : le paquet est indécodable, on le jette. La trace est agrégée —
+		//c'est un régime normal pendant une renégociation (cf. unknownPtCount).
+		return OnUnknownPayloadType(type, RTPPacket::GetSSRC(buffer), from_addr);
 
 	//Create rtp packet
 	RTPTimedPacket *packet = NULL;
