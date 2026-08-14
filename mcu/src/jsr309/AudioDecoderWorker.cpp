@@ -116,8 +116,13 @@ int  AudioDecoderJoinableWorker::Stop()
 
 int AudioDecoderJoinableWorker::Decode()
 {
-	SWORD		raw[512];
-	DWORD		rawSize=512;
+	//8192 : une trame de 20 ms à 48 kHz fait 960 échantillons, 120 ms (opus)
+	//jusqu'à 5760. L'ancien 512 tronquait chaque trame 48 kHz : Decode borne à
+	//outLen et retient le reste en fifo, donc seuls 512 échantillons sur 960
+	//sortaient par paquet — débit utile à 53 %, latence croissante, et l'aval
+	//famélique (mesuré le 2026-08-14 : 25 paquets/s au lieu de 50 vers le pair).
+	SWORD		raw[8192];
+	DWORD		rawSize=8192;
 	AudioDecoder*	codec=NULL;
 	DWORD		frameTime=0;
 	DWORD		lastTime=0;

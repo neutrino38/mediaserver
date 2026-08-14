@@ -165,7 +165,7 @@ int PipeAudioInput::PutSamples(SWORD *buffer,DWORD size)
 int PipeAudioInput::Init(DWORD rate)
 {
 	Log("-PipeAudioInput init [rate:%d]\n",rate);
-	
+
 	//Protegemos
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -173,8 +173,23 @@ int PipeAudioInput::Init(DWORD rate)
 		//Iniciamos
 		inited = true;
 
-		//Store native sample rate
-		nativeRate = rate;
+		//Le décodeur ne connaît sa fréquence qu'au PREMIER paquet reçu, donc
+		//souvent APRÈS le StartRecording de l'encodeur : le resampler a alors
+		//été ouvert sur l'ancienne fréquence native. S'il ne suit pas, les
+		//échantillons 48 kHz du décodeur sont lus comme du 16 kHz — audio 3x
+		//trop rapide, mesuré en trafic le 2026-08-14. Un changement de
+		//fréquence d'écriture en cours d'enregistrement rouvre le resampler.
+		if (recording && nativeRate != rate)
+		{
+			if (swr)
+				swr_free(&swr);
+			fifoBuffer.clear();
+			nativeRate = rate;
+			swr = OpenResampler(nativeRate, recordRate);
+		}
+		else
+			//Store native sample rate
+			nativeRate = rate;
 	}
 
 	return true;

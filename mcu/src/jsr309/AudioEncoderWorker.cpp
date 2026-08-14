@@ -132,7 +132,13 @@ int AudioEncoderMultiplexerWorker::End()
 int AudioEncoderMultiplexerWorker::Encode()
 {
 	RTPPacket	packet(MediaFrame::Audio,codec,codec);
-	SWORD 		recBuffer[512];
+	//8192 : doit contenir numFrameSamples du codec ouvert — 960 pour l'opus
+	//48 kHz, là où l'ancien 512 suffisait aux codecs 8 kHz (160). RecBuffer
+	//écrit numFrameSamples échantillons sans connaître la taille du tampon :
+	//avec 512, chaque trame opus écrasait la pile — dont l'objet `packet`
+	//ci-dessus — et l'endpoint jetait des paquets au media corrompu
+	//(« packet contains media 851977 », mesuré le 2026-08-14).
+	SWORD 		recBuffer[8192];
 	//NULL explicite : ce pointeur était lu non initialisé au premier tour de boucle.
 	AudioEncoder* 	encoder = NULL;
 	DWORD		frameTime=0;
@@ -166,12 +172,23 @@ int AudioEncoderMultiplexerWorker::Encode()
                 if (encoder == NULL)
                     return Error("Could not create codec\n");
 
+                //RecBuffer écrit numFrameSamples échantillons sans borne : le
+                //tampon DOIT les contenir, sinon on recommence l'écrasement de
+                //pile que le 8192 ci-dessus vient de fermer.
+                if (encoder->numFrameSamples > (int)(sizeof(recBuffer)/sizeof(SWORD)))
+                {
+                    Error("-AudioEncoder: frame of %d samples exceeds the %d capture buffer\n",
+                          encoder->numFrameSamples, (int)(sizeof(recBuffer)/sizeof(SWORD)));
+                    delete encoder;
+                    return 0;
+                }
+
                 input->StartRecording(encoder->GetRate());
                 Log("-JSR309 AudioEncoder: Started audio encoder %s at %d Hz.\n",
                     AudioCodec::GetNameFor(codec), encoder->GetRate());
                 clock = encoder->GetClockRate();
                 packet.SetClockRate(clock);
-                
+
                 rate = encoder->TrySetRate(input->GetNativeRate());
                 multiplier = (float) clock/ (float) rate;
             }
