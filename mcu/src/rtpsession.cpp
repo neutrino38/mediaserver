@@ -2693,6 +2693,18 @@ int RTPSession::Run()
 			break;
 		}
 
+		//Réveil inter-thread : purger l'eventfd, SINON il reste lisible et chaque
+		//poll() suivant rend la main immédiatement — la boucle tourne alors à vide,
+		//à 100 % d'un cœur, jusqu'à la fin de l'appel. C'est le contrat de `Wait`
+		//(« le write reste lisible jusqu'au Drain() ») et il n'était honoré nulle
+		//part ici, alors que quatre chemins signalent cet eventfd :
+		//SetRemoteSTUNCredentials, ArmRTPTimeout, RequestDTLSClientHandshake et
+		//ArmNATPriming — ce dernier depuis SetRemotePort, donc à CHAQUE
+		//StartSending. Autrement dit : les quatre sessions RTP d'un appel B2BUA
+		//(deux pattes × audio/vidéo) partaient en rotation dès l'établissement.
+		if (ufds[2].revents & POLLIN)
+			wait.Drain();
+
 		if (ufds[0].revents & POLLIN)
 		{
 			//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
