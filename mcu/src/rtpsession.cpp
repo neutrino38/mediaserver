@@ -2227,14 +2227,27 @@ int RTPSession::ReadRTP()
 				delete(request);
 
 				// Needed for DTLS in client mode (otherwise the DTLS "Client Hello" is not sent over the wire)
-				len = dtls.Read(buffer,MTU);
-				//Send back
-				if (!len)
+				//
+				//…mais seulement s'il Y A un DTLS. Le demander sur une session qui n'en
+				//a pas coûtait une ERR par binding request reçu, et un pair qui fait de
+				//l'ICE en émet plusieurs par flux même quand nous n'avons annoncé ni ICE
+				//ni DTLS : une paire d'appels Linphone en RTP clair produisait ainsi une
+				//quarantaine de « DTLSConnection::Read() | SSL not yet ready » sur son
+				//chemin nominal (trafic du 2026-08-14).
+				//
+				//Structuré en `if` et non en retour anticipé : la sortie de ce bloc
+				//passe par le `delete(stun)` d'en dessous. Le `return 0` qui gardait le
+				//cas « rien à émettre » le sautait, et fuyait le message STUN à chaque
+				//fois — il devient la branche vide qu'il aurait toujours dû être.
+				if (dtls.IsInited())
 				{
-					Debug("DTLS: packet empty no need to send it\n");
-					return 0;	
+					len = dtls.Read(buffer,MTU);
+					//Send back
+					if (len)
+						sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+					else
+						Debug("DTLS: packet empty no need to send it\n");
 				}
-				sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
 			}
 		}
 		//P3 : réponse à un binding request que NOUS avons émis (pair ICE-lite ou full).
