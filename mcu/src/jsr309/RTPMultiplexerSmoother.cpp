@@ -16,6 +16,8 @@ RTPMultiplexerSmoother::RTPMultiplexerSmoother() : RTPMultiplexer()
 {
 	//NO session
 	inited = false;
+	//Un SSRC dès la construction : SmoothFrame peut précéder Start()
+	ssrc = random();
 }
 
 RTPMultiplexerSmoother::~RTPMultiplexerSmoother()
@@ -41,6 +43,8 @@ int RTPMultiplexerSmoother::Start()
 	
 	//We are inited
 	inited = true;
+	//Nouveau run d'encodage = nouvelle base de temps : SSRC neuf (cf. .h)
+	ssrc = random();
 	//Réarmer la file après un éventuel Stop (Cancel collant)
 	queue.Reset();
 	//Run (réarme le Wait du Worker)
@@ -111,6 +115,8 @@ int RTPMultiplexerSmoother::SmoothFrame(MediaFrame* frame,DWORD duration)
 
 		//Create rtp packet
 		RTPPacketSched *packet = new RTPPacketSched(frame->GetType(),codec);
+		//L'identité de source du run d'encodage courant (cf. .h)
+		packet->SetSSRC(ssrc);
 
 		//Make sure it is enought length
 		if (rtp->GetPrefixLen()+rtp->GetSize()>packet->GetMaxMediaLength())

@@ -35,6 +35,12 @@ protected:
 private:
 	bool		inited;
 	WaitQueue<RTPPacketSched*> queue;
+	//SSRC du run d'encodage courant, posé sur chaque paquet produit. Tiré à
+	//neuf à chaque Start() : un encodeur relancé (SetCodec d'une renégociation)
+	//repart d'une base de temps à lui, et la RFC 3550 veut que cette nouvelle
+	//source s'annonce par un SSRC neuf — le pair resynchronise alors proprement
+	//au lieu de voir la base sauter dans un flux continu.
+	DWORD		ssrc;
 };
 
 #endif	/* RTPMULTIPLEXERSMOOTHER_H */

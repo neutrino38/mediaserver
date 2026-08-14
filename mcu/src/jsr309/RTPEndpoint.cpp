@@ -20,6 +20,8 @@ RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Po
 	//No time
 	prevts = 0;
 	timestamp = 0;
+	//No source yet
+	prevSSRC = 0;
         //No codec
         codec = NoCodec;
 	//Aucun codec refusé pour l'instant
@@ -293,6 +295,20 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
 	//Get diference from latest frame
 	QWORD dif = getUpdDifTime(&prev);
 
+	//La source a changé de SSRC : encodeur relancé par une renégociation, ou
+	//pair amont qui a lui-même changé de source. Sa base de timestamps lui est
+	//propre (RFC 3550), le delta inter-bases ne veut rien dire — on repart au
+	//temps mur comme après onResetStream. En aval, SendPacket tire un sendSSRC
+	//neuf sur ce même changement, et le pair resynchronise proprement.
+	if (packet.GetSSRC()!=prevSSRC)
+	{
+		if (prevSSRC)
+			Log("-RTPEndpoint: source SSRC changed [%x->%x], rebasing %s timestamp on wall clock\n",
+			    prevSSRC,packet.GetSSRC(),MediaFrame::TypeToString(packet.GetMedia()));
+		prevSSRC = packet.GetSSRC();
+		reseted = true;
+	}
+
 	//If was reseted
 	if (reseted)
 	{
@@ -300,7 +316,7 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
 		timestamp += dif*freq/1000;
 		//Not reseted
 		reseted = false;
-		
+
 	} else {
 		//Get dif from packet timestamp
 		timestamp += packet.GetTimestamp()-prevts;

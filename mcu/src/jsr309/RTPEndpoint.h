@@ -90,6 +90,11 @@ private:
 	DWORD codec;
 	DWORD timestamp;
 	DWORD freq;
+	//SSRC du dernier paquet reçu de la source jointe. Un SSRC qui change est
+	//une nouvelle source de synchronisation (RFC 3550) : sa base de timestamps
+	//lui est propre, le delta inter-bases ne veut rien dire — on repart au
+	//temps mur, comme après onResetStream.
+	DWORD prevSSRC;
 	timeval prev;
 	DWORD prevts;
 	bool reseted;

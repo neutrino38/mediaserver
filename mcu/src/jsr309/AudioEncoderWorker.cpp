@@ -191,6 +191,15 @@ int AudioEncoderMultiplexerWorker::Encode()
 
                 rate = encoder->TrySetRate(input->GetNativeRate());
                 multiplier = (float) clock/ (float) rate;
+
+                //Nouvel encodeur = nouvelle base de temps (frameTime repart de
+                //zéro à chaque run, et l'horloge peut changer avec le codec) :
+                //on l'annonce comme le veut la RFC 3550, par un SSRC neuf.
+                //En aval, RTPSession::SendPacket tire alors un sendSSRC neuf et
+                //le pair resynchronise proprement — au re-INVITE du 2026-08-14,
+                //la base sautait de ±125k unités DANS le même flux et le jitter
+                //buffer du pair décrochait (audio haché mesuré en capture).
+                packet.SetSSRC(random());
             }
 		//Incrementamos el tiempo de envio
 		frameTime += encoder->numFrameSamples*multiplier;
