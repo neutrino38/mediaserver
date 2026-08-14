@@ -3118,15 +3118,24 @@ void RTPSession::onTargetBitrateRequested(DWORD bitrate)
     mutex.unlock();
     Debug("-RTPSession::onTargetBitrateRequested() %i, bitrate [%d] for %s stream %p.\n", fb, bitrate, MediaFrame::TypeToString(media), this);
     if (fb)
-    {
-	Debug("-RTPSession::onTargetBitrateRequested() sending TMMBR\n",bitrate);
+	//Feedback SPONTANÉ de l'estimateur : reste verrouillé par la propriété
+	//"tmmbr" (sendBitrateFeedback) — c'est son rôle. L'envoi lui-même est
+	//partagé avec le chemin explicite (RTPEndpoint::SetREMB, mode pont), qui
+	//n'est PAS verrouillé.
+	SendTempMaxMediaStreamBitrateRequest(bitrate);
+}
+
+int RTPSession::SendTempMaxMediaStreamBitrateRequest(DWORD bitrate)
+{
+	Debug("-RTPSession::SendTempMaxMediaStreamBitrateRequest [%d] on %s stream\n",bitrate,MediaFrame::TypeToString(media));
+
 	//Create rtcp sender retpor
 	RTCPCompoundPacket* rtcp = CreateSenderReport();
-	
+
 	DWORD recSSRC =0;
 	if (defaultStream != NULL)
 		recSSRC = defaultStream->GetRecSSRC();
-	
+
 	//Create TMMBR
 	RTCPRTPFeedback *rfb = RTCPRTPFeedback::Create(RTCPRTPFeedback::TempMaxMediaStreamBitrateRequest,sendSSRC,recSSRC);
 	//Limit incoming bitrate
@@ -3134,17 +3143,19 @@ void RTPSession::onTargetBitrateRequested(DWORD bitrate)
 	//Add to packet
 	rtcp->AddRTCPacket(rfb);
 
-	//We have a pending request
+	//We have a pending request : SendSenderReport retransmet le TMMBR tant que
+	//le TMMBN du pair n'est pas arrivé (pendingTMBR).
 	pendingTMBR = true;
 	//Store values
 	pendingTMBBitrate = bitrate;
 
 	//Send packet
-	SendPacket(*rtcp);
+	int ret = SendPacket(*rtcp);
 
 	//Delete it
 	delete(rtcp);
-    }
+
+	return ret;
 }
 
 void RTPSession::ReSendPacket(int seq)

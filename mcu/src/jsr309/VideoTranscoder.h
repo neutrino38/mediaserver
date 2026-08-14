@@ -59,6 +59,12 @@ private:
 	//du puits transformerait une rafale aval en tempête de FIR vers la source.
 	void RequestSourceFPU();
 
+	//Pousse la consigne négociée de la patte émettrice (SetCodec, kbps) vers la
+	//source en TMMBR. Appelé au basculement en mode pont et quand SetCodec
+	//change la consigne pendant le pont : sans encodeur dans le chemin, seule
+	//la source peut respecter la bande passante négociée du puits.
+	void PushSourceBitrateLimit();
+
 	VideoEncoderMultiplexerWorker	encoder;
 	VideoDecoderJoinableWorker	decoder;
 	VideoPipe	pipe;

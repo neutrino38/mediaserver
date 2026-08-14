@@ -474,9 +474,17 @@ void RTPEndpoint::SetREMB(DWORD estimation)
 {
 	//Check if we have an estimator
 	if (remoteRateEstimator)
-		//Update temporal limit
+		//Update temporal limit : le feedback spontané de l'estimateur (s'il est
+		//activé par la propriété "tmmbr") restera cohérent avec la borne.
 		remoteRateEstimator->SetTemporalMaxLimit(estimation);
 
+	//Demande EXPLICITE venue de l'aval (mode pont : TMMBR/REMB du puits relayé,
+	//ou consigne négociée poussée au basculement). L'émettre sur le fil tout de
+	//suite : le feedback spontané ci-dessus est verrouillé par la propriété
+	//"tmmbr" (défaut : désactivé) et SetTemporalMaxLimit seul ne produit AUCUN
+	//paquet — la limite restait lettre morte. La retransmission tant que le
+	//TMMBN du pair n'arrive pas est assurée par SendSenderReport (pendingTMBR).
+	SendTempMaxMediaStreamBitrateRequest(estimation);
 }
 
 int RTPEndpoint::RequestUpdate()

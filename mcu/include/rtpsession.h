@@ -228,6 +228,12 @@ public:
 	int RequestFPU(DWORD & ssrc);
 	
 	int SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD overhead);
+	//Envoie un TMMBR au pair (borne son débit d'émission, en bps) et arme la
+	//retransmission : SendSenderReport le répète tant que le TMMBN n'est pas
+	//arrivé (pendingTMBR). Chemin EXPLICITE (demande relayée du mode pont,
+	//consigne négociée) — non verrouillé par la propriété "tmmbr", qui ne
+	//gouverne que le feedback spontané de l'estimateur.
+	int SendTempMaxMediaStreamBitrateRequest(DWORD bitrate);
 
 	virtual void onTargetBitrateRequested(DWORD bitrate);
 	virtual void onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DWORD localMasterKeySize,BYTE* remoteMasterKey,DWORD remoteMasterKeySize);

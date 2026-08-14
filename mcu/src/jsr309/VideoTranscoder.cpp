@@ -65,6 +65,10 @@ int VideoTranscoder::SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrat
             properties.erase(std::string("useInputSize"));
         }
 	ret = encoder.SetCodec(codec,mode,fps,bitrate,intraPeriod, properties);
+	//Consigne changée alors que le pont est établi : l'encodeur qui l'aurait
+	//appliquée n'est pas dans le chemin, la re-pousser à la source.
+	if (ret && state == 2)
+		PushSourceBitrateLimit();
 	return ret;
 }
 int VideoTranscoder::End()
@@ -167,6 +171,13 @@ void VideoTranscoder::onRTPPacket(RTPPacket &packet)
 			//demander tout de suite. L'anti-tempête déduplique si le
 			//StartSending du puits vient de le faire (probing).
 			RequestSourceFPU();
+
+			//En pont, plus personne n'applique la consigne négociée de la
+			//patte émettrice : l'encodeur qui la tenait n'est plus dans le
+			//chemin. La pousser à la source en TMMBR (kbps -> bps) — c'est
+			//désormais à ELLE de s'y tenir. Sans quoi une source à 2 Mbps
+			//arrose un puits qui n'en a négocié que 512.
+			PushSourceBitrateLimit();
 		}
 		else
 		{
@@ -229,6 +240,22 @@ void VideoTranscoder::UnlistenSource()
 		j->RemoveListener(this);
 
 	joined.reset();
+}
+
+void VideoTranscoder::PushSourceBitrateLimit()
+{
+	//Consigne inconnue tant que SetCodec n'a pas été appelé : rien à imposer.
+	int kbps = encoder.GetBitrate();
+	if (kbps <= 0)
+		return;
+
+	//lock() : la source est-elle encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
+	{
+		Log("-VideoTranscoder: pushing negotiated bitrate limit to source [%ls,%d kbps]\n",
+		    tag.c_str(), kbps);
+		j->SetREMB(((DWORD)kbps)*1000);
+	}
 }
 
 void VideoTranscoder::RequestSourceFPU()
