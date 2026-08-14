@@ -228,6 +228,14 @@ bool RTPEndpoint::TrySendingCodec(DWORD wanted)
 
 int  RTPEndpoint::TryCheckCodec(int codec)
 {
+    //Sonde d'arbitrage du pont : « absent de la rtpMap » est un résultat
+    //NOMINAL (les deux pattes ne portent pas le même codec), pas une erreur.
+    //Vérifier en silence avant de basculer réellement le codec d'émission —
+    //SetSendingCodec journalise son échec en Error, ce qui alarmait la
+    //supervision à chaque arbitrage retombant sur le transcodage.
+    if ( !RTPSession::CanSendCodec(codec) )
+        return -1;
+
     if ( RTPSession::SetSendingCodec(codec) )
     {
         return codec;

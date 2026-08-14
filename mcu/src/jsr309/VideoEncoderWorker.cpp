@@ -428,6 +428,24 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//Une image est arrivée : le pont est écarté, il faut vraiment encoder.
 		if (!videoEncoder)
 		{
+			//Des bornes ont pu arriver pendant que la boucle était garée dans
+			//GrabFrame sans encodeur (la renégociation précède souvent la
+			//première image) : les consommer ICI, sinon l'encodeur est créé
+			//avec les anciennes et jeté au tour suivant par le bloc
+			//negotiatedDirty — un open/close gaspillé à chaque établissement,
+			//observé en recette le 2026-08-14 (libvpx, ~90 ms).
+			if (negotiatedDirty.exchange(false))
+			{
+				ComputeEffective(effective);
+				//La géométrie a pu bouger (écrêtage AV1) : la capture doit
+				//suivre. L'image en main reste à l'ancienne taille — sans
+				//importance, elle est abandonnée plus bas (continue) et la
+				//prochaine sera à la bonne échelle.
+				if (!input->StartVideoCapture(width,height,fps))
+					Error("-VideoEncoder: failed to restart capture before encoder creation [%dx%d@%d]\n",
+					      width, height, fps);
+			}
+
 			videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
 
 			//Comprobamos que se haya creado correctamente

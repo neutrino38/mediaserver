@@ -161,6 +161,12 @@ public:
 	void SetSendingRTPMap(RTPMap &map);
 	void SetReceivingRTPMap(RTPMap &map);
 	bool SetSendingCodec(DWORD codec);
+	//Sonde silencieuse : le codec est-il dans la rtpMap de sortie ? Ne bascule
+	//rien et ne journalise rien. C'est le chemin nominal de l'arbitrage pont
+	//(TryCodec), qui échoue par construction dès que les deux pattes ne portent
+	//pas le même codec — le journaliser en Error alarmait la supervision pour
+	//rien (recette 2026-08-14).
+	bool CanSendCodec(DWORD codec);
 
 	int ForwardPacket( RTPPacket &packet, DWORD recssrc );
 	

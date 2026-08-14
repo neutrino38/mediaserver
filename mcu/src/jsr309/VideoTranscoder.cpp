@@ -183,9 +183,12 @@ void VideoTranscoder::onRTPPacket(RTPPacket &packet)
 		{
 			state = 1;
 			auto outCodec = encoder.GetCodec();
+			//Sens de lecture : (codec reçu) -> (codec émis). L'ordre inverse
+			//historique a fait re-dériver le sens du flux depuis les rtpMaps
+			//en recette (2026-08-14).
 			Log("-VideoTranscoder: transcoding %s -> %s .\n",
-				VideoCodec::GetNameFor(outCodec),
-			    VideoCodec::GetNameFor((VideoCodec::Type) packet.GetCodec()));
+			    VideoCodec::GetNameFor((VideoCodec::Type) packet.GetCodec()),
+			    VideoCodec::GetNameFor(outCodec));
 
 			//LA différence avec l'audio. Reprendre l'encodage en cours de flux ne
 			//suffit pas pour de la vidéo : le puits vient de recevoir des paquets

@@ -993,6 +993,22 @@ int RTPSession::GetRemotePort()
 	return sendAddr.sin_port;
 }
 
+bool RTPSession::CanSendCodec(DWORD codec)
+{
+	//Check rtp map
+	if (!rtpMapOut)
+		return false;
+
+	//Même parcours que SetSendingCodec, sans bascule ni journal : la sonde
+	//d'arbitrage du pont interroge chaque puits, et « absent » y est une
+	//réponse nominale, pas une erreur.
+	for (RTPMap::iterator it = rtpMapOut->begin(); it!=rtpMapOut->end(); ++it)
+		if (it->second==codec)
+			return true;
+
+	return false;
+}
+
 bool RTPSession::SetSendingCodec(DWORD codec)
 {
 	//Check rtp map
