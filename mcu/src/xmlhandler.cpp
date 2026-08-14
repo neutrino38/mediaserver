@@ -135,7 +135,7 @@ int XmlHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 	xmlrpc_value *params = NULL;
 	timeval tv;
 
-	Log(">ProcessRequest [uri:%s]\n",req->uri);
+	//Log(">ProcessRequest [uri:%s]\n",req->uri);
 
 	//Init timer
 	getUpdDifTime(&tv);
@@ -185,7 +185,7 @@ int XmlHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 	//Get method name
 	xmlrpc_parse_call(&env,buffer,inputLen,(const char**)&method,&params);
 
-	Log("-ProcessRequest [method:%s]\n",method);
+	Log("-ProcessRequest [uri:%s] [method:%s]\n",req->uri,method);
 
 	//Free name and params
 	free(method);
@@ -216,7 +216,8 @@ int XmlHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 	//Liberamos el buffer
 	free(buffer);
 
-	Log("<ProcessRequest [time:%llu]\n",getDifTime(&tv)/1000);
+	auto diff = getDifTime(&tv) / 1000;
+	if (diff > 200)	Log("-Processed request [%s] in %llu ms\n",req->uri,diff);
 
 	return TRUE;
 }

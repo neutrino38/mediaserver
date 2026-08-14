@@ -1,5 +1,6 @@
 #ifndef _RTPSESSION_H_
 #define _RTPSESSION_H_
+#include "worker.h"
 #include <sys/socket.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,7 +25,8 @@
 
 class RTPSession : 
 	public RemoteRateEstimator::Listener,
-	public DTLSConnection::Listener
+	public DTLSConnection::Listener,
+	public Worker
 {
 public:
 	class Listener
@@ -159,6 +161,12 @@ public:
 	void SetSendingRTPMap(RTPMap &map);
 	void SetReceivingRTPMap(RTPMap &map);
 	bool SetSendingCodec(DWORD codec);
+	//Sonde silencieuse : le codec est-il dans la rtpMap de sortie ? Ne bascule
+	//rien et ne journalise rien. C'est le chemin nominal de l'arbitrage pont
+	//(TryCodec), qui échoue par construction dès que les deux pattes ne portent
+	//pas le même codec — le journaliser en Error alarmait la supervision pour
+	//rien (recette 2026-08-14).
+	bool CanSendCodec(DWORD codec);
 
 	int ForwardPacket( RTPPacket &packet, DWORD recssrc );
 	
@@ -204,6 +212,18 @@ public:
 	MediaFrame::Type 		GetMediaType()	const { return media;		}
 	MediaFrame::MediaRole 	GetMediaRole()	const { return role;		}
 
+	//Nom lisible de la patte qui porte cette session (le `name` de l'Endpoint
+	//JSR-309, p.ex. "cx-66-outbound"). Purement descriptif : il ne sert qu'aux
+	//traces. Sans lui, une erreur de réception ne dit ni de quel appel ni de
+	//quelle jambe elle vient — et un B2BUA en a deux par appel, sur le même
+	//processus et le même log.
+	void SetLabel(const std::wstring& l)	{ label = l;			}
+	const std::wstring& GetLabel()	const	{ return label;			}
+	//Ce que les traces impriment : une session sans patte (un test, un chemin qui
+	//n'est pas passé par un Endpoint) doit se lire comme telle plutôt que laisser
+	//un blanc entre deux virgules.
+	const wchar_t* LabelForLog()	const	{ return label.empty() ? L"unnamed" : label.c_str(); }
+
 	int SetLocalCryptoSDES(const char* suite, const char* key64);
 	int SetRemoteCryptoSDES(const char* suite, const char* key64,int keyRank=0);
 	int SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint);
@@ -214,6 +234,12 @@ public:
 	int RequestFPU(DWORD & ssrc);
 	
 	int SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD overhead);
+	//Envoie un TMMBR au pair (borne son débit d'émission, en bps) et arme la
+	//retransmission : SendSenderReport le répète tant que le TMMBN n'est pas
+	//arrivé (pendingTMBR). Chemin EXPLICITE (demande relayée du mode pont,
+	//consigne négociée) — non verrouillé par la propriété "tmmbr", qui ne
+	//gouverne que le feedback spontané de l'estimateur.
+	int SendTempMaxMediaStreamBitrateRequest(DWORD bitrate);
 
 	virtual void onTargetBitrateRequested(DWORD bitrate);
 	virtual void onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DWORD localMasterKeySize,BYTE* remoteMasterKey,DWORD remoteMasterKeySize);
@@ -225,11 +251,29 @@ private:
 	void Stop();
 	int  ReadRTP();
 	int  ReadRTCP();
+	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
+	//unknownPtCount). Rend toujours 0 : l'appelant jette le paquet.
+	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from);
+	//Rattrapage de renégociation : le codec que la map de réception PRÉCÉDENTE
+	//donnait à ce payload type, ou RTPMap::NotFound (cf. rtpMapInPrev).
+	BYTE CodecFromPreviousMap(BYTE type);
+	//Ferme le repli quand ce payload type prouve que le pair a lu notre réponse.
+	void RetirePreviousMap(BYTE type);
+	//Le payload type sous lequel la map COURANTE porte ce codec, ou
+	//RTPMap::NotFound. Sert à la garde du rattrapage et à sa trace.
+	BYTE CurrentTypeForCodec(BYTE codec) const;
 	void ProcessRTCPPacket(RTCPCompoundPacket *packet, const char * fromAddr);
 	void ReSendPacket(int seq);
 
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
-	int Run();
+
+	//Corps du thread hérité de Worker : la boucle poll des sockets RTP/RTCP.
+	//`override` EXPLICITE, et non décoratif : une classe dérivée qui déclarerait
+	//un `int Run()` le remplacerait silencieusement, et la boucle poll ne
+	//tournerait plus du tout pour elle. C'est arrivé avec RTPEndpoint (corrigé le
+	//2026-08-12 en renommant sa boucle en MultiplexLoop). Le mot-clé ne l'empêche
+	//pas côté dérivé, mais il documente le contrat au bon endroit.
+	int Run() override;
 
 	//P2 (offreur WebRTC) : pilotage du handshake DTLS en rôle CLIENT
 	void FlushDTLS();                    //vide write_bio DTLS vers sendAddr
@@ -242,7 +286,6 @@ private:
 	void OnICEConnectivityConfirmed(sockaddr_in* from); //réponse valide reçue -> débloque
 
 private:
-	static  void* run(void *par);
 protected:
 	
 
@@ -355,7 +398,8 @@ private:
 	int 	simRtcpSocket;
 	int 	simPort;
 	int	simRtcpPort;
-	pollfd	ufds[2];
+	//[RTP, RTCP, eventfd de reveil du Wait herite (Worker)]
+	pollfd	ufds[3];
 	bool	inited;
 	bool	running;
 
@@ -387,6 +431,19 @@ private:
 	BYTE*	recvKey;
 
 	char*	cname;
+	//Nom de la patte, pour les traces uniquement (cf. SetLabel).
+	std::wstring label;
+	//Agrégation des paquets reçus dont le payload type n'est pas dans rtpMapIn.
+	//C'est un état NORMAL et transitoire : entre l'offre et la réception de la
+	//réponse, l'offreur émet encore avec son ANCIENNE numérotation (RFC 3264
+	//§8), si bien qu'un re-INVITE qui renumérote — Linphone déplace OPUS de 96 à
+	//98 — fait tomber quelques centaines de millisecondes de paquets. Une Error
+	//par paquet, c'est ~200 lignes par renégociation pour un incident qui se
+	//résout tout seul : on trace le premier, puis un résumé compté au plus toutes
+	//les `unknownPtPeriod` ms.
+	BYTE	unknownPtType;
+	DWORD	unknownPtCount;
+	timeval	unknownPtLast;
 	char*	iceRemoteUsername;
 	char*	iceRemotePwd;
 	char*	iceLocalUsername;
@@ -425,7 +482,6 @@ private:
 	bool	natRtcpCorrected;
 	bool	NatCorrectable(in_addr_t announced);
 	static bool IsRFC1918(in_addr_t addr);
-	pthread_t thread;
 	std::mutex mutex;	
 
 	//Tipos
@@ -456,6 +512,19 @@ private:
 	//RTP Map types
 	RTPMap* rtpMapIn;
 	RTPMap* rtpMapOut;
+	//La map de réception PRÉCÉDENTE, gardée quelques secondes après une
+	//renégociation (cf. RTP_MAP_FALLBACK_MS), et l'instant où elle a été
+	//remplacée. C'est le trou de l'offre/réponse : entre le moment où nous
+	//appliquons la nouvelle numérotation et celui où l'offreur reçoit notre
+	//réponse, ses paquets portent encore l'ancienne. Les jeter, c'est perdre des
+	//centaines de millisecondes de flux — et en vidéo, tout ce qui suit la
+	//dernière intra reçue, donc une image figée jusqu'à la suivante.
+	RTPMap* rtpMapInPrev;
+	timeval	rtpMapInPrevSince;
+	//Traces agrégées du rattrapage, mêmes règles que unknownPt* ci-dessus.
+	BYTE	salvagedType;
+	DWORD	salvagedCount;
+	timeval	salvagedLast;
 	RTPMap	extMap;
 
 	DWORD	numSendPackets;

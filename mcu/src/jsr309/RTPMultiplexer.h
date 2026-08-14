@@ -7,6 +7,7 @@
 
 #ifndef RTPMULTIPLEXER_H
 #define	RTPMULTIPLEXER_H
+#include <mutex>
 #include <set>
 #include "config.h"
 #include "rtp.h"
@@ -37,7 +38,7 @@ private:
 	typedef std::set<Joinable::Listener*> Listeners;
 protected:
 	Listeners	listeners;
-	pthread_mutex_t mutex;
+	std::mutex mutex;
 	std::map<int,Properties> negotiated;	// codec -> bornes (phase 5)
 	// Limitation du log "no listener" à 1/s : un flux entrant que personne ne
 	// consomme (ex. montant du pair pendant un play) inonderait sinon le log.

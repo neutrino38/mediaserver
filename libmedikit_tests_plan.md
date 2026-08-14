@@ -197,10 +197,10 @@ par la lib elle-même.
 
 - **[FAIT 2026-07-17] Doublon mort `mcu/src/red.cpp` + `mcu/include/red.h`
   supprimé** (`git rm`). Vérifié : `red.o` absent des `OBJS` de
-  `mcu/Makefile.rpm` (seul `redcodec.o` compilé) ; `mcu/include/red.h` n'était
+  `mcu/Makefile` (seul `redcodec.o` compilé) ; `mcu/include/red.h` n'était
   qu'un shim `#include "medkit/red.h"` inclus par le seul `red.cpp` non compilé.
   Le mcu consomme la version libmedikit (`medkit/red.h`). mcu recompilé vert via
-  `./install.ksh localcompile` (piège : `make -f mcu/Makefile.rpm` doit tourner
+  `./install.ksh localcompile` (piège : `make -f mcu/Makefile` doit tourner
   depuis `mcu/`, pas depuis la racine).
 - **[FAIT 2026-07-17] Cible Makefile `ffmp4probe`** : ajout de
   `-L../../../staticdeps/lib` (comme `negotest`) → compile de nouveau.

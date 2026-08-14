@@ -43,9 +43,6 @@ RTMPParticipant::RTMPParticipant(DWORD partId) :
 	//NOt attached
 	attached = NULL;
 	//Inicializamos los mutex
-	pthread_mutex_init(&mutex,NULL);
-	pthread_mutex_init(&attachedMutex,NULL);
-	pthread_cond_init(&cond,0);
 }
 
 RTMPParticipant::~RTMPParticipant()
@@ -53,9 +50,6 @@ RTMPParticipant::~RTMPParticipant()
 	//End it just in case
 	End();
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
-	pthread_mutex_destroy(&attachedMutex);
 }
 
 int RTMPParticipant::SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties,MediaFrame::MediaRole role )
@@ -212,10 +206,10 @@ int RTMPParticipant::End()
 		//Extrait `attached` sous verrou puis déréférence hors verrou (H-6) :
 		//RemoveMediaListener appelle vers un AUTRE objet, jamais sous attachedMutex.
 		RTMPMediaStream *prevAttached;
-		pthread_mutex_lock(&attachedMutex);
+		std::unique_lock<std::mutex> attachedMutexLock(attachedMutex);
 		prevAttached = attached;
 		attached = NULL;
-		pthread_mutex_unlock(&attachedMutex);
+		attachedMutexLock.unlock();
 		if (prevAttached)
 			//Remove from that listeners
 			prevAttached->RemoveMediaListener(this);
@@ -265,7 +259,7 @@ int  RTMPParticipant::StopSendingVideo()
 		videoInput->CancelGrabFrame();
 		Log("-StopSendingVideo: interrupted video input\n");
 		//Cancel sending
-		pthread_cond_signal(&cond);
+		pacer.Signal();
 
 		//Esperamos
 		Log("-StopSendingVideo: joining videothread %lx\n", sendVideoThread);
@@ -630,15 +624,10 @@ int RTMPParticipant::SendVideo()
 		//Check
 		if (frameTime)
 		{
-			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
-			//Calculate timeout
-			calcAbsTimeout(&ts,&prev,frameTime);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Dormir jusqu'à l'échéance prev+frameTime (réveillé par
+			//StopSendingVideo)
+			QWORD elapsed = getDifTime(&prev)/1000;
+			int canceled = (frameTime > elapsed) && pacer.WaitSignal((DWORD)(frameTime - elapsed));
 			//Check if we have been canceled
 			if (canceled)
 				//Exit
@@ -1334,11 +1323,11 @@ void RTMPParticipant::onAttached(RTMPMediaStream *stream)
 	//Extrait/écrit `attached` sous verrou ; RemoveMediaListener (autre objet)
 	//appelé hors verrou (H-6).
 	RTMPMediaStream *prev;
-	pthread_mutex_lock(&attachedMutex);
+	std::unique_lock<std::mutex> attachedMutexLock(attachedMutex);
 	//Check if it is the same
 	if (stream==attached)
 	{
-		pthread_mutex_unlock(&attachedMutex);
+		attachedMutexLock.unlock();
 		//Error
 		Error("Already attached to same string\n");
 		//Do nothing
@@ -1348,7 +1337,7 @@ void RTMPParticipant::onAttached(RTMPMediaStream *stream)
 	prev = attached;
 	//Store stream
 	attached = stream;
-	pthread_mutex_unlock(&attachedMutex);
+	attachedMutexLock.unlock();
 
 	if (prev)
 		//Remove from that listeners
@@ -1433,17 +1422,17 @@ void RTMPParticipant::onDetached(RTMPMediaStream *stream)
 	Log("-RTMP participant detached from stream [id:%d]\n",stream?stream->GetStreamId():-1);
 
 	//Écriture de `attached` sous verrou (H-6).
-	pthread_mutex_lock(&attachedMutex);
+	std::unique_lock<std::mutex> attachedMutexLock(attachedMutex);
 	//Check if already attached
 	if (attached!=stream)
 	{
 		//Exit
-		pthread_mutex_unlock(&attachedMutex);
+		attachedMutexLock.unlock();
 		return;
 	}
 	//Not attached anymore
 	attached = NULL;
-	pthread_mutex_unlock(&attachedMutex);
+	attachedMutexLock.unlock();
 	//Start receiving
 	StopReceiving();
 }

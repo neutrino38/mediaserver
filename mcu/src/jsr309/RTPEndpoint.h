@@ -62,22 +62,48 @@ public:
 		tsTransparency = transparent;
 	}
 	
-protected:
-	int Run();
-
 private:
+	//Corps du thread de démultiplexage (pthread créé par StartReceiving).
+	//
+	//NE PAS le renommer `Run()` : `RTPSession` dérive de `Worker`, dont `Run()`
+	//est virtuel pur et porte la boucle poll des sockets RTP/RTCP. Un `Run()` ici
+	//OVERRIDE celui de `RTPSession` — le thread du Worker exécutait alors cette
+	//boucle-ci, et la boucle poll ne tournait JAMAIS pour un endpoint JSR-309
+	//(aucun paquet RTP lu). C'était le cas jusqu'au 2026-08-12.
+	int MultiplexLoop();
+
+	//Bascule le PT d'émission sur `wanted`, ou rend false si la rtpMap de sortie
+	//négociée ne le porte pas — auquel cas l'appelant ne DOIT pas émettre le
+	//paquet. Borne le harcèlement : un codec refusé le reste jusqu'à une
+	//renégociation, et RTPSession::SetSendingCodec journalise une Error par appel.
+	bool TrySendingCodec(DWORD wanted);
+
 	//Funciones propias
 	static void *run(void *par);
 
 private:
+	//Sentinelle « aucun codec » de `codec` et d'`unmappedCodec` : c'est déjà celle
+	//qu'onResetStream écrit.
+	static const DWORD NoCodec = (DWORD)-1;
+
 	pthread_t thread;
 	DWORD codec;
 	DWORD timestamp;
 	DWORD freq;
+	//SSRC du dernier paquet reçu de la source jointe. Un SSRC qui change est
+	//une nouvelle source de synchronisation (RFC 3550) : sa base de timestamps
+	//lui est propre, le delta inter-bases ne veut rien dire — on repart au
+	//temps mur, comme après onResetStream.
+	DWORD prevSSRC;
 	timeval prev;
 	DWORD prevts;
 	bool reseted;
 	bool tsTransparency;
+	//Dernier codec refusé par la rtpMap de sortie, l'instant du refus, et les
+	//paquets jetés depuis le dernier journal.
+	DWORD unmappedCodec;
+	QWORD unmappedTs;
+	DWORD unmappedCount;
 };
 
 class ExternalFIRRequestedEvent: public JSR309Event

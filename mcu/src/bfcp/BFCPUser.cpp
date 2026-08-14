@@ -14,13 +14,11 @@ BFCPUser::BFCPUser(int userId, int conferenceId) :
 	transport(NULL)
 {
 	//Create mutex
-	pthread_mutex_init(&mutex,NULL);
 }
 
 BFCPUser::~BFCPUser()
 {
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 int BFCPUser::GetUserId()
@@ -50,11 +48,11 @@ bool BFCPUser::IsChair()
 void BFCPUser::SetTransport(WebSocket *transport)
 {
 	// Lock mutex.
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	// Set the new transport for this user.
 	this->transport = transport;
 	// Un Lock mutex.
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 
@@ -62,11 +60,11 @@ void BFCPUser::SetTransport(WebSocket *transport)
 void BFCPUser::UnsetTransport()
 {
 	// Lock mutex.
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Disconnected
 	transport = NULL;
 	// Un Lock mutex.
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 }
 
 
@@ -76,7 +74,7 @@ void BFCPUser::CloseTransport(const WORD code, const std::wstring& reason)
 	::Debug("BFCPUser::CloseTransport() | start\n");
 
 	// Lock mutex.
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	if (transport) {
 		BFCP::ConnectionData *conn_data = (BFCP::ConnectionData *)transport->GetUserData();
@@ -88,7 +86,7 @@ void BFCPUser::CloseTransport(const WORD code, const std::wstring& reason)
 	}
 
 	// Un Lock mutex.
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	::Debug("BFCPUser::CloseTransport() | end\n");
 }
@@ -105,7 +103,7 @@ void BFCPUser::SendMessage(BFCPMessage *msg)
 	::Debug("BFCPUser::SendMessage() | start\n");
 
 	// Lock mutex.
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	if (transport) {
 		// TODO: Here we assume that the user is connected via WS. transport should be a BFCPTransport
@@ -117,7 +115,7 @@ void BFCPUser::SendMessage(BFCPMessage *msg)
 	}
 
 	// Un Lock mutex.
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	::Debug("BFCPUser::SendMessage() | end\n");
 }

@@ -100,8 +100,10 @@ int RTMPClientConnection::Connect(const char* server,int port, const char* app,L
 
 	//If not found
 	if (!host)
-		//Error
-		return Error("-Could not resolve %s\n",host);
+		//Error : c'est le NOM qu'on a tenté de résoudre qui fait le diagnostic. La
+		//ligne passait `host`, qui vaut NULL ici par construction — le log disait
+		//donc toujours "(null)" au lieu de nommer l'hôte fautif.
+		return Error("-Could not resolve %s\n",server);
 	//Set to zero
 	bzero((char *) &addr, sizeof(addr));
 
@@ -236,8 +238,6 @@ int RTMPClientConnection::Run()
 	//Set no delay option
 	int flag = 1;
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int));
-	//Catch all IO errors
-	signal(SIGIO,EmptyCatch);
 
 	//Create C01 and send it
 	c01.SetRTMPVersion(3);

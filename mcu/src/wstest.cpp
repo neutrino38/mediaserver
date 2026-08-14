@@ -11,7 +11,7 @@
  * WebSocketServer/WebSocketConnection/WebSocketTransport — ce qui en fait le
  * harnais de non-régression des Phases 0 → 2 du refactor.
  *
- * Build : make -f mcu/Makefile.rpm wstest   (sortie : bin/debug/wstest)
+ * Build : make -C mcu wstest   (sortie : bin/debug/wstest)
  * Usage : wstest [port] [-d]
  */
 #include <signal.h>

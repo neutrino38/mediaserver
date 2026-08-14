@@ -1,6 +1,9 @@
 #ifndef _VIDEOMIXER_H_
 #define _VIDEOMIXER_H_
 #include <pthread.h>
+#include <condition_variable>
+#include <mutex>
+#include "worker.h"
 #include <video.h>
 #include <use.h>
 #include "pipevideoinput.h"
@@ -12,7 +15,7 @@
 #include <list>
 #include <memory>
 
-class VideoMixer 
+class VideoMixer : public Worker
 {
 public:
 	enum VADMode
@@ -66,14 +69,12 @@ public:
 	static void SetVADDefaultChangePeriod(DWORD ms);
 
 protected:
-	int MixVideo();
+	//Corps du Worker (boucle de composition)
+	virtual int Run();
 	int DumpMosaic(DWORD id,Mosaic* mosaic);
 	int UpdateMosaic(Mosaic* mosaic);
 	int GetPosition(int mosaicId,int id);
 	
-private:
-	static void * startMixingVideo(void *par);
-
 private:
 
 	//Tipos
@@ -106,9 +107,11 @@ private:
 	Mosaic	*defaultMosaic;
 
 	//Threads, mutex y condiciones
-	pthread_t 	mixVideoThread;
-	pthread_cond_t  mixVideoCond;
-	pthread_mutex_t mixVideoMutex;
+	//Verrou PARTAGÉ avec les PipeVideoOutput (pointeurs passés au ctor) :
+	//tenu pendant toute la passe de composition, signalé par les pipes à
+	//chaque nouvelle trame. Design à verrou partagé — pas le motif Wait.
+	std::condition_variable	mixVideoCond;
+	std::mutex		mixVideoMutex;
 	int		mixingVideo;
 	QWORD		ini;
 	Use		lstVideosUse;

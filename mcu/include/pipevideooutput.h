@@ -1,13 +1,15 @@
 #ifndef _PIPVIDEOOUTPUT_H_
 #define _PIPVIDEOOUTPUT_H_
-#include <pthread.h>
+#include <condition_variable>
+#include <mutex>
 #include <video.h>
 
 class PipeVideoOutput :
 	public VideoOutput
 {
 public:
-	PipeVideoOutput(pthread_mutex_t* mutex, pthread_cond_t* cond);
+	//Verrou et condition PARTAGÉS avec le VideoMixer propriétaire
+	PipeVideoOutput(std::mutex* mutex, std::condition_variable* cond);
 	virtual ~PipeVideoOutput();
 
 	virtual int NextFrame(PictPtr pic);
@@ -33,8 +35,8 @@ private:
 	int 	inited;
 	DWORD	version;
 
-	pthread_mutex_t* videoMixerMutex;
-	pthread_cond_t*  videoMixerCond;
+	std::mutex*		 videoMixerMutex;
+	std::condition_variable* videoMixerCond;
 };
 
 #endif

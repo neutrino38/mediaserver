@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <sys/poll.h>
 #include "config.h"
+#include "wait.h"
 #include "rtmp.h"
 #include "rtmpchunk.h"
 #include "rtmpmessage.h"
@@ -116,9 +117,11 @@ private:
 
 	pthread_t thread;
         pthread_t threadw;
-	pthread_mutex_t mutex;
         Use lock;
-        pthread_cond_t cond;
+	//Réveil du thread writer (données à sérialiser / arrêt). Remplace un
+	//couple mutex/cond dont le mutex n'était JAMAIS initialisé (UB latent).
+	::Wait writeWait;
+	bool   writePending = false;
 
 	std::shared_ptr<RTMPNetConnection> app;
 	std::wstring	 appName;

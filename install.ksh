@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.12.1"
+VERSION="1.12.3"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
@@ -92,7 +92,7 @@ function clean
 
 	# Nettoyage du binaire et des objets du mediaserver.
 	cd mcu
-	make -f Makefile.rpm clean
+	make clean
 	cd "$BASESRCDIR"
 
 	# Nettoyage des objets et archives des sous-modules (libmedkit + libbfcp),
@@ -196,7 +196,7 @@ function local_compile
 
 	# xmlrpc-c : plus construit depuis les sources. On s'appuie desormais sur le
 	# paquet systeme xmlrpc-c-devel (AlmaLinux 9, depot crb) : memes en-tetes,
-	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile.rpm LDXMLFLAGS).
+	# meme backend libxml2, lie dynamiquement (voir mcu/Makefile LDXMLFLAGS).
 
 	# g722_1 / SIREN : plus construit. Le codec G.722.1 a ete retire du
 	# mediaserver et de libmedikit (plus aucune reference a -lg722_1).
@@ -218,7 +218,7 @@ function local_compile
 
 	mkdir -p bin/debug
 	cd mcu
-	make -f Makefile.rpm mcu
+	make mcu
 }
 
 function compile_rabbitmq
@@ -263,7 +263,7 @@ function compile_libmedkit
 {
 	# Construit libmedkit.a DANS l'arbre du sous-module (cible 'all', pas
 	# d'install dans /opt/ives). Le mediaserver s'y lie directement via
-	# MEDKITDIR/USEMEDKIT dans mcu/Makefile.rpm. Voir almalinux9_port_plan.md.
+	# MEDKITDIR/USEMEDKIT dans mcu/Makefile. Voir almalinux9_port_plan.md.
 	MEDIASERVERPATH=$PWD
 	MEDKITDIR=$MEDIASERVERPATH/third_party/fontventa/libmedikit
 	if [ ! -d "$MEDKITDIR" ]
@@ -272,19 +272,25 @@ function compile_libmedkit
 		exit 20
 	fi
 	echo "Compilation libmedkit (in-tree)"
-	# INCLUDE surcharge :
-	#  - ffmpeg : en-tetes dans /usr/include/ffmpeg (override par FFMPEGINC) ;
-	#  - mp4v2 : pas de paquet natif, en-tetes pris dans staticdeps/include
-	#    (build source IVeS), override par MP4V2INC.
+	# Plus de surcharge d'INCLUDE ici : les chemins d'en-tetes sont TOUS dans le
+	# Makefile du sous-module. ffmpeg y vient de pkg-config, staticdeps/include
+	# du defaut relatif (equivalent au chemin absolu qu'on injectait, make
+	# tournant en -C), et FFMPEGINC/MP4V2INC y restent utilisables comme
+	# variables d'environnement.
+	#
+	# Cet ecrasement etait actif ET nuisible : il masquait un `-I` sans argument
+	# du Makefile (CUSTOM_ASTPATH vide en build non-Asterisk), qui faisait avaler
+	# a gcc l'option suivante comme repertoire d'include. Un `make` direct dans le
+	# sous-module compilait donc SANS -DLOG_, contrairement au build officiel :
+	# deux verites pour un meme arbre, et la mauvaise etait la plus accessible.
+	#
 	# ASTERISK=no : on exclut les objets couples a Asterisk (transcoder, mp4format,
 	# framebuffer, frameutils, astlog), inutilisables hors module Asterisk et qui
 	# exigeraient asterisk-devel. Le mediaserver n'est pas un module Asterisk.
 	# On laisse le Makefile choisir la liste OBJS (source unique de verite : elle
 	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
 	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
-	make -C "$MEDKITDIR" all \
-		ASTERISK=no \
-		INCLUDE="-I. ${FFMPEGINC:--I/usr/include/ffmpeg} ${MP4V2INC:--I$MEDIASERVERPATH/staticdeps/include}"
+	make -C "$MEDKITDIR" all ASTERISK=no
 	cd $MEDIASERVERPATH
 }
 
@@ -292,7 +298,7 @@ function compile_libbfcp
 {
 	# Construit libbfcp DANS l'arbre du sous-module (cible 'all', pas d'install
 	# dans /opt/ives). Le mediaserver s'y lie directement via BFCPDIR dans
-	# mcu/Makefile.rpm. On produit les deux variantes (dbg + rel) pour couvrir
+	# mcu/Makefile. On produit les deux variantes (dbg + rel) pour couvrir
 	# les deux valeurs de DEBUG du build mcu.
 	MEDIASERVERPATH=$PWD
 	BFCPDIR=$MEDIASERVERPATH/third_party/libbfcp

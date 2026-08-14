@@ -7,6 +7,7 @@
 
 #ifndef RTMPPARTICIPANT_H
 #define	RTMPPARTICIPANT_H
+#include <mutex>
 #include <memory>
 
 #include "rtmpstream.h"
@@ -105,7 +106,7 @@ private:
 	RTMPMediaStream		*attached;
 	//Protège les lectures/écritures du pointeur `attached` (H-6). Indépendant
 	//de `use` (Participant). Jamais tenu pendant un appel vers un autre objet.
-	pthread_mutex_t		attachedMutex;
+	std::mutex		attachedMutex;
 	RTMPMetaData		*meta;
 	MediaStatistics		audioStats;
 	MediaStatistics		videoStats;
@@ -131,9 +132,9 @@ private:
 	pthread_t 	sendTextThread;
 	pthread_t 	sendVideoThread;
 	pthread_t 	sendAudioThread;
-	pthread_mutex_t	mutex;
-	pthread_cond_t	cond;
-	
+	//Cadence de la boucle d'envoi vidéo, réveillée par StopSendingVideo
+	::Wait		pacer;
+
 	//Controlamos si estamos mandando o no
 	bool	sendingVideo;
 	bool 	receivingVideo;

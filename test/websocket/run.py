@@ -11,7 +11,7 @@ Usage :
     python3 test/websocket/run.py [--binary PATH] [--port P] [--verbose]
 
 À exécuter depuis la racine du dépôt. Construire d'abord le binaire :
-    make -f mcu/Makefile.rpm wstest
+    make -C mcu wstest
 """
 import argparse
 import os
@@ -65,7 +65,7 @@ def main():
 
     if not os.path.exists(args.binary):
         print("ERROR: server binary not found: %s" % args.binary)
-        print("Build it first:  make -f mcu/Makefile.rpm wstest")
+        print("Build it first:  make -C mcu wstest")
         return 2
 
     server_log = open(os.path.join(HERE, "wstest.server.log"), "wb")

@@ -23,7 +23,6 @@ TextEncoder::TextEncoder()
 	//Not encoding
 	encodingText=0;
 	//Create mutex
-	pthread_mutex_init(&mutex,0);
 }
 
 /*******************************
@@ -37,7 +36,6 @@ TextEncoder::~TextEncoder()
 		//End
 		End();
 	//Destroy mutex
-	pthread_mutex_destroy(&mutex);
 }
 
 /***************************************
@@ -63,15 +61,6 @@ int TextEncoder::Init(TextInput *input)
 * startencodingText
 *	Helper function
 ***************************************/
-void * TextEncoder::startEncoding(void *par)
-{
-	TextEncoder *conf = (TextEncoder *)par;
-	blocksignals();
-	Log("Encoding text [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->Encode());
-}
-
-
 /***************************************
 * StartSending
 *	Comienza a mandar a la ip y puertos especificados
@@ -88,7 +77,7 @@ int TextEncoder::StartEncoding()
 	encodingText=1;
 
 	//Start thread
-	createPriorityThread(&encodingTextThread,startEncoding,this,1);
+	StartThread();
 
 	Log("<StartSending text [%d]\n",encodingText);
 
@@ -129,7 +118,7 @@ int TextEncoder::StopEncoding()
 		textInput->Cancel();
 
 		//Y esperamos
-		pthread_join(encodingTextThread,NULL);
+		StopThread();
 	}
 
 	Log("<StopEncoding Text\n");
@@ -170,13 +159,13 @@ int TextEncoder::Encode()
 			//"[nom] test". Text2Subtitle traite par ailleurs exactement les
 			//memes cas particuliers (BOM 0xFEFF, retour arriere, 0xFFFD,
 			//delimiteurs de ligne) que l'accumulation supprimee ici.
-			pthread_mutex_lock(&mutex);
+			std::unique_lock<std::mutex> mutexLock(mutex);
 			//For each listener
 			for (Listeners::iterator it=listeners.begin(); it!=listeners.end(); ++it)
 				//Call listener
 				(*it)->onMediaFrame(*frame);
 			//unlock
-			pthread_mutex_unlock(&mutex);
+			mutexLock.unlock();
 		}
 
 		//Delete frame -- y compris les trames vides, qui fuyaient jusqu'ici
@@ -192,13 +181,13 @@ int TextEncoder::Encode()
 bool TextEncoder::AddListener(MediaFrame::Listener *listener)
 {
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Add to set
 	listeners.insert(listener);
 
 	//unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return true;
 }
@@ -206,7 +195,7 @@ bool TextEncoder::AddListener(MediaFrame::Listener *listener)
 bool TextEncoder::RemoveListener(MediaFrame::Listener *listener)
 {
 	//Lock
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 
 	//Search
 	Listeners::iterator it = listeners.find(listener);
@@ -217,7 +206,7 @@ bool TextEncoder::RemoveListener(MediaFrame::Listener *listener)
 		listeners.erase(it);
 
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 
 	return true;
 }

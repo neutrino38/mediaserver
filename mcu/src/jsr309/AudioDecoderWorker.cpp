@@ -12,8 +12,7 @@ AudioDecoderJoinableWorker::AudioDecoderJoinableWorker()
 {
 	//Nothing
 	output = NULL;
-        input = NULL;
-	decoding = false;
+    input = NULL;
 }
 
 AudioDecoderJoinableWorker::~AudioDecoderJoinableWorker()
@@ -44,7 +43,7 @@ int AudioDecoderJoinableWorker::Init(PipeAudioInput * input)
             output = NULL;
         }
         //Store it
-	this->input = input;
+		this->input = input;
         return input->Init(16000);
     }
     else
@@ -65,9 +64,7 @@ int AudioDecoderJoinableWorker::End()
 	Dettach();
 
 	//Check if already decoding
-	if (decoding)
-		//Stop
-		Stop();
+	if (IsThreadRunning()) Stop();
 
 	//Set null
 	output = NULL;
@@ -83,30 +80,18 @@ int AudioDecoderJoinableWorker::Start()
 		//Exit
 		return Error("null audio outputi/input not starting");
 
-	//Check if need to restart
-	if (decoding)
-		//Stop first
-		Stop();
 
-	//Start decoding
-	decoding = 1;
+	//Stop first
+	Stop();
+
+
+	//Rearmer la file apres un eventuel Stop (Cancel collant)
+	packets.Reset();
 
 	//launc thread
-	createPriorityThread(&thread,startDecoding,this,0);
+	StartThread();
 
 	return 1;
-}
-void * AudioDecoderJoinableWorker::startDecoding(void *par)
-{
-	Log("AudioDecoderJoinableWorkerThread [%d]\n",getpid());
-	//Get worker
-	AudioDecoderJoinableWorker *worker = (AudioDecoderJoinableWorker *)par;
-	//Block all signals
-	blocksignals();
-	//Run
-	worker->Decode();
-	//Exit
-	return NULL;;
 }
 
 int  AudioDecoderJoinableWorker::Stop()
@@ -114,16 +99,13 @@ int  AudioDecoderJoinableWorker::Stop()
 	Log(">StopAudioDecoderJoinableWorker\n");
 
 	//If we were started
-	if (decoding)
+	if (IsThreadRunning())
 	{
-		//Stop
-		decoding=0;
-
 		//Cancel any pending wait
 		packets.Cancel();
 
 		//Esperamos
-		pthread_join(thread,NULL);
+		StopThread();
 	}
 
 	Log("<StopAudioDecoderJoinableWorker\n");
@@ -134,8 +116,13 @@ int  AudioDecoderJoinableWorker::Stop()
 
 int AudioDecoderJoinableWorker::Decode()
 {
-	SWORD		raw[512];
-	DWORD		rawSize=512;
+	//8192 : une trame de 20 ms à 48 kHz fait 960 échantillons, 120 ms (opus)
+	//jusqu'à 5760. L'ancien 512 tronquait chaque trame 48 kHz : Decode borne à
+	//outLen et retient le reste en fifo, donc seuls 512 échantillons sur 960
+	//sortaient par paquet — débit utile à 53 %, latence croissante, et l'aval
+	//famélique (mesuré le 2026-08-14 : 25 paquets/s au lieu de 50 vers le pair).
+	SWORD		raw[8192];
+	DWORD		rawSize=8192;
 	AudioDecoder*	codec=NULL;
 	DWORD		frameTime=0;
 	DWORD		lastTime=0;
@@ -144,69 +131,46 @@ int AudioDecoderJoinableWorker::Decode()
 
 
 	//Mientras tengamos que capturar
-	while(decoding)
+	while (IsThreadRunning())
 	{
-		//Obtenemos el paquete
-		if (!packets.Wait(0))
-                {
-			//Check condition again
-                    msleep(1000);
-			continue;
-                }
-
 		//Get packet in queue
-		RTPPacket* packet = packets.Pop();
+		RTPPacket* packet = packets.Pop(5000);
 		
 		//Check
 		if (!packet)
-                {
-                    msleep(1000);
-                    continue;
-                }
+        {
+			if (packets.IsCanceled()) break;
+			//Timeout : continue
+			continue;
+		}
 
 		//Comprobamos el tipo
-		if ( codec==NULL  || packet->GetCodec()!=codec->type )
+		if ( codec==NULL  || packet->GetCodec()!= codec->type )
 		{
 			//Si habia uno nos lo cargamos
 			if (codec!=NULL)
-                        {
-                            if (input) input->StopRecording();
-                            if (output) output->StopPlaying();
+            {
+                if (input) input->StopRecording();
+                if (output) output->StopPlaying();
 			    delete codec;
-                        }
+            }
 
 			//Creamos uno dependiendo del tipo
-                        codec = AudioCodecFactory::CreateDecoder((AudioCodec::Type)packet->GetCodec());
+            codec = AudioCodecFactory::CreateDecoder((AudioCodec::Type)packet->GetCodec());
 			if ( codec != NULL )
-                        {
-                            DWORD rate;
-
-                            if (output)
-                            {
-                                rate = output->GetNativeRate();
-                            }
-                            else
-                            {
-                                rate = 16000;
-                            }
-
-                            rate = codec->TrySetRate(rate);
-                            if (input)
-                            {
-
-                                input->Init(rate);
-                            }
-
-                            if (output)
-                            {
-                                output->StartPlaying(rate);
-                            }
-                        }
-                        else
-                        {
-                            Error("Failed to open audio decoder\n");
-                            break;
-                        }
+            {
+                DWORD rate = (output) ? output->GetNativeRate() : 16000;
+                rate = codec->TrySetRate(rate);
+                
+				if (input) input->Init(rate);
+				if (output) output->StartPlaying(rate);
+            }
+            else
+            {
+				Error("Failed to open %s audio decoder\n", AudioCodec::GetNameFor((AudioCodec::Type)packet->GetCodec()));
+				delete packet;
+				break;
+            }
 			
 		}
 
@@ -221,7 +185,7 @@ int AudioDecoderJoinableWorker::Decode()
 
 		//Y lo reproducimos
 		if (output != NULL) output->PlayBuffer(raw,len,frameTime);
-                if (input != NULL) input->PutSamples(raw, len);
+        if (input != NULL) input->PutSamples(raw, len);
 
 		//Delete packet
 		delete(packet);
@@ -229,7 +193,7 @@ int AudioDecoderJoinableWorker::Decode()
 
 	//End reproducing
 	if (output != NULL) output->StopPlaying();
-        if (input != NULL) input->End();
+    if (input != NULL) input->End();
 
 	//If a decoder is created, delete it
 	if (codec!=NULL) delete codec;		

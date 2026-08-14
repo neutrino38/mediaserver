@@ -165,7 +165,7 @@ Chacune peut être un commit isolé.*
 | 0.9 | *(ajouté)* `RecorderTimer` réécrit en `std::thread` : correction de la version initiale — `wait_for` **avec prédicat** (`cancelled \|\| stopClaimed`), flag `cancelled` posé sous mutex dans le destructeur (sinon réveil perdu → `join()` bloqué toute la durée max), et re-vérification du claim au timeout (sinon double `Close()` + double événement si `RecorderStop` passe en même temps). | `jsr309/MediaSession.{h,cpp}` (RecorderTimer) | **Fait** — sémantique one-shot de `ClaimStop` préservée. |
 | 0.10 | **C-13 (correctif ciblé)** : notification retour à la destruction de la source. Ajout d'un `virtual void onJoinableEnded(Joinable*)` no-op sur `Joinable::Listener` ; `~RTPMultiplexer` notifie chaque listener (`(*it)->onJoinableEnded(this)`) **avant** `listeners.clear()` ; `RTPEndpoint` et `WSEndpoint` (les deux `Port` qui sont `Listener`) remettent `Endpoint::Port::joined = NULL` si le pointeur correspond. Le `~Port → Detach()` ultérieur voit alors `joined==NULL` → plus de deref sur l'objet libéré. Sémantique = expiration d'un `weak_ptr` faite à la main ; ne touche pas la propriété du graphe (réservé Phase 4). | `jsr309/Joinable.h`, `RTPMultiplexer.cpp`, `RTPEndpoint.{h,cpp}`, `WSEndpoint.{h,cpp}` | **Fait, vérifié** — build vert (`./install.ksh localcompile`, 2026-07-08) + scénario reproduit (play fichier inexistant + endpoints attachés puis teardown) : plus de « pure virtual method called ». |
 
-**Livrable** : build vert ✅ (2026-07-06, `make -f Makefile.rpm mcu`) + test manuel conférence
+**Livrable** : build vert ✅ (2026-07-06, `make mcu`) + test manuel conférence
 création/destruction en boucle (à dérouler). Ces correctifs suppriment déjà les crashs les plus
 reproductibles.
 
@@ -204,7 +204,7 @@ Bonus : `PlayerDelete`/`RecorderDelete` libèrent maintenant leur contexte d'év
 les mixers/transcodeurs (fuites) ; ordre de verrous global : mutex session → mutex manager,
 jamais l'inverse.
 
-**Livrable** : build vert ✅ (2026-07-06, `make -f Makefile.rpm mcu`). Reste à dérouler : scénario
+**Livrable** : build vert ✅ (2026-07-06, `make mcu`). Reste à dérouler : scénario
 JSR309 de charge (création session/endpoints/players/recorders en parallèle de destructions,
 scénarios elixip).
 
@@ -477,7 +477,7 @@ que ce que ce texte supposait (voir la note « écarts » en fin de point 7).*
    `Multiplex`, aliasing des `decoder` workers membres par valeur) est le remède complet — très
    invasif car les listeners sont des membres par valeur, réservé à une session dédiée.
 
-**Correctif collatéral (2026-07-10)** : le rebuild complet (nécessaire car `mcu/Makefile.rpm` ne
+**Correctif collatéral (2026-07-10)** : le rebuild complet (nécessaire car `mcu/Makefile` ne
 suit pas les dépendances headers → objets périmés) a exposé une régression du paquet système
 **ffmpeg** (`libavutil/base64.h` a perdu ses gardes `extern "C"` entre le 2026-07-09 et le
 2026-07-10) : `websocketconnection.cpp` (include manquant) et `rtpsession.cpp` (include nu →
@@ -548,7 +548,7 @@ en boucle pendant un flux vidéo actif (exercer le RAII des mosaïques et des ov
 
 ## 5. Méthode de validation (pas de suite de tests automatisée)
 
-1. **Build vert** à chaque étape : `make -f mcu/Makefile.rpm mcu` (et `./install.ksh localcompile`
+1. **Build vert** à chaque étape : `make -C mcu mcu` (et `./install.ksh localcompile`
    en fin de phase).
 2. **Scénarios de charge manuels** par phase (client XML-RPC en boucle) :
    - create/delete conference × N en parallèle de SetVideoCodec/AddMosaicParticipant ;

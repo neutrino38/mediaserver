@@ -151,6 +151,10 @@ int main(int argc,char **argv)
 	//Adresse annoncée dans le SDP : NULL → auto-détectée
 	const char* publicIp = NULL;
 	int vadPeriod = 5000;
+	//Délai de grâce (s) sans long-poll sur une file d'événements avant
+	//destruction de la file et des objets qui en dépendent (0 = désactivé).
+	//Commun à toutes les API de contrôle (JSR309 aujourd'hui, MCU à venir).
+	int eventQueueExpires = XmlEventQueue::DefaultExpiresSecs;
 	const char *logfile = "mcu.log";
 	const char *pidfile = "mcu.pid";
 #ifdef MOTELI
@@ -190,7 +194,12 @@ int main(int argc,char **argv)
 				" --websocket-secure Enable secure WebSocket (wss://)\r\n"
 				" --websocket-cert Certificate file (PEM) for wss:// (default: mcu.crt; implies --websocket-secure)\r\n"
 				" --websocket-key  Private key file (PEM) for wss:// (default: mcu.key; implies --websocket-secure)\r\n"
-				" --vad-period     Set the VAD based conference change period in milliseconds\r\n");
+				" --vad-period     Set the VAD based conference change period in milliseconds\r\n"
+				" --event-queue-expires\r\n"
+				"                  Grace period, in seconds, before an event queue with no\r\n"
+				"                  long-poll client is destroyed together with the media sessions\r\n"
+				"                  bound to it (client liveness is proven by its long-poll).\r\n"
+				"                  0 disables the cleanup (default: 60)\r\n");
 #ifdef MOTELI
 			printf("usage for rabbit MQ connector:\r\n"
 			       "mcu --rq-queue queueName --rq-host user:passwd@host:port/vhost\n"
@@ -236,6 +245,9 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--vad-period")==0 && (i+1<=argc))
 			//Get rtmp port
 			vadPeriod = atoi(argv[++i]);
+		else if (strcmp(argv[i],"--event-queue-expires")==0 && (i+1<argc))
+			//Délai de grâce sans long-poll (0 = désactive le nettoyage)
+			eventQueueExpires = atoi(argv[++i]);
 		else if (strcmp(argv[i],"--websocket-host")==0 && (i+1<argc))
 			//Get host
 			wsHost = argv[++i];
@@ -442,14 +454,14 @@ int main(int argc,char **argv)
 	StatusHandler status;
 
 	//Init de mcu
-	mcu.Init(&xmleventmcu);
+	mcu.Init(&xmleventmcu,eventQueueExpires);
 	//Init the broadcaster
 	broadcaster.Init();
 	//Init the media gateway
 	mediaGateway.Init(&xmleventmediaGateway);
 	
 	//INit the jsr309
-	jsr309Manager.Init(&xmleventjsr309);
+	jsr309Manager.Init(&xmleventjsr309,eventQueueExpires);
 
 	//Add the rtmp application from the mcu to the rtmp server
 	rtmpServer.AddApplication(L"mcu/",&mcu);

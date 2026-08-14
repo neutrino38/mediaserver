@@ -12,12 +12,8 @@
 
 VideoPipe::VideoPipe()
 {
-	//Inicializamos los mutex
-	pthread_mutex_init(&newPicMutex,0);
-	pthread_cond_init(&newPicCond,0);
-
-	//No estamos iniciados
-	//inited = false;
+	//No estamos iniciados (inited : init par défaut dans le header — le ctor
+	//historique ne l'initialisait PAS, lecture de mémoire indéterminée)
 	capturing = false;
 	imgNew = 0;
 	videoWidth = 0;
@@ -31,40 +27,25 @@ VideoPipe::VideoPipe()
 
 VideoPipe::~VideoPipe()
 {
-	//Liberamos los mutex
-	pthread_mutex_destroy(&newPicMutex);
-	pthread_cond_destroy(&newPicCond);
 }
 
 int VideoPipe::Init()
 {
 	Log("VideoPipe init\n");
 
-	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
-
 	//Iniciamos
-	inited = true;
-
-	//Protegemos
-	pthread_mutex_unlock(&newPicMutex);
+	Locked([this] { inited = true; });
 
 	return true;
 }
 
 int VideoPipe::End()
 {
-	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
-
 	//Terminamos
-	inited = false;
+	Locked([this] { inited = false; });
 
-	//Se�alizamos la condicion
-	pthread_cond_signal(&newPicCond);
-
-	//Protegemos
-	pthread_mutex_unlock(&newPicMutex);
+	//Réveiller un grab en cours (il relivrera `last`, cf. sémantique)
+	Signal();
 
 	return true;
 }
@@ -73,24 +54,20 @@ int VideoPipe::StartVideoCapture(int width,int height,int fps)
 {
 	Log("-StartVideoCapture [%d,%d,%d]\n",width,height,fps);
 
-	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	Locked([&] {
+		//Almacenamos el tama�o
+		videoWidth = width;
+		videoHeight = height;
+		videoSize = (videoWidth*videoHeight*3)/2;
+		videoFPS = fps;
 
-	//Almacenamos el tama�o
-	videoWidth = width;
-	videoHeight = height;
-	videoSize = (videoWidth*videoHeight*3)/2;
-	videoFPS = fps;
+		//El inicio
+		imgNew = false;
+		last = nullptr;
 
-	//El inicio
-	imgNew = false;
-	last = nullptr;
-
-	//Estamos capturando
-	capturing = true;
-
-	//Desprotegemos
-	pthread_mutex_unlock(&newPicMutex);
+		//Estamos capturando
+		capturing = true;
+	});
 
 	return true;
 }
@@ -99,18 +76,14 @@ int VideoPipe::StopVideoCapture()
 {
 	Log("-StopVideoCapture\n");
 
-	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	Locked([this] {
+		//Y no estamos capturando
+		capturing = false;
 
-	//Y no estamos capturando
-	capturing = false;
-
-	//Clear flags
-	last = nullptr;
-	imgNew = false;
-
-	//Desprotegemos
-	pthread_mutex_unlock(&newPicMutex);
+		//Clear flags
+		last = nullptr;
+		imgNew = false;
+	});
 
 	return true;
 }
@@ -119,64 +92,43 @@ PictPtr VideoPipe::GrabFrame(DWORD timeout)
 {
 	PictPtr pic;
 
-	//Bloqueamos para ver si hay un nuevo picture
-	pthread_mutex_lock(&newPicMutex);
-
 	//Si no estamos iniciados
-	if (!inited)
+	if (!Locked([this] { wakeGrab = false; return (bool)inited; }))
 	{
 		//Logeamos
 		Error("VideoPipe no inited, grab failed\n");
-		//Desbloqueamos
-		pthread_mutex_unlock(&newPicMutex);
 		//Salimos
 		return nullptr;
 	}
 
-	//Miramos a ver si hay un nuevo pict
-	if(imgNew==0)
-	{
-		//If timeout has been specified
-		if (timeout)
-		{
-			timespec   ts;
-			//Calculate timeout
-			calcTimout(&ts,timeout);
-			//wait
-			pthread_cond_timedwait(&newPicCond,&newPicMutex,&ts);
-		} else {
-			//Wait ad infinitum
-			pthread_cond_wait(&newPicCond,&newPicMutex);
-		}
-	}
+	//Attendre une nouvelle image, un CancelGrabFrame ou un End ; le timeout
+	//échu relivre `last` (gel d'image, cf. sémantique en tête de classe)
+	WaitUntil(timeout, [this] { return imgNew != 0 || wakeGrab || !inited; });
 
-	//Lo vamos a consumir
-	imgNew=0;
+	Locked([&] {
+		//Lo vamos a consumir
+		imgNew=0;
 
-	//Nos quedamos con la referencia antes de que la cambien (partage refcompté)
-	pic=last;
-
-	//Y liberamos el mutex
-	pthread_mutex_unlock(&newPicMutex);
+		//Nos quedamos con la referencia antes de que la cambien (partage refcompté)
+		pic=last;
+	});
 
 	return pic;
 }
 
 void  VideoPipe::CancelGrabFrame()
 {
-	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	Locked([this] {
+		//No image
+		imgNew = false;
+		last = nullptr;
 
-	//No image
-	imgNew = false;
-	last = nullptr;
+		//Réveil explicite du grab en cours
+		wakeGrab = true;
+	});
 
 	//Se�alamos
-	pthread_cond_signal(&newPicCond);
-
-	//Unloco mutex
-	pthread_mutex_unlock(&newPicMutex);
-
+	Signal();
 }
 
 DWORD VideoPipe::GetBufferSize()
@@ -186,8 +138,12 @@ DWORD VideoPipe::GetBufferSize()
 
 int VideoPipe::SetVideoSize(int width, int height)
 {
-	//Set current values
-	if ( width != inputWidth && height != inputHeight )
+	//|| et non && : un changement d'une SEULE dimension (640×480 → 640×360,
+	//le passage 4:3 → 16:9 typique) est un vrai changement de taille native.
+	//Le && historique le ratait : sizeChanged restait bas, l'encodeur en mode
+	//useInputSize gardait l'ancienne géométrie et le pipe étirait l'image en
+	//continu.
+	if ( width != inputWidth || height != inputHeight )
 	{
 		Log("VideoPipe: size changed to %d x %d\n", width, height );
 		inputWidth  = width;
@@ -202,12 +158,11 @@ int VideoPipe::NextFrame(PictPtr pic)
 	if (!pic || !pic->GetAVFrame())
 		return 0;
 
-	//Protegemos
-	pthread_mutex_lock(&newPicMutex);
+	bool delivered = Locked([&] {
+		//Si estamos capturamos
+		if (!capturing)
+			return false;
 
-	//Si estamos capturamos
-	if (capturing)
-	{
 		// Mise à l'échelle vers la taille de sortie (le rescaler rend une
 		// référence si la trame est déjà à la bonne taille). Remplace
 		// FrameScaler ; graphe avfilter persistant.
@@ -215,12 +170,12 @@ int VideoPipe::NextFrame(PictPtr pic)
 
 		//Hay imagen
 		imgNew = true;
-		//Se�alamos
-		pthread_cond_signal(&newPicCond);
-	}
+		return true;
+	});
 
-	//Y desbloqueamos
-	pthread_mutex_unlock(&newPicMutex);
+	//Se�alamos (hors verrou de travail : Signal reprend celui de Wait)
+	if (delivered)
+		Signal();
 
 	return 1;
 }

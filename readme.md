@@ -88,7 +88,7 @@ Once the dependencies and submodule archives already exist, you can rebuild
 just the C++ binary with:
 
 ```sh
-make -f mcu/Makefile.rpm mcu
+make -C mcu mcu
 ```
 
 ### Building the submodules individually
@@ -189,6 +189,7 @@ mcu [-h|--help] [-f] [-d]
     [--min-rtp-port <min_port>] [--max-rtp-port port]
     [--public-ip <ip>]
     [--vad-period <m>]
+    [--event-queue-expires <s>]
 ```
 
 ### Options générales
@@ -260,6 +261,44 @@ endroit à regarder devant un appel sans média :
 | Option | Défaut | Description |
 |---|---|---|
 | `--vad-period ms` | `5000` | Période (en millisecondes) de changement de la mosaïque pilotée par la détection d'activité vocale (VAD). |
+
+### Files d'événements — expiration des sessions et conférences abandonnées
+
+| Option | Défaut | Description |
+|---|---|---|
+| `--event-queue-expires s` | `60` | Délai de grâce, en secondes, sans aucun client en long-poll sur une file d'événements, avant destruction de la file **et des objets qui en dépendent**. `0` désactive le nettoyage (comportement historique). S'applique aux **deux API de contrôle** : les `MediaSession` de `/jsr309` et les **conférences** de `/mcu`, chacune liée à une file par son `queueId`. |
+
+Le long-poll du contrôleur sur `/events/jsr309/<queueId>` (ou
+`/events/mcu/<queueId>`) sert de **preuve de vie** : il est rétabli en moins
+d'une seconde après une coupure et le serveur y émet un keep-alive toutes les
+30 s. Soixante secondes sans lecteur, c'est donc un contrôleur mort — et sans ce
+nettoyage ses sessions et conférences (endpoints, mixers, threads d'encodage,
+ports RTP) vivaient jusqu'au redémarrage du serveur.
+
+Deux signaux, un seul délai :
+
+1. **file toujours là, mais plus lue** → les objets rattachés sont détruits,
+   puis la file ;
+2. **file détruite explicitement** (`EventQueueDelete`) alors que des objets la
+   référencent encore → le délai est **armé**, pas exécuté : les objets ne
+   partent qu'à l'échéance, ce qui laisse au contrôleur une chance de revenir.
+
+Trace dans `/var/log/mcu.log` :
+
+```
+-JSR309Manager: expiration par event queue armee [grace:60000ms,balayage:10000ms]
+-MCU: expiration par event queue armee [grace:60000ms,balayage:10000ms]
+-JSR309Manager: suppression de la session 12 [tag:call-42,queue:7] : controleur absent du long-poll
+-JSR309Manager: file d'evenements 7 sans poller depuis plus de 60s, destruction [objets:1]
+-MCU: file d'evenements 9 detruite mais encore referencee, armement du delai de grace de 60s
+-MCU: delai de grace ecoule pour la file d'evenements 9, destruction [objets:1]
+```
+
+**La portée du nettoyage est celle du découpage des files choisi par le
+contrôleur** : une file par appel/conférence isole les objets entre eux ; une
+file partagée (cas du client Java `jsr309impl`, et du montage historique décrit
+dans `MCU-API.md` §7.2) les emporte *tous ensemble*. Détail du contrat dans
+`xmlrpc_jsr309_api.md` §5 et `MCU-API.md` §5.
 
 
 ### WebRTC — WebSocket sécurisé (wss://)

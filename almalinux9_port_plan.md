@@ -10,7 +10,7 @@ est vert**. Il ne reste que le service systemd, la CI et quelques nettoyages.
 ## 1. Réalisé (build mcu vert sur AlmaLinux 9 / GCC 11.5)
 
 ### Toolchain & langage
-- **GCC 11**, `-std=gnu++17 -Werror=return-type` (`mcu/Makefile.rpm`). ~66
+- **GCC 11**, `-std=gnu++17 -Werror=return-type` (`mcu/Makefile`). ~66
   chemins sans `return` (UB) corrigés. Cf. `cpp17-migration.md`.
 
 ### Dépendances passées en dynamique système
@@ -102,14 +102,22 @@ est vert**. Il ne reste que le service systemd, la CI et quelques nettoyages.
   `speex/speexcodec.cpp` — aucun usage direct de l'API libspeex) et la ligne de
   lien el9 par défaut ne référence plus `-lspeex`. Vérifié : relink vert, pas de
   `NEEDED libspeex` dans le binaire (seule reste la dépendance *transitive* de
-  `libavcodec` système, normale). Seules les branches legacy `FEWSTATICDEPS`/
-  `el5` du `Makefile.rpm` mentionnent encore `-lspeex` (nettoyage §D).
+  `libavcodec` système, normale). Les branches legacy qui mentionnaient encore
+  `-lspeex` ont été supprimées depuis (§D).
 
-### D. Détection de distribution
-- `DISTRO` (`Makefile.rpm`) ne reconnaît que `fc`/`el5`/`el6`. Le **mode par
-  défaut (`else`) est de fait le mode AlmaLinux 9 dynamique** ; il fonctionne mais
-  aucun `el9` n'est détecté explicitement. Nettoyer/renommer (ex. brancher `el9`
-  explicitement, clarifier le rôle de `FEWSTATICDEPS`).
+### D. Détection de distribution — **fait (2026-08-13)**
+- `DISTRO` (`fc`/`el5`/`el6`) et `FEWSTATICDEPS` ont été **supprimés** de
+  `mcu/Makefile`, en même temps que le renommage `Makefile.rpm` → `Makefile`.
+  La détection ne reconnaissait pas AlmaLinux : elle tombait dans le `else`, qui
+  était donc le seul chemin réellement emprunté. Il n'y a plus qu'une ligne de
+  lien, dynamique, el9 — pas de branche `el9` à « brancher explicitement », il
+  n'y a plus de branche du tout.
+- Les codecs que ces branches liaient en direct (`-lx264`, `-lvpx`, `-lspeex`,
+  `-lfdk-aac`, `-lg722_1`, `-lopencore-amr*`) arrivent tous par libavcodec via
+  libmedkit ; le mediaserver n'appelle plus aucune de ces API directement.
+- ffmpeg passe par `pkg-config` des deux côtés, et libmedikit publie un
+  `libmedkit.pc` que `mcu/Makefile` consomme. Voir `ffmpeg9_migration_plan.md`
+  §4.
 
 ### E. CI — **à recréer**
 - L'ancien `Jenkinsfile` (matrice CentOS6) a été **supprimé**. Aucune CI n'est
@@ -154,8 +162,9 @@ est vert**. Il ne reste que le service systemd, la CI et quelques nettoyages.
 
 ## 4. Récapitulatif des fichiers à toucher (reste à faire)
 
-- `mcu/Makefile.rpm` — détection/nommage `el9` explicite + purge des branches
-  legacy `FEWSTATICDEPS`/`el5` (`-lspeex`, `-lvpx`, `-lfdk-aac`…) (cosmétique, §D).
+- ~~`mcu/Makefile` — purge des branches legacy `FEWSTATICDEPS`/`el5`~~ **fait le
+  2026-08-13** (§D) : branches supprimées, fichier renommé `Makefile.rpm` →
+  `Makefile`, ffmpeg par `pkg-config`.
 - CI (à recréer) — cible + dépôts AlmaLinux 9 (l'ancien `Jenkinsfile` a été
   supprimé) (§E).
 - (optionnel MOTELI) `install.ksh` — protobuf 3 / librabbitmq EPEL (§G).

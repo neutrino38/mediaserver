@@ -67,8 +67,20 @@ public:
 		});
 	}
 
-	T Pop()
+	//timeout en ms : 0 = ne PAS attendre (pop non bloquant). ATTENTION, ce n'est
+	//pas la convention de Wait() ci-dessus, ou 0 signifie « infini » : les neuf
+	//appels historiques Pop() veulent le pop non bloquant, d'ou ce defaut.
+	//
+	//Rend NULL des que la file est vide au moment du retrait — expiration du
+	//timeout, annulation, ou pop a vide. La garde est indispensable et pas
+	//defensive : Wait() rend false sur timeout ET sur Cancel, donc le chemin
+	//NORMAL passe ici file vide, et front() sur un deque vide est un
+	//comportement indefini.
+	T Pop(DWORD timeout = 0)
 	{
+		if (timeout > 0)
+			Wait(timeout);
+
 		return Locked([this]() -> T {
 			if (events.empty())
 				return (T)NULL;

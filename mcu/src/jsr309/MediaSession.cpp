@@ -1858,8 +1858,10 @@ int MediaSession::VideoTranscoderCreate(std::wstring tag)
 {
 	//Create trascoder
 	std::shared_ptr<VideoTranscoder> videoTranscoder = std::make_shared<VideoTranscoder>(tag);
-	//Init
-	videoTranscoder->Init(false);
+	//Init : mode pont autorisé, comme AudioTranscoderCreate. Un transcodeur vidéo
+	//qui ré-encode alors que les deux pattes portent le même codec coûte un
+	//décodage, un scale et un encodage par appel, pour un flux identique.
+	videoTranscoder->Init(false, true);
 
 	std::lock_guard<std::mutex> lock(mutex);
 

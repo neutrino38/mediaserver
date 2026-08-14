@@ -35,8 +35,6 @@ FLVEncoder::FLVEncoder()
 	frameDesc = NULL;
 	aacSpecificConfig = NULL;
 	//Mutex
-	pthread_mutex_init(&mutex,0);
-	pthread_cond_init(&cond,0);
 }
 
 FLVEncoder::~FLVEncoder()
@@ -54,8 +52,6 @@ FLVEncoder::~FLVEncoder()
 		delete(aacSpecificConfig);
 
 	//Mutex
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 int FLVEncoder::Init(AudioInput* audioInput,VideoInput *videoInput, TextInput *textInput)
@@ -155,14 +151,14 @@ DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)
 DWORD FLVEncoder::AddMediaFrameListener(MediaFrame::Listener* listener)
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Apend
 	mediaListeners.insert(listener);
 	//Get number of listeners
 	DWORD num = listeners.size();
 	//Unlock
 	textEncoder.AddListener(listener);
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	//return number of listeners
 	return num;
 }
@@ -170,7 +166,7 @@ DWORD FLVEncoder::AddMediaFrameListener(MediaFrame::Listener* listener)
 DWORD FLVEncoder::RemoveMediaFrameListener(MediaFrame::Listener* listener)
 {
 	//Lock mutexk
-	pthread_mutex_lock(&mutex);
+	std::unique_lock<std::mutex> mutexLock(mutex);
 	//Find it
 	MediaFrameListeners::iterator it = mediaListeners.find(listener);
 	//If present
@@ -181,7 +177,7 @@ DWORD FLVEncoder::RemoveMediaFrameListener(MediaFrame::Listener* listener)
 	DWORD num = mediaListeners.size();
 	textEncoder.RemoveListener(listener);
 	//Unlock
-	pthread_mutex_unlock(&mutex);
+	mutexLock.unlock();
 	//return number of listeners
 	return num;
 }
@@ -385,11 +381,11 @@ int FLVEncoder::EncodeAudio()
 		aacSpecificConfig = new RTMPAudioFrame(0,AACSpecificConfig(rate,1));
 
 		//Lock
-		pthread_mutex_lock(&mutex);
+		std::unique_lock<std::mutex> mutexLock(mutex);
 		//Send audio desc
 		SendMediaFrame(aacSpecificConfig);
 		//unlock
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 	}
 
 	//Mientras tengamos que capturar
@@ -504,8 +500,8 @@ int FLVEncoder::EncodeAudio()
 					break;
 			}
 
-			//Lock
-			pthread_mutex_lock(&mutex);
+			//Lock (la déclaration du bloc AAC ci-dessus est hors de portée)
+			std::unique_lock<std::mutex> mutexLock(mutex);
 			//Send audio
 			SendMediaFrame(&audio);
 			//Copy to rtp frame
@@ -524,7 +520,7 @@ int FLVEncoder::EncodeAudio()
 				//Send it
 				(*it)->onMediaFrame(frame);
 			//unlock
-			pthread_mutex_unlock(&mutex);
+			mutexLock.unlock();
 		}
 	}
 
@@ -628,15 +624,9 @@ int FLVEncoder::EncodeVideo()
 		//Check
 		if (frameTime)
 		{
-			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
-			//Calculate timeout
-			calcAbsTimeout(&ts,&prev,frameTime);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Dormir jusqu'à l'échéance prev+frameTime (réveillable)
+			QWORD elapsed = getDifTime(&prev)/1000;
+			int canceled = (frameTime > elapsed) && pacer.WaitSignal((DWORD)(frameTime - elapsed));
 			//Check if we have been canceled
 			if (canceled)
 				//Exit
@@ -689,14 +679,18 @@ int FLVEncoder::EncodeVideo()
 			//Crete desc frame
 			frameDesc = new RTMPVideoFrame(getDifTime(&first)/1000,desc);
 			//Lock
-			pthread_mutex_lock(&mutex);
+			std::unique_lock<std::mutex> mutexLock(mutex);
 			//Send it
 			SendMediaFrame(frameDesc);
 			//unlock
-			pthread_mutex_unlock(&mutex);
+			mutexLock.unlock();
 		}
 		
 		
+		//Lock. L'ORIGINAL ne verrouillait PAS ce bloc (et déverrouillait un
+		//mutex non tenu = UB) : les listeners étaient parcourus pendant que
+		//Add/RemoveMediaFrameListener les mutent sous verrou.
+		std::unique_lock<std::mutex> mutexLock(mutex);
 		//Set timestamp
 		frame.SetTimestamp(encoded->GetTimeStamp());
 		//Publish it
@@ -706,7 +700,7 @@ int FLVEncoder::EncodeVideo()
 			//Send it
 			(*it)->onMediaFrame(*encoded);
 		//unlock
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 	}
 
 	//Stop the capture

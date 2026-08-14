@@ -21,7 +21,7 @@ dépendance à JSR309/RTP/média. Sert de garde-fou pour le refactor décrit dan
 
 ```sh
 # 1. Construire le binaire de test (depuis la racine du dépôt) :
-make -C mcu -f Makefile.rpm wstest      # → bin/debug/wstest
+make -C mcu wstest      # → bin/debug/wstest
 
 # 2. Lancer le harnais complet :
 python3 test/websocket/run.py           # code de sortie != 0 si un test échoue

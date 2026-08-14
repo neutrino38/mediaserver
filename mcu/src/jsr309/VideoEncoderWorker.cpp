@@ -20,18 +20,17 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	encoding = false;
 	sendFPU = false;
 	codec = (VideoCodec::Type)-1;
+	//Consigne inconnue tant que SetCodec n'a pas été appelé (GetBitrate = 0)
+	bitrate = 0;
+	//Aucune limite TMMBR/REMB en vigueur
+	videoBitrateLimit = 0;
         useInputSize = false;
-	//Create objects
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
+	negotiatedDirty = false;
 }
 
 VideoEncoderMultiplexerWorker::~VideoEncoderMultiplexerWorker()
 {
 	End();
-	//Clean object
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 int VideoEncoderMultiplexerWorker::Init(VideoInput *input)
@@ -54,9 +53,8 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 	this->fps	  = fps;
 	this->configuredFps = fps;
 	this->intraPeriod = intraPeriod;
-	//Init limits
-	this->videoBitrateLimit		= bitrate;
-	this->videoBitrateLimitCount	= fps;
+	//La limite TMMBR/REMB en vigueur (videoBitrateLimit) survit à la
+	//renégociation : elle appartient au pair, pas au codec (RFC 5104).
 	params = properties;
 
 	Stop();
@@ -84,29 +82,88 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 
 //Phase 5 (nego_fmtp §6.3) : les bornes que la négociation SDP de la patte
 //émettrice impose à l'encodeur. Les Properties ne sont lues qu'à CreateEncoder,
-//donc des bornes qui changent sur un encodeur ouvert exigent un cycle
-//Stop/Start — le même que SetCodec, au prix d'un IDR frais, ce qui est
-//précisément ce qu'un changement de profil exige de toute façon.
+//donc des bornes qui changent sur un encodeur ouvert exigent de le rouvrir.
+//
+//Ce qui a changé le 2026-08-13, et pourquoi : la réouverture se faisait ici, par
+//un Stop()/Start() synchrone. Or cet appel arrive du thread XML-RPC, qui tient le
+//verrou de la MediaSession pendant tout `EndpointStartReceiving` — donc le join du
+//thread d'encodage avait lieu SOUS ce verrou. Le jour où ce join n'est pas revenu
+//(`svt_av1_enc_deinit_handle` de SVT-AV1 0.9.0 se bloque sur un de ses threads
+//internes), la session entière a gelé, les threads de dispatch se sont empilés
+//derrière le verrou, la file d'acceptation a saturé, et le serveur a cessé
+//d'accepter tout en restant « actif » pour systemd.
+//
+//La réouverture est donc DÉPORTÉE dans la boucle : on mémorise et on lève un
+//drapeau. Le chemin dangereux n'est pas déplacé, il disparaît — plus aucun join
+//sous le verrou de session par ce chemin. Prix : un GOP émis avec les bornes
+//précédentes, ce qui est sans conséquence pour un profil ou un niveau.
 void VideoEncoderMultiplexerWorker::SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec)
 {
-	//Bornes identiques : ne pas redémarrer l'encodeur pour rien (chaque push
-	//re-signalisation/attach/StartSending repasse ici).
-	if (negotiated == byCodec)
-		return;
+	bool encoderRunning;
 
-	negotiated = byCodec;
+	{
+		std::lock_guard<std::mutex> lock(negotiatedLock);
+
+		//Bornes identiques : ne rien faire (chaque push
+		//re-signalisation/attach/StartSending repasse ici).
+		if (negotiated == byCodec)
+			return;
+
+		negotiated = byCodec;
+		encoderRunning = encoding;
+	}
 
 	Log("-VideoEncoder: negotiated codec properties updated [%d codec(s)]\n",
 	    (int)byCodec.size());
 
-	//Même logique de reprise que SetCodec : un encodeur ouvert ré-ouvre avec
-	//les bornes à jour, un encodeur pas encore démarré les lira au Start().
+	if (encoderRunning)
+	{
+		//La boucle s'en charge : elle jettera son encodeur et le recréera avec les
+		//nouvelles bornes à la prochaine image. Rien à joindre depuis ici.
+		negotiatedDirty = true;
+		Log("-VideoEncoder: renegotiation deferred to the encoding loop\n");
+		return;
+	}
+
+	//Encodeur ARRÊTÉ : il n'y a pas de thread d'encodage à joindre, donc le chemin
+	//historique est sûr — et c'est lui qui démarre l'encodeur quand la négociation
+	//est ce qui le rend possible.
 	Stop();
 	if (!listeners.empty() && codec != (VideoCodec::Type)-1)
 	{
-		Log("-VideoEncoder: restarted encoder with negotiated properties.\n");
+		Log("-VideoEncoder: started encoder with negotiated properties.\n");
 		Start();
 	}
+}
+
+//Bornes effectives et géométrie : la config du contrôleur, écrasée pour CE codec
+//par ce que le pair a déclaré savoir décoder. Repart de la CONFIG à chaque appel,
+//pour suivre aussi une renégociation qui ASSOUPLIT la borne.
+void VideoEncoderMultiplexerWorker::ComputeEffective(Properties& effective)
+{
+	effective = params;
+
+	{
+		std::lock_guard<std::mutex> lock(negotiatedLock);
+		std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
+		if (itNeg != negotiated.end())
+		{
+			for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
+				effective[it->first] = it->second;
+
+			Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
+			    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
+		}
+	}
+
+	width  = GetWidth(mode);
+	height = GetHeight(mode);
+	fps    = configuredFps;
+
+	//Phase 5b : écrêtage cadence/taille au niveau AV1 déclaré par le pair
+	//(annexe A.3 — décidé le 2026-08-06 : écrêter, jamais refuser la vidéo).
+	if (codec == VideoCodec::AV1)
+		AV1Encoder::ClampToLevel(effective, width, height, fps);
 }
 
 int VideoEncoderMultiplexerWorker::Start()
@@ -160,7 +217,7 @@ int VideoEncoderMultiplexerWorker::Stop()
 		input->CancelGrabFrame();
 
 		//Cancel sending
-		pthread_cond_signal(&cond);
+		pacer.Signal();
 
 		//Esperamos
 		pthread_join(thread,NULL);
@@ -214,10 +271,12 @@ void VideoEncoderMultiplexerWorker::Update()
 
 void VideoEncoderMultiplexerWorker::SetREMB(int estimation)
 {
-	//Set bitrate limit
+	//RFC 5104 : la limite (TMMBR/REMB, en bps) reste en vigueur jusqu'à ce
+	//qu'une nouvelle valeur la remplace — zéro la lève. L'ancienne
+	//« quarantaine » d'une seconde laissait le débit remonter à la consigne
+	//pleine dès que le pair cessait de répéter son TMMBR ; or il cesse
+	//précisément quand on lui répond TMMBN, ce que la session fait désormais.
 	videoBitrateLimit = estimation/1000;
-	//Set limit of bitrate to 1 second;
-	videoBitrateLimitCount = fps;
 }
 
 int VideoEncoderMultiplexerWorker::Encode()
@@ -231,32 +290,18 @@ int VideoEncoderMultiplexerWorker::Encode()
 	Acumulator fpsAcu(1000);
 	VideoEncoder* videoEncoder = NULL;
 
-	//Phase 5 (nego_fmtp §6.3) : les bornes négociées de la patte émettrice
-	//écrasent la config du contrôleur pour CE codec — le pair a déclaré ce
-	//qu'il sait décoder (profil H.264, packetization-mode, niveau AV1), et
-	//émettre au-dessus produit un flux négocié avec succès et décodé par
-	//personne. Fusionné AVANT la capture : l'écrêtage AV1 s'applique à elle.
-	Properties effective = params;
-	std::map<int,Properties>::const_iterator itNeg = negotiated.find((int)codec);
-	if (itNeg != negotiated.end())
-	{
-		for (Properties::const_iterator it = itNeg->second.begin(); it != itNeg->second.end(); ++it)
-			effective[it->first] = it->second;
+	//Bornes négociées de la patte émettrice fusionnées par-dessus la config, et
+	//géométrie qui en découle — le pair a déclaré ce qu'il sait décoder (profil
+	//H.264, packetization-mode, niveau AV1), et émettre au-dessus produit un flux
+	//négocié avec succès et décodé par personne. Calculé AVANT la capture :
+	//l'écrêtage AV1 s'applique à elle. Recalculable en cours de boucle, cf. le
+	//drapeau negotiatedDirty plus bas.
+	Properties effective;
+	ComputeEffective(effective);
 
-		Log("-VideoEncoder: opening with negotiated properties for %s [%d key(s)]\n",
-		    VideoCodec::GetNameFor(codec), (int)itNeg->second.size());
-	}
-
-	//Phase 5b : écrêtage cadence/taille au niveau AV1 déclaré par le pair
-	//(annexe A.3 — décidé le 2026-08-06 : écrêter, jamais refuser la vidéo).
-	//Repart de la CONFIG à chaque (ré)ouverture, pour suivre aussi une
-	//re-négociation qui assouplit la borne.
-	width  = GetWidth(mode);
-	height = GetHeight(mode);
-	fps    = configuredFps;
-
-	if (codec == VideoCodec::AV1)
-		AV1Encoder::ClampToLevel(effective, width, height, fps);
+	//Le drapeau ne concerne que les bornes arrivées PENDANT que nous tournons :
+	//celles d'avant viennent d'être prises en compte.
+	negotiatedDirty = false;
 
 	Log(">SendVideo [width:%d,size:%d,bitrate:%d,fps:%d,intra:%d]\n",width,height,bitrate,fps,intraPeriod);
 
@@ -274,25 +319,21 @@ int VideoEncoderMultiplexerWorker::Encode()
 	//No wait for first
 	QWORD frameTime = 0;
 
-	videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
-
-	//Comprobamos que se haya creado correctamente
-	if (videoEncoder == NULL)
-	{
-		//error
-		Error("Can't create video encoder\n");
-		encoding = false;
-	}
-	else
-	{
-		//Send at higher bitrate first frame, but skip frames after that so sending bitrate is kept
-                // DIsabled by IVES - to check later
-		videoEncoder->SetFrameRate(fps,current,intraPeriod);
-		//Iniciamos el tamama�o del encoder
- 		videoEncoder->SetSize(width,height);
-	
-		Log("-Created %s video encoder.\n", VideoCodec::GetNameFor(codec));
-	}
+	//L'encodeur n'est PAS créé ici, mais à la première image réellement
+	//capturée (plus bas dans la boucle).
+	//
+	//En mode pont (VideoTranscoder::onRTPPacket, state == 2) les paquets sont
+	//relayés tels quels : le décodeur n'est jamais appelé, le pipe ne reçoit
+	//donc aucune image, et GrabFrame(0) — attente infinie — gare ce thread
+	//sans consommer de CPU. Ouvrir l'encodeur d'avance revenait à instancier
+	//un codec que ce mode n'utilisera jamais. Sur un appel AV1 <-> AV1, le cas
+	//précis où les deux pattes pontent, c'étaient deux encodeurs SVT-AV1
+	//ouverts pour rien — et le crash de libSvtAv1Enc 0.9.0 avec, puisque leurs
+	//init/deinit se percutent (cf. libmedikit medkit/ffcodeclock.h).
+	//
+	//Le mode n'est arbitré qu'au PREMIER PAQUET RTP reçu, donc après le
+	//démarrage de ce thread : impossible de le consulter ici. La présence
+	//d'une image dans le pipe est le signal juste, et il est déjà disponible.
 
 	//The time of the first one
 	gettimeofday(&first,NULL);
@@ -307,7 +348,40 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//Nos quedamos con el puntero antes de que lo cambien
 		PictPtr pic;
 
-                if (useInputSize && input->HasNativeSizeChanged() )
+		//La négociation a changé pendant que nous tournions
+		//(SetNegotiatedCodecProperties). Les Properties ne sont lues qu'à
+		//CreateEncoder, donc on jette l'encodeur : la prochaine image le recrée avec
+		//les nouvelles bornes. C'est ce qui remplace le Stop/Start synchrone d'avant
+		//— celui-ci joignait CE thread depuis le thread XML-RPC qui tient le verrou
+		//de la MediaSession, et il n'en est pas revenu le 2026-08-13.
+		if (negotiatedDirty.exchange(false))
+		{
+			ComputeEffective(effective);
+
+			if (videoEncoder)
+			{
+				delete videoEncoder;
+				videoEncoder = NULL;
+			}
+
+			//La géométrie peut avoir bougé (écrêtage AV1 sur un niveau plus bas, ou
+			//plus haut) : la capture doit suivre, sinon l'encodeur recréé recevrait
+			//des images d'une autre taille que celle qu'il annonce.
+			if (!input->StartVideoCapture(width,height,fps))
+				Error("-VideoEncoder: failed to restart capture after renegotiation [%dx%d@%d]\n",
+				      width, height, fps);
+			else
+				Log("-VideoEncoder: applied renegotiated properties in-loop [%dx%d@%d]\n",
+				    width, height, fps);
+
+			//L'encodeur recréé doit émettre une intra : le puits vient de perdre la
+			//référence de son flux.
+			sendFPU = true;
+		}
+
+                //`videoEncoder` peut être nul : il n'est créé qu'à la première
+                //image (cf. plus haut), et ce bloc le déréférence.
+                if (videoEncoder && useInputSize && input->HasNativeSizeChanged() )
                 {
                     DWORD nativeWidth = input->GetNativeWidth();
                     DWORD nativeHeight = input->GetNativeHeight();
@@ -351,6 +425,55 @@ int VideoEncoderMultiplexerWorker::Encode()
 			//Exit
 			continue;
 
+		//Une image est arrivée : le pont est écarté, il faut vraiment encoder.
+		if (!videoEncoder)
+		{
+			//Des bornes ont pu arriver pendant que la boucle était garée dans
+			//GrabFrame sans encodeur (la renégociation précède souvent la
+			//première image) : les consommer ICI, sinon l'encodeur est créé
+			//avec les anciennes et jeté au tour suivant par le bloc
+			//negotiatedDirty — un open/close gaspillé à chaque établissement,
+			//observé en recette le 2026-08-14 (libvpx, ~90 ms).
+			if (negotiatedDirty.exchange(false))
+			{
+				ComputeEffective(effective);
+				//La géométrie a pu bouger (écrêtage AV1) : la capture doit
+				//suivre. L'image en main reste à l'ancienne taille — sans
+				//importance, elle est abandonnée plus bas (continue) et la
+				//prochaine sera à la bonne échelle.
+				if (!input->StartVideoCapture(width,height,fps))
+					Error("-VideoEncoder: failed to restart capture before encoder creation [%dx%d@%d]\n",
+					      width, height, fps);
+			}
+
+			videoEncoder = VideoCodecFactory::CreateEncoder(codec, effective);
+
+			//Comprobamos que se haya creado correctamente
+			if (videoEncoder == NULL)
+			{
+				//error
+				Error("Can't create video encoder\n");
+				encoding = false;
+				break;
+			}
+
+			//Send at higher bitrate first frame, but skip frames after that so sending bitrate is kept
+			// DIsabled by IVES - to check later
+			videoEncoder->SetFrameRate(fps,current,intraPeriod);
+			//Iniciamos el tamama�o del encoder
+			videoEncoder->SetSize(width,height);
+
+			Log("-Created %s video encoder.\n", VideoCodec::GetNameFor(codec));
+
+			//Cette image-ci est abandonnée : elle a servi à décider qu'un
+			//encodeur était nécessaire. Repasser par le haut de la boucle rend
+			//au tour suivant l'ordre d'origine — ajustement à la taille native
+			//(useInputSize) AVANT l'encodage — au lieu de le dupliquer ici.
+			//Une image perdue à l'établissement est sans conséquence : le flux
+			//démarre de toute façon sur l'IDR que produit le premier encodage.
+			continue;
+		}
+
 		//Check if we need to send intra
 		if (sendFPU)
 		{
@@ -370,25 +493,25 @@ int VideoEncoderMultiplexerWorker::Encode()
 		{
 			//Get real sent bitrate during last second and convert to kbits
 			DWORD instant = bitrateAcu.GetInstantAvg()/1000;
-			//If we are in quarentine
-			if (videoBitrateLimitCount)
-				//Limit sending bitrate
-				target = videoBitrateLimit;
 			//Check if sending below limits
-			else if (instant<bitrate)
+			if (instant<bitrate)
 				//Increase a 8% each second or fps kbps
 				target += (DWORD)(target*0.08/fps)+1;
 		}
 
-		//Check target bitrate agains max conf bitrate
-		if (target>bitrate*1.2)
-			//Set limit to max bitrate allowing a 20% overflow so instant bitrate can get closer to target
-			target = bitrate*1.2;
+		//Plafond : la consigne négociée (b=AS de la patte émettrice), sans
+		//marge. L'ancien ×1.2 autorisait 20 % au-dessus de ce que le SDP
+		//annonce — un pair ou un SBC qui police sa bande passante jette
+		//l'excédent. L'encodeur sous-atteint sa cible, donc le débit réel
+		//reste sous la consigne : c'est le bon côté de la barrière.
+		if (target>bitrate)
+			target = bitrate;
 
-		//Check limits counter
-		if (videoBitrateLimitCount>0)
-			//One frame less of limit
-			videoBitrateLimitCount--;
+		//Limite TMMBR/REMB en vigueur : STRICTE (pas de marge ×1.2 — c'est le
+		//plafond déclaré du pair, pas notre consigne) et PERSISTANTE (levée par
+		//une nouvelle valeur, jamais par le temps — cf. SetREMB).
+		if (videoBitrateLimit>0 && target>videoBitrateLimit)
+			target = videoBitrateLimit;
 
 		//Check if we have a new bitrate
 		if (target && target!=current)
@@ -410,9 +533,6 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//Check
 		if (frameTime)
 		{
-			timespec ts;
-			//Lock
-			pthread_mutex_lock(&mutex);
 			//Calculate slept time
 			QWORD sleep = frameTime;
 			//Remove extra sleep from prev
@@ -422,12 +542,10 @@ int VideoEncoderMultiplexerWorker::Encode()
 			else
 				//Do not overflow
 				sleep = 1;
-			//Calculate timeout
-			calcAbsTimeoutNS(&ts,&prev,sleep);
-			//Wait next or stopped
-			int canceled  = !pthread_cond_timedwait(&cond,&mutex,&ts);
-			//Unlock
-			pthread_mutex_unlock(&mutex);
+			//Dormir jusqu'à l'échéance prev+sleep (µs, réveillé par Stop)
+			QWORD elapsed = getDifTime(&prev);
+			int canceled = (sleep > elapsed)
+				&& pacer.WaitSignal(std::chrono::microseconds(sleep - elapsed));
 			//Check if we have been canceled
 			if (canceled)
 				//Exit

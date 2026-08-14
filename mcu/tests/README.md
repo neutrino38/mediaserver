@@ -12,8 +12,8 @@ et `mcu/src/wstest.cpp` par des tests autonomes, déterministes et assertifs.
 Depuis le répertoire `mcu/` (là où `install.ksh` invoque `make`) :
 
 ```sh
-make -f Makefile.rpm check     # compile puis exécute toute la suite
-make -f Makefile.rpm tests     # compile seulement (produit tests/runtests)
+make check     # compile puis exécute toute la suite
+make tests     # compile seulement (produit tests/runtests)
 ./tests/runtests               # relancer sans recompiler
 ```
 
@@ -34,7 +34,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 
 - **GoogleTest système** : `gtest` (`pkg-config gtest`). Sur AlmaLinux 9 :
   `dnf install gtest-devel`.
-- La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `Makefile.rpm`),
+- La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `mcu/Makefile`),
   qui doivent avoir été bâtis au préalable : lancer d'abord `./install.ksh localcompile`.
 
 > **Piège du `main` parasite.** La suite fournit son **propre `main()`**
@@ -56,3 +56,4 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | — (géométrie des 12 dispositions + composition avfilter vérifiée pixel à pixel) |
 | `test_codec_type.cpp` | `CodecType` | — (le membre `type` d'un codec doit être lisible via un pointeur de base) |
 | `test_rtp_latching.cpp` | `RtpLatching` | — (latching RTP symétrique : où le média atterrit réellement, via un socket sonde en loopback) |
+| `test_rtp_renegotiation.cpp` | `RtpRenegotiation` | — (le trou de l'offre/réponse : un payload type renuméroté par un re-INVITE est rattrapé, un codec retiré ne l'est pas) |

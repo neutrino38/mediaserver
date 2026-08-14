@@ -17,10 +17,6 @@ RTPSmoother::RTPSmoother()
 	//NO session
 	session = NULL;
 	inited = false;
-	
-	//Create objects
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
 }
 
 RTPSmoother::~RTPSmoother()
@@ -34,10 +30,6 @@ RTPSmoother::~RTPSmoother()
 	while(queue.Length()>0)
 		//Delete first
 		delete(queue.Pop());
-	
-	//Clean object
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 
@@ -47,15 +39,19 @@ int RTPSmoother::Init(RTPSession *session)
 	if (inited)
 		//End first
 		End();
-	
+
 	//Store it
 	this->session = session;
 
 	//We are inited
 	inited = true;
 
-	//Run
-	createPriorityThread(&thread,run,this,1);
+	//Réarmer la file après un éventuel End (Cancel collant —
+	//l'historique ne le faisait pas : re-Init = boucle folle sur file annulée)
+	queue.Reset();
+
+	//Run (réarme le Wait du Worker)
+	StartThread();
 
 	return 1;
 }
@@ -177,7 +173,7 @@ int RTPSmoother::Cancel()
 	queue.Cancel();
 
 	//Cancel waiting
-	pthread_cond_signal(&cond);
+	wait.Cancel();
 
 	//exit
 	return 1;
@@ -196,24 +192,14 @@ int RTPSmoother::End()
 	Cancel();
 
 	//Wait
-	pthread_join(thread,NULL);
+	StopThread();
 
 	return 1;
-}
-
-void* RTPSmoother::run(void *par)
-{
-        Log("RTPSmootherThread [%d]\n",getpid());
-        //Get endpoint
-	RTPSmoother *smooth = (RTPSmoother *)par;
-	//Run 
-        pthread_exit((void *)(intptr_t)smooth->Run());
 }
 
 int RTPSmoother::Run()
 {
 	timeval prev;
-	timespec wait;
 	DWORD	sendingTime = 0;
 	
 	//Calculate first
@@ -248,17 +234,10 @@ int RTPSmoother::Run()
 			//If we have to sleep
 			if (sendingTime)
 			{
-				//Lock
-				pthread_mutex_lock(&mutex);
-
-				//Calculate timeout
-				calcAbsTimeout(&wait,&prev,sendingTime);
-
-				//Wait next or stopped
-				pthread_cond_timedwait(&cond,&mutex,&wait);
-
-				//Unlock
-				pthread_mutex_unlock(&mutex);
+				//Dormir jusqu'à l'échéance prev+sendingTime (annulable)
+				QWORD elapsed = getDifTime(&prev)/1000;
+				if (sendingTime > elapsed)
+					wait.WaitSignal(sendingTime - elapsed);
 			}
 		} else {
 			//Update time of the previous frame

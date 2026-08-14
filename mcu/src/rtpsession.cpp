@@ -37,6 +37,21 @@ BYTE rtpEmpty[] = {0x80,0x14,0x00,0x00,0x00,0x00,0x00,0x00};
 #define NAT_PRIMING_BURST	3
 #define NAT_PRIMING_INTERVAL_MS	20
 
+//Durée (ms) pendant laquelle la map de réception PRÉCÉDENTE reste utilisable après
+//une renégociation. Elle couvre le trou de l'offre/réponse (RFC 3264 §8) : le pair
+//qui a offert continue d'émettre sous son ancienne numérotation jusqu'à recevoir la
+//réponse — un aller-retour SIP, plus le temps que met un B2BUA à obtenir celle de
+//l'autre jambe. Quelques secondes couvrent largement le cas ; au-delà, un pair qui
+//n'a toujours pas basculé a un vrai problème et ses paquets redeviennent des rebuts.
+#define RTP_MAP_FALLBACK_MS	5000
+
+//Cadence maximale (ms) des traces « payload type non négocié ». Le régime normal
+//qu'elles décrivent — l'offreur qui émet encore avec l'ancienne numérotation
+//pendant une renégociation — dure quelques centaines de millisecondes à 20-50
+//paquets/s : au-delà de la première ligne, ce qui compte est COMBIEN et jusqu'à
+//QUAND, pas une ligne par paquet. Cf. RTPSession::OnUnknownPayloadType.
+#define UNKNOWN_PT_LOG_PERIOD_MS	2000
+
 //srtp library initializers
 class SRTPLib
 {
@@ -134,8 +149,10 @@ static std::string DetectAnnouncedIp()
 	for (int i=0; localHost->h_addr_list[i]!=0; i++)
 	{
 		struct in_addr addr;
-		//Copie
-		addr.s_addr = *(u_long *) localHost->h_addr_list[i];
+		//Copie : une entrée de h_addr_list fait h_length octets (4 en AF_INET),
+		//pas sizeof(u_long) — le déréférencement en u_long lisait 8 octets sur LP64,
+		//donc 4 octets hors du buffer de la résolveuse.
+		memcpy(&addr.s_addr,localHost->h_addr_list[i],sizeof(addr.s_addr));
 		//En texte
 		const char* host = inet_ntoa(addr);
 
@@ -240,6 +257,16 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Empty types by defauilt
 	rtpMapIn = NULL;
 	rtpMapOut = NULL;
+	//Aucune renégociation encore vue : pas de map précédente à quoi se rattraper
+	rtpMapInPrev = NULL;
+	setZeroTime(&rtpMapInPrevSince);
+	salvagedType = 0;
+	salvagedCount = 0;
+	setZeroTime(&salvagedLast);
+	//Aucun paquet au payload type inconnu encore reçu (cf. OnUnknownPayloadType)
+	unknownPtType = 0;
+	unknownPtCount = 0;
+	setZeroTime(&unknownPtLast);
 	//statistics
 	totalSendBytes = 0;
 	numSendPackets = 0;
@@ -295,7 +322,6 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	memset(&sendAddr,       0,sizeof(struct sockaddr_in));
 	memset(&sendRtcpAddr,   0,sizeof(struct sockaddr_in));
 	//No thread
-	setZeroThread(&thread);
 	running = false;
 	//No stimator
 	remoteRateEstimator = NULL;
@@ -328,6 +354,8 @@ RTPSession::~RTPSession()
 		remoteRateEstimator->SetListener(NULL);
 	if (rtpMapIn)
 		delete(rtpMapIn);
+	if (rtpMapInPrev)
+		delete(rtpMapInPrev);
 	if (rtpMapOut)
 		delete(rtpMapOut);
 	//Delete packets
@@ -592,10 +620,9 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	//Store values
 	iceRemoteUsername = strdup(username);
 	iceRemotePwd = strdup(pwd);
-	//P3 : réveille le thread Run pour (ré)évaluer l'émission de checks STUN sortants
-	//dès que la destination sera connue (pair ICE-lite qui n'initie jamais).
-	if (thread)
-		pthread_kill(thread,SIGIO);
+	//P3 : réveille le thread Run (eventfd du Wait, jamais perdu) pour (ré)évaluer
+	//l'émission de checks STUN sortants dès que la destination sera connue.
+	wait.Signal();
 	//Ok
 	return 1;
 }
@@ -752,12 +779,199 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const char* key64,int key
 
 void RTPSession::SetReceivingRTPMap(RTPMap &map)
 {
-	//If we already have one
-	if (rtpMapIn)
-		//Delete it
-		delete(rtpMapIn);
+	//L'ancienne map n'est pas détruite : elle DEVIENT la map de repli, le temps
+	//que le pair reçoive notre réponse et bascule sur la nouvelle numérotation
+	//(cf. rtpMapInPrev et CodecFromPreviousMap). Celle d'avant, elle, a fait son
+	//temps. Rien de concurrent ici : l'appelant arrête la réception avant de
+	//changer la map (Endpoint::StartReceiving), et c'est pour cette même course
+	//qu'il le fait.
+	if (rtpMapInPrev)
+		delete(rtpMapInPrev);
+	rtpMapInPrev = rtpMapIn;
+	if (rtpMapInPrev)
+		getUpdDifTime(&rtpMapInPrevSince);
 	//Clone it
 	rtpMapIn = new RTPMap(map);
+
+	//Nouvelle map = nouvel épisode : ce qui a été jeté ou rattrapé sous l'ancienne
+	//numérotation est clos, et le premier paquet inattendu de la nouvelle doit
+	//se tracer tout de suite plutôt que d'être absorbé par le résumé en cours.
+	if (unknownPtCount)
+		Log("-RTP [%ls,%s,local:%d] renegotiated after dropping %u packet(s) with "
+		    "payload type %d absent from the receiving map\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    unknownPtCount, unknownPtType);
+	if (salvagedCount)
+		Log("-RTP [%ls,%s,local:%d] renegotiated after salvaging %u packet(s) sent "
+		    "under the previous payload type %d\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    salvagedCount, salvagedType);
+	unknownPtCount = 0;
+	setZeroTime(&unknownPtLast);
+	salvagedCount = 0;
+	setZeroTime(&salvagedLast);
+}
+
+//Le pair a-t-il basculé sur la nouvelle numérotation ? Si oui, le repli n'a plus
+//de raison d'être et il est fermé SUR-LE-CHAMP : le laisser vivre les cinq
+//secondes de sa borne, c'est accepter de l'ancien encore longtemps après que
+//l'offre/réponse a convergé — et pendant tout ce temps, un pair qui se remettrait
+//à émettre l'ancien numéro pour une autre raison (recyclage du numéro par un
+//équipement intermédiaire) serait servi au lieu d'être refusé.
+//
+//La preuve n'est pas « un paquet valide » : c'est un payload type que SEULE la
+//nouvelle map porte. Un numéro commun aux deux — PCMU 0, telephone-event 101,
+//tout ce que la renégociation n'a pas touché — ne prouve rien du tout, puisque le
+//pair l'émettait déjà avant. Le fermer là-dessus rouvrirait le trou exact que ce
+//rattrapage vient boucher.
+//
+//Le désarmement seul est fait ici, pas la libération : nous sommes dans le thread
+//de réception, et `rtpMapInPrev` appartient au thread de contrôle, qui le détruit
+//à la renégociation suivante — réception arrêtée (Endpoint::StartReceiving).
+void RTPSession::RetirePreviousMap(BYTE type)
+{
+	//Rien d'armé, ou numéro déjà connu de l'ancienne map : aucune preuve.
+	if (!rtpMapInPrev || isZeroTime(&rtpMapInPrevSince) ||
+	    rtpMapInPrev->GetCodecForType(type)!=RTPMap::NotFound)
+		return;
+
+	if (salvagedCount)
+		Log("-RTP [%ls,%s,local:%d] peer switched to the new numbering (payload type "
+		    "%d) after %u salvaged packet(s): the previous receiving map is retired\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort, type, salvagedCount);
+
+	setZeroTime(&rtpMapInPrevSince);
+	salvagedCount = 0;
+	setZeroTime(&salvagedLast);
+}
+
+//Le payload type sous lequel la map COURANTE porte ce codec, s'il y est encore.
+BYTE RTPSession::CurrentTypeForCodec(BYTE codec) const
+{
+	if (!rtpMapIn)
+		return RTPMap::NotFound;
+
+	for (RTPMap::const_iterator it=rtpMapIn->begin(); it!=rtpMapIn->end(); ++it)
+		if (it->second==codec)
+			return it->first;
+
+	return RTPMap::NotFound;
+}
+
+//Rattrapage de renégociation : un paquet arrive avec un payload type que la map
+//courante ne porte plus, mais que la PRÉCÉDENTE portait.
+//
+//C'est le trou de l'offre/réponse (RFC 3264 §8) : nous appliquons la nouvelle
+//numérotation dès que nous répondons, l'offreur ne bascule qu'en RECEVANT cette
+//réponse, et entre les deux il émet encore sous l'ancienne. Un re-INVITE de
+//Linphone qui renumérote ses payload types dynamiques ouvrait ainsi une fenêtre
+//de plusieurs centaines de millisecondes où tout était jeté — inaudible en audio,
+//VISIBLE en vidéo : le décodeur perd tout ce qui suit la dernière intra reçue, et
+//l'image reste figée jusqu'à la suivante.
+//
+//La garde est le codec, pas le payload type : le paquet n'est accepté que si son
+//ancien codec est TOUJOURS porté par la map courante (sous un autre numéro). Ce
+//qui est réparé est alors une renumérotation, rien d'autre — le flux qui traverse
+//est celui que la négociation en cours autorise, et l'aval le lit par
+//`packet->SetCodec()`, pas par le numéro resté dans l'en-tête. Un codec réellement
+//retiré de la négociation, lui, reste un rebut : le laisser passer ferait décoder
+//au pair d'en face un format qu'il vient de refuser.
+BYTE RTPSession::CodecFromPreviousMap(BYTE type)
+{
+	//Aucune renégociation, ou repli périmé
+	if (!rtpMapInPrev || isZeroTime(&rtpMapInPrevSince) ||
+	    (getDifTime(&rtpMapInPrevSince)/1000) > RTP_MAP_FALLBACK_MS)
+		return RTPMap::NotFound;
+
+	BYTE codec = rtpMapInPrev->GetCodecForType(type);
+	if (codec==RTPMap::NotFound)
+		return RTPMap::NotFound;
+
+	//Le codec doit toujours être négocié, sous un numéro ou un autre
+	BYTE current = CurrentTypeForCodec(codec);
+	if (current==RTPMap::NotFound)
+		return RTPMap::NotFound;
+
+	//Trace agrégée : le premier paquet rattrapé de l'épisode, puis un compte
+	bool first = (salvagedCount==0 || type!=salvagedType || isZeroTime(&salvagedLast));
+
+	if (!first && (getDifTime(&salvagedLast)/1000) < UNKNOWN_PT_LOG_PERIOD_MS)
+	{
+		salvagedCount++;
+		return codec;
+	}
+
+	if (first)
+	{
+		salvagedType = type;
+		salvagedCount = 1;
+
+		Log("-RTP [%ls,%s,local:%d] salvaging packets still sent with the previous "
+		    "payload type %d for %s (renumbered to %d by the renegotiation): the peer "
+		    "has not seen our answer yet\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    type, GetNameForCodec(media,codec), current);
+	}
+	else
+	{
+		salvagedCount++;
+
+		Log("-RTP [%ls,%s,local:%d] still salvaging the previous payload type %d "
+		    "(%s) — %u since the first one\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		    type, GetNameForCodec(media,codec), salvagedCount);
+	}
+
+	getUpdDifTime(&salvagedLast);
+	return codec;
+}
+
+//Un paquet reçu dont le payload type n'est pas dans la map de réception.
+//
+//Ce n'est pas une anomalie du serveur : pendant une renégociation, l'offreur
+//continue d'émettre avec l'ANCIENNE numérotation jusqu'à ce qu'il reçoive la
+//réponse (RFC 3264 §8) — un re-INVITE de Linphone qui déplace OPUS de 96 à 98
+//produit ainsi quelques centaines de millisecondes de paquets indécodables. Le
+//paquet est jeté (nous ne savons pas quel codec il porte), et la trace dit de
+//QUELLE patte, de QUEL média et de QUELLE source elle parle — la question à
+//laquelle l'ancienne ligne "-RTP packet type unknown [96]", répétée deux cents
+//fois sans un mot de contexte, ne répondait pas.
+int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from)
+{
+	//Une trace par épisode, puis un résumé compté. Un changement de payload type
+	//rouvre un épisode : c'est une autre cause, pas la suite de la même.
+	bool first = (unknownPtCount==0 || type!=unknownPtType || isZeroTime(&unknownPtLast));
+
+	if (!first && (getDifTime(&unknownPtLast)/1000) < UNKNOWN_PT_LOG_PERIOD_MS)
+	{
+		//Même épisode, trop tôt pour reparler : compter et se taire
+		unknownPtCount++;
+		return 0;
+	}
+
+	if (first)
+	{
+		unknownPtType = type;
+		unknownPtCount = 1;
+
+		Error("-RTP received a packet whose payload type is not negotiated "
+		      "[pt:%d,ssrc:%x,media:%s,role:%d,label:%ls,local port:%d,from:%s:%d] "
+		      "— dropped (normal while a renegotiation is in flight)\n",
+		      type, ssrc, MediaFrame::TypeToString(media), role, LabelForLog(), simPort,
+		      inet_ntoa(from.sin_addr), ntohs(from.sin_port));
+	}
+	else
+	{
+		unknownPtCount++;
+
+		Error("-RTP [%ls,%s,local:%d] still dropping packets with the unnegotiated "
+		      "payload type %d [ssrc:%x] — %u since the first one\n",
+		      LabelForLog(), MediaFrame::TypeToString(media), simPort,
+		      type, ssrc, unknownPtCount);
+	}
+
+	getUpdDifTime(&unknownPtLast);
+	return 0;
 }
 
 int RTPSession::SetLocalPort(int recvPort)
@@ -777,6 +991,22 @@ int RTPSession::GetRemotePort()
 {
 	// Return local
 	return sendAddr.sin_port;
+}
+
+bool RTPSession::CanSendCodec(DWORD codec)
+{
+	//Check rtp map
+	if (!rtpMapOut)
+		return false;
+
+	//Même parcours que SetSendingCodec, sans bascule ni journal : la sonde
+	//d'arbitrage du pont interroge chaque puits, et « absent » y est une
+	//réponse nominale, pas une erreur.
+	for (RTPMap::iterator it = rtpMapOut->begin(); it!=rtpMapOut->end(); ++it)
+		if (it->second==codec)
+			return true;
+
+	return false;
 }
 
 bool RTPSession::SetSendingCodec(DWORD codec)
@@ -860,8 +1090,17 @@ bool RTPSession::NatCorrectable(in_addr_t announced)
 ***********************************/
 int RTPSession::SetRemotePort(char *ip,int sendPort)
 {
-	//Get ip addr
-	DWORD ipAddr = inet_addr(ip);
+	struct in_addr remote;
+
+	//Une adresse illisible ne doit PAS devenir une destination. inet_addr rendait
+	//INADDR_NONE aussi bien sur une erreur de format que sur l'adresse de diffusion,
+	//et ce retour n'était pas testé : la destination devenait 255.255.255.255 et le
+	//mediaserver émettait le flux en BROADCAST sur le LAN, sans un mot dans le log.
+	//inet_pton distingue les deux cas ; tous les appelants traitent déjà 0 en erreur.
+	if (!ip || inet_pton(AF_INET,ip,&remote)!=1)
+		return Error("-SetRemotePort: adresse invalide [%s]\n",ip?ip:"(null)");
+
+	DWORD ipAddr = remote.s_addr;
 
 	//Un contrôleur qui passe 0.0.0.0 demande explicitement le latch : il ne connaît
 	//pas la vraie adresse du pair et s'en remet à la source réellement observée.
@@ -934,9 +1173,8 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 		Log("-ArmRTPTimeout: watchdog armé à %u ms [%p]\n",timeoutMs,this);
 
 		//Si le thread dort dans poll(-1) (watchdog jusqu'ici désarmé), on le réveille
-		//(SIGIO -> EINTR) pour qu'il reprenne l'attente bornée sans attendre un paquet.
-		if (thread)
-			pthread_kill(thread,SIGIO);
+		//via l'eventfd pour qu'il reprenne l'attente bornée sans attendre un paquet.
+		wait.Signal();
 	}
 	else
 	{
@@ -975,10 +1213,9 @@ void RTPSession::RequestDTLSClientHandshake()
 	if (!dtls.IsInited() || !dtls.IsClientRole())
 		return;
 
-	//Réveille le thread Run (poll -> EINTR via SIGIO) pour qu'il pilote le handshake
-	//sans attendre un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
-	if (thread)
-		pthread_kill(thread,SIGIO);
+	//Réveille le thread Run (eventfd) pour qu'il pilote le handshake sans attendre
+	//un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
+	wait.Signal();
 }
 
 void RTPSession::DriveDTLSClientHandshake()
@@ -1251,8 +1488,7 @@ void RTPSession::ArmNATPriming()
 	gettimeofday(&natPrimingLast,NULL);
 
 	//Réveille le thread Run (s'il tourne) pour qu'il cadence la suite de la rafale
-	if (thread)
-		pthread_kill(thread,SIGIO);
+	wait.Signal();
 }
 
 void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
@@ -1753,8 +1989,11 @@ int RTPSession::ReadRTCP()
 
 			//Do NAT
 			sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
-			//Set port
-			sendRtcpAddr.sin_port = from_addr.sin_addr.s_addr;
+			//Set port : c'est bien sin_port qu'il faut recopier. La ligne prenait
+			//sin_addr.s_addr, donc le port RTCP de destination valait deux octets de
+			//l'ADRESSE du pair — le RTCP partait dans le vide dès qu'un binding STUN
+			//arrivait sur la socket RTCP (ICE sans rtcp-mux).
+			sendRtcpAddr.sin_port = from_addr.sin_port;
 		}
 
 		//Delete message
@@ -1940,7 +2179,10 @@ int RTPSession::ReadRTP()
 					{
 						// Do symetric RTP 
 						sendAddr.sin_addr.s_addr = recIP;
-						sendAddr.sin_port = ntohs(recPort);
+						//recPort est en ordre HÔTE, sin_port se stocke en ordre RÉSEAU :
+						//htons, comme dans le test juste au-dessus (même résultat sur les
+						//deux architectures, mais la conversion était écrite à l'envers).
+						sendAddr.sin_port = htons(recPort);
 					}
 				}
 
@@ -1985,14 +2227,15 @@ int RTPSession::ReadRTP()
 					//Do nto authenticate
 						len = request->NonAuthenticatedFingerPrint(aux,size);
 
-					//Send it
-					if (!len)
-					{
+					//Send it — ou pas, si la sérialisation n'a rien produit. Ce cas
+					//sortait de la fonction par un `return 0` qui sautait les trois
+					//libérations ci-dessous : le tampon `aux`, la requête `request` et
+					//le message `stun` fuyaient à chaque binding request qu'on n'arrivait
+					//pas à signer. Rien à émettre n'est pas une raison de ne pas ranger.
+					if (len)
+						sendto(simSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+					else
 						Debug("ICE: packet empty no need to send it\n");
-						return 0;	
-					}
-					
-					sendto(simSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
 				}
 
 				//Clean memory
@@ -2001,14 +2244,27 @@ int RTPSession::ReadRTP()
 				delete(request);
 
 				// Needed for DTLS in client mode (otherwise the DTLS "Client Hello" is not sent over the wire)
-				len = dtls.Read(buffer,MTU);
-				//Send back
-				if (!len)
+				//
+				//…mais seulement s'il Y A un DTLS. Le demander sur une session qui n'en
+				//a pas coûtait une ERR par binding request reçu, et un pair qui fait de
+				//l'ICE en émet plusieurs par flux même quand nous n'avons annoncé ni ICE
+				//ni DTLS : une paire d'appels Linphone en RTP clair produisait ainsi une
+				//quarantaine de « DTLSConnection::Read() | SSL not yet ready » sur son
+				//chemin nominal (trafic du 2026-08-14).
+				//
+				//Structuré en `if` et non en retour anticipé : la sortie de ce bloc
+				//passe par le `delete(stun)` d'en dessous. Le `return 0` qui gardait le
+				//cas « rien à émettre » le sautait, et fuyait le message STUN à chaque
+				//fois — il devient la branche vide qu'il aurait toujours dû être.
+				if (dtls.IsInited())
 				{
-					Debug("DTLS: packet empty no need to send it\n");
-					return 0;	
+					len = dtls.Read(buffer,MTU);
+					//Send back
+					if (len)
+						sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+					else
+						Debug("DTLS: packet empty no need to send it\n");
 				}
-				sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
 			}
 		}
 		//P3 : réponse à un binding request que NOUS avons émis (pair ICE-lite ou full).
@@ -2199,10 +2455,20 @@ int RTPSession::ReadRTP()
 	//Set initial codec
 	BYTE codec = rtpMapIn->GetCodecForType(type);
 
+	//Renumérotation en cours de renégociation : la map précédente répond encore
+	//pour le temps que le pair mette à recevoir notre réponse (§ CodecFromPreviousMap),
+	//et pas une seconde de plus qu'il n'en faut — le premier numéro que seule la
+	//nouvelle map porte prouve qu'il a basculé et referme le repli.
+	if (codec!=RTPMap::NotFound)
+		RetirePreviousMap(type);
+	else
+		codec = CodecFromPreviousMap(type);
+
 	//Check codec
 	if (codec==RTPMap::NotFound)
-		//Exit
-		return Error("-RTP packet type unknown [%d]\n",type);
+		//Exit : le paquet est indécodable, on le jette. La trace est agrégée —
+		//c'est un régime normal pendant une renégociation (cf. unknownPtCount).
+		return OnUnknownPayloadType(type, RTPPacket::GetSSRC(buffer), from_addr);
 
 	//Create rtp packet
 	RTPTimedPacket *packet = NULL;
@@ -2216,6 +2482,10 @@ int RTPSession::ReadRTP()
 		BYTE t = red->GetPrimaryType();
 		//Map primary data codec
 		BYTE c = rtpMapIn->GetCodecForType(t);
+		//Le bloc primaire porte son propre payload type : il est renuméroté par la
+		//renégociation comme les autres, et le même rattrapage lui est dû.
+		if (c==RTPMap::NotFound)
+			c = CodecFromPreviousMap(t);
 		//Check codec
 		if (c==RTPMap::NotFound)
 		{
@@ -2233,6 +2503,10 @@ int RTPSession::ReadRTP()
 			BYTE t = red->GetRedundantType(i);
 			//Map redundant data codec
 			BYTE c = rtpMapIn->GetCodecForType(t);
+			//Idem pour chaque bloc redondant (RFC 4103) : ils portent le même
+			//payload type que le primaire d'un paquet antérieur.
+			if (c==RTPMap::NotFound)
+				c = CodecFromPreviousMap(t);
 			//Check codec
 			if (c==RTPMap::NotFound)
 			{
@@ -2321,23 +2595,19 @@ void RTPSession::Start()
 	running = true;
 
 	//Create thread
-	createPriorityThread(&thread,run,this,0);
+	StartThread();
 }
 
 void RTPSession::Stop()
 {
-	//Check thred
-	if (thread)
+	//Check running
+	if (running)
 	{
 		//Not running
 		running = false;
-		
-		//Signal the pthread this will cause the poll call to exit
-		pthread_kill(thread,SIGIO);
-		//Wait thread to close
-		pthread_join(thread,NULL);
-		//Nulifi thread
-		thread = 0;
+
+		//Réveille le poll (eventfd du Wait hérité) et joint le thread
+		StopThread();
                 DeleteStreams();
 	}
 
@@ -2356,20 +2626,6 @@ void RTPSession::Stop()
 * run
 *       Helper thread function
 ************************/
-void * RTPSession::run(void *par)
-{
-        Log("-RTPSession thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTPSession *sess = (RTPSession *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)sess->Run());
-}
-
 /***************************
  * Run
  * 	Server running thread
@@ -2393,8 +2649,9 @@ int RTPSession::Run()
 	fsflags |= O_NONBLOCK;
 	fcntl(simRtcpSocket,F_SETFL,fsflags);
 
-	//Catch all IO errors
-	signal(SIGIO,EmptyCatch);
+	//Réveil inter-thread : eventfd du Wait hérité (remplace le SIGIO historique)
+	ufds[2].fd = wait.GetPollFd();
+	ufds[2].events = POLLIN;
 
 	//Le chrono d'inactivité ne court que lorsqu'il est armé (ArmRTPTimeout, au SDP
 	//answer) : rien à amorcer ici.
@@ -2438,7 +2695,7 @@ int RTPSession::Run()
 					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
 
 		//Wait for events
-		int nready = poll(ufds,2,waitMs);
+		int nready = poll(ufds,3,waitMs);
 		if(nready<0)
 		{
 			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler
@@ -2451,6 +2708,18 @@ int RTPSession::Run()
 			msleep(10);
 			break;
 		}
+
+		//Réveil inter-thread : purger l'eventfd, SINON il reste lisible et chaque
+		//poll() suivant rend la main immédiatement — la boucle tourne alors à vide,
+		//à 100 % d'un cœur, jusqu'à la fin de l'appel. C'est le contrat de `Wait`
+		//(« le write reste lisible jusqu'au Drain() ») et il n'était honoré nulle
+		//part ici, alors que quatre chemins signalent cet eventfd :
+		//SetRemoteSTUNCredentials, ArmRTPTimeout, RequestDTLSClientHandshake et
+		//ArmNATPriming — ce dernier depuis SetRemotePort, donc à CHAQUE
+		//StartSending. Autrement dit : les quatre sessions RTP d'un appel B2BUA
+		//(deux pattes × audio/vidéo) partaient en rotation dès l'établissement.
+		if (ufds[2].revents & POLLIN)
+			wait.Drain();
 
 		if (ufds[0].revents & POLLIN)
 		{
@@ -2657,9 +2926,18 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							//Get field
 							RTCPRTPFeedback::TempMaxMediaStreamBitrateField *field = (RTCPRTPFeedback::TempMaxMediaStreamBitrateField*) fb->GetField(i);
 							//Check if it is for us
-							if (auto l = LockListener(); l && field->GetSSRC()==sendSSRC)
+							if (field->GetSSRC()==sendSSRC)
+							{
 								//call listener
-								l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+								if (auto l = LockListener())
+									l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+								//RFC 5104 §4.2.1.2 : l'émetteur de média répond TMMBN, sinon
+								//le pair retransmet son TMMBR à chaque intervalle RTCP —
+								//exactement ce que NOUS faisons en face tant que le TMMBN
+								//n'arrive pas (pendingTMBR, SendSenderReport). Répondu même
+								//sans listener : la restriction est acquise au niveau session.
+								SendTempMaxMediaStreamBitrateNotification(field->GetBitrate(),field->GetOverhead());
+							}
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
@@ -2865,15 +3143,24 @@ void RTPSession::onTargetBitrateRequested(DWORD bitrate)
     mutex.unlock();
     Debug("-RTPSession::onTargetBitrateRequested() %i, bitrate [%d] for %s stream %p.\n", fb, bitrate, MediaFrame::TypeToString(media), this);
     if (fb)
-    {
-	Debug("-RTPSession::onTargetBitrateRequested() sending TMMBR\n",bitrate);
+	//Feedback SPONTANÉ de l'estimateur : reste verrouillé par la propriété
+	//"tmmbr" (sendBitrateFeedback) — c'est son rôle. L'envoi lui-même est
+	//partagé avec le chemin explicite (RTPEndpoint::SetREMB, mode pont), qui
+	//n'est PAS verrouillé.
+	SendTempMaxMediaStreamBitrateRequest(bitrate);
+}
+
+int RTPSession::SendTempMaxMediaStreamBitrateRequest(DWORD bitrate)
+{
+	Debug("-RTPSession::SendTempMaxMediaStreamBitrateRequest [%d] on %s stream\n",bitrate,MediaFrame::TypeToString(media));
+
 	//Create rtcp sender retpor
 	RTCPCompoundPacket* rtcp = CreateSenderReport();
-	
+
 	DWORD recSSRC =0;
 	if (defaultStream != NULL)
 		recSSRC = defaultStream->GetRecSSRC();
-	
+
 	//Create TMMBR
 	RTCPRTPFeedback *rfb = RTCPRTPFeedback::Create(RTCPRTPFeedback::TempMaxMediaStreamBitrateRequest,sendSSRC,recSSRC);
 	//Limit incoming bitrate
@@ -2881,17 +3168,19 @@ void RTPSession::onTargetBitrateRequested(DWORD bitrate)
 	//Add to packet
 	rtcp->AddRTCPacket(rfb);
 
-	//We have a pending request
+	//We have a pending request : SendSenderReport retransmet le TMMBR tant que
+	//le TMMBN du pair n'est pas arrivé (pendingTMBR).
 	pendingTMBR = true;
 	//Store values
 	pendingTMBBitrate = bitrate;
 
 	//Send packet
-	SendPacket(*rtcp);
+	int ret = SendPacket(*rtcp);
 
 	//Delete it
 	delete(rtcp);
-    }
+
+	return ret;
 }
 
 void RTPSession::ReSendPacket(int seq)

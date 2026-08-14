@@ -6,6 +6,7 @@
 #include "multiconf.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
+#include "eventqueuesweeper.h"
 #include "xmlstreaminghandler.h"
 #include "uploadhandler.h"
 #include "websocketserver.h"
@@ -19,7 +20,9 @@ class MCU :
 	//S5 : la porte WebSocket de l'API conférence (texte temps réel d'un
 	//participant). Enregistrée par main.cpp sous le préfixe "/mcu", à côté du
 	//"/jsr309" historique.
-	public WebSocketServer::Handler
+	public WebSocketServer::Handler,
+	//Expiration des conférences dont la file d'événements n'est plus lue
+	private EventQueueSweeper
 {
 public:
 	//Codes partages avec TOUS les controleurs, mcuGold inclus : on AJOUTE en fin,
@@ -49,7 +52,13 @@ public:
 	MCU();
 	~MCU();
 
-	int Init(XmlStreamingHandler *eventMngr);
+	//queueExpiresSecs : délai de grâce sans lecteur sur la file d'événements
+	//d'une conférence avant sa destruction (0 = expiration désactivée,
+	//comportement historique). MÊME politique que l'API JSR-309 : la portée du
+	//nettoyage suit donc le découpage des files choisi par le contrôleur — une
+	//file par conférence isole les conférences entre elles, une file partagée
+	//les emporte ensemble (cf. MCU-API.md §5).
+	int Init(XmlStreamingHandler *eventMngr,int queueExpiresSecs = XmlEventQueue::DefaultExpiresSecs);
 	int CreateEventQueue();
 	int DeleteEventQueue(int id);
 	int End();
@@ -84,6 +93,15 @@ private:
 
 	typedef std::map<int,ConferenceEntry> Conferences;
 	typedef std::map<std::wstring,int> ConferenceTags;
+
+private:
+	//EventQueueSweeper : files référencées par les conférences...
+	virtual void CollectQueueIds(std::set<int>& ids);
+	//... et destruction de toutes les conférences dont l'entrée pointe vers
+	//cette file (extraction sous verrou, End() hors verrou comme
+	//DeleteConference). Rend le nombre de conférences détruites.
+	virtual int DeleteQueueOwners(int queueId,const char *reason);
+
 private:
 	XmlStreamingHandler	*eventMngr;
 	Conferences		conferences;

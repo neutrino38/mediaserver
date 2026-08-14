@@ -9,10 +9,11 @@
 #define	AUDIODECODER_H
 #include "medkit/codecs.h"
 #include "audio.h"
+#include "worker.h"
 #include "waitqueue.h"
 #include "rtp.h"
 
-class AudioDecoderWorker
+class AudioDecoderWorker : public Worker
 {
 public:
 	AudioDecoderWorker();
@@ -26,14 +27,12 @@ public:
 
 protected:
 	int Decode();
-
-private:
-	static void *startDecoding(void *par);
+	//Corps du Worker
+	virtual int Run() { return Decode(); }
 
 private:
 	AudioOutput *output;
 	WaitQueue<RTPPacket*> packets;
-	pthread_t thread;
 	bool decoding;
 };
 

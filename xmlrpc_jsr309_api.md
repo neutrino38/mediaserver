@@ -264,6 +264,55 @@ serveur maintient la connexion ouverte (attente jusqu'à 30 s par cycle) et :
 Chaque événement est un tuple dont le **premier entier est le type d'événement**
 (`JSR309Event::Events`).
 
+### Le long-poll est la preuve de vie du client (expiration automatique)
+
+⚠️ **Contrat** : le serveur considère le long-poll comme le *heartbeat* du
+client. **Deux signaux** conduisent à la destruction des sessions, avec le même
+délai de grâce de **60 s** (défaut, cf. `--event-queue-expires`) :
+
+1. **file toujours là, mais plus lue** pendant 60 s → le client est mort sans
+   prévenir. Le serveur détruit **toutes les `MediaSession` créées avec ce
+   `queueId`** (endpoints, mixers, transcoders, players, recorders et ports RTP
+   compris), puis la file elle-même.
+2. **file détruite (`EventQueueDelete`) alors que des sessions la référencent
+   encore** → **pas de destruction immédiate** : le serveur *arme* le délai de
+   grâce et ne détruit ces sessions qu'à son échéance, pour laisser au client
+   une chance de se reconnecter.
+
+Conséquences pour le client :
+
+- **rien à faire** dans le cas normal : le long-poll est rétabli en moins d'une
+  seconde après une coupure réseau, et le serveur envoie un keep-alive toutes
+  les 30 s — 60 s de silence, c'est deux keep-alive manqués, donc un client
+  réellement absent. Aucun ping applicatif n'est nécessaire ;
+- **ouvrir le long-poll sans tarder** après `EventQueueCreate` : le délai court
+  dès la création de la file. Une file jamais lue est détruite au bout du même
+  délai (ce qui nettoie aussi les sondes de supervision et les appels avortés) ;
+- **client à file partagée** (une seule file pour toutes ses sessions, cas du
+  client Java `jsr309impl`) : les 60 s sans lecteur emportent **toutes** ses
+  sessions d'un coup. C'est le comportement voulu quand le client est mort,
+  mais c'est bien un changement de contrat par rapport aux versions
+  antérieures, où une session orpheline survivait jusqu'au redémarrage du
+  serveur ;
+- **`queueId` doit désigner une file réelle** : depuis le signal 2, une session
+  créée avec un `queueId` > 0 fantaisiste (jamais créé) est détruite au bout du
+  délai de grâce, exactement comme une session dont la file a été supprimée.
+  Seul `queueId` ≤ 0 (« pas de file ») met une session hors d'atteinte du
+  nettoyage — comme il la privait déjà de ses événements ;
+- l'ordre de terminaison du §9.5 (`MediaSessionDelete` avant `EventQueueDelete`)
+  reste le bon usage, mais l'inverser ne détruit plus la session sur le coup ;
+- aucun événement n'est émis pour signaler l'expiration : par construction, il
+  n'y aurait plus personne pour le lire. La trace est côté serveur
+  (`/var/log/mcu.log`, `file d'evenements <id> sans poller depuis…`,
+  `armement du delai de grace`, `delai de grace ecoule`).
+
+Le mécanisme se désarme entièrement avec `--event-queue-expires 0`
+(comportement historique : aucune session n'est jamais détruite d'office, et
+`EventQueueDelete` n'a aucun effet de bord).
+
+> La même politique s'applique aux **conférences de l'API `/mcu`** (leur
+> `queueId` est porté par la conférence) — voir `MCU-API.md`.
+
 ### Types d'événements
 
 > ⚠️ **Contrat de fil** : ces codes numériques sont partagés avec le contrôleur
@@ -325,6 +374,11 @@ de `returnVal` en cas de succès. `returnVal = []` signifie tableau vide.
 | `EventQueueCreate` | — | `[ int queueId, string sourceName ]` |
 | `EventQueueDelete` | `i queueId` | `[]` |
 
+`EventQueueDelete` **arme un délai de grâce sur les `MediaSession` liées à cette
+file** (elles sont détruites 60 s plus tard si le client ne revient pas), et une
+file que plus personne ne lit pendant 60 s est détruite avec ses sessions : voir
+« Le long-poll est la preuve de vie du client » au §5.
+
 `sourceName` est le **chemin HTTP relatif** de la file d'événements à ouvrir en
 long-poll, p.ex. `"/events/jsr309/7"`. Le client doit l'utiliser tel quel
 (préfixé de `http://<host>:8080`) plutôt que de reconstruire l'URL à la main.
@@ -341,6 +395,9 @@ long-poll, p.ex. `"/events/jsr309/7"`. Le client doit l'utiliser tel quel
 
 `tag` : nom lisible de la session (renvoyé dans les événements comme
 `sessionTag`).
+
+`queueId` lie la session à une file d'événements — et donc à sa durée de vie :
+la session est détruite d'office si la file cesse d'être lue (§5).
 
 ### 6.3 Players (lecture de fichiers)
 
@@ -955,6 +1012,11 @@ détruire proprement les endpoints d'abord reste préférable.
 - **Idempotence / erreurs** : vérifier `returnCode == 1` après **chaque** appel ;
   en cas d'échec en cours de montage, dérouler la terminaison (§9.5) pour ne pas
   fuiter de session/endpoint côté serveur.
+- **Long-poll permanent** : tant qu'un appel vit, sa file d'événements doit être
+  lue. 60 s sans lecteur et le serveur détruit la file **et les sessions
+  associées** (§5) — c'est le filet contre les sessions orphelines, mais c'est
+  aussi ce qui punit un contrôleur qui laisserait tomber son long-poll en
+  gardant ses appels. Reconnexion immédiate en cas de coupure.
 
 ### 9.7 Négociation des codecs et des `fmtp` (dynamique cible)
 

@@ -46,6 +46,13 @@ int AudioTranscoder::Init(bool allowBriding)
 
 int AudioTranscoder::End()
 {
+    //AVANT d'arrêter quoi que ce soit : en mode pont la source tient un
+    //Joinable::Listener* sur NOUS. MediaSession::AudioTranscoderDelete appelle
+    //End() sans passer par Dettach(), et le destructeur l'appelle aussi — le
+    //shared_ptr détruit ensuite l'objet, et la source publierait dans de la
+    //mémoire libérée. La sûreté mémoire ne doit pas dépendre de l'ordre des
+    //appels du contrôleur. Même correctif que VideoTranscoder (bad033e).
+    UnlistenSource();
     decoder.End();
     pipe.End();
     encoder.End();
@@ -134,6 +141,15 @@ void AudioTranscoder::onEndStream()
 }
 
 
+void AudioTranscoder::UnlistenSource()
+{
+	//lock() : la source est-elle encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->RemoveListener(this);
+
+	joined.reset();
+}
+
 //Returning 0 here made every AudioTranscoderAttachToEndpoint/Dettach XML-RPC
 //call answer an error while the attach had in fact happened.
 int AudioTranscoder::Attach(const std::shared_ptr<Joinable> & join)
@@ -142,18 +158,38 @@ int AudioTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 	if (!allowBridging)
     {
 		decoder.Attach(join);
+		return 1;
     }
-	else
-    {
-		decoder.Start();
-		if (join)
-			join->AddListener(this);
-	}
+
+	//Une source précédente ne doit pas continuer à nous publier des paquets : sans
+	//ce retrait, un ré-attachement laisse le transcodeur inscrit auprès des DEUX,
+	//et chaque paquet de l'ancienne traverse encore le pont.
+	UnlistenSource();
+
+	joined = join;
+
+	//Le mode se rejuge sur le premier paquet de la NOUVELLE source : son codec
+	//n'a aucune raison d'être celui de la précédente.
+	state = 0;
+	recCodec = -1;
+
+	decoder.Start();
+	if (join)
+		join->AddListener(this);
+
 	return 1;
 }
 
 int AudioTranscoder::Dettach()
 {
+	//En mode pont, c'est nous qui sommes inscrit auprès de la source : sans ce
+	//retrait elle garderait un pointeur sur cet objet, et continuerait à publier
+	//dedans après le détachement.
+	UnlistenSource();
+
+	//En mode transcodage seul, c'est le décodeur qui était inscrit et qui se
+	//retire ; en mode pont, il n'était pas attaché et Dettach() se réduit à
+	//l'arrêt de son worker — ce qu'on veut dans les deux cas.
 	decoder.Dettach();
 	return 1;
 }

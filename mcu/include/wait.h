@@ -18,7 +18,13 @@
  * Évolutions (unification du motif, cf. wait-primitive-unification) :
  *   - WaitUntil(timeout, pred) : attente sur prédicat évalué SOUS le verrou ;
  *   - Locked(f) : traitement sous le verrou de l'attente (état partagé de la
- *     classe utilisatrice), à réveiller ensuite via Signal().
+ *     classe utilisatrice), à réveiller ensuite via Signal() ;
+ *   - GetPollFd()/Drain() : réveil compatible poll() via un eventfd (créé
+ *     paresseusement). Signal() et Cancel() écrivent AUSSI dans l'eventfd :
+ *     un thread bloqué dans poll() sur GetPollFd() est réveillé, et —
+ *     contrairement au pthread_kill(SIGIO) historique — un réveil émis juste
+ *     AVANT l'entrée dans poll() n'est JAMAIS perdu (l'eventfd a une
+ *     mémoire : le write reste lisible jusqu'au Drain()).
  */
 
 #ifndef WAIT_H
@@ -30,6 +36,10 @@
 #include <condition_variable>
 #include <mutex>
 
+#include <sys/eventfd.h>
+#include <unistd.h>
+#include <cstdint>
+
 class Wait
 {
 public:
@@ -40,8 +50,12 @@ public:
 	virtual ~Wait()
 	{
 		//Annule puis draine : on ne libère mutex/condition qu'une fois le
-		//dernier waiter effectivement sorti de WaitSignal/WaitUntil
+		//dernier waiter effectivement sorti de WaitSignal/WaitUntil.
+		//NB : un thread qui poll() sur GetPollFd() doit être JOINT avant la
+		//destruction (contrat Worker) — l'eventfd est fermé ici.
 		CancelAndDrain();
+		if (efd >= 0)
+			close(efd);
 	}
 
 	void Signal()
@@ -50,6 +64,7 @@ public:
 		//soit vu avant le sommeil, soit délivré au waiter — jamais entre-deux
 		std::lock_guard<std::mutex> lock(mutex);
 		cond.notify_one();
+		WakePollFd();
 	}
 
 	void Cancel()
@@ -57,13 +72,33 @@ public:
 		std::lock_guard<std::mutex> lock(mutex);
 		cancel = true;
 		cond.notify_all();
+		WakePollFd();
 	}
 
-	//Réarme après un Cancel (le cancel est collant sinon)
+	//Réarme après un Cancel (le cancel est collant sinon) ; purge aussi un
+	//éventuel réveil eventfd en attente
 	void Reset()
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		cancel = false;
+		DrainPollFd();
+	}
+
+	//Descripteur de réveil à ajouter au jeu poll() (événement POLLIN).
+	//Créé paresseusement : un Wait purement cv n'alloue jamais de fd.
+	int GetPollFd()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (efd < 0)
+			efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+		return efd;
+	}
+
+	//Purge le compteur de l'eventfd après un réveil du poll() (sans quoi le
+	//poll suivant re-signalerait POLLIN immédiatement)
+	void Drain()
+	{
+		DrainPollFd();
 	}
 
 	bool IsCanceled()
@@ -76,6 +111,13 @@ public:
 	//comme l'historique) ; false si timeout ou annulé.
 	bool WaitSignal(DWORD timeout)
 	{
+		return WaitSignal(std::chrono::milliseconds(timeout));
+	}
+
+	//Variante à précision fine (jusqu'à la ns) pour les cadenceurs ;
+	//durée nulle = attente infinie. Mêmes retours que la variante ms.
+	bool WaitSignal(std::chrono::nanoseconds timeout)
+	{
 		std::unique_lock<std::mutex> lock(mutex);
 
 		//Déjà annulé : échec immédiat
@@ -85,8 +127,8 @@ public:
 		WaiterScope scope(*this);
 
 		bool ok;
-		if (timeout)
-			ok = (cond.wait_for(lock, std::chrono::milliseconds(timeout)) == std::cv_status::no_timeout);
+		if (timeout.count())
+			ok = (cond.wait_for(lock, timeout) == std::cv_status::no_timeout);
 		else
 		{
 			cond.wait(lock);
@@ -159,11 +201,32 @@ private:
 		}
 	};
 
+	//Réveille un éventuel poll() (no-op tant que GetPollFd n'a pas servi).
+	//EAGAIN = compteur plein : un réveil est déjà en attente, rien à faire.
+	void WakePollFd()
+	{
+		if (efd >= 0)
+		{
+			uint64_t one = 1;
+			[[maybe_unused]] ssize_t r = write(efd, &one, sizeof(one));
+		}
+	}
+
+	void DrainPollFd()
+	{
+		if (efd >= 0)
+		{
+			uint64_t count;
+			[[maybe_unused]] ssize_t r = read(efd, &count, sizeof(count));
+		}
+	}
+
 	std::mutex		mutex;
 	std::condition_variable	cond;
 	std::condition_variable	drained;
 	bool			cancel	= false;
 	int			waiters	= 0;
+	int			efd	= -1;
 };
 
 #endif	/* WAIT_H */

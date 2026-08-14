@@ -15,8 +15,6 @@
 ************************/
 TextMixer::TextMixer()
 {
-	//Creamos  los mutex
-	pthread_mutex_init(&mixTextMutex,0);
 }
 
 /***********************
@@ -25,33 +23,15 @@ TextMixer::TextMixer()
 ************************/
 TextMixer::~TextMixer()
 {
-	//Liberamos los mutex
-	pthread_mutex_destroy(&mixTextMutex);
+	//Contrat Worker : arrêter le thread avant de détruire l'état dérivé
+	StopThread();
 }
 
 /***********************************
-* startMixingText
-*	Crea el thread de mezclado de text
+* Run
+*	Mezcla los texts (corps du Worker)
 ************************************/
-void *TextMixer::startMixingText(void *par)
-{
-	Log("-MixTextThread [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	TextMixer *am = (TextMixer *)par;
-
-	//Bloqueamos las se�ales
-	blocksignals();
-	
-	//Ejecutamos
-	pthread_exit((void *)(intptr_t)am->MixText());
-}
-
-/***********************************
-* MixText
-*	Mezcla los texts
-************************************/
-int TextMixer::MixText()
+int TextMixer::Run()
 {
 	wchar_t buffer[1024];
 	DWORD size=1024;
@@ -116,9 +96,9 @@ int TextMixer::MixText()
 
 		//Un lock
 		lstTextsUse.DecUse();
-		
-		//Sleep 200 ms
-		msleep(200*1000);
+
+		//Tick de 200 ms, interruptible par End()/StopThread()
+		wait.WaitSignal(200);
 	}
 
 	//Know for each worker
@@ -142,8 +122,8 @@ int TextMixer::Init()
 	// Estamos mzclando
 	mixingText = true;
 
-	//Y arrancamoe el thread
-	createPriorityThread(&mixTextThread,startMixingText,this,0);
+	//Y arrancamoe el thread (réarme le Wait interne)
+	StartThread();
 
 	return 1;
 }
@@ -156,23 +136,22 @@ int TextMixer::End()
 {
 	Log(">End textmixer\n");
 
-	//Borramos los texts
-	TextSources::iterator it;
-
 	//Terminamos con la mezcla
 	if (mixingText)
 	{
 		//Terminamos la mezcla
 		mixingText = 0;
 
-		//Y esperamos
-		pthread_join(mixTextThread,NULL);
+		//Réveille le tick et joint (arrêt immédiat)
+		StopThread();
 	}
 
-	//Recorremos la lista
-	for (it =sources.begin();it!=sources.end();it++)
+	//Borramos los texts restantes. DeleteMixer EFFACE l'entrée de la map :
+	//itérer dessus pendant la suppression invalidait l'itérateur (UB, crash
+	//constaté par TextMixerSite.ForwardsTextToOtherParticipantOnly).
+	while (!sources.empty())
 		//Borramos el text
-		DeleteMixer((*it).first);
+		DeleteMixer(sources.begin()->first);
 
 	Log("<End textmixer\n");
 	

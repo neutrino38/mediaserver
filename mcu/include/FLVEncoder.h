@@ -1,6 +1,8 @@
 #ifndef _FLVENCODER_H_
 #define _FLVENCODER_H_
+#include <mutex>
 #include <pthread.h>
+#include "wait.h"
 #include "video.h"
 #include "text.h"
 #include "textencoder.h"
@@ -86,9 +88,12 @@ private:
 	int		inited;
 	bool		sendFPU;
 	timeval		first;
-	pthread_mutex_t mutex;
-	pthread_cond_t	cond;
-	
+	//Protège listeners et méta (état partagé)
+	std::mutex mutex;
+	//Cadence de la boucle d'encodage (l'ancienne cond n'était JAMAIS
+	//signalée : pur sommeil, désormais réveillable)
+	::Wait		pacer;
+
 	Use		use;
 
 	MediaFrameListeners mediaListeners;

@@ -56,7 +56,7 @@ basculer tout l'include path vers `medkit/` et supprimer les homonymes (palier 4
 - Codecs natifs à migrer vers ffmpeg : VP8, OPUS, SPEEX, gsm
 - Codecs natifs → classes dédiées dans libmedkit (libx264, 
   libg722_1, table G711).
-- `mcu/Makefile.rpm` : `libmedkit.a` lié inconditionnellement ; plus aucun `.o`
+- `mcu/Makefile` : `libmedkit.a` lié inconditionnellement ; plus aucun `.o`
   de codec dans `OBJS`/`OBJS2` ; libs natives `-l*` dans `LDFLAGS` mcu.
 
 ## Paliers (chacun compile)
@@ -86,7 +86,7 @@ buffer membre existant (`buffer`/`bufLen`/`bufSize`), avec dispatch selon `type`
 ### Palier 1 — SOCLE : build vert via medkit pour la vidéo ffmpeg ⭐
 But : `USEMEDKIT=yes` → mcu compile et linke ; H263/H263-1996/MPEG4/VP6/FLV1 et
 H264-decode fournis par medkit ; audio + VP8 + H264-encode encore par mcu.
-- `mcu/Makefile.rpm` : `USEMEDKIT=yes` ; `-I$(MEDKITDIR)` placé **avant**
+- `mcu/Makefile` : `USEMEDKIT=yes` ; `-I$(MEDKITDIR)` placé **avant**
   `-Iinclude/` ; retirer de `OBJS`/`OBJS2` les `.o` repris par medkit
   (`H263OBJ`, `H264OBJ` partiel : decoder/depacketizer, `FLV1OBJ`, `VP6OBJ`,
   `mpeg4`) ; `MEDKITLIB` actif.
@@ -137,7 +137,7 @@ qui sont nativement supportés par ffmpeg. On supprime les flags de link -lgsm, 
   collisionnés) des sources mcu en `#include "medkit/…"` (script sed ciblé),
   puis **supprimer** ces en-têtes homonymes de `mcu/include/`.
 - Convertir les appelants de `AddRtpPacket` (4→5 args, `mark`).
-- `mcu/Makefile.rpm` : retirer le bloc `ifeq ($(USEMEDKIT),yes)…endif`, rendre
+- `mcu/Makefile` : retirer le bloc `ifeq ($(USEMEDKIT),yes)…endif`, rendre
   `-I$(MEDKITDIR)` et `MEDKITLIB` inconditionnels, supprimer `USEMEDKIT=no` et
   tout `.o` codec résiduel des OBJS.
 
@@ -175,7 +175,7 @@ qui sont nativement supportés par ffmpeg. On supprime les flags de link -lgsm, 
 - `third_party/fontventa/libmedikit/ffvideocodec.{h,cpp}`, nouveau `ffaudiocodec.{h,cpp}`
 - `third_party/fontventa/libmedikit/{video,audio}.cpp` (factories), `Makefile`
 - `mcu/src/{video,audio}.cpp` (factories), `mcu/include/{video,audio,codecs,media}.h`
-- `mcu/Makefile.rpm`, `install.ksh` (fonction `compile_libmedkit`)
+- `mcu/Makefile`, `install.ksh` (fonction `compile_libmedkit`)
 
 ## Avancement réalisé dans libmedkit (paliers 0/2 + ffvideocodec)
 
@@ -224,7 +224,7 @@ implémenter `VideoFrame::PacketizeH263()` (cf. pièges) ; décodeur AAC si beso
 Avant cette décision, plusieurs corrections de compilation ont déjà été
 appliquées dans `mcu/` pour avancer le portage ffmpeg 5/6 / AlmaLinux 9 :
 - `mcu/include/stringparser.h` : `pow10()` → `pow(10.0, e)`.
-- `mcu/Makefile.rpm` : ajout `-I/usr/include/ffmpeg` ; ImageMagick 7 via
+- `mcu/Makefile` : ajout `-I/usr/include/ffmpeg` ; ImageMagick 7 via
   `pkg-config Magick++` (`MAGICKCFLAGS`/`MAGICKLIBS`, remplace `-lMagick++-6.Q16`).
 - `mcu/include/rtpbuffer.h` : `Log2(...)` → `Log(...)` (un seul argument).
 - `FF_INPUT_BUFFER_PADDING_SIZE` → `AV_INPUT_BUFFER_PADDING_SIZE` (framescaler,
@@ -251,7 +251,7 @@ fois la migration vers libmedkit réalisée (les sources concernées quittent
 - `ffvideocodec.{h,cpp}` : `FfVideoDecoder::DecodePacket` (dispatch H264 STAP-A/FU-A via `h264_append_nals` porté de mcu ; dépaquetisation RFC 2429 H263+ ; accumulation brute MPEG4/VP6/FLV1).
 
 **Palier 1+2 fusionnés (build vert) — fait :** (le « build vert » vidéo seul était impossible car `nelly`/`g722codec` mcu n'compilent pas en ffmpeg 5 → audio traité en même temps)
-- `mcu/Makefile.rpm` : `USEMEDKIT=yes` ; `-I$(MEDKITDIR)` avant `-Iinclude/` ; `OBJS`/`OBJS2` purgés des `.o` repris par medkit (H263/MPEG4/H263-1996, h264decoder, vp6, flv1codec, g722codec, NellyCodec) ; gardés mcu : `h264encoder.o`, `h264depacketizer.o` (utilisé par `rtp.cpp`), `g7221codec.o`, VP8, gsm, speex, opus.
+- `mcu/Makefile` : `USEMEDKIT=yes` ; `-I$(MEDKITDIR)` avant `-Iinclude/` ; `OBJS`/`OBJS2` purgés des `.o` repris par medkit (H263/MPEG4/H263-1996, h264decoder, vp6, flv1codec, g722codec, NellyCodec) ; gardés mcu : `h264encoder.o`, `h264depacketizer.o` (utilisé par `rtp.cpp`), `g7221codec.o`, VP8, gsm, speex, opus.
 - `mcu/include/{media,codecs}.h` rendus **identiques** à medkit ; `video.h`/`audio.h` : `VideoFrame`/`AudioFrame` alignés (useStartCode/naluSizeLen, packetization, ctor `owns`, `Packetize` virtuel) en gardant les classes Input/Output propres à mcu.
 - `AddRtpPacket` : passage **4→5 args** (`mark`) ; 8 appelants compilés convertis (audioencoder, FLVEncoder, vp8encoder, rtp, h264encoder, h264depacketizer ×3).
 - `mcu/src/video.cpp` : factory délègue à `FfVideoDecoder`/`FfVideoEncoder` (H263/H263-1996/MPEG4/H264-dec/VP6/SORENSON) ; garde VP8 + H264-encode mcu. Définit `VideoFrame::Packetize`/`PacketizeH264`/`PacketizeH263`/NALU (sinon medkit `video.o` tiré → double `VideoCodecFactory`).
@@ -260,11 +260,11 @@ fois la migration vers libmedkit réalisée (les sources concernées quittent
 
 **AMR-NB / AMR-WB migrés vers libmedkit (FfAudio) :** nouveau module `libmedikit/amr/amrcodec.{h,cpp}` (`AMRNBEncoder`/`AMRNBDecoder` via `AV_CODEC_ID_AMR_NB` ; `AMRWBEncoder`/`AMRWBDecoder` via `AV_CODEC_ID_AMR_WB`, bitrate de mode valide réglé avant `Open()`), câblé dans les deux factories, ajouté à `Makefile` medkit + `MEDKIT_OBJS` (install.ksh). Les `-lopencore-amrnb -lopencore-amrwb` retirés du link mcu (fournis par `libavcodec.so` : `libopencore_amrnb`/`libvo_amrwbenc`).
 
-**Dépendances passées en dynamique système (AlmaLinux 9) dans `mcu/Makefile.rpm` (LDXMLFLAGS) :**
+**Dépendances passées en dynamique système (AlmaLinux 9) dans `mcu/Makefile` (LDXMLFLAGS) :**
 - OpenSSL : `-lssl -lcrypto` au lieu de `staticdeps/lib/libssl.a`/`libcrypto.a` (absents).
 - XML : `-lxml2` au lieu de `libxmlrpc_xmlparse.a`/`libxmlrpc_xmltok.a` (xmlrpc-c bâti avec **backend libxml2** : `xmlParseChunk` vient de libxml2).
 
-**Vérif :** `./install.ksh libmedkit` puis `cd mcu && make -f Makefile.rpm mcu` → `bin/debug/mcu` (ELF 34 Mo) ; le binaire démarre (init RTMP/WebSocket/RTP OK).
+**Vérif :** `./install.ksh libmedkit` puis `cd mcu && make mcu` → `bin/debug/mcu` (ELF 34 Mo) ; le binaire démarre (init RTMP/WebSocket/RTP OK).
 
 **Palier 3b — VP8 décode migré vers le décodeur NATIF ffmpeg (2026-06-30) :**
 - `VideoCodec::VP8` décodé par le décodeur natif `vp8` de ffmpeg (**pas** libvpx :
@@ -273,7 +273,7 @@ fois la migration vers libmedkit réalisée (les sources concernées quittent
   (`vp8/vp8encoder.{h,cpp}`, dérive de `FfVideoEncoder`, `AV_CODEC_ID_VP8` →
   `avcodec_find_encoder` renvoie le wrapper `libvpx`). Le code vpx natif de mcu
   (`vp8encoder.o`/`vp8decoder.o`) est **retiré du build**, et `-lvpx` retiré du
-  link mcu : `libvpx.so` n'est plus tiré que **via `libavcodec.so`**. `Makefile.rpm`
+  link mcu : `libvpx.so` n'est plus tiré que **via `libavcodec.so`**. `mcu/Makefile`
   `VP8OBJ=` (vide).
 
 **Packetisation RTP par encodeur (symétrique aux décodeurs, 2026-06-30) :**
@@ -307,7 +307,7 @@ brute + `Decode` sur `last`, pour MPEG4/VP6/FLV1/SORENSON/H263-1996).
 - Vérifié : build vert, symboles `{FfVideoDecoder,H264Decoder,H263Decoder,VP8Decoder}::DecodePacket` tous présents.
 
 **Palier 4 — partiel (2026-06-30) :**
-- ✅ **A.1 — mode sans-medkit supprimé** : `mcu/Makefile.rpm` lie `libmedkit.a` et
+- ✅ **A.1 — mode sans-medkit supprimé** : `mcu/Makefile` lie `libmedkit.a` et
   `-I$(MEDKITDIR)` **inconditionnellement** (bloc `ifeq ($(USEMEDKIT),yes)` retiré,
   variable `USEMEDKIT` supprimée). Build vérifié vert.
 - ⛔ **A.2 — bascule des `#include` vers `medkit/` + suppression des homonymes :
@@ -376,12 +376,12 @@ Tous les répertoires et fichiers codec dont la fonctionnalité a été reprise 
 **mcu/src/audio.cpp et video.cpp supprimés — factories libmedkit utilisées directement :**
 - `libmedikit/audio.cpp` : `AudioCodecFactory::CreateEncoder/Decoder` + `AudioFrame::Packetize` — tous les codecs audio câblés (G711, G722, G7221, AMR/AMR-WB, Nelly, GSM, Speex, OPUS)
 - `libmedikit/video.cpp` : `VideoCodecFactory::CreateEncoder/Decoder` + `VideoFrame::Packetize/PacketizeH264/PacketizeH263/NALU` — tous les codecs vidéo câblés (SORENSON, H263_1998/1996, MPEG4, H264, VP6, VP8)
-- `audio.o`/`video.o` retirés de `OBJS`/`OBJS2` dans `mcu/Makefile.rpm`
+- `audio.o`/`video.o` retirés de `OBJS`/`OBJS2` dans `mcu/Makefile`
 
 **mcu/include/media.h → forwarder libmedkit :**
 - Réduit à `#include "medkit/media.h"` ; l'implémentation (`media.o`) provient de `libmedkit.a` depuis le début
 
-**Makefile.rpm — état final :**
+**Makefile — état final :**
 - Toutes les variables `*DIR`/`*OBJ` codec retirées (`G711`, `H263`, `VP6`, `VP8`, `GSM`, `NELLY`, `OPUS`, `H264`, `G722`, `SPEEX`)
 - `OBJS+=` ne contient plus que `$(DOCSHARINGOBJ) $(JSR309OBJ)`
 - `VPATH` : entrées codec toutes retirées

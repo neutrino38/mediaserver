@@ -21,3 +21,4 @@ test/websocket/wstest.key
 /*.pcap
 /*.log
 mcu/.dep.inc
+*.swp

@@ -25,7 +25,6 @@ AudioStream::AudioStream(Listener* listener) : rtp(MediaFrame::Audio,listener)
 	muted = 0;
 	
 	//Create objects
-	pthread_mutex_init(&mutex,NULL);
 }
 
 /*******************************
@@ -37,7 +36,6 @@ AudioStream::~AudioStream()
 	//Défense en profondeur (H-5) : arrêt/join des threads même sans End()
 	//préalable. End() est idempotent.
 	End();
-	pthread_mutex_destroy(&mutex);
 }
 
 /***************************************
@@ -533,7 +531,7 @@ int AudioStream::SendAudio()
 		
 		
 		//DTMF handling
-		pthread_mutex_lock(&mutex);
+		std::unique_lock<std::mutex> mutexLock(mutex);
 		while (!dtmfBuffer.empty() )
 		{
 			DTMFMessage* dtmfmsg = dtmfBuffer.front();
@@ -553,7 +551,7 @@ int AudioStream::SendAudio()
 			dtmfBuffer.erase(dtmfBuffer.begin());
 		}
 		
-		pthread_mutex_unlock(&mutex);
+		mutexLock.unlock();
 		
 	}
 
@@ -588,9 +586,9 @@ MediaStatistics AudioStream::GetStatistics()
 
 int AudioStream::SendDTMF(DTMFMessage* dtmf)
 {
-	 pthread_mutex_lock(&mutex);
+	 std::unique_lock<std::mutex> mutexLock(mutex);
 	 dtmfBuffer.push_back(dtmf);
-	 pthread_mutex_unlock(&mutex);
+	 mutexLock.unlock();
 	return 0;
 }
 

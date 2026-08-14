@@ -115,8 +115,9 @@ private:
 	int 		videoGrabHeight;	//Alto de la captur
 	int 		videoFPS;
 	int 		videoBitrate;
+	//Limite TMMBR/REMB en vigueur (kbps, 0 = aucune) : plafond STRICT du débit
+	//cible, persistant jusqu'à remplacement par une nouvelle valeur (RFC 5104).
 	int 		videoBitrateLimit;
-	int 		videoBitrateLimitCount;
 	int		videoIntraPeriod;
 public:
 	//P8a : les proprietes codec locales, telles que SetRTPProperties les a retenues

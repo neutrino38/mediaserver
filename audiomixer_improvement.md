@@ -137,4 +137,4 @@ deux `%d`, un seul argument → lecture de pile (UB), affichage poubelle.
    unique_ptr/atomic (§2).
 
 Chaque étape est indépendante et testable par la suite gtest existante
-(`make -C mcu -f Makefile.rpm check`) + un appel réel pour la partie audible.
+(`make -C mcu -f Makefile check`) + un appel réel pour la partie audible.

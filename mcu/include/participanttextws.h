@@ -1,6 +1,7 @@
 #ifndef PARTICIPANTTEXTWS_H
 #define PARTICIPANTTEXTWS_H
 
+#include "worker.h"
 #include <pthread.h>
 #include <list>
 #include <memory>
@@ -32,7 +33,7 @@
 // URL token and calls ws->Accept(weak_ptr to this). Init() starts the pull
 // thread; End() stops it and closes the socket; both idempotent. A second
 // browser connection on the same token replaces the first (onOpen closes it).
-class ParticipantTextWS : public WebSocket::Listener
+class ParticipantTextWS : public WebSocket::Listener, public Worker
 {
 public:
 	ParticipantTextWS(std::shared_ptr<TextInput> mixerInput,
@@ -54,7 +55,8 @@ protected:
 	int PullText();
 
 private:
-	static void * startPullingText(void *par);
+	//Corps du Worker
+	virtual int Run() { return PullText(); }
 
 	void DeliverToWs(const BYTE *data, DWORD size);
 
@@ -85,7 +87,6 @@ private:
 	static const QWORD  maxPendingAgeMs  = 5000;
 	std::list<std::pair<QWORD,std::string>> pending;
 
-	pthread_t	pullThread;
 	TaskState	pulling;
 };
 

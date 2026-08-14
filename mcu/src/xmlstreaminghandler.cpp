@@ -10,17 +10,16 @@
 
 XmlEventQueue::XmlEventQueue()
 {
-	cancel = false;
-	//Create mutex
-	pthread_mutex_init(&mutex,NULL);
-	//Create condition
-	pthread_cond_init(&cond,0);
-
+	//Le compte à rebours d'expiration démarre à la création : le client a
+	//`idle` pour venir poller la file qu'il vient de demander.
+	lastPoller = std::chrono::steady_clock::now();
 }
+
 XmlEventQueue::~XmlEventQueue()
 {
-	//Lock
-	pthread_mutex_lock(&mutex);
+	//Drainer un éventuel WaitForEvent avant de détruire la liste (les
+	//prédicats la consultent) ; le ~Wait refera à blanc.
+	CancelAndDrain();
 
 	//While events
 	while (!events.empty())
@@ -30,113 +29,83 @@ XmlEventQueue::~XmlEventQueue()
 		//And remove it froom server
 		events.pop_front();
 	}
-
-	//UnLock
-	pthread_mutex_unlock(&mutex);
-
-	//Destroy event
-	pthread_mutex_destroy(&mutex);
-	//Destroy condition
-	pthread_cond_destroy(&cond);
 }
 
 void XmlEventQueue::AddEvent(XmlEvent *event)
 {
-	//Lock
-	pthread_mutex_lock(&mutex);
-
 	//Add event
-	events.push_back(event);
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
+	Locked([&] { events.push_back(event); });
 
 	//Signal
-	pthread_cond_signal(&cond);
-}
-
-void XmlEventQueue::Cancel()
-{
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//Canceled
-	cancel = true;
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-
-	//Signal condition
-	pthread_cond_signal(&cond);
+	Signal();
 }
 
 bool XmlEventQueue::WaitForEvent(DWORD timeout)
 {
-	timespec ts;
-
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//if we are cancel
-	if (cancel)
-	{
-		//Unlock
-		pthread_mutex_unlock(&mutex);
+	//if we are cancel : false SEULEMENT à l'entrée
+	if (IsCanceled())
 		//canceled
 		return false;
-	}
 
-	//If there are no events in the queue
-	if (events.empty())
-	{
-		//Calculate timeout
-		calcTimout(&ts,timeout);
+	//Attendre un événement ; timeout et Cancel-pendant-l'attente rendent
+	//true quand même (keep-alive du long-poll, Cancel en deux temps)
+	WaitUntil(timeout, [this] { return !events.empty(); });
 
-		//Esperamos la condicion
-		pthread_cond_timedwait(&cond,&mutex,&ts);
-	}
-
-	//Unlock
-	pthread_mutex_unlock(&mutex);
-	
-	//There are events in the queue
 	return true;
 }
 
 xmlrpc_value* XmlEventQueue::PeekXMLEvent(xmlrpc_env *env)
 {
-	xmlrpc_value* val = NULL;
+	return Locked([&]() -> xmlrpc_value* {
+		//Get event
+		if (!events.empty())
+			//Retreive firs
+			return events.front()->GetXmlValue(env);
+		return NULL;
+	});
+}
 
-	//Lock
-	pthread_mutex_lock(&mutex);
+void XmlEventQueue::AttachPoller()
+{
+	Locked([&] {
+		pollers++;
+		//Horodater aussi à l'attache : si le poller reste des heures, la file
+		//n'est de toute façon pas expirable tant que pollers > 0
+		lastPoller = std::chrono::steady_clock::now();
+	});
+}
 
-	//Get event
-	if (!events.empty())
-		//Retreive firs
-		val = events.front()->GetXmlValue(env);
+void XmlEventQueue::DetachPoller()
+{
+	Locked([&] {
+		if (pollers > 0) pollers--;
+		//Départ du dernier poller : c'est d'ici que court le délai de grâce
+		lastPoller = std::chrono::steady_clock::now();
+	});
+}
 
-	//UnLock
-	pthread_mutex_unlock(&mutex);
-
-	return val;
+bool XmlEventQueue::IsPolled(std::chrono::milliseconds idle)
+{
+	return Locked([&] {
+		//Poller attaché : vivant, sans discussion
+		if (pollers > 0) return true;
+		//Sinon : détachement (ou création) assez récent ?
+		return (std::chrono::steady_clock::now() - lastPoller) <= idle;
+	});
 }
 
 void XmlEventQueue::PopEvent()
 {
-	//Lock
-	pthread_mutex_lock(&mutex);
-
-	//Get event
-	if (!events.empty())
-	{
-		//delet first
-		delete(events.front());
-		//And remove it froom server
-		events.pop_front();
-	}
-
-	//UnLock
-	pthread_mutex_unlock(&mutex);
+	Locked([&] {
+		//Get event
+		if (!events.empty())
+		{
+			//delet first
+			delete(events.front());
+			//And remove it froom server
+			events.pop_front();
+		}
+	});
 }
 
 /**************************************
@@ -205,6 +174,9 @@ int XmlStreamingHandler::CreateEventQueue()
 	//Unlock
 	listUse.Unlock();
 
+	Log("-Created event queue [id:%d]\n",id);
+	
+
 	//Return queue id
 	return id;
 }
@@ -247,10 +219,39 @@ int XmlStreamingHandler::AddEvent(DWORD id,XmlEvent *event)
 
 
 
-int XmlStreamingHandler::DestroyEventQueue(DWORD id)
+std::vector<DWORD> XmlStreamingHandler::GetIdleQueues(std::chrono::milliseconds idle)
 {
-	Log("-Destroy event queue [id:%d]\n",id);
-	
+	std::vector<DWORD> idles;
+
+	//We are using the list (interdit toute modification de la map le temps du
+	//parcours : les écrivains passent par listUse.WaitUnusedAndLock)
+	listUse.IncUse();
+
+	for (EventQueues::iterator it = queues.begin(); it!=queues.end(); ++it)
+		if (!it->second->IsPolled(idle))
+			idles.push_back(it->first);
+
+	//Not using it anymore
+	listUse.DecUse();
+
+	return idles;
+}
+
+bool XmlStreamingHandler::HasQueue(DWORD id)
+{
+	//We are using the list
+	listUse.IncUse();
+
+	bool found = (queues.find(id)!=queues.end());
+
+	//Not using it anymore
+	listUse.DecUse();
+
+	return found;
+}
+
+int XmlStreamingHandler::DestroyEventQueue(DWORD id)
+{	
 	//Get lock
 	listUse.WaitUnusedAndLock();
 
@@ -284,6 +285,8 @@ int XmlStreamingHandler::DestroyEventQueue(DWORD id)
 	//Delete queu
 	delete(queue);
 	
+	Log("-Destroyed event queue [id:%d]\n",id);
+
 	//Done
 	return 1;
 }
@@ -337,6 +340,10 @@ int XmlStreamingHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 
 	//Inc queue usage
 	queue->IncUse();
+
+	//Ce long-poll est la preuve de vie du client : tant qu'il est attaché, la
+	//file (et les sessions qui lui sont liées) ne peut pas expirer.
+	queue->AttachPoller();
 
 	//Not using it anymore
 	listUse.DecUse();
@@ -395,6 +402,10 @@ int XmlStreamingHandler::ProcessRequest(TRequestInfo *req,TSession * const ses)
 
 	//End it
 	ResponseWriteEnd(ses);
+
+	//Plus de poller : le délai de grâce d'expiration démarre ici (la
+	//reconnexion du client, en principe sous la seconde, le réarme)
+	queue->DetachPoller();
 
 	//Dec queue usage
 	queue->DecUse();

@@ -84,9 +84,6 @@ VideoMixer::VideoMixer(const std::wstring &tag) : eventSource(tag)
 	//No vad
 	vadMode = NoVAD;
 
-	//Inciamos lso mutex y la condicion
-	pthread_mutex_init(&mixVideoMutex,0);
-	pthread_cond_init(&mixVideoCond,0);
 }
 
 /***********************
@@ -95,37 +92,16 @@ VideoMixer::VideoMixer(const std::wstring &tag) : eventSource(tag)
 ************************/
 VideoMixer::~VideoMixer()
 {
-	//Liberamos los mutex
-	pthread_mutex_destroy(&mixVideoMutex);
-	pthread_cond_destroy(&mixVideoCond);
-}
-
-/***********************
-* startMixingVideo
-*	Helper thread function
-************************/
-void * VideoMixer::startMixingVideo(void *par)
-{
-        Log("-MixVideoThread [%d]\n",getpid());
-
-	//Obtenemos el parametro
-	VideoMixer *vm = (VideoMixer *)par;
-
-	//Bloqueamos las seï¿½ales
-	blocksignals();
-
-	//Ejecutamos
-	pthread_exit((void *)(intptr_t)vm->MixVideo());
+	//Contrat Worker : arrêter le thread avant de détruire l'état dérivé
+	StopThread();
 }
 
 /************************
-* MixVideo
-*	Thread de mezclado de video
+* Run
+*	Thread de mezclado de video (corps du Worker)
 *************************/
-int VideoMixer::MixVideo()
+int VideoMixer::Run()
 {
-	struct timespec   ts;
-	struct timeval    tp;
 	int forceUpdate = 0;
 	DWORD version = 0;
 
@@ -164,27 +140,20 @@ int VideoMixer::MixVideo()
 
 		//Desprotege la lista (crash correction - moved after mosaic reset)
 		lstVideosUse.Unlock();
-		//LOck the mixing
-		pthread_mutex_lock(&mixVideoMutex);
+		//LOck the mixing (tenu pendant toute la passe, relâché en fin
+		//d'itération — l'ancien unlock explicite était au même endroit)
+		std::unique_lock<std::mutex> mixLock(mixVideoMutex);
 
 		//Everything is updated
 		forceUpdate = 0;
 
-		//Get now
-		gettimeofday(&tp, NULL);
-
-		//Calculate timeout
-		calcAbsTimeout(&ts,&tp,500);
-
 		//Wait for new images or timeout and adquire mutex on exit
-		if (pthread_cond_timedwait(&mixVideoCond,&mixVideoMutex,&ts)==ETIMEDOUT)
+		if (mixVideoCond.wait_for(mixLock, std::chrono::milliseconds(500)) == std::cv_status::timeout)
 		{
 
 			//Force an update each second
 			forceUpdate = 1;
-			//Desbloqueamos
-			pthread_mutex_unlock(&mixVideoMutex);
-			//go to the begining
+			//go to the begining (le unique_lock se libère par le scope)
 			continue;
 		}
 
@@ -454,8 +423,7 @@ int VideoMixer::MixVideo()
 		//Desprotege la lista
 		lstVideosUse.Unlock();
 
-		//Desbloqueamos
-		pthread_mutex_unlock(&mixVideoMutex);
+		//Desbloqueamos (fin de la passe : le unique_lock sort du scope)
 	}
 
 	Log("<MixVideo\n");
@@ -626,7 +594,7 @@ int VideoMixer::Init(Mosaic::Type comp,int size, const char * logoFile)
 	mixingVideo = true;
 
 	//Y arrancamoe el thread
-	createPriorityThread(&mixVideoThread,startMixingVideo,this,0);
+	StartThread();
 
 	return 1;
 }
@@ -648,11 +616,14 @@ int VideoMixer::End()
 		//Terminamos la mezcla
 		mixingVideo = 0;
 
-		//Seï¿½alamos la condicion
-		pthread_cond_signal(&mixVideoCond);
+		//Seï¿½alamos la condicion (sous verrou : pas de réveil perdu)
+		{
+			std::lock_guard<std::mutex> g(mixVideoMutex);
+			mixVideoCond.notify_one();
+		}
 
 		//Y esperamos
-		pthread_join(mixVideoThread,NULL);
+		StopThread();
 	}
 
 	//Protegemos la lista
@@ -958,32 +929,31 @@ int VideoMixer::EndMixer(int id)
 	lstVideosUse.DecUse();
 
 	//LOck the mixing
-	pthread_mutex_lock(&mixVideoMutex);
-
-	//If still mixing video
-	if (mixingVideo)
 	{
-		//For all the mosaics
-		for (Mosaics::iterator it = mosaics.begin(); it!=mosaics.end(); ++it)
+		std::lock_guard<std::mutex> mixGuard(mixVideoMutex);
+
+		//If still mixing video
+		if (mixingVideo)
 		{
-			//Get mosaic
-			Mosaic *mosaic = it->second.get();
-			//Remove particiapant ande get position for user
-			//int pos = mosaic->RemoveParticipant(id);
-			int pos = mosaic->GetPosition(id);
-			int res = RemoveMosaicParticipant(it->first, id);
-			if (pos >= 0)
+			//For all the mosaics
+			for (Mosaics::iterator it = mosaics.begin(); it!=mosaics.end(); ++it)
 			{
-				Log("-Removed from mosaic [mosaicId:%d,pos:%d]\n",it->first,pos);
+				//Get mosaic
+				Mosaic *mosaic = it->second.get();
+				//Remove particiapant ande get position for user
+				//int pos = mosaic->RemoveParticipant(id);
+				int pos = mosaic->GetPosition(id);
+				int res = RemoveMosaicParticipant(it->first, id);
+				if (pos >= 0)
+				{
+					Log("-Removed from mosaic [mosaicId:%d,pos:%d]\n",it->first,pos);
+				}
 			}
 		}
+
+		//Signal for new video
+		mixVideoCond.notify_one();
 	}
-
-	//Signal for new video
-	pthread_cond_signal(&mixVideoCond);
-
-	//UNlock mixing
-	pthread_mutex_unlock(&mixVideoMutex);
 
 	Log("<Endmixer [id:%d]\n",id);
 
@@ -1219,8 +1189,11 @@ int VideoMixer::SetCompositionType(int mosaicId,Mosaic::Type comp, int size)
 	//And in the list
 	mosaics[mosaicId] = mosaicPtr;
 
-	//Signal for new video
-	pthread_cond_signal(&mixVideoCond);
+	//Signal for new video (sous verrou : pas de réveil perdu)
+	{
+		std::lock_guard<std::mutex> g(mixVideoMutex);
+		mixVideoCond.notify_one();
+	}
 
 	//Unlock (Could this be done earlier??)
 	lstVideosUse.Unlock();

@@ -1,12 +1,13 @@
 #ifndef _RTMPFLVSTREAM_H_
 #define _RTMPFLVSTREAM_H_
+#include "worker.h"
 #include "config.h"
 #include "rtmp.h"
 #include "rtmpstream.h"
 #include "rtmpmessage.h"
 #include <string>
 
-class RTMPFLVStream : public RTMPMediaStream
+class RTMPFLVStream : public RTMPMediaStream, public Worker
 {
 public:
 	RTMPFLVStream(DWORD id);
@@ -22,14 +23,14 @@ protected:
 	int PlayFLV();
 
 private:
-	static void * play(void *par);
+	//Corps du Worker
+	virtual int Run() { return PlayFLV(); }
 
 protected:
 	int	fd;
 	bool	recording;
 	bool	playing;
 	QWORD 	first;
-	pthread_t thread;
 };
 
 #endif

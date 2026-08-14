@@ -320,6 +320,52 @@ serveur maintient la connexion ouverte et :
 Chaque événement est un tuple dont le **premier entier est le type d'événement**
 (`MCU::Events`).
 
+### Le long-poll est la preuve de vie du contrôleur (expiration automatique)
+
+⚠️ **Contrat** : le serveur considère le long-poll comme le *heartbeat* du
+contrôleur. **Deux signaux** conduisent à la destruction des conférences, avec
+le même délai de grâce de **60 s** (défaut, cf. `--event-queue-expires`) :
+
+1. **file toujours là, mais plus lue** pendant 60 s → le contrôleur est mort
+   sans prévenir. Le serveur détruit **toutes les conférences créées avec ce
+   `queueId`** (participants, mixers, mosaïques, broadcaster et ports RTP
+   compris), libère leurs `tag`, puis détruit la file.
+2. **file détruite (`EventQueueDelete`) alors que des conférences la référencent
+   encore** → **pas de destruction immédiate** : le serveur *arme* le délai de
+   grâce et ne détruit ces conférences qu'à son échéance, pour laisser au
+   contrôleur une chance de se reconnecter.
+
+**La portée du nettoyage est celle que le contrôleur choisit** en découpant ses
+files : le `queueId` est porté par la **conférence** (`CreateConference`), donc
+
+- **une file par conférence** → les conférences sont isolées : perdre le
+  long-poll d'une file ne détruit que cette conférence. C'est le découpage
+  recommandé ;
+- **une file partagée** par plusieurs conférences (le montage décrit au §7.2)
+  → 60 s sans lecteur les emportent **toutes ensemble**. C'est cohérent avec le
+  fait que le contrôleur est alors globalement mort, mais il faut en avoir
+  conscience : dans les versions antérieures, une conférence orpheline survivait
+  jusqu'au redémarrage du serveur.
+
+Autres conséquences :
+
+- **ouvrir le long-poll sans tarder** après `EventQueueCreate` : le délai court
+  dès la création de la file, et une file jamais lue est détruite au bout du
+  même délai ;
+- **`queueId` doit désigner une file réelle** : une conférence créée avec un
+  `queueId` > 0 fantaisiste est détruite au bout du délai de grâce, comme si sa
+  file avait été supprimée. Seul `queueId` ≤ 0 (« pas de file », ce que produit
+  le transport MOTELI quand `eventListenerId` est absent) met une conférence
+  hors d'atteinte du nettoyage — comme il la privait déjà de ses événements ;
+- aucun événement n'annonce l'expiration (il n'y aurait plus de lecteur) : la
+  trace est côté serveur (`/var/log/mcu.log`, `MCU: suppression de la conference
+  … : controleur absent du long-poll`) ;
+- `--event-queue-expires 0` désarme entièrement le mécanisme (comportement
+  historique, `EventQueueDelete` sans effet de bord).
+
+La même politique gouverne les `MediaSession` de l'API `/jsr309`
+(`xmlrpc_jsr309_api.md` §5) — c'est le même code de balayage.
+
 ### Types d'événements
 
 Source unique : `mcu/include/mcu.h` (`MCU::Events`).
@@ -378,6 +424,10 @@ Crée une file d'événements.
 Détruit une file d'événements (ferme le flux HTTP associé).
 - **Params** `(i)` : `queueId`.
 - **Retour** : vide.
+
+> Les conférences créées avec ce `queueId` **ne sont pas détruites sur le coup**
+> mais entrent dans un délai de grâce de 60 s, à l'issue duquel elles sont
+> supprimées si le contrôleur n'est pas revenu (§5).
 
 ---
 
@@ -1000,6 +1050,12 @@ session** au niveau transport : c'est cet enchaînement qui porte la sémantique
 5. **La file d'événements est partagée** (portée « mixer ») : on la crée une
    fois et on passe son `queueId` à chaque `CreateConference` ; elle **survit**
    aux conférences (pas de `EventQueueDelete` par conférence).
+   > ⚠️ Ce montage est celui d'un contrôleur historique. Depuis l'expiration
+   > automatique par file (§5), il fait de la file un point de défaillance
+   > unique : 60 s sans lecteur emportent **toutes** les conférences. Préférer
+   > désormais **une file par conférence** (`EventQueueCreate` par appel, puis
+   > `EventQueueDelete` à la fin), ce qui limite la portée du nettoyage à la
+   > conférence concernée.
 6. **Teardown minimal côté participant** : `DeleteParticipant` suffit — le
    serveur libère les flux ; le contrôleur n'émet pas de `StopSending` /
    `StopReceiving` / `RemoveMosaicParticipant` à la destruction.

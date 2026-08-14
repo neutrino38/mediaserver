@@ -20,8 +20,14 @@ RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Po
 	//No time
 	prevts = 0;
 	timestamp = 0;
+	//No source yet
+	prevSSRC = 0;
         //No codec
-        codec = -1;
+        codec = NoCodec;
+	//Aucun codec refusé pour l'instant
+	unmappedCodec = NoCodec;
+	unmappedTs    = 0;
+	unmappedCount = 0;
 	//Get freg
 	switch(type)
 	{
@@ -85,13 +91,18 @@ int RTPEndpoint::End()
         //Detach if joined
 	//Detach();
 
-        //Stop
-        RTPSession::End();
-
-	//If receiving
+	//ORDRE : arrêter le consommateur AVANT de détruire la source. StopReceiving
+	//baisse `receiving`, réveille la boucle de démultiplexage (DeleteStreams) et
+	//joint son thread ; ce n'est qu'ensuite que la session peut être démontée.
+	//L'ordre inverse laissait le thread de démultiplexage appeler GetPacket() sur
+	//une session en cours de destruction.
 	if (receiving)
 		//Stop it
 		StopReceiving();
+
+        //Stop
+        RTPSession::End();
+
 	return 0;
 }
 
@@ -137,8 +148,9 @@ int RTPEndpoint::StopReceiving()
 	//Cancel grab
 	DeleteStreams();
 
-	//Cancel any pending IO
-	pthread_kill(thread,SIGIO);
+	//NB : l'ancien pthread_kill(SIGIO) ici était MORT : le thread bloque dans
+	//l'attente du jitter buffer (cv), pas dans poll ; c'est le Cancel des streams
+	//(DeleteStreams ci-dessus) qui le réveille réellement.
 
         //Y unimos
 	pthread_join(thread,NULL);
@@ -172,8 +184,60 @@ int RTPEndpoint::StopSending()
 	return 1;
 }
 
+//Voir la déclaration : borne la retentative ET le journal. Retenter a du sens (une
+//renégociation peut ajouter le PT à la rtpMap de sortie) ; le faire à chaque
+//paquet non, puisque RTPSession::SetSendingCodec journalise une Error par appel —
+//sur de la vidéo, c'est le journal noyé à 30 lignes par seconde et par flux.
+bool RTPEndpoint::TrySendingCodec(DWORD wanted)
+{
+	struct timeval tv;
+	gettimeofday(&tv,0);
+	const QWORD nowMs = (QWORD)tv.tv_sec*1000 + tv.tv_usec/1000;
+
+	//Déjà refusé il y a moins d'une seconde : on jette sans redemander.
+	if (wanted == unmappedCodec && nowMs - unmappedTs < 1000)
+	{
+		unmappedCount++;
+		return false;
+	}
+
+	if (RTPSession::SetSendingCodec(wanted))
+	{
+		//Sortie du trou : le dire, sinon la reprise après renégociation est
+		//invisible alors que l'entrée dans le trou est bruyante.
+		if (unmappedCodec != NoCodec)
+			Log("-RTPEndpoint: %s desormais dans la rtpMap de sortie, emission reprise"
+			    " apres %u paquet(s) jete(s)\n",
+			    GetNameForCodec(type,wanted), unmappedCount);
+
+		unmappedCodec = NoCodec;
+		unmappedCount = 0;
+		return true;
+	}
+
+	unmappedCount++;
+
+	Log("-RTPEndpoint: %s hors de la rtpMap de sortie negociee, %u paquet(s) jete(s)."
+	    " Les emettre sous le PT precedent ferait decoder du bruit au pair.\n",
+	    GetNameForCodec(type,wanted), unmappedCount);
+
+	unmappedCodec = wanted;
+	unmappedTs    = nowMs;
+	unmappedCount = 0;
+
+	return false;
+}
+
 int  RTPEndpoint::TryCheckCodec(int codec)
 {
+    //Sonde d'arbitrage du pont : « absent de la rtpMap » est un résultat
+    //NOMINAL (les deux pattes ne portent pas le même codec), pas une erreur.
+    //Vérifier en silence avant de basculer réellement le codec d'émission —
+    //SetSendingCodec journalise son échec en Error, ce qui alarmait la
+    //supervision à chaque arbitrage retombant sur le transcodage.
+    if ( !RTPSession::CanSendCodec(codec) )
+        return -1;
+
     if ( RTPSession::SetSendingCodec(codec) )
     {
         return codec;
@@ -209,14 +273,41 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
         //Check type
         if (packet.GetCodec()!=codec)
         {
+		//Un endpoint ne peut étiqueter que ce que sa rtpMap de sortie NÉGOCIÉE
+		//porte. Le verdict de SetSendingCodec était ignoré ici : en cas d'échec il
+		//laisse le PT PRÉCÉDENT dans l'en-tête, et le paquet partait quand même —
+		//des octets d'un codec sous l'étiquette d'un autre. Le pair ne voit aucune
+		//erreur : il lit le PT, croit savoir ce qu'il décode, et décode du bruit.
+		//
+		//Et le pire n'était pas là : `codec` était mis à jour AVANT l'appel, donc
+		//dès le paquet suivant `packet.GetCodec() == codec` faisait sauter tout le
+		//bloc. L'échec était journalisé UNE fois, puis plus rien — ni retentative
+		//après une renégociation qui ajouterait le PT, ni trace des milliers de
+		//paquets mal étiquetés qui suivaient.
+		if (!TrySendingCodec(packet.GetCodec()))
+			//Rien de juste à émettre : ne pas mentir sur l'étiquette.
+			return;
+
                 //Store it
                 codec = packet.GetCodec();
-		//Set it
-                RTPSession::SetSendingCodec(codec);
 	}
 
 	//Get diference from latest frame
 	QWORD dif = getUpdDifTime(&prev);
+
+	//La source a changé de SSRC : encodeur relancé par une renégociation, ou
+	//pair amont qui a lui-même changé de source. Sa base de timestamps lui est
+	//propre (RFC 3550), le delta inter-bases ne veut rien dire — on repart au
+	//temps mur comme après onResetStream. En aval, SendPacket tire un sendSSRC
+	//neuf sur ce même changement, et le pair resynchronise proprement.
+	if (packet.GetSSRC()!=prevSSRC)
+	{
+		if (prevSSRC)
+			Log("-RTPEndpoint: source SSRC changed [%x->%x], rebasing %s timestamp on wall clock\n",
+			    prevSSRC,packet.GetSSRC(),MediaFrame::TypeToString(packet.GetMedia()));
+		prevSSRC = packet.GetSSRC();
+		reseted = true;
+	}
 
 	//If was reseted
 	if (reseted)
@@ -225,7 +316,7 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
 		timestamp += dif*freq/1000;
 		//Not reseted
 		reseted = false;
-		
+
 	} else {
 		//Get dif from packet timestamp
 		timestamp += packet.GetTimestamp()-prevts;
@@ -259,7 +350,7 @@ void RTPEndpoint::onEndStream()
 	joined.reset();
 }
 
-int RTPEndpoint::Run()
+int RTPEndpoint::MultiplexLoop()
 {
         while(receiving)
         {
@@ -302,10 +393,8 @@ void* RTPEndpoint::run(void *par)
 	RTPEndpoint *end = (RTPEndpoint *)par;
         //Block signal in thread
 	blocksignals();
-	//Catch
-	signal(SIGIO,EmptyCatch);
-	//Run
-	end->Run();
+	//Run : la boucle de démultiplexage, PAS Worker::Run() (cf. RTPEndpoint.h)
+	end->MultiplexLoop();
 	//Exit
 	return NULL;
 }
@@ -409,9 +498,17 @@ void RTPEndpoint::SetREMB(DWORD estimation)
 {
 	//Check if we have an estimator
 	if (remoteRateEstimator)
-		//Update temporal limit
+		//Update temporal limit : le feedback spontané de l'estimateur (s'il est
+		//activé par la propriété "tmmbr") restera cohérent avec la borne.
 		remoteRateEstimator->SetTemporalMaxLimit(estimation);
 
+	//Demande EXPLICITE venue de l'aval (mode pont : TMMBR/REMB du puits relayé,
+	//ou consigne négociée poussée au basculement). L'émettre sur le fil tout de
+	//suite : le feedback spontané ci-dessus est verrouillé par la propriété
+	//"tmmbr" (défaut : désactivé) et SetTemporalMaxLimit seul ne produit AUCUN
+	//paquet — la limite restait lettre morte. La retransmission tant que le
+	//TMMBN du pair n'arrive pas est assurée par SendSenderReport (pendingTMBR).
+	SendTempMaxMediaStreamBitrateRequest(estimation);
 }
 
 int RTPEndpoint::RequestUpdate()

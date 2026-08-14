@@ -1,5 +1,7 @@
 #ifndef _RTMPSERVER_H_
 #define _RTPMSERVER_H_
+#include <mutex>
+#include "worker.h"
 #include "pthread.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
@@ -7,7 +9,7 @@
 #include <list>
 
 
-class RTMPServer : public RTMPConnection::Listener
+class RTMPServer : public RTMPConnection::Listener, public Worker
 {
 public:
 	/** Constructors */
@@ -31,7 +33,6 @@ private:
 	typedef std::map<std::wstring,RTMPApplication *> ApplicationMap;
 	typedef std::list<RTMPConnection*>	Connections;
 
-        static void * run(void *par);
 
 	void CreateConnection(int fd);
 	void CleanZombies();
@@ -45,8 +46,7 @@ private:
 	Connections connections;
 	Connections zombies;
 	ApplicationMap applications;
-	pthread_t serverThread;
-	pthread_mutex_t	sessionMutex;
+	std::mutex	sessionMutex;
 };
 
 #endif

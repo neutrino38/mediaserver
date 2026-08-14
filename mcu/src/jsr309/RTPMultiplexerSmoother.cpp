@@ -16,10 +16,8 @@ RTPMultiplexerSmoother::RTPMultiplexerSmoother() : RTPMultiplexer()
 {
 	//NO session
 	inited = false;
-	
-	//Create objects
-	pthread_mutex_init(&mutex,NULL);
-	pthread_cond_init(&cond,NULL);
+	//Un SSRC dès la construction : SmoothFrame peut précéder Start()
+	ssrc = random();
 }
 
 RTPMultiplexerSmoother::~RTPMultiplexerSmoother()
@@ -31,10 +29,6 @@ RTPMultiplexerSmoother::~RTPMultiplexerSmoother()
 	while(queue.Length()>0)
 		//Delete first
 		delete(queue.Pop());
-	
-	//Clean object
-	pthread_mutex_destroy(&mutex);
-	pthread_cond_destroy(&cond);
 }
 
 
@@ -49,9 +43,12 @@ int RTPMultiplexerSmoother::Start()
 	
 	//We are inited
 	inited = true;
+	//Nouveau run d'encodage = nouvelle base de temps : SSRC neuf (cf. .h)
+	ssrc = random();
+	//Réarmer la file après un éventuel Stop (Cancel collant)
 	queue.Reset();
-	//Run
-	createPriorityThread(&thread,run,this,1);
+	//Run (réarme le Wait du Worker)
+	StartThread();
 
 	return 1;
 }
@@ -118,6 +115,8 @@ int RTPMultiplexerSmoother::SmoothFrame(MediaFrame* frame,DWORD duration)
 
 		//Create rtp packet
 		RTPPacketSched *packet = new RTPPacketSched(frame->GetType(),codec);
+		//L'identité de source du run d'encodage courant (cf. .h)
+		packet->SetSSRC(ssrc);
 
 		//Make sure it is enought length
 		if (rtp->GetPrefixLen()+rtp->GetSize()>packet->GetMaxMediaLength())
@@ -172,7 +171,7 @@ int RTPMultiplexerSmoother::Cancel()
 	queue.Cancel();
 
 	//Cancel waiting
-	pthread_cond_signal(&cond);
+	wait.Cancel();
 
 	//exit
 	return 1;
@@ -193,28 +192,16 @@ int RTPMultiplexerSmoother::Stop()
 	Cancel();
 
 	//Wait
-	pthread_join(thread,NULL);
+	StopThread();
 
 	Log("<RTPMultiplexerSmoother stopped\n");
 
 	return 1;
 }
 
-void* RTPMultiplexerSmoother::run(void *par)
-{
-        Log("RTPMultiplexerSmootherThread [%d]\n",getpid());
-        //Get endpoint
-	RTPMultiplexerSmoother *smooth = (RTPMultiplexerSmoother *)par;
-	//Run 
-        smooth->Run();
-	//Exit
-	return NULL;
-}
-
 int RTPMultiplexerSmoother::Run()
 {
 	timeval prev;
-	timespec wait;
 	DWORD	sendingTime = 0;
 	
 	int count =0;
@@ -248,17 +235,12 @@ int RTPMultiplexerSmoother::Run()
 		//Update sending time
 		sendingTime = sched->GetSendingTime();
 
-		//Lock
-		pthread_mutex_lock(&mutex);
-
-		//Calculate timeout
-		calcAbsTimeout(&wait,&prev,sendingTime);
-
-		//Wait next or stopped
-		pthread_cond_timedwait(&cond,&mutex,&wait);
-
-		//Unlock
-		pthread_mutex_unlock(&mutex);
+		//Dormir jusqu'à l'échéance prev+sendingTime (annulable)
+		{
+			QWORD elapsed = getDifTime(&prev)/1000;
+			if (sendingTime > elapsed)
+				wait.WaitSignal(sendingTime - elapsed);
+		}
 
 		//If it was last
 		if (sched->GetMark())
