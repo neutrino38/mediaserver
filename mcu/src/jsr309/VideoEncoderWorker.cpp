@@ -20,6 +20,8 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	encoding = false;
 	sendFPU = false;
 	codec = (VideoCodec::Type)-1;
+	//Consigne inconnue tant que SetCodec n'a pas été appelé (GetBitrate = 0)
+	bitrate = 0;
         useInputSize = false;
 	negotiatedDirty = false;
 }

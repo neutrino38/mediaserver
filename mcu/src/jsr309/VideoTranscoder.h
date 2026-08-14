@@ -54,6 +54,11 @@ private:
 	//comme listener, donc c'est lui qui doit se retirer.
 	void UnlistenSource();
 
+	//Demande une intra à la SOURCE (FIR/PLI RTCP via l'endpoint amont), bornée à
+	//une par seconde : RequestFPU n'a aucun anti-rebond, et relayer 1:1 les PLI
+	//du puits transformerait une rafale aval en tempête de FIR vers la source.
+	void RequestSourceFPU();
+
 	VideoEncoderMultiplexerWorker	encoder;
 	VideoDecoderJoinableWorker	decoder;
 	VideoPipe	pipe;
@@ -66,6 +71,9 @@ private:
 	//VideoDecoderJoinableWorker::joined). Vide en mode transcodage seul : c'est
 	//alors le décodeur qui est inscrit auprès de la source, et lui qui se retire.
 	std::weak_ptr<Joinable>	joined;
+	//Dernière demande d'intra relayée à la source (anti-tempête, cf.
+	//RequestSourceFPU) — même borne que lastFPURequest du décodeur.
+	timeval		lastSourceFPU;
 };
 
 #endif	/* VIDEOTRANSCODER_H */

@@ -7,6 +7,7 @@
 
 #include "VideoTranscoder.h"
 #include "videopipe.h"
+#include "tools.h"
 
 VideoTranscoder::VideoTranscoder(std::wstring &name)
 {
@@ -20,6 +21,8 @@ VideoTranscoder::VideoTranscoder(std::wstring &name)
 	state = 0;
 	recCodec = -1;
 	allowBridging = false;
+	//Aucune demande d'intra relayée pour l'instant
+	setZeroTime(&lastSourceFPU);
 }
 
 VideoTranscoder::~VideoTranscoder()
@@ -91,11 +94,40 @@ void VideoTranscoder::AddListener(Joinable::Listener *listener)
 
 void VideoTranscoder::Update()
 {
+	//Armer l'encodeur dans tous les cas : en transcodage c'est lui qui absorbe
+	//la demande (N FIR aval → une seule intra, à la prochaine image), et si le
+	//pont retombe en transcodage l'intra en attente servira à la reprise.
 	encoder.Update();
+
+	//Hors transcodage établi, l'encodeur n'est pas (ou pas encore) dans le
+	//chemin : en pont (state 2) seule la SOURCE peut produire l'intra que le
+	//puits réclame, et en probing (state 0) le StartSending du puits arrive
+	//avant le premier paquet — demander l'intra à la source sert aux deux modes
+	//futurs. En transcodage (state 1) on ne relaie PAS : l'absorption est la
+	//valeur ajoutée du transcodeur. En mode transcodage seul (!allowBridging),
+	//joined est vide et le relais est un no-op.
+	if (state != 1)
+		RequestSourceFPU();
 }
 
 void VideoTranscoder::SetREMB(DWORD estimation)
 {
+	//En mode pont, l'encodeur n'est pas dans le chemin : seule la source peut
+	//baisser le débit du flux relayé. La demande du puits (TMMBR/REMB, en bps)
+	//remonte donc à l'amont, bornée par la consigne négociée de la patte
+	//émettrice — le puits ne peut pas « autoriser » plus que sa négociation.
+	if (state == 2)
+	{
+		DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
+		if (cap && estimation > cap)
+			estimation = cap;
+
+		if (std::shared_ptr<Joinable> j = joined.lock())
+			j->SetREMB(estimation);
+		return;
+	}
+
+	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe la limite.
 	encoder.SetREMB(estimation);
 }
 
@@ -128,6 +160,13 @@ void VideoTranscoder::onRTPPacket(RTPPacket &packet)
 			state = 2;
 			Log("-VideoTranscoder: switched to bridged mode for codec %s.\n",
 			    VideoCodec::GetNameFor((VideoCodec::Type) packet.GetCodec()));
+
+			//Le puits recevait le flux de l'encodeur (ou rien du tout) : il
+			//voit maintenant la continuation d'un flux qu'il n'a jamais vu,
+			//illisible avant la prochaine intra périodique de la source — la
+			//demander tout de suite. L'anti-tempête déduplique si le
+			//StartSending du puits vient de le faire (probing).
+			RequestSourceFPU();
 		}
 		else
 		{
@@ -192,6 +231,22 @@ void VideoTranscoder::UnlistenSource()
 	joined.reset();
 }
 
+void VideoTranscoder::RequestSourceFPU()
+{
+	//Borne : une demande par seconde, même cadence que lastFPURequest du
+	//décodeur. Le compteur n'avance que si la demande part réellement.
+	if (getDifTime(&lastSourceFPU)<1000000)
+		return;
+
+	//lock() : la source est-elle encore vivante ?
+	if (std::shared_ptr<Joinable> j = joined.lock())
+	{
+		Log("-VideoTranscoder: requesting FPU from source [%ls]\n",tag.c_str());
+		getUpdDifTime(&lastSourceFPU);
+		j->Update();
+	}
+}
+
 //Returning 0 here made every VideoTranscoderAttachToEndpoint/Dettach XML-RPC
 //call answer an error while the attach had in fact happened — a controller that
 //checks the status tears the call down over a success.
@@ -227,11 +282,21 @@ int VideoTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 	//n'a aucune raison d'être celui de la précédente.
 	state = 0;
 	recCodec = -1;
+	//Nouvelle source = nouveau flux : ne pas bloquer sa première demande
+	//d'intra sur le compteur de la précédente.
+	setZeroTime(&lastSourceFPU);
 
 	//Le décodeur n'est plus alimenté par la source mais à la main, depuis
 	//onRTPPacket, quand l'arbitrage retombe sur le transcodage. Il faut donc
 	//démarrer son worker sans l'attacher (exactement ce que fait l'audio).
 	decoder.Start();
+
+	//... mais il doit connaître la source : c'est à ELLE que ses demandes de
+	//FPU s'adressent (perte de paquets, erreur de décodage). Sans ce lien,
+	//joined restait vide côté décodeur et les demandes échouaient en silence —
+	//plus aucune FIR vers l'amont en mode transcodage, gel jusqu'à l'intra
+	//périodique de la source.
+	decoder.SetSource(join);
 
 	if (join)
 		join->AddListener(this);

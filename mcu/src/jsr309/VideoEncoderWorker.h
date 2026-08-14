@@ -48,6 +48,10 @@ public:
 	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);
 
 	inline VideoCodec::Type GetCodec() { return codec; }
+	//Consigne configurée (SetCodec), en kbps ; 0 tant que SetCodec n'a pas été
+	//appelé. Sert de borne au relais TMMBR/REMB du mode pont : le puits ne peut
+	//pas « autoriser » plus que ce que sa négociation porte.
+	inline int GetBitrate() { return bitrate; }
 private:
 	int Start();
 	int Stop();
