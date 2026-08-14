@@ -556,10 +556,13 @@ int VideoStream::SendVideo()
 				target += (DWORD)(target*0.08/videoFPS)+1;
 		}
 
-		//Check target bitrate agains max conf bitrate
-		if (target>videoBitrate*1.2)
-			//Set limit to max bitrate allowing a 20% overflow so instant bitrate can get closer to target
-			target = videoBitrate*1.2;
+		//Plafond : la consigne négociée (b=AS de la patte émettrice), sans
+		//marge. L'ancien ×1.2 autorisait 20 % au-dessus de ce que le SDP
+		//annonce — un pair ou un SBC qui police sa bande passante jette
+		//l'excédent. L'encodeur sous-atteint sa cible, donc le débit réel
+		//reste sous la consigne : c'est le bon côté de la barrière.
+		if (target>videoBitrate)
+			target = videoBitrate;
 
 		//Limite TMMBR/REMB en vigueur : STRICTE (pas de marge ×1.2 — c'est le
 		//plafond déclaré du pair, pas notre consigne) et PERSISTANTE (levée par
