@@ -12,6 +12,9 @@ C++ refactor, safeguard for dangling confs and media sessions, proper AV1 Video 
 
 - Conference and JSR309 session autodestrya conference or a JSR-309 session with no live event queue is destroyed after a configurable timeout, set by `--event-queue-expires` at startup (60 s by default, 0 disables it)
 - documented in MCU-API.md
+## Speex codec tested
+
+Corrected sample rate size for SPEEK at 16 kHz
 
 ## AV1 calls and media relay
 
