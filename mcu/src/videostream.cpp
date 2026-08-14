@@ -47,7 +47,6 @@ VideoStream::VideoStream(Listener* listener, PictPtr & muteLogo, MediaFrame::Med
 	videoBitrate=0;
 	videoIntraPeriod=0;
 	videoBitrateLimit=0;
-	videoBitrateLimitCount=0;
 	sendFPU = false;
 	this->listener = listener;
 	mediaListener = NULL;
@@ -120,10 +119,12 @@ int VideoStream::SetTemporalBitrateLimit(int estimation)
 
 
 
-	//Set bitrate limit
+	//RFC 5104 : la limite (TMMBR/REMB, en bps) reste en vigueur jusqu'à ce
+	//qu'une nouvelle valeur la remplace — zéro la lève. L'ancienne
+	//« quarantaine » d'une seconde laissait le débit remonter à la consigne
+	//pleine dès que le pair cessait de répéter son TMMBR ; or il cesse
+	//précisément quand on lui répond TMMBN, ce que la session fait désormais.
 	videoBitrateLimit = estimation/1000;
-	//Set limit of bitrate to 1 second;
-	videoBitrateLimitCount = videoFPS;
 	//Exit
 	return 1;
 }
@@ -547,14 +548,10 @@ int VideoStream::SendVideo()
 		//Check temporal limits for estimations
 		if (bitrateAcu.IsInWindow())
 		{
-			//Get real sent bitrate during last second and convert to kbits 
+			//Get real sent bitrate during last second and convert to kbits
 			DWORD instant = bitrateAcu.GetInstantAvg()/1000;
-			//If we are in quarentine
-			if (videoBitrateLimitCount)
-				//Limit sending bitrate
-				target = videoBitrateLimit;
 			//Check if sending below limits
-			else if (instant<videoBitrate)
+			if (instant<videoBitrate)
 				//Increase a 8% each second or fps kbps
 				target += (DWORD)(target*0.08/videoFPS)+1;
 		}
@@ -564,10 +561,11 @@ int VideoStream::SendVideo()
 			//Set limit to max bitrate allowing a 20% overflow so instant bitrate can get closer to target
 			target = videoBitrate*1.2;
 
-		//Check limits counter
-		if (videoBitrateLimitCount>0)
-			//One frame less of limit
-			videoBitrateLimitCount--;
+		//Limite TMMBR/REMB en vigueur : STRICTE (pas de marge ×1.2 — c'est le
+		//plafond déclaré du pair, pas notre consigne) et PERSISTANTE (levée par
+		//une nouvelle valeur, jamais par le temps — cf. SetTemporalBitrateLimit).
+		if (videoBitrateLimit>0 && target>videoBitrateLimit)
+			target = videoBitrateLimit;
 
 		//Check if we have a new bitrate
 		if (target && target!=current)

@@ -79,8 +79,10 @@ private:
 	int configuredFps;
 	int bitrate;
 	int intraPeriod;
+	//Limite TMMBR/REMB en vigueur (kbps, 0 = aucune) : plafond STRICT du
+	//débit cible, persistant jusqu'à remplacement par une nouvelle valeur
+	//(RFC 5104) — écrit par le plan de contrôle, lu par la boucle d'encodage.
 	int videoBitrateLimit;
-	int videoBitrateLimitCount;
 	Properties params;
 	//Bornes négociées par code codec (phase 5) : ce que le pair de la patte
 	//émettrice a déclaré savoir décoder. Fusionnées par-dessus `params` à

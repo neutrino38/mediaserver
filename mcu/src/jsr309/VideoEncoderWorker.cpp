@@ -22,6 +22,8 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	codec = (VideoCodec::Type)-1;
 	//Consigne inconnue tant que SetCodec n'a pas été appelé (GetBitrate = 0)
 	bitrate = 0;
+	//Aucune limite TMMBR/REMB en vigueur
+	videoBitrateLimit = 0;
         useInputSize = false;
 	negotiatedDirty = false;
 }
@@ -51,9 +53,8 @@ int VideoEncoderMultiplexerWorker::SetCodec(VideoCodec::Type codec,int mode,int 
 	this->fps	  = fps;
 	this->configuredFps = fps;
 	this->intraPeriod = intraPeriod;
-	//Init limits
-	this->videoBitrateLimit		= bitrate;
-	this->videoBitrateLimitCount	= fps;
+	//La limite TMMBR/REMB en vigueur (videoBitrateLimit) survit à la
+	//renégociation : elle appartient au pair, pas au codec (RFC 5104).
 	params = properties;
 
 	Stop();
@@ -270,10 +271,12 @@ void VideoEncoderMultiplexerWorker::Update()
 
 void VideoEncoderMultiplexerWorker::SetREMB(int estimation)
 {
-	//Set bitrate limit
+	//RFC 5104 : la limite (TMMBR/REMB, en bps) reste en vigueur jusqu'à ce
+	//qu'une nouvelle valeur la remplace — zéro la lève. L'ancienne
+	//« quarantaine » d'une seconde laissait le débit remonter à la consigne
+	//pleine dès que le pair cessait de répéter son TMMBR ; or il cesse
+	//précisément quand on lui répond TMMBN, ce que la session fait désormais.
 	videoBitrateLimit = estimation/1000;
-	//Set limit of bitrate to 1 second;
-	videoBitrateLimitCount = fps;
 }
 
 int VideoEncoderMultiplexerWorker::Encode()
@@ -472,12 +475,8 @@ int VideoEncoderMultiplexerWorker::Encode()
 		{
 			//Get real sent bitrate during last second and convert to kbits
 			DWORD instant = bitrateAcu.GetInstantAvg()/1000;
-			//If we are in quarentine
-			if (videoBitrateLimitCount)
-				//Limit sending bitrate
-				target = videoBitrateLimit;
 			//Check if sending below limits
-			else if (instant<bitrate)
+			if (instant<bitrate)
 				//Increase a 8% each second or fps kbps
 				target += (DWORD)(target*0.08/fps)+1;
 		}
@@ -487,10 +486,11 @@ int VideoEncoderMultiplexerWorker::Encode()
 			//Set limit to max bitrate allowing a 20% overflow so instant bitrate can get closer to target
 			target = bitrate*1.2;
 
-		//Check limits counter
-		if (videoBitrateLimitCount>0)
-			//One frame less of limit
-			videoBitrateLimitCount--;
+		//Limite TMMBR/REMB en vigueur : STRICTE (pas de marge ×1.2 — c'est le
+		//plafond déclaré du pair, pas notre consigne) et PERSISTANTE (levée par
+		//une nouvelle valeur, jamais par le temps — cf. SetREMB).
+		if (videoBitrateLimit>0 && target>videoBitrateLimit)
+			target = videoBitrateLimit;
 
 		//Check if we have a new bitrate
 		if (target && target!=current)

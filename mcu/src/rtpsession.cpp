@@ -2910,9 +2910,18 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							//Get field
 							RTCPRTPFeedback::TempMaxMediaStreamBitrateField *field = (RTCPRTPFeedback::TempMaxMediaStreamBitrateField*) fb->GetField(i);
 							//Check if it is for us
-							if (auto l = LockListener(); l && field->GetSSRC()==sendSSRC)
+							if (field->GetSSRC()==sendSSRC)
+							{
 								//call listener
-								l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+								if (auto l = LockListener())
+									l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+								//RFC 5104 §4.2.1.2 : l'émetteur de média répond TMMBN, sinon
+								//le pair retransmet son TMMBR à chaque intervalle RTCP —
+								//exactement ce que NOUS faisons en face tant que le TMMBN
+								//n'arrive pas (pendingTMBR, SendSenderReport). Répondu même
+								//sans listener : la restriction est acquise au niveau session.
+								SendTempMaxMediaStreamBitrateNotification(field->GetBitrate(),field->GetOverhead());
+							}
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
