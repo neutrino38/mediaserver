@@ -134,6 +134,16 @@ public:
 		session.SetReceivingRTPMap(map);
 	}
 
+	// Deux entrées, pour distinguer un numéro que la renégociation a changé d'un
+	// numéro qu'elle a laissé tel quel.
+	void Renegotiate(BYTE type1, BYTE codec1, BYTE type2, BYTE codec2)
+	{
+		RTPMap map;
+		map[type1] = codec1;
+		map[type2] = codec2;
+		session.SetReceivingRTPMap(map);
+	}
+
 	int Port() { return session.GetLocalPort(); }
 
 	// Émet `payloadType`/`ssrc` et laisse le thread de réception le traiter. Rend
@@ -200,6 +210,71 @@ TEST(RtpRenegotiation, DropsAPayloadTypeWhoseCodecTheRenegotiationRemoved)
 
 	EXPECT_EQ(1, s.SendAndCount(peer, kNewType, kProbe2Ssrc, 3))
 		<< "le codec que la renégociation a retenu, lui, passe";
+}
+
+TEST(RtpRenegotiation, RetiresThePreviousMapAsSoonAsThePeerSwitches)
+{
+	Peer peer;
+	ASSERT_TRUE(peer.Open());
+
+	VideoSession s;
+	ASSERT_TRUE(s.ok);
+
+	s.SendAndCount(peer, kOldType, kPrimingSsrc, 1);
+	s.Renegotiate(kNewType, VideoCodec::VP8);
+
+	// Le pair a reçu la réponse : il émet sous le NOUVEAU numéro, que seule la
+	// nouvelle map porte. Le repli n'a plus d'objet.
+	ASSERT_EQ(1, s.SendAndCount(peer, kNewType, kProbeSsrc, 2));
+
+	// Un retardataire sous l'ancien numéro n'est donc plus rattrapé — le repli est
+	// fermé par la BASCULE, pas seulement par l'expiration de sa borne : sans cela
+	// il resterait ouvert cinq secondes après que l'offre/réponse a convergé.
+	EXPECT_EQ(0, s.SendAndCount(peer, kOldType, kProbe2Ssrc, 3))
+		<< "le repli doit se refermer dès que le pair a basculé";
+}
+
+TEST(RtpRenegotiation, APayloadTypeCommonToBothMapsIsNoProofOfSwitching)
+{
+	Peer peer;
+	ASSERT_TRUE(peer.Open());
+
+	// Audio : la renégociation déplace OPUS de 96 à 98 et laisse PCMU sur 0, comme
+	// le fait un re-INVITE de Linphone. C'est le cas qui piège une fermeture naïve.
+	CountingListener listener;
+	RTPSession session(MediaFrame::Audio, &listener);
+	ASSERT_EQ(1, session.Init());
+
+	RTPMap before;
+	before[kOldType] = AudioCodec::OPUS;
+	before[0]        = AudioCodec::PCMU;
+	session.SetReceivingRTPMap(before);
+
+	const int port = session.GetLocalPort();
+	auto send = [&](BYTE pt, DWORD ssrc, WORD seq) {
+		const int had = listener.newStreams;
+		EXPECT_TRUE(peer.Send(port, pt, ssrc, seq));
+		for (int waited = 0; waited < 500 && listener.newStreams == had; waited += 10)
+			usleep(10 * 1000);
+		return listener.newStreams - had;
+	};
+
+	send(kOldType, kPrimingSsrc, 1);
+
+	RTPMap after;
+	after[98] = AudioCodec::OPUS;   // renuméroté
+	after[0]  = AudioCodec::PCMU;   // inchangé
+	session.SetReceivingRTPMap(after);
+
+	// PCMU sur 0 : le pair l'émettait déjà AVANT la renégociation, donc ce paquet
+	// ne dit rien de ce qu'il a reçu. Fermer le repli là-dessus rouvrirait le trou.
+	EXPECT_EQ(1, send(0, kProbeSsrc, 2));
+
+	EXPECT_EQ(1, send(kOldType, kProbe2Ssrc, 3))
+		<< "OPUS sous son ancien numéro doit encore être rattrapé : rien ne prouve "
+		   "que le pair a vu notre réponse";
+
+	session.End();
 }
 
 // Non testé ici : l'EXPIRATION du repli (RTP_MAP_FALLBACK_MS, 5 s). Elle demanderait

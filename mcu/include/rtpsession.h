@@ -245,6 +245,8 @@ private:
 	//Rattrapage de renégociation : le codec que la map de réception PRÉCÉDENTE
 	//donnait à ce payload type, ou RTPMap::NotFound (cf. rtpMapInPrev).
 	BYTE CodecFromPreviousMap(BYTE type);
+	//Ferme le repli quand ce payload type prouve que le pair a lu notre réponse.
+	void RetirePreviousMap(BYTE type);
 	//Le payload type sous lequel la map COURANTE porte ce codec, ou
 	//RTPMap::NotFound. Sert à la garde du rattrapage et à sa trace.
 	BYTE CurrentTypeForCodec(BYTE codec) const;

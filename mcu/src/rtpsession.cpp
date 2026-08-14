@@ -812,6 +812,39 @@ void RTPSession::SetReceivingRTPMap(RTPMap &map)
 	setZeroTime(&salvagedLast);
 }
 
+//Le pair a-t-il basculé sur la nouvelle numérotation ? Si oui, le repli n'a plus
+//de raison d'être et il est fermé SUR-LE-CHAMP : le laisser vivre les cinq
+//secondes de sa borne, c'est accepter de l'ancien encore longtemps après que
+//l'offre/réponse a convergé — et pendant tout ce temps, un pair qui se remettrait
+//à émettre l'ancien numéro pour une autre raison (recyclage du numéro par un
+//équipement intermédiaire) serait servi au lieu d'être refusé.
+//
+//La preuve n'est pas « un paquet valide » : c'est un payload type que SEULE la
+//nouvelle map porte. Un numéro commun aux deux — PCMU 0, telephone-event 101,
+//tout ce que la renégociation n'a pas touché — ne prouve rien du tout, puisque le
+//pair l'émettait déjà avant. Le fermer là-dessus rouvrirait le trou exact que ce
+//rattrapage vient boucher.
+//
+//Le désarmement seul est fait ici, pas la libération : nous sommes dans le thread
+//de réception, et `rtpMapInPrev` appartient au thread de contrôle, qui le détruit
+//à la renégociation suivante — réception arrêtée (Endpoint::StartReceiving).
+void RTPSession::RetirePreviousMap(BYTE type)
+{
+	//Rien d'armé, ou numéro déjà connu de l'ancienne map : aucune preuve.
+	if (!rtpMapInPrev || isZeroTime(&rtpMapInPrevSince) ||
+	    rtpMapInPrev->GetCodecForType(type)!=RTPMap::NotFound)
+		return;
+
+	if (salvagedCount)
+		Log("-RTP [%ls,%s,local:%d] peer switched to the new numbering (payload type "
+		    "%d) after %u salvaged packet(s): the previous receiving map is retired\n",
+		    LabelForLog(), MediaFrame::TypeToString(media), simPort, type, salvagedCount);
+
+	setZeroTime(&rtpMapInPrevSince);
+	salvagedCount = 0;
+	setZeroTime(&salvagedLast);
+}
+
 //Le payload type sous lequel la map COURANTE porte ce codec, s'il y est encore.
 BYTE RTPSession::CurrentTypeForCodec(BYTE codec) const
 {
@@ -2393,8 +2426,12 @@ int RTPSession::ReadRTP()
 	BYTE codec = rtpMapIn->GetCodecForType(type);
 
 	//Renumérotation en cours de renégociation : la map précédente répond encore
-	//pour le temps que le pair mette à recevoir notre réponse (§ CodecFromPreviousMap)
-	if (codec==RTPMap::NotFound)
+	//pour le temps que le pair mette à recevoir notre réponse (§ CodecFromPreviousMap),
+	//et pas une seconde de plus qu'il n'en faut — le premier numéro que seule la
+	//nouvelle map porte prouve qu'il a basculé et referme le repli.
+	if (codec!=RTPMap::NotFound)
+		RetirePreviousMap(type);
+	else
 		codec = CodecFromPreviousMap(type);
 
 	//Check codec
