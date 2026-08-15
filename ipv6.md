@@ -96,6 +96,24 @@ porter.
 - `socket(PF_INET, SOCK_DGRAM, 0)` pour RTP (l. 1303) et RTCP (l. 1323) ;
 - `bind(..., sizeof(struct sockaddr_in))` (l. 1315 et 1329).
 
+> **Fait le 2026-08-15** (étape 5) : `RTPSession` porte son adressage en
+> `IPAddress`/`IPEndpoint`, ses sockets sont créées dans `socketFamily`
+> (AF_INET6 + `IPV6_V6ONLY=0` par défaut, la famille de l'adresse de bind si un
+> profil en impose une), et `SetBindAddress()` — à poser avant `Init` — choisit
+> l'interface. `inet_addr`/`inet_ntoa` ont disparu du fichier ; `SetRemotePort`
+> et `AddICECandidate` acceptent les deux familles, zone comprise. La classe de
+> trafic passe par `IPV6_TCLASS` en v6, `IP_TOS` en v4 : poser le mauvais niveau
+> ne remonte aucune erreur mais laisse le média non marqué.
+>
+> **Une régression attrapée par les tests, et qui dit tout du chantier** :
+> l'adresse non spécifiée. `SetRemotePort("0.0.0.0")` signifie « latche-moi »,
+> et l'ancien code le codait en posant `INADDR_ANY` dans `sendAddr` — la même
+> valeur servant de sentinelle « pas de destination ». Avec un `IPEndpoint`, une
+> destination `0.0.0.0` est une destination *renseignée* : `HasRemote()` rendait
+> vrai et le média partait vers `0.0.0.0`. Il faut donc laisser l'endpoint
+> **vide**. C'est exactement la confusion que l'étape 3 avait nommée, et il
+> aurait été facile de la réintroduire ici sans le test de latching.
+
 **Cible recommandée** : socket unique en `AF_INET6` avec `IPV6_V6ONLY = 0`. Les
 pairs v4 arrivent alors en `::ffff:a.b.c.d` sur la même socket, ce qui évite de
 doubler la plage de ports RTP (`--min-rtp-port` / `--max-rtp-port`) et de dupliquer
@@ -523,11 +541,11 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrigeait un bug présent, hors IPv6** | **fait** (§11) |
 | 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivateV4()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | **fait** |
 | 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip`/`--default-profile` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | **fait** |
-| 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | à faire |
+| 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | **fait** |
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | à faire |
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | à faire |
 | 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | à faire |
-| 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | à faire |
+| 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | **XOR-MAPPED fait** ; reste l'adresse annoncée derrière NAT |
 | 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient`, `jsr309impl` (§5.5) | moyen | 6 | la couche JSR-309 suit | à faire |
 
 Les étapes 1, 3 et 8 restent **indépendantes du contrat de contrôle** : elles
@@ -659,7 +677,21 @@ Le tag est porté par une double convention de nommage — GoogleTest refuse `:`
 un nom, c'est le séparateur de `--gtest_filter` : suites préfixées `IPv6`
 (sélection), tests préfixés `DISABLED_` (exclusion par défaut).
 
-État au 2026-08-12 : **27 FAILED, 12 PASSED, 2 SKIPPED**. Les échecs par section :
+> **État au 2026-08-15, après les étapes 0 à 5 : 37 PASSED, 2 SKIPPED,
+> 2 FAILED.** Les tests devenus verts ont **perdu leur préfixe `DISABLED_`**,
+> comme prévu : ils sont désormais joués par `make check` et servent de
+> garde-fous anti-régression. Ne restent désactivés que les deux tests d'écoute
+> TCP (`IPv6Servers`), qui décrivent l'étape 8.
+>
+> Un test a vu sa **prémisse corrigée** : `IPv6Dns.PublicIpAccepteUnNomDHote`
+> exigeait que `SetAnnouncedIp("localhost")` réussisse, ce qui ne pouvait pas
+> coexister avec `IPv6Canonical.RefuseDAnnoncerLaLoopback` deux suites plus
+> haut — annoncer 127.0.0.1 publie un SDP injoignable, que le contrôleur ait
+> écrit l'adresse ou son nom. Le test demande maintenant ce qui était réellement
+> visé : que le **nom de l'hôte** soit accepté, et que « localhost » reste
+> refusé.
+
+État au 2026-08-12 (avant travaux) : **27 FAILED, 12 PASSED, 2 SKIPPED**. Les échecs par section :
 
 | Suite | Ce qu'elle attaque | Échecs |
 |---|---|---|

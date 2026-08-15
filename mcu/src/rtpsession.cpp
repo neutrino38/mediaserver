@@ -135,9 +135,15 @@ std::string RTPSession::announcedIp;
 bool RTPSession::announcedIpResolved = false;
 std::mutex RTPSession::announcedIpMutex;
 
-//Auto-détection de l'adresse à annoncer, à défaut de --public-ip : premier IPv4
-//non loopback de l'hôte. Déplacée ici depuis Endpoint::GetMediaCandidates, qui la
-//refaisait — gethostbyname compris, et sans verrou — à chaque appel.
+//Auto-détection de l'adresse à annoncer, à défaut de --public-ip : première
+//adresse ANNONÇABLE de l'hôte. Déplacée ici depuis Endpoint::GetMediaCandidates,
+//qui la refaisait — résolution comprise, et sans verrou — à chaque appel.
+//
+//`gethostbyname` a disparu au profit d'`IPAddress::Resolve` : il ne rendait que
+//des enregistrements A et rejetait explicitement h_addrtype != AF_INET, donc un
+//hôte dont le nom ne porte qu'un AAAA était invisible — et le serveur refusait
+//alors de démarrer. La préférence reste à l'IPv4 (comportement historique : un
+//hôte double pile annonce la même adresse qu'avant), l'IPv6 servant de repli.
 static std::string DetectAnnouncedIp()
 {
 	char hostname[HOST_NAME_MAX];
@@ -151,39 +157,22 @@ static std::string DetectAnnouncedIp()
 		return std::string();
 	}
 
-	//Résolution
-	struct hostent *localHost = gethostbyname(hostname);
+	int err = 0;
+	//Résolution ordonnée : v4 annonçables d'abord, puis v6. L'ordre est le
+	//NÔTRE et pas celui du résolveur — cette adresse finit dans une ligne c=.
+	const std::list<IPAddress> addrs = IPAddress::Resolve(hostname,err,AF_INET);
 
-	//Comprobamos
-	if (!localHost || localHost->h_addrtype != AF_INET)
+	if (addrs.empty())
 	{
 		//Erreur
-		Error("-RTPSession cannot resolve \"%s\" to detect the announced IP\n",hostname);
+		Error("-RTPSession cannot resolve \"%s\" to an announceable address (err %d)\n",hostname,err);
 		//Rien
 		return std::string();
 	}
 
-	//Première adresse qui n'est pas la loopback
-	for (int i=0; localHost->h_addr_list[i]!=0; i++)
-	{
-		struct in_addr addr;
-		//Copie : une entrée de h_addr_list fait h_length octets (4 en AF_INET),
-		//pas sizeof(u_long) — le déréférencement en u_long lisait 8 octets sur LP64,
-		//donc 4 octets hors du buffer de la résolveuse.
-		memcpy(&addr.s_addr,localHost->h_addr_list[i],sizeof(addr.s_addr));
-		//En texte
-		const char* host = inet_ntoa(addr);
-
-		//Celle-là fera l'affaire
-		if (host && strcmp(host,"127.0.0.1")!=0)
-			return std::string(host);
-	}
-
-	//Erreur
-	Error("-RTPSession no non-loopback IPv4 address found for \"%s\"\n",hostname);
-
-	//Rien
-	return std::string();
+	//Forme canonique (RFC 5952 en v6) : deux écritures de la même adresse
+	//doivent produire la même chaîne, c'est elle que verra le pair.
+	return addrs.front().ToString();
 }
 
 bool RTPSession::SetAnnouncedIp(const char* ip)
@@ -192,18 +181,30 @@ bool RTPSession::SetAnnouncedIp(const char* ip)
 	if (!ip || !*ip)
 		return false;
 
-	struct in_addr addr;
+	//Littéral (v4 ou v6) OU nom d'hôte : sur une machine double pile, donner un
+	//nom est la seule façon de laisser le résolveur trancher. Un nom qui ne rend
+	//rien d'annonçable est un refus, au même titre qu'un littéral loopback.
+	int err = 0;
+	const std::list<IPAddress> addrs = IPAddress::Resolve(ip,err,AF_INET);
 
-	//Une adresse annoncée fausse produit un SDP que le pair ne peut pas joindre :
-	//on refuse ce qui n'est pas une IPv4 littérale plutôt que de l'annoncer.
-	if (inet_pton(AF_INET,ip,&addr)!=1)
-		return Error("-RTPSession announced IP \"%s\" is not a valid IPv4 address\n",ip);
+	if (addrs.empty())
+		return Error("-RTPSession announced IP \"%s\" is not a usable address\n",ip);
+
+	const IPAddress addr = addrs.front();
+
+	//Une adresse annoncée fausse produit un SDP que le pair ne peut pas joindre.
+	//Loopback, multicast, non spécifiée, link-local : refus plutôt qu'annonce.
+	if (!addr.IsAnnounceable())
+		return Error("-RTPSession announced IP \"%s\" cannot be announced (loopback, multicast, link-local or unspecified)\n",ip);
 
 	//Verrou
 	std::lock_guard<std::mutex> lock(announcedIpMutex);
 
-	//Set : une adresse explicite dispense de toute auto-détection
-	announcedIp = ip;
+	//Set : une adresse explicite dispense de toute auto-détection. On stocke la
+	//forme CANONIQUE — minuscules et compression RFC 5952 en v6, forme v4 pour
+	//une ::ffff:a.b.c.d — pas la chaîne d'entrée : le pair doit voir une
+	//écriture stable, et le contrôleur pouvoir la comparer.
+	announcedIp = addr.ToString();
 	announcedIpResolved = true;
 
 	//Log
@@ -256,7 +257,7 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	recSR = 0;
 	sendCycles = 0;
 	
-	recIP = INADDR_ANY;
+	recIP = IPAddress();
 	recPort = 0;
 	//P7 : rattrapage NAT désactivé par défaut — le plan de contrôle l'active par la
 	//propriété "natLatch" (ou en passant 0.0.0.0 à SetRemotePort), lui seul sachant
@@ -337,8 +338,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Fill with 0
 	memset(sendPacket,0,MTU+SRTP_MAX_TRAILER_LEN);
 	//Preparamos las direcciones de envio
-	memset(&sendAddr,       0,sizeof(struct sockaddr_in));
-	memset(&sendRtcpAddr,   0,sizeof(struct sockaddr_in));
+	sendAddr     = IPEndpoint();
+	sendRtcpAddr = IPEndpoint();
 	//No thread
 	running = false;
 	//No stimator
@@ -346,8 +347,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	sendBitrateFeedback = false; // test
 
 	//Set family
-	sendAddr.sin_family     = AF_INET;
-	sendRtcpAddr.sin_family = AF_INET;
+	//Sockets media : dual-stack par defaut (AF_INET6 + IPV6_V6ONLY=0), sauf
+	//adresse de bind v4 imposee par un profil. Init fixe la valeur definitive.
+	socketFamily = AF_INET6;
 	
 	defaultStream = NULL;
 	
@@ -954,7 +956,7 @@ BYTE RTPSession::CodecFromPreviousMap(BYTE type)
 //QUELLE patte, de QUEL média et de QUELLE source elle parle — la question à
 //laquelle l'ancienne ligne "-RTP packet type unknown [96]", répétée deux cents
 //fois sans un mot de contexte, ne répondait pas.
-int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from)
+int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const IPEndpoint& from)
 {
 	//Une trace par épisode, puis un résumé compté. Un changement de payload type
 	//rouvre un épisode : c'est une autre cause, pas la suite de la même.
@@ -976,7 +978,7 @@ int RTPSession::OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& f
 		      "[pt:%d,ssrc:%x,media:%s,role:%d,label:%ls,local port:%d,from:%s:%d] "
 		      "— dropped (normal while a renegotiation is in flight)\n",
 		      type, ssrc, MediaFrame::TypeToString(media), role, LabelForLog(), simPort,
-		      inet_ntoa(from.sin_addr), ntohs(from.sin_port));
+		      from.Address().ToString().c_str(), from.Port());
 	}
 	else
 	{
@@ -1008,7 +1010,7 @@ int RTPSession::GetLocalPort()
 int RTPSession::GetRemotePort()
 {
 	// Return local
-	return sendAddr.sin_port;
+	return sendAddr.Port();
 }
 
 bool RTPSession::CanSendCodec(DWORD codec)
@@ -1063,7 +1065,7 @@ bool RTPSession::SetSendingCodec(DWORD codec)
 *	n'est pas en jeu, et l'adresse annoncée est privée. La *preuve* (un paquet
 *	réellement reçu d'ailleurs) est vérifiée par chaque appelant.
 ***********************************/
-bool RTPSession::NatCorrectable(in_addr_t announced)
+bool RTPSession::NatCorrectable(const IPAddress& announced)
 {
 	//Le contrôleur n'a pas activé le rattrapage sur cette jambe
 	if (!natLatch)
@@ -1078,7 +1080,7 @@ bool RTPSession::NatCorrectable(in_addr_t announced)
 	//169.254/16) : exactement l'ancienne IsRFC1918, désormais portée par IPAddress.
 	//IsPrivate() NE convient PAS ici : elle répond « non routable », ce qui couvre
 	//aussi les plages de documentation ou réservées — nullement NATées.
-	return V4Address(announced).IsPrivateV4();
+	return announced.IsPrivateV4();
 }
 
 /***********************************
@@ -1087,29 +1089,36 @@ bool RTPSession::NatCorrectable(in_addr_t announced)
 ***********************************/
 int RTPSession::SetRemotePort(char *ip,int sendPort)
 {
-	struct in_addr remote;
-
-	//Une adresse illisible ne doit PAS devenir une destination. inet_addr rendait
+	//Une adresse illisible ne doit PAS devenir une destination : inet_addr rendait
 	//INADDR_NONE aussi bien sur une erreur de format que sur l'adresse de diffusion,
-	//et ce retour n'était pas testé : la destination devenait 255.255.255.255 et le
+	//et ce retour n'était pas testé — la destination devenait 255.255.255.255 et le
 	//mediaserver émettait le flux en BROADCAST sur le LAN, sans un mot dans le log.
-	//inet_pton distingue les deux cas ; tous les appelants traitent déjà 0 en erreur.
-	if (!ip || inet_pton(AF_INET,ip,&remote)!=1)
+	//IPAddress::Parse tranche les deux familles et distingue l'erreur ; tous les
+	//appelants traitent déjà 0 en erreur.
+	const IPAddress remote = ip ? IPAddress::Parse(ip) : IPAddress();
+
+	if (!remote.IsSet())
 		return Error("-SetRemotePort: adresse invalide [%s]\n",ip?ip:"(null)");
 
-	DWORD ipAddr = remote.s_addr;
+	//Multicast, ou link-local sans zone : ce ne sont pas des destinations unicast.
+	//Émettre vers ff02::1 arroserait tout le segment ; vers fe80::1 sans zone, le
+	//noyau ne saurait par quelle interface sortir.
+	if (!remote.IsUnspecified() && !remote.IsUnicastDestination())
+		return Error("-SetRemotePort: adresse inutilisable comme destination [%s]\n",ip);
 
-	//Un contrôleur qui passe 0.0.0.0 demande explicitement le latch : il ne connaît
-	//pas la vraie adresse du pair et s'en remet à la source réellement observée.
-	//Vaut autorisation, au même titre que la propriété RTP "natLatch".
-	if (ipAddr==INADDR_ANY)
+	//Un contrôleur qui passe 0.0.0.0 — ou :: — demande explicitement le latch : il
+	//ne connaît pas la vraie adresse du pair et s'en remet à la source réellement
+	//observée. Vaut autorisation, au même titre que la propriété RTP "natLatch".
+	const bool latchRequest = remote.IsUnspecified();
+
+	if (latchRequest)
 		natLatch = true;
 
 	//If we already have one and it is a NATed
-	if (HasRecIP() && ipAddr==INADDR_ANY)
+	if (HasRecIP() && latchRequest)
 	{
 		//Exit
-		Log("-SetRemotePort NAT already bound to [%s:%d]\n",inet_ntoa(sendAddr.sin_addr),recPort);
+		Log("-SetRemotePort NAT already bound to [%s:%d]\n",sendAddr.Address().ToString().c_str(),recPort);
 
 		return 1;
 	}
@@ -1122,17 +1131,30 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	natCorrected = false;
 	natRtcpCorrected = false;
 
-	//Ip y puerto de destino
-	SetRemoteIp(ipAddr);
-	sendAddr.sin_port 		= htons(sendPort);
-	
-	//Check if doing rtcp muxing
-	if (muxRTCP)
-		//Same than rtp
-		sendRtcpAddr.sin_port 	= htons(sendPort);
+	//Ip y puerto de destino. L'adresse NON SPÉCIFIÉE (0.0.0.0 ou ::) n'en est pas
+	//une : c'est une demande de latch, et la destination doit rester INCONNUE
+	//jusqu'à ce qu'un paquet nous apprenne d'où parle le pair. La poser
+	//telle quelle ferait croire à SendPacket qu'il a une cible — et il émettrait
+	//vers 0.0.0.0. C'est ce que la sentinelle INADDR_ANY disait avant, en
+	//confondant « pas d'adresse » avec « l'adresse 0.0.0.0 » ; ici les deux sont
+	//distincts, et c'est l'endpoint VIDE qui porte l'absence.
+	if (latchRequest)
+	{
+		sendAddr     = IPEndpoint();
+		sendRtcpAddr = IPEndpoint();
+	}
 	else
-		//One more than rtp
-		sendRtcpAddr.sin_port 	= htons(sendPort+1);
+	{
+		sendAddr = Dest(remote,sendPort);
+
+		//Check if doing rtcp muxing
+		if (muxRTCP)
+			//Same than rtp
+			sendRtcpAddr = Dest(remote,sendPort);
+		else
+			//One more than rtp
+			sendRtcpAddr = Dest(remote,sendPort+1);
+	}
 
 	//Amorçage du chemin d'envoi (ouverture NAT). En chiffré (DTLS/SRTP) on garde
 	//l'ouverture minimale historique : le handshake DTLS et les checks STUN prennent
@@ -1140,7 +1162,11 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	//latcher un pair symétrique (comedia) — le simple rtpEmpty de 8 octets ne suffit
 	//pas à un stack RTP strict.
 	if (encript)
-		sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	{
+		//Rien à amorcer tant que la destination est inconnue (demande de latch).
+		if (HasRemote())
+			sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,sendAddr,sendAddr.Len());
+	}
 	else
 		ArmNATPriming();
 
@@ -1199,7 +1225,7 @@ void RTPSession::FlushDTLS()
 	//Vide toutes les données DTLS en attente dans write_bio (ClientHello puis
 	//flights suivants) vers la cible d'envoi, indépendamment du STUN entrant.
 	while ((len = dtls.Read(buffer,MTU)) > 0)
-		sendto(simSocket,buffer,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+		sendto(simSocket,buffer,len,0,sendAddr,sendAddr.Len());
 }
 
 void RTPSession::RequestDTLSClientHandshake()
@@ -1226,7 +1252,7 @@ void RTPSession::DriveDTLSClientHandshake()
 	if (!dtlsClientStarted)
 	{
 		Log("-RTPSession DTLS client: émission du ClientHello vers [%s:%d] [%p]\n",
-			inet_ntoa(sendAddr.sin_addr),ntohs(sendAddr.sin_port),this);
+			sendAddr.Address().ToString().c_str(),sendAddr.Port(),this);
 		dtlsClientStarted = true;
 		dtlsClientFailed  = false;
 		gettimeofday(&dtlsClientStart,NULL);
@@ -1290,8 +1316,8 @@ void RTPSession::SendICEBindingRequest()
 	if (len)
 	{
 		Debug("ICE: envoi Binding Request sortant (user=%s) vers %s:%d [%p]\n",
-			iceRemoteUsername, inet_ntoa(sendAddr.sin_addr), ntohs(sendAddr.sin_port), this);
-		sendto(simSocket,aux,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+			iceRemoteUsername, sendAddr.Address().ToString().c_str(), sendAddr.Port(), this);
+		sendto(simSocket,aux,len,0,sendAddr,sendAddr.Len());
 	}
 	free(aux);
 	delete(request);
@@ -1329,24 +1355,21 @@ void RTPSession::DriveICEChecks()
 	}
 }
 
-void RTPSession::OnICEConnectivityConfirmed(sockaddr_in* from)
+void RTPSession::OnICEConnectivityConfirmed(const IPEndpoint& from)
 {
 	//Latch symétrique de l'adresse distante si pas encore fixée.
 	if (!HasRecIP())
 	{
-		recIP   = from->sin_addr.s_addr;
-		recPort = ntohs(from->sin_port);
+		recIP   = from.Address();
+		recPort = from.Port();
 	}
 	if (!HasRemote())
-	{
-		sendAddr.sin_addr.s_addr = from->sin_addr.s_addr;
-		sendAddr.sin_port        = from->sin_port;
-	}
+		sendAddr = Dest(from.Address(),from.Port());
 
 	if (!iceConnected)
 	{
 		Log("-RTPSession ICE: connectivité confirmée avec [%s:%d] [%p]\n",
-			inet_ntoa(from->sin_addr), ntohs(from->sin_port), this);
+			from.Address().ToString().c_str(), from.Port(), this);
 		//Connectivité validée : on cesse d'émettre des checks sortants. Le handshake
 		//DTLS client (P2) et le média ne sont pas gatés par l'ICE dans cette
 		//implémentation (cf. audit P1) : ils sont pilotés indépendamment par la boucle
@@ -1400,23 +1423,24 @@ int RTPSession::AddICECandidate(const char* candidate)
 		return 1;
 	}
 
-	//Résout l'adresse
-	DWORD ipAddr = inet_addr(address);
-	if (ipAddr == INADDR_NONE)
+	//Résout l'adresse. Les deux familles : un navigateur émet systématiquement
+	//des candidats v6 quand il en a, et une link-local AVEC zone (fe80::1%eth0)
+	//est la seule forme utilisable de link-local.
+	const IPAddress candidateIp = IPAddress::Parse(address);
+	if (!candidateIp.IsSet() || !candidateIp.IsUnicastDestination())
 		return Error("-AddICECandidate: adresse invalide [%s]\n",address);
 
 	Log("-AddICECandidate: bascule cible d'envoi vers [%s:%d] typ %s prio %u\n",address,port,candType,priority);
 
 	//Reconfigure la cible d'envoi RTP/RTCP
 	mutex.lock();
-	SetRemoteIp(ipAddr);
-	sendAddr.sin_port            = htons(port);
-	sendRtcpAddr.sin_port        = htons(muxRTCP ? port : port+1);
-	iceRemotePriority            = priority;
+	sendAddr     = Dest(candidateIp,port);
+	sendRtcpAddr = Dest(candidateIp,muxRTCP ? port : port+1);
+	iceRemotePriority = priority;
 	mutex.unlock();
 
 	//Amorce le chemin (ouverture NAT ; le STUN entrant confirmera la connectivité)
-	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,sendAddr,sendAddr.Len());
 
 	//P2 : un candidat gagnant fournit une destination -> amorcer le ClientHello si
 	//on est client DTLS et que StartSending n'a pas encore fixé l'adresse.
@@ -1433,7 +1457,7 @@ int RTPSession::SendEmptyPacket()
 		return 0;
 
 	//Open rtp and rtcp ports
-	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	sendto(simSocket,rtpEmpty,sizeof(rtpEmpty),0,sendAddr,sendAddr.Len());
 
 	//ok
 	return 1;
@@ -1459,7 +1483,7 @@ int RTPSession::SendNATPrimingPacket()
 	set4(packet,4,sendTime);
 	set4(packet,8,sendSSRC);
 
-	sendto(simSocket,packet,sizeof(packet),0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	sendto(simSocket,packet,sizeof(packet),0,sendAddr,sendAddr.Len());
 
 	if (natPrimingLeft > 0)
 		natPrimingLeft--;
@@ -1501,19 +1525,69 @@ void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
 * Init
 *	Inicia el control rtcp
 ********************************/
+/***********************************
+* SetDualStack
+*	IPV6_V6ONLY=0 sur une socket v6 : elle entend alors les DEUX familles, les
+*	pairs v4 arrivant en ::ffff:a.b.c.d. Sans effet sur une socket v4.
+*	Un échec n'est pas fatal (certains noyaux imposent net.ipv6.bindv6only=1) :
+*	on perd les pairs v4 sur cette jambe, mais la session reste utilisable en v6
+*	— d'où une trace plutôt qu'un refus.
+***********************************/
+void RTPSession::SetDualStack(int fd)
+{
+	if (fd==FD_INVALID || socketFamily!=AF_INET6)
+		return;
+
+	int v6only = 0;
+	if (setsockopt(fd,IPPROTO_IPV6,IPV6_V6ONLY,&v6only,sizeof(v6only))!=0)
+		Error("-RTPSession cannot clear IPV6_V6ONLY on socket %d: %s — IPv4 peers will not be heard\n",
+		      fd,strerror(errno));
+}
+
+/***********************************
+* SetBindAddress
+*	Adresse à lier par les sockets média — donc interface empruntée, donc profil
+*	d'adressage effectif de cette jambe. À poser AVANT Init : après, les sockets
+*	existent et changer d'adresse voudrait dire les recréer sous le média.
+***********************************/
+bool RTPSession::SetBindAddress(const IPAddress& addr)
+{
+	if (simSocket!=FD_INVALID || simRtcpSocket!=FD_INVALID)
+		return Error("-RTPSession SetBindAddress: sockets deja ouvertes [%p]\n",this);
+
+	//Vide : retour au défaut (écoute dual-stack sur toutes les interfaces).
+	if (!addr.IsSet())
+	{
+		bindAddress = IPAddress();
+		return true;
+	}
+
+	//Une adresse qu'on ne peut pas lier n'a rien à faire ici : multicast,
+	//link-local sans zone... Le refus est explicite, la session garde le défaut.
+	if (addr.IsMulticast() || addr.NeedsScope())
+		return Error("-RTPSession SetBindAddress: adresse inutilisable [%s]\n",addr.ToString().c_str());
+
+	bindAddress = addr;
+	return true;
+}
+
 int RTPSession::Init()
 {
 	int retries = 0;
 	simPort=0;	
 	Log(">Init RTPSession %p for media %s and role %s\n", this, MediaFrame::TypeToString(media), MediaFrame::RoleToString(role));
 
-	sockaddr_in recAddr;
+	//Famille des sockets média. Par défaut AF_INET6 avec IPV6_V6ONLY=0 : UNE
+	//socket entend les deux familles, un pair v4 arrivant en ::ffff:a.b.c.d.
+	//C'est ce qui évite de doubler la plage de ports RTP et le thread de
+	//réception. Une adresse de bind imposée par un profil d'adressage fixe en
+	//revanche la famille — et donc restreint la session à celle-ci, ce qui est
+	//précisément ce que le contrôleur a demandé (§14.5 de ipv6.md).
+	socketFamily = bindAddress.IsSet() ? bindAddress.Family() : AF_INET6;
 
-	//Clear addr
-	memset(&recAddr,0,sizeof(struct sockaddr_in));
-
-	//Set family
-	recAddr.sin_family     	= AF_INET;
+	//Adresse d'écoute : celle du profil, sinon « toutes interfaces » dans la
+	//famille retenue.
+	const IPAddress listenOn = bindAddress.IsSet() ? bindAddress : IPAddress::Any(socketFamily);
 	
 	//Get two consecutive ramdom ports
 	while (retries++<100)
@@ -1536,7 +1610,10 @@ int RTPSession::Init()
 		}
 
 		//Create new sockets
-		simSocket = socket(PF_INET,SOCK_DGRAM,0);
+		simSocket = socket(socketFamily,SOCK_DGRAM,0);
+		//Dual-stack : sans cela une socket v6 n'entend QUE de l'IPv6, et la
+		//bascule ferait perdre tous les pairs v4 d'un coup.
+		SetDualStack(simSocket);
 		//If not forced to any port
 		if (!simPort)
 		{
@@ -1546,9 +1623,9 @@ int RTPSession::Init()
 			simPort &= 0xFFFFFFFE;
 		}
 		//Try to bind to port
-		recAddr.sin_port = htons(simPort);
+		IPEndpoint rtpBind = listenOn.To(simPort);
 		//Bind the rtcp socket
-		if(bind(simSocket,(struct sockaddr *)&recAddr,sizeof(struct sockaddr_in))!=0)
+		if(bind(simSocket,rtpBind,rtpBind.Len())!=0)
 		{
 			Log("Failed to open RTP port %d : %s.\n", simPort, strerror(errno) );
 			simPort=0;
@@ -1556,13 +1633,16 @@ int RTPSession::Init()
 			continue;
 		}
 		//Create new sockets
-		simRtcpSocket = socket(PF_INET,SOCK_DGRAM,0);
+		simRtcpSocket = socket(socketFamily,SOCK_DGRAM,0);
+		//Dual-stack aussi pour le RTCP : une correction partielle laisserait le
+		//RTCP sourd en v6 alors que le RTP y entend.
+		SetDualStack(simRtcpSocket);
 		//Next port
 		simRtcpPort = simPort+1;
 		//Try to bind to port
-		recAddr.sin_port = htons(simRtcpPort);
+		IPEndpoint rtcpBind = listenOn.To(simRtcpPort);
 		//Bind the rtcp socket
-		if(bind(simRtcpSocket,(struct sockaddr *)&recAddr,sizeof(struct sockaddr_in))!=0)
+		if(bind(simRtcpSocket,rtcpBind,rtcpBind.Len())!=0)
 		{
 			//Use random
 			simPort = 0;
@@ -1574,10 +1654,20 @@ int RTPSession::Init()
 		int cos = 5;
 		setsockopt(simSocket,     SOL_SOCKET, SO_PRIORITY, &cos, sizeof(cos));
 		setsockopt(simRtcpSocket, SOL_SOCKET, SO_PRIORITY, &cos, sizeof(cos));
-		//Set TOS
+		//Set TOS. En v6 la classe de trafic est portée par IPV6_TCLASS, pas
+		//par IP_TOS : poser le mauvais niveau ne remonterait aucune erreur mais
+		//laisserait le média non marqué, donc non prioritaire dans le réseau.
 		int tos = 0x2E;
-		setsockopt(simSocket,     IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
-		setsockopt(simRtcpSocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
+		if (socketFamily==AF_INET6)
+		{
+			setsockopt(simSocket,     IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
+			setsockopt(simRtcpSocket, IPPROTO_IPV6, IPV6_TCLASS, &tos, sizeof(tos));
+		}
+		else
+		{
+			setsockopt(simSocket,     IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
+			setsockopt(simRtcpSocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
+		}
 		//Everything ok
 		Log("-Got ports [%d,%d]\n",simPort,simRtcpPort);
 		//Start receiving
@@ -1668,10 +1758,10 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 	//If muxin
 	if (muxRTCP)
 		//Send using RTP port
-		ret = sendto(simSocket,data,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+		ret = sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
 	else
 		//Send using RCTP port
-		ret = sendto(simRtcpSocket,data,len,0,(sockaddr *)&sendRtcpAddr,sizeof(struct sockaddr_in));
+		ret = sendto(simRtcpSocket,data,len,0,sendRtcpAddr,sendRtcpAddr.Len());
 
 	//Check error
 	if (ret<0)
@@ -1704,13 +1794,11 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 		if (HasRecIP())
 		{
 			//Do NAT
-			sendAddr.sin_addr.s_addr = recIP;
-			//Set port
-			sendAddr.sin_port = htons(recPort);
+			sendAddr = Dest(recIP,recPort);
 			//La cible est posée : plus de rattrapage ultérieur (voir plus bas)
 			natCorrected = true;
 			//Log
-			Log("-RTPSession NAT: Now sending %s to [%s:%d].\n", MediaFrame::TypeToString(media),inet_ntoa(sendAddr.sin_addr), recPort);
+			Log("-RTPSession NAT: Now sending %s to [%s:%d].\n", MediaFrame::TypeToString(media),sendAddr.Address().ToString().c_str(), recPort);
 			//Check if using ice
 		}
 		else {
@@ -1720,7 +1808,7 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			return 0;
 		}
 	}
-	else if ( HasRecIP() && !SameAddr(recIP,sendAddr.sin_addr.s_addr) )
+	else if ( HasRecIP() && !SameAddr(recIP,sendAddr.Address()) )
         {
 		//Le pair a annoncé une adresse privée dans son SDP mais son RTP nous arrive
 		//d'ailleurs : c'est le mapping d'un NAT symétrique, qui a réécrit l'adresse ET
@@ -1728,13 +1816,12 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 		//source réellement observée, seule preuve dont nous disposons.
 		//One-shot : recIP est recalé sur *chaque* paquet de source différente (voir
 		//ReadRTP), sans ce garde la cible battrait au gré du moindre paquet égaré.
-		if (!natCorrected && NatCorrectable(sendAddr.sin_addr.s_addr))
+		if (!natCorrected && NatCorrectable(sendAddr.Address()))
 		{
-			sendAddr.sin_addr.s_addr = recIP;
-			sendAddr.sin_port = htons(recPort);
+			sendAddr = Dest(recIP,recPort);
 			natCorrected = true;
 			Log("-RTPSession NAT: %s now sending to [%s:%d] (annonce privee corrigee sur la source reelle).\n",
-			    MediaFrame::TypeToString(media),inet_ntoa(sendAddr.sin_addr),recPort);
+			    MediaFrame::TypeToString(media),sendAddr.Address().ToString().c_str(),recPort);
 		}
 		else
 			Log("-RTPSession NAT: WARNING Trying to send packet from different ip address than receiving one.\n");
@@ -1909,12 +1996,12 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	else
 	{
 		//Send packet
-		ret = sendto(simSocket,sendPacket,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+		ret = sendto(simSocket,sendPacket,len,0,sendAddr,sendAddr.Len());
 	}
 	*/	
 	
 	//Send packet
-	int ret = sendto(simSocket,sendPacket,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+	int ret = sendto(simSocket,sendPacket,len,0,sendAddr,sendAddr.Len());
 
     if (ret <= 0)
 	{
@@ -1934,14 +2021,14 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 int RTPSession::ReadRTCP()
 {
 	BYTE buffer[MTU];
-	sockaddr_in from_addr;
-	DWORD from_len = sizeof(from_addr);
+	IPEndpoint from_addr;
+
 
 	//Receive from everywhere
-	memset(&from_addr, 0, from_len);
+
 
 	//Read rtcp socket
-	int size = recvfrom(simRtcpSocket,buffer,MTU,MSG_DONTWAIT,(sockaddr*)&from_addr, &from_len);
+	int size = recvfrom(simRtcpSocket,buffer,MTU,MSG_DONTWAIT,from_addr.Data(),from_addr.LenPtr());
 
 	
 	//Check if it is an STUN request
@@ -1960,7 +2047,7 @@ int RTPSession::ReadRTCP()
 			//Create response
 			STUNMessage* resp = stun->CreateResponse();
 			//Add received xor mapped addres
-			resp->AddXorAddressAttribute(&from_addr);
+			resp->AddXorAddressAttribute(from_addr.Sockaddr());
 			//TODO: Check incoming request username attribute value starts with iceLocalUsername+":"
 			//Create  response
 			DWORD size = resp->GetSize();
@@ -1975,7 +2062,7 @@ int RTPSession::ReadRTCP()
 				len = resp->NonAuthenticatedFingerPrint(aux,size);
 			
 			//Send it
-			sendto(simRtcpSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+			sendto(simRtcpSocket,aux,len,0,from_addr,from_addr.Len());
 
 			//Clean memory
 			free(aux);
@@ -1983,12 +2070,12 @@ int RTPSession::ReadRTCP()
 			delete(resp);
 
 			//Do NAT
-			sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
+			sendRtcpAddr = Dest(from_addr.Address(),from_addr.Port());
 			//Set port : c'est bien sin_port qu'il faut recopier. La ligne prenait
 			//sin_addr.s_addr, donc le port RTCP de destination valait deux octets de
 			//l'ADRESSE du pair — le RTCP partait dans le vide dès qu'un binding STUN
 			//arrivait sur la socket RTCP (ICE sans rtcp-mux).
-			sendRtcpAddr.sin_port = from_addr.sin_port;
+
 		}
 
 		//Delete message
@@ -2007,29 +2094,28 @@ int RTPSession::ReadRTCP()
 	//que de le deviner à recPort+1. Sans objet en rtcp-mux, où le RTCP part sur
 	//sendAddr (déjà corrigé côté RTP).
 	if (HasRemoteRtcp()
-	    && !SameAddr(sendRtcpAddr.sin_addr.s_addr,from_addr.sin_addr.s_addr)
+	    && !SameAddr(sendRtcpAddr.Address(),from_addr.Address())
 	    && !natRtcpCorrected
-	    && NatCorrectable(sendRtcpAddr.sin_addr.s_addr))
+	    && NatCorrectable(sendRtcpAddr.Address()))
 	{
-		sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
-		sendRtcpAddr.sin_port        = from_addr.sin_port;
+		sendRtcpAddr = Dest(from_addr.Address(),from_addr.Port());
 		natRtcpCorrected             = true;
 		Log("-RTPSession NAT: RTCP now sending to %s:%d (annonce privee corrigee sur la source reelle).\n",
-		    inet_ntoa(sendRtcpAddr.sin_addr),ntohs(sendRtcpAddr.sin_port));
+		    sendRtcpAddr.Address().ToString().c_str(),sendRtcpAddr.Port());
 	}
 
 	//Check if we have sendinf ip address
 	if (!HasRemoteRtcp())
 	{
 		//Do NAT
-		sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
+		sendRtcpAddr = Dest(from_addr.Address(),from_addr.Port());
 		//Set port
-		sendRtcpAddr.sin_port = from_addr.sin_port;
+
 		//Cible RTCP posée : plus de rattrapage ultérieur
 		natRtcpCorrected = true;
 		//Log it
 		Log("-Got first RTCP packet, sending to %s:%d with rtcp-muxing %s\n",
-		    inet_ntoa(sendRtcpAddr.sin_addr),ntohs(sendRtcpAddr.sin_port),
+		    sendRtcpAddr.Address().ToString().c_str(),sendRtcpAddr.Port(),
 		    muxRTCP ? "on": "off");
 	}
 	
@@ -2051,7 +2137,7 @@ int RTPSession::ReadRTCP()
 	//Check packet
 	if (rtcp)
 		//Handle incomming rtcp packets
-		ProcessRTCPPacket(rtcp, inet_ntoa(from_addr.sin_addr));
+		ProcessRTCPPacket(rtcp, from_addr.Address().ToString().c_str());
 	
 	//OK
 	return 1;
@@ -2065,15 +2151,17 @@ int RTPSession::ReadRTP()
 {
 	BYTE data[MTU];
 	BYTE *buffer = data;
-	sockaddr_in from_addr;
+	IPEndpoint from_addr;
 	bool isRTX = false;
-	DWORD from_len = sizeof(from_addr);
+
 
 	//Receive from everywhere
-	memset(&from_addr, 0, from_len);
+
 
 	//Leemos del socket
-	int size = recvfrom(simSocket,buffer,MTU,MSG_DONTWAIT,(sockaddr*)&from_addr, &from_len);
+	//Data()/LenPtr() : LenPtr repose la capacite avant chaque lecture, sinon une
+	//source v6 arriverait tronquee sur un objet deja rempli par un pair v4.
+	int size = recvfrom(simSocket,buffer,MTU,MSG_DONTWAIT,from_addr.Data(),from_addr.LenPtr());
 
 	if (size <= 0)
 	{
@@ -2102,14 +2190,14 @@ int RTPSession::ReadRTP()
 			//Create response
 			STUNMessage* resp = stun->CreateResponse();
 			//Add received xor mapped addres
-			resp->AddXorAddressAttribute(&from_addr);
+			resp->AddXorAddressAttribute(from_addr.Sockaddr());
 			//TODO: Check incoming request username attribute value starts with iceLocalUsername+":"
 			//Create  response
 			DWORD size = resp->GetSize();
 			BYTE *aux = (BYTE*)malloc(size);
 
 			//Check if we have local passworkd
-			Debug("ICE: receiving Binding Request from %s localPwd=%s\n", inet_ntoa(from_addr.sin_addr), 
+			Debug("ICE: receiving Binding Request from %s localPwd=%s\n", from_addr.Address().ToString().c_str(), 
 			    (iceLocalPwd != NULL) ? iceLocalPwd : "no password");
 			if (iceRemotePwd)
 			{
@@ -2126,7 +2214,7 @@ int RTPSession::ReadRTP()
 				}
 						
 				//Send it
-				sendto(simSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+				sendto(simSocket,aux,len,0,from_addr,from_addr.Len());
 			}
 			else
 			{
@@ -2140,7 +2228,7 @@ int RTPSession::ReadRTP()
 
 			if ( !HasIceRemote() )
 			{
-				iceRemoteIP = from_addr.sin_addr.s_addr;
+				iceRemoteIP = from_addr.Address();
 			}
 
 			//P3 : un check entrant valide prouve la connectivité (rôle serveur /
@@ -2154,7 +2242,7 @@ int RTPSession::ReadRTP()
 			//If set
 			if (stun->HasAttribute(STUNMessage::Attribute::IceControlled)
 				|| stun->HasAttribute(STUNMessage::Attribute::UseCandidate)
-				|| SameAddr(iceRemoteIP,from_addr.sin_addr.s_addr))
+				|| SameAddr(iceRemoteIP,from_addr.Address()))
 			{
 				// We should check that username matches
 				if (iceRemoteUsername)
@@ -2163,21 +2251,17 @@ int RTPSession::ReadRTP()
 					if ( !HasRecIP() )
 					{
 						// set recIP if not set
-						recIP = from_addr.sin_addr.s_addr;
-						recPort = ntohs(from_addr.sin_port);
+						recIP = from_addr.Address();
+						recPort = from_addr.Port();
 					}
 					
 					
-					if ( !SameAddr(sendAddr.sin_addr.s_addr,recIP) 
+					if ( !SameAddr(sendAddr.Address(),recIP) 
 					     || 
-					     sendAddr.sin_port != htons(recPort) )
+					     sendAddr.Port() != recPort )
 					{
 						// Do symetric RTP 
-						sendAddr.sin_addr.s_addr = recIP;
-						//recPort est en ordre HÔTE, sin_port se stocke en ordre RÉSEAU :
-						//htons, comme dans le test juste au-dessus (même résultat sur les
-						//deux architectures, mais la conversion était écrite à l'envers).
-						sendAddr.sin_port = htons(recPort);
+						sendAddr = Dest(recIP,recPort);
 					}
 				}
 
@@ -2214,7 +2298,7 @@ int RTPSession::ReadRTP()
 					Debug("ICE: sending bind request with remote user=[%s], remote password=[%s] to %s:%d.\n",
 				      (iceRemoteUsername != NULL) ? iceRemoteUsername : "no user",
 				      (iceRemotePwd != NULL ) ? iceRemotePwd : "no pwd",
-					 inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port));
+					 from_addr.Address().ToString().c_str(), from_addr.Port());
 					if (iceRemotePwd)
 					//Serialize and autenticate
 						len = request->AuthenticatedFingerPrint(aux,size,iceRemotePwd);
@@ -2228,7 +2312,7 @@ int RTPSession::ReadRTP()
 					//le message `stun` fuyaient à chaque binding request qu'on n'arrivait
 					//pas à signer. Rien à émettre n'est pas une raison de ne pas ranger.
 					if (len)
-						sendto(simSocket,aux,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+						sendto(simSocket,aux,len,0,from_addr,from_addr.Len());
 					else
 						Debug("ICE: packet empty no need to send it\n");
 				}
@@ -2256,7 +2340,7 @@ int RTPSession::ReadRTP()
 					len = dtls.Read(buffer,MTU);
 					//Send back
 					if (len)
-						sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+						sendto(simSocket,buffer,len,0,from_addr,from_addr.Len());
 					else
 						Debug("DTLS: packet empty no need to send it\n");
 				}
@@ -2268,12 +2352,12 @@ int RTPSession::ReadRTP()
 		else if (type==STUNMessage::Response && method==STUNMessage::Binding)
 		{
 			Log("ICE: réception Binding Response de %s:%d [%p]\n",
-				inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port), this);
+				from_addr.Address().ToString().c_str(), from_addr.Port(), this);
 			//Validation pragmatique (parité avec le niveau ICE existant : pas de
 			//vérif MESSAGE-INTEGRITY sur l'entrant) : une Binding Response provenant du
 			//pair attendu confirme la connectivité.
-			if (!HasIceRemote() || SameAddr(iceRemoteIP,from_addr.sin_addr.s_addr))
-				OnICEConnectivityConfirmed(&from_addr);
+			if (!HasIceRemote() || SameAddr(iceRemoteIP,from_addr.Address()))
+				OnICEConnectivityConfirmed(from_addr);
 			else
 				Debug("ICE: Binding Response d'une source inattendue, ignorée [%p]\n",this);
 		}
@@ -2305,7 +2389,7 @@ int RTPSession::ReadRTP()
 		//Check packet
 		if (rtcp)
 			//Handle incomming rtcp packets
-			ProcessRTCPPacket(rtcp,inet_ntoa(from_addr.sin_addr));
+			ProcessRTCPPacket(rtcp,from_addr.Address().ToString().c_str());
 		
 		//Skip
 		return 1;
@@ -2314,7 +2398,7 @@ int RTPSession::ReadRTP()
 	//Check if it a DTLS packet
 	if (DTLSConnection::IsDTLS(buffer,size))
 	{
-		Log("-RTPSession DTLS: received packet from [%s:%d]\n", inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port));
+		Log("-RTPSession DTLS: received packet from [%s:%d]\n", from_addr.Address().ToString().c_str(), from_addr.Port());
 		//Feed it
 		if (!dtls.Write(buffer,size))
 		{
@@ -2331,7 +2415,7 @@ int RTPSession::ReadRTP()
 			return 1;	
 		}
 
-		sendto(simSocket,buffer,len,0,(sockaddr *)&from_addr,sizeof(struct sockaddr_in));
+		sendto(simSocket,buffer,len,0,from_addr,from_addr.Len());
 		return 1;
 	}
 
@@ -2345,15 +2429,15 @@ int RTPSession::ReadRTP()
 	}
 	
 	//If we don't have originating IP
-	if (!SameAddr(recIP,from_addr.sin_addr.s_addr))
+	if (!SameAddr(recIP,from_addr.Address()))
 	{
 		//Bind it to first received packet ip
-		recIP = from_addr.sin_addr.s_addr;
+		recIP = from_addr.Address();
 		//Get also port
-		recPort = ntohs(from_addr.sin_port);
+		recPort = from_addr.Port();
 		//Log
 		Log("-RTPSession NAT: received packet from [%s:%d] for media %s.\n",
-                   inet_ntoa(from_addr.sin_addr), ntohs(from_addr.sin_port),
+                   from_addr.Address().ToString().c_str(), from_addr.Port(),
                    MediaFrame::TypeToString(media));
 		//Check if got listener
 		if (auto l = LockListener())
@@ -3259,7 +3343,7 @@ void RTPSession::ReSendPacket(int seq)
                 {
                         Debug("-resent nacked packet ext %d seq %d rtpsess=%p.\n", ext, packet->GetSeqNum(), this);
                         //Send packet
-                        sendto(simSocket,data,len,0,(sockaddr *)&sendAddr,sizeof(struct sockaddr_in));
+                        sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
                 }
 	}
 	else
@@ -3520,7 +3604,7 @@ int RTPSession::SendSenderReport()
 			remb->AddField(RTCPPayloadFeedback::ApplicationLayerFeeedbackField::CreateReceiverEstimatedMaxBitrate(ssrcs,estimation));
 			//Add to packet
 			rtcp->AddRTCPacket(remb);
-			Debug("SR: reporting estimated bandwidth of %d to %s", estimation,  inet_ntoa(sendRtcpAddr.sin_addr));
+			Debug("SR: reporting estimated bandwidth of %d to %s", estimation,  sendRtcpAddr.Address().ToString().c_str());
 		}
 	}
 	

@@ -311,7 +311,7 @@ int PickFreeTcpPort()
  * ========================================================================= */
 
 // Forme compressée : la notation courante. Le minimum vital.
-TEST(IPv6Notation, DISABLED_AccepteLaFormeCompressee)
+TEST(IPv6Notation, AccepteLaFormeCompressee)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -320,7 +320,7 @@ TEST(IPv6Notation, DISABLED_AccepteLaFormeCompressee)
 
 // Forme complète, 8 groupes de 4 chiffres : même adresse, autre écriture. Un
 // contrôleur SIP qui recopie un SDP verbatim peut très bien l'envoyer telle quelle.
-TEST(IPv6Notation, DISABLED_AccepteLaFormeCompleteNonCompressee)
+TEST(IPv6Notation, AccepteLaFormeCompleteNonCompressee)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -329,7 +329,7 @@ TEST(IPv6Notation, DISABLED_AccepteLaFormeCompleteNonCompressee)
 
 // RFC 4291 : la représentation hexadécimale est INSENSIBLE À LA CASSE. Un
 // rejet sur majuscules ferait échouer les appels d'un pair parfaitement conforme.
-TEST(IPv6Notation, DISABLED_AccepteLaCasseHexadecimaleHaute)
+TEST(IPv6Notation, AccepteLaCasseHexadecimaleHaute)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -337,7 +337,7 @@ TEST(IPv6Notation, DISABLED_AccepteLaCasseHexadecimaleHaute)
 }
 
 // `::` ne peut apparaître QU'UNE FOIS (sinon la longueur est ambiguë).
-TEST(IPv6Notation, DISABLED_RefuseUneDoubleCompression)
+TEST(IPv6Notation, RefuseUneDoubleCompression)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -345,7 +345,7 @@ TEST(IPv6Notation, DISABLED_RefuseUneDoubleCompression)
 }
 
 // Neuf groupes : trop long.
-TEST(IPv6Notation, DISABLED_RefuseTropDeGroupes)
+TEST(IPv6Notation, RefuseTropDeGroupes)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -353,7 +353,7 @@ TEST(IPv6Notation, DISABLED_RefuseTropDeGroupes)
 }
 
 // Groupe hors bornes (5 chiffres hexa).
-TEST(IPv6Notation, DISABLED_RefuseUnGroupeTropLong)
+TEST(IPv6Notation, RefuseUnGroupeTropLong)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -363,7 +363,7 @@ TEST(IPv6Notation, DISABLED_RefuseUnGroupeTropLong)
 // ADVERSE — les crochets appartiennent à la syntaxe des URL (RFC 3986), PAS à
 // celle des adresses. Un appelant qui recopie l'hôte d'une URL sans le
 // déparenthéser doit se faire jeter, pas produire une destination silencieuse.
-TEST(IPv6Notation, DISABLED_RefuseUnLitteralEntreCrochets)
+TEST(IPv6Notation, RefuseUnLitteralEntreCrochets)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -375,7 +375,7 @@ TEST(IPv6Notation, DISABLED_RefuseUnLitteralEntreCrochets)
 // valide, à part entière. Aucune API ne doit donc jamais tenter de découper une
 // chaîne « adresse:port » en v6 — le port reste un argument séparé. Ce test
 // verrouille l'interprétation : la chaîne est acceptée COMME ADRESSE.
-TEST(IPv6Notation, DISABLED_AdresseEtPortNeSeConcatenentJamais)
+TEST(IPv6Notation, AdresseEtPortNeSeConcatenentJamais)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -385,7 +385,7 @@ TEST(IPv6Notation, DISABLED_AdresseEtPortNeSeConcatenentJamais)
 // L'adresse non spécifiée `::` est l'équivalent v6 de 0.0.0.0, donc la
 // convention « le contrôleur ignore l'adresse du pair, qu'il latche » doit valoir
 // aussi. Elle est acceptée, et n'est pas une destination réelle.
-TEST(IPv6Notation, DISABLED_AccepteLAdresseNonSpecifieeCommeDemandeDeLatch)
+TEST(IPv6Notation, AccepteLAdresseNonSpecifieeCommeDemandeDeLatch)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -394,7 +394,7 @@ TEST(IPv6Notation, DISABLED_AccepteLAdresseNonSpecifieeCommeDemandeDeLatch)
 
 // Chaîne vide et pointeur nul : refus franc (déjà vrai depuis le durcissement
 // de SetRemotePort, ce test est le garde-fou de non-régression).
-TEST(IPv6Notation, DISABLED_RefuseUneChaineVide)
+TEST(IPv6Notation, RefuseUneChaineVide)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -407,7 +407,7 @@ TEST(IPv6Notation, DISABLED_RefuseUneChaineVide)
 // ou un découpage manuel + if_nametoindex). Décision à prendre : soit on accepte
 // la zone, soit on refuse toute link-local — mais pas « on accepte fe80::1 tout
 // court », qui donne une destination inatteignable.
-TEST(IPv6Notation, DISABLED_GereLIdentifiantDeZoneDUneLinkLocal)
+TEST(IPv6Notation, GereLIdentifiantDeZoneDUneLinkLocal)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -420,7 +420,7 @@ TEST(IPv6Notation, DISABLED_GereLIdentifiantDeZoneDUneLinkLocal)
 
 // Forme « IPv4-compatible » (::a.b.c.d), dépréciée par la RFC 4291 §2.5.5.1.
 // Elle reste syntaxiquement valide : à accepter ou refuser, mais consciemment.
-TEST(IPv6Notation, DISABLED_TraiteLaFormeIPv4CompatibleDepreciee)
+TEST(IPv6Notation, TraiteLaFormeIPv4CompatibleDepreciee)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -429,7 +429,7 @@ TEST(IPv6Notation, DISABLED_TraiteLaFormeIPv4CompatibleDepreciee)
 }
 
 // Quatre octets suffisent après ::ffff: — cinq n'est pas une adresse.
-TEST(IPv6Notation, DISABLED_RefuseUnV4MappedMalforme)
+TEST(IPv6Notation, RefuseUnV4MappedMalforme)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -444,7 +444,7 @@ TEST(IPv6Notation, DISABLED_RefuseUnV4MappedMalforme)
  *      de comparaisons de chaînes fausses côté contrôleur et de logs illisibles.
  * ========================================================================= */
 
-TEST(IPv6Canonical, DISABLED_SetAnnouncedIpAccepteUnLitteralV6)
+TEST(IPv6Canonical, SetAnnouncedIpAccepteUnLitteralV6)
 {
 	AnnouncedIpGuard guard;
 	EXPECT_TRUE(RTPSession::SetAnnouncedIp(kDocV6));
@@ -453,7 +453,7 @@ TEST(IPv6Canonical, DISABLED_SetAnnouncedIpAccepteUnLitteralV6)
 
 // ADVERSE — la forme longue et la forme majuscule doivent RESSORTIR canonisées :
 // minuscules, zéros de tête supprimés, plus longue suite de zéros compressée.
-TEST(IPv6Canonical, DISABLED_NormaliseVersLaFormeCanoniqueRFC5952)
+TEST(IPv6Canonical, NormaliseVersLaFormeCanoniqueRFC5952)
 {
 	AnnouncedIpGuard guard;
 
@@ -468,14 +468,14 @@ TEST(IPv6Canonical, DISABLED_NormaliseVersLaFormeCanoniqueRFC5952)
 
 // ADVERSE — annoncer ::1 publie un SDP que personne ne peut joindre. Même
 // raisonnement que le rejet de 127.0.0.1 par l'auto-détection actuelle.
-TEST(IPv6Canonical, DISABLED_RefuseDAnnoncerLaLoopback)
+TEST(IPv6Canonical, RefuseDAnnoncerLaLoopback)
 {
 	AnnouncedIpGuard guard;
 	EXPECT_FALSE(RTPSession::SetAnnouncedIp("::1"));
 }
 
 // ADVERSE — une adresse multicast ou non spécifiée n'est pas annonçable.
-TEST(IPv6Canonical, DISABLED_RefuseDAnnoncerMulticastOuNonSpecifiee)
+TEST(IPv6Canonical, RefuseDAnnoncerMulticastOuNonSpecifiee)
 {
 	AnnouncedIpGuard guard;
 	EXPECT_FALSE(RTPSession::SetAnnouncedIp(kMulticastV6));
@@ -483,7 +483,7 @@ TEST(IPv6Canonical, DISABLED_RefuseDAnnoncerMulticastOuNonSpecifiee)
 }
 
 // Non-régression : le durcissement v6 ne doit pas rendre l'API laxiste sur v4.
-TEST(IPv6Canonical, DISABLED_RefuseTouteChaineQuiNEstPasUneAdresse)
+TEST(IPv6Canonical, RefuseTouteChaineQuiNEstPasUneAdresse)
 {
 	AnnouncedIpGuard guard;
 	EXPECT_FALSE(RTPSession::SetAnnouncedIp("pas une adresse"));
@@ -502,7 +502,7 @@ TEST(IPv6Canonical, DISABLED_RefuseTouteChaineQuiNEstPasUneAdresse)
 
 // Une adresse multicast ne peut pas être une destination RTP unicast : émettre
 // vers ff02::1 arrose tout le segment. Refus attendu.
-TEST(IPv6Subnet, DISABLED_RefuseUneDestinationMulticast)
+TEST(IPv6Subnet, RefuseUneDestinationMulticast)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -512,7 +512,7 @@ TEST(IPv6Subnet, DISABLED_RefuseUneDestinationMulticast)
 // Une ULA (fc00::/7) est l'analogue v6 du RFC 1918 : elle est acceptable comme
 // destination (réseau d'entreprise), c'est la POLITIQUE de rattrapage qui doit
 // décider séparément.
-TEST(IPv6Subnet, DISABLED_AccepteUneUniqueLocalAddressCommeDestination)
+TEST(IPv6Subnet, AccepteUneUniqueLocalAddressCommeDestination)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -523,7 +523,7 @@ TEST(IPv6Subnet, DISABLED_AccepteUneUniqueLocalAddressCommeDestination)
 // l'adresse ENCAPSULE une adresse v4 et un port, et le comportement NAT qui va
 // avec. Elles sont globales au sens du routage, mais se comportent comme des
 // adresses NATées. À classer explicitement, dans un sens ou dans l'autre.
-TEST(IPv6Subnet, DISABLED_ClasseExplicitementTeredoEt6to4)
+TEST(IPv6Subnet, ClasseExplicitementTeredoEt6to4)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -543,7 +543,7 @@ TEST(IPv6Subnet, DISABLED_ClasseExplicitementTeredoEt6to4)
  * ========================================================================= */
 
 // La forme mappée est une adresse valide et doit être acceptée en destination.
-TEST(IPv6Mapped, DISABLED_AccepteUneDestinationV4Mapped)
+TEST(IPv6Mapped, AccepteUneDestinationV4Mapped)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -555,7 +555,7 @@ TEST(IPv6Mapped, DISABLED_AccepteUneDestinationV4Mapped)
 // bascule de cible, et la classification « privée » (RFC 1918) doit s'appliquer
 // À TRAVERS le mapping : sinon, selon la famille de la socket, la même adresse
 // change de politique de rattrapage.
-TEST(IPv6Mapped, DISABLED_UneAdresseMappeeEstEgaleASonEquivalentV4)
+TEST(IPv6Mapped, UneAdresseMappeeEstEgaleASonEquivalentV4)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -569,7 +569,7 @@ TEST(IPv6Mapped, DISABLED_UneAdresseMappeeEstEgaleASonEquivalentV4)
 // ADVERSE — l'annonce doit rester lisible côté SDP : un pair v4 ne comprend pas
 // « ::ffff:192.0.2.1 » dans une ligne `c=IN IP4`. La forme mappée doit être
 // dé-mappée avant publication.
-TEST(IPv6Mapped, DISABLED_LAnnonceDemappeVersLaFormeV4)
+TEST(IPv6Mapped, LAnnonceDemappeVersLaFormeV4)
 {
 	AnnouncedIpGuard guard;
 	ASSERT_TRUE(RTPSession::SetAnnouncedIp("::ffff:192.0.2.1"));
@@ -585,7 +585,7 @@ TEST(IPv6Mapped, DISABLED_LAnnonceDemappeVersLaFormeV4)
  * ========================================================================= */
 
 // Le port RTP écoute-t-il réellement en IPv6 ?
-TEST(IPv6DualStack, DISABLED_LaSocketRtpEcouteEnIPv6)
+TEST(IPv6DualStack, LaSocketRtpEcouteEnIPv6)
 {
 	REQUIRE_IPV6_LOOPBACK();
 	Session sess;
@@ -599,7 +599,7 @@ TEST(IPv6DualStack, DISABLED_LaSocketRtpEcouteEnIPv6)
 // NON-RÉGRESSION — après migration, un pair IPv4 doit continuer d'atteindre la
 // MÊME socket (c'est tout l'intérêt de IPV6_V6ONLY=0 plutôt que deux sockets).
 // Ce test doit passer AVANT comme APRÈS : c'est le garde-fou anti-régression.
-TEST(IPv6DualStack, DISABLED_LaSocketRtpEntendToujoursLIPv4)
+TEST(IPv6DualStack, LaSocketRtpEntendToujoursLIPv4)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -610,7 +610,7 @@ TEST(IPv6DualStack, DISABLED_LaSocketRtpEntendToujoursLIPv4)
 
 // La socket RTCP (port+1) doit être dual-stack au même titre que la socket RTP :
 // une correction partielle laisserait le RTCP sourd en v6.
-TEST(IPv6DualStack, DISABLED_LaSocketRtcpEcouteAussiEnIPv6)
+TEST(IPv6DualStack, LaSocketRtcpEcouteAussiEnIPv6)
 {
 	REQUIRE_IPV6_LOOPBACK();
 	Session sess;
@@ -641,7 +641,7 @@ TEST(IPv6DualStack, DISABLED_LaSocketRtcpEcouteAussiEnIPv6)
  *      dans le même produit, d'où la confusion — le §8 teste l'une, le §6 l'autre.
  * ========================================================================= */
 
-TEST(IPv6Ice, DISABLED_AccepteUnCandidatHostV6)
+TEST(IPv6Ice, AccepteUnCandidatHostV6)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -649,7 +649,7 @@ TEST(IPv6Ice, DISABLED_AccepteUnCandidatHostV6)
 		"candidate:1 1 UDP 2130706431 2001:db8::1 5000 typ host"));
 }
 
-TEST(IPv6Ice, DISABLED_AccepteUnCandidatSrflxV6)
+TEST(IPv6Ice, AccepteUnCandidatSrflxV6)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -659,7 +659,7 @@ TEST(IPv6Ice, DISABLED_AccepteUnCandidatSrflxV6)
 
 // ADVERSE — un navigateur émet des candidats host link-local AVEC zone.
 // Ils doivent être traités (ou ignorés proprement), jamais faire échouer l'appel.
-TEST(IPv6Ice, DISABLED_TraiteUnCandidatLinkLocalAvecZone)
+TEST(IPv6Ice, TraiteUnCandidatLinkLocalAvecZone)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -670,7 +670,7 @@ TEST(IPv6Ice, DISABLED_TraiteUnCandidatLinkLocalAvecZone)
 // ADVERSE — la comparaison de priorités doit rester correcte quand les candidats
 // mélangent les familles : un candidat v6 de priorité supérieure doit l'emporter
 // sur un candidat v4 déjà retenu, et un candidat v4 inférieur ne doit pas revenir.
-TEST(IPv6Ice, DISABLED_LaPrioriteArbitreEntreFamillesMelangees)
+TEST(IPv6Ice, LaPrioriteArbitreEntreFamillesMelangees)
 {
 	Session sess;
 	if (!sess.ok) GTEST_SKIP() << "pas de paire de ports RTP disponible";
@@ -690,7 +690,7 @@ TEST(IPv6Ice, DISABLED_LaPrioriteArbitreEntreFamillesMelangees)
  *      n'XORe que sur le cookie : ce n'est pas une extension de boucle.
  * ========================================================================= */
 
-TEST(IPv6Stun, DISABLED_XorMappedAddressPorteLaFamille2SurVingtOctets)
+TEST(IPv6Stun, XorMappedAddressPorteLaFamille2SurVingtOctets)
 {
 	BYTE transId[12];
 	for (int i = 0; i < 12; ++i)
@@ -720,7 +720,7 @@ TEST(IPv6Stun, DISABLED_XorMappedAddressPorteLaFamille2SurVingtOctets)
 
 // ADVERSE — le XOR de l'adresse v6 court sur 16 octets : cookie (4) PUIS
 // transaction ID (12). Un XOR limité au cookie laisserait 12 octets en clair.
-TEST(IPv6Stun, DISABLED_LeXorCouvreLeCookiePuisLeTransactionId)
+TEST(IPv6Stun, LeXorCouvreLeCookiePuisLeTransactionId)
 {
 	BYTE transId[12];
 	for (int i = 0; i < 12; ++i)
@@ -799,7 +799,7 @@ public:
 // ADVERSE — c'est la sortie RÉELLE de GetMediaCandidates qui est vérifiée, pas
 // une reformulation locale de la règle : sans les crochets, le « : » du port est
 // indissociable de l'adresse et l'URL publiée dans le SDP est inexploitable.
-TEST(IPv6Url, DISABLED_LeLitteralV6EstEncadreParDesCrochets)
+TEST(IPv6Url, LeLitteralV6EstEncadreParDesCrochets)
 {
 	AnnouncedIpGuard guard;
 	ASSERT_TRUE(RTPSession::SetAnnouncedIp(kDocV6));
@@ -815,7 +815,7 @@ TEST(IPv6Url, DISABLED_LeLitteralV6EstEncadreParDesCrochets)
 }
 
 // NON-RÉGRESSION — une adresse v4 ne doit surtout PAS être encadrée.
-TEST(IPv6Url, DISABLED_LAdresseV4NEstPasEncadree)
+TEST(IPv6Url, LAdresseV4NEstPasEncadree)
 {
 	AnnouncedIpGuard guard;
 	ASSERT_TRUE(RTPSession::SetAnnouncedIp("192.0.2.1"));
@@ -833,7 +833,7 @@ TEST(IPv6Url, DISABLED_LAdresseV4NEstPasEncadree)
 // ADVERSE — longueur maximale. Une v6 pleine fait 39 caractères sans zone ; avec
 // « wss:// », les crochets et « :65535 » l'URL dépasse 55 octets, très au-delà du
 // `char url[50]` historique. Le test vérifie que RIEN n'est tronqué.
-TEST(IPv6Url, DISABLED_UneAdresseDeLongueurMaximaleNEstPasTronquee)
+TEST(IPv6Url, UneAdresseDeLongueurMaximaleNEstPasTronquee)
 {
 	const char* const longest = "2001:0db8:85a3:08d3:1319:8a2e:0370:7344";
 
@@ -860,7 +860,7 @@ TEST(IPv6Url, DISABLED_UneAdresseDeLongueurMaximaleNEstPasTronquee)
 
 // ADVERSE — l'hôte local expose-t-il un AAAA que la résolution actuelle ignore ?
 // Le test ne PASSE que si le mécanisme d'annonce sait le trouver.
-TEST(IPv6Dns, DISABLED_LAutodetectionVoitLesEnregistrementsAAAA)
+TEST(IPv6Dns, LAutodetectionVoitLesEnregistrementsAAAA)
 {
 	char hostname[HOST_NAME_MAX];
 	ASSERT_EQ(0, gethostname(hostname, sizeof hostname));
@@ -897,19 +897,39 @@ TEST(IPv6Dns, DISABLED_LAutodetectionVoitLesEnregistrementsAAAA)
 		<< "l'adresse AAAA de l'hôte doit au minimum être annonçable : " << found;
 }
 
-// ADVERSE — `--public-ip` n'accepte aujourd'hui qu'un LITTÉRAL. Sur une machine
-// double pile, donner un nom est la seule façon de laisser le résolveur trancher.
-TEST(IPv6Dns, DISABLED_PublicIpAccepteUnNomDHote)
+// ADVERSE — `--public-ip` n'acceptait qu'un LITTÉRAL. Sur une machine double
+// pile, donner un nom est la seule façon de laisser le résolveur trancher.
+//
+// PRÉMISSE CORRIGÉE (2026-08-15) : ce test employait « localhost », qui ne
+// résout QUE vers de la loopback. Il ne pouvait pas passer en même temps que
+// `IPv6Canonical.RefuseDAnnoncerLaLoopback`, deux lignes plus haut dans la même
+// suite — annoncer 127.0.0.1 publie un SDP que personne ne peut joindre, et
+// c'est vrai que le contrôleur ait écrit l'adresse ou son nom. La règle retenue
+// est donc : les noms SONT résolus, et le résultat est jugé sur les mêmes
+// critères qu'un littéral. On demande ici ce qui est réellement attendu — que
+// le nom de l'hôte, lui, soit accepté.
+TEST(IPv6Dns, PublicIpAccepteUnNomDHote)
 {
+	char hostname[HOST_NAME_MAX];
+	ASSERT_EQ(0, gethostname(hostname, sizeof hostname));
+
 	AnnouncedIpGuard guard;
-	EXPECT_TRUE(RTPSession::SetAnnouncedIp("localhost"))
+
+	if (!RTPSession::SetAnnouncedIp(hostname))
+		GTEST_SKIP() << "le nom \"" << hostname << "\" ne donne rien d'annoncable ici";
+
+	EXPECT_TRUE(*RTPSession::GetAnnouncedIp())
 		<< "un nom doit être résolu (getaddrinfo), pas rejeté comme "
 		   "« not a valid address » — sinon aucun déploiement nommé n'est possible";
+
+	//... et un nom qui ne mène qu'à la loopback reste refusé, comme le littéral.
+	EXPECT_FALSE(RTPSession::SetAnnouncedIp("localhost"))
+		<< "annoncer la loopback publie un SDP injoignable, nom ou pas";
 }
 
 // ADVERSE — hôte double pile : A ET AAAA. La politique de choix doit être
 // explicite et stable, pas dépendante de l'ordre rendu par le résolveur.
-TEST(IPv6Dns, DISABLED_UnHoteDoublePileChoisitDeFaconDeterministe)
+TEST(IPv6Dns, UnHoteDoublePileChoisitDeFaconDeterministe)
 {
 	addrinfo hints {};
 	hints.ai_family = AF_UNSPEC;

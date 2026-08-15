@@ -353,8 +353,54 @@ void  STUNMessage::AddAddressAttribute(sockaddr_in* addr)
 	//Add it
 	AddAttribute(Attribute::MappedAddress,aux,8);
 }
+/**
+ * XOR-MAPPED-ADDRESS, RFC 5389 §15.2 — LES DEUX FAMILLES.
+ *
+ * La famille se lit dans la sockaddr, elle n'est plus codee en dur a 0x01 : le
+ * parametre reste declare sockaddr_in* pour ne pas casser les appelants, mais
+ * il est traite comme un sockaddr — sa_family et sin_family occupent le meme
+ * offset dans les deux structures, c'est garanti par la sockets API.
+ *
+ * En IPv6 le XOR ne porte PAS que sur le magic cookie : il court sur les 16
+ * octets, soit le cookie (4) PUIS les 96 bits du transaction ID. Ce n'est pas
+ * une extension de boucle, c'est une autre regle — la manquer laisserait 12
+ * octets en clair, et un pair conforme calculerait une adresse fausse.
+ */
 void  STUNMessage::AddXorAddressAttribute(sockaddr_in* addr)
 {
+	AddXorAddressAttribute((const sockaddr*)addr);
+}
+
+void  STUNMessage::AddXorAddressAttribute(const sockaddr* addr)
+{
+	if (!addr)
+		return;
+
+	if (addr->sa_family == AF_INET6)
+	{
+		const sockaddr_in6* in6 = (const sockaddr_in6*)addr;
+		BYTE aux[20];
+
+		//Unused
+		aux[0] = 0;
+		//Family : IPv6
+		aux[1] = 2;
+		//Set port
+		memcpy(aux+2,&in6->sin6_port,2);
+		//Xor it
+		aux[2] ^= MagicCookie[0];
+		aux[3] ^= MagicCookie[1];
+		//Set address
+		memcpy(aux+4,&in6->sin6_addr,16);
+		//Xor : cookie puis transaction ID (RFC 5389 §15.2)
+		for (int i=0;i<4;++i)  aux[4+i]   ^= MagicCookie[i];
+		for (int i=0;i<12;++i) aux[8+i]   ^= transId[i];
+		//Add it
+		AddAttribute(Attribute::XorMappedAddress,aux,20);
+		return;
+	}
+
+	const sockaddr_in* in = (const sockaddr_in*)addr;
 	BYTE aux[8];
 
 	//Unused
@@ -362,12 +408,12 @@ void  STUNMessage::AddXorAddressAttribute(sockaddr_in* addr)
 	//Family
 	aux[1] = 1;
 	//Set port
-	memcpy(aux+2,&addr->sin_port,2);
+	memcpy(aux+2,&in->sin_port,2);
 	//Xor it
 	aux[2] ^= MagicCookie[0];
 	aux[3] ^= MagicCookie[1];
 	//Set addres
-	memcpy(aux+4,&addr->sin_addr.s_addr,4);
+	memcpy(aux+4,&in->sin_addr.s_addr,4);
 	//Xor it
 	aux[4] ^= MagicCookie[0];
 	aux[5] ^= MagicCookie[1];

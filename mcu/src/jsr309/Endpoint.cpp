@@ -6,6 +6,7 @@
  */
 #include "log.h"
 #include "Endpoint.h"
+#include "ipaddress.h"
 #include "RTPEndpoint.h"
 #include "WSEndpoint.h"
 
@@ -807,7 +808,17 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 		if ( protocol == MediaFrame::WS && WSEndpoint::IsLocalSecure() )
 			scheme = "wss";
 
-		std::string url = std::string(scheme) + "://" + host;
+		//RFC 3986 §3.2.2 : dans une URL, un littéral IPv6 s'écrit ENTRE
+		//CROCHETS — sans eux le « : » du port est indissociable de l'adresse,
+		//et l'URL publiée dans le SDP est inexploitable. `host` peut aussi être
+		//un nom (--websocket-host) : on n'encadre donc que ce qui se parse
+		//comme une adresse v6. La règle vaut pour les URL SEULEMENT : jamais
+		//dans un `c=` ni un `a=candidate:`, où les champs sont séparés par des
+		//espaces et l'ambiguïté n'existe pas.
+		const IPAddress hostAddr = IPAddress::Parse(host);
+		const std::string authority = hostAddr.IsV6() ? hostAddr.ToUrlString() : std::string(host);
+
+		std::string url = std::string(scheme) + "://" + authority;
 		if (port > 0)
 			url += ":" + std::to_string(port);
 

@@ -20,6 +20,7 @@
 #include "stunmessage.h"
 #include "remoterateestimator.h"
 #include "dtls.h"
+#include "ipaddress.h"
 
 
 
@@ -89,6 +90,13 @@ public:
 	//constructeur (utilisé tel quel par MediaBridgeSession, non converti).
 	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
 	int Init();
+	//Adresse à lier par les sockets média, AVANT Init : c'est elle qui décide de
+	//l'interface empruntée, donc du profil d'adressage effectif de cette jambe
+	//(§14 de ipv6.md). Vide (le défaut) = écoute dual-stack sur toutes les
+	//interfaces, comportement historique. Rend false si l'adresse est
+	//inutilisable ; la session reste alors sur le défaut.
+	bool SetBindAddress(const IPAddress& addr);
+	const IPAddress& GetBindAddress() const { return bindAddress; }
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetLocalPort(int recvPort);
 	int GetLocalPort();
@@ -253,7 +261,7 @@ private:
 	int  ReadRTCP();
 	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
 	//unknownPtCount). Rend toujours 0 : l'appelant jette le paquet.
-	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from);
+	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const IPEndpoint& from);
 	//Rattrapage de renégociation : le codec que la map de réception PRÉCÉDENTE
 	//donnait à ce payload type, ou RTPMap::NotFound (cf. rtpMapInPrev).
 	BYTE CodecFromPreviousMap(BYTE type);
@@ -283,7 +291,7 @@ private:
 	//P3 (offreur WebRTC) : binding requests STUN sortants vers un pair ICE-lite
 	void SendICEBindingRequest();               //émet un Binding Request vers sendAddr
 	void DriveICEChecks();                       //depuis Run : émission + retransmission
-	void OnICEConnectivityConfirmed(sockaddr_in* from); //réponse valide reçue -> débloque
+	void OnICEConnectivityConfirmed(const IPEndpoint& from); //réponse valide reçue -> débloque
 
 private:
 protected:
@@ -480,7 +488,7 @@ private:
 	bool	natLatch;
 	bool	natCorrected;
 	bool	natRtcpCorrected;
-	bool	NatCorrectable(in_addr_t announced);
+	bool	NatCorrectable(const IPAddress& announced);
 	std::mutex mutex;
 
 	//--- Prédicats d'adressage (étape 3 du chantier IPv6, cf. ipv6.md §1.5) ---
@@ -494,32 +502,57 @@ private:
 	//
 	// Ils sont volontairement à comportement CONSTANT : à ce stade, ils rendent
 	// exactement ce que rendaient les tests qu'ils remplacent.
-	bool HasRemote()     const { return sendAddr.sin_addr.s_addr     != INADDR_ANY; }
-	bool HasRemoteRtcp() const { return sendRtcpAddr.sin_addr.s_addr != INADDR_ANY; }
-	bool HasRecIP()      const { return recIP                        != INADDR_ANY; }
-	bool HasIceRemote()  const { return iceRemoteIP                  != INADDR_ANY; }
+	bool HasRemote()     const { return sendAddr.IsSet();     }
+	bool HasRemoteRtcp() const { return sendRtcpAddr.IsSet(); }
+	bool HasRecIP()      const { return recIP.IsSet();        }
+	bool HasIceRemote()  const { return iceRemoteIP.IsSet();  }
 
-	// Deux adresses désignent-elles le même pair ? Trivial en IPv4 — mais
-	// PAS en dual-stack, où `::ffff:1.2.3.4` et `1.2.3.4` sont le même hôte
-	// (ipv6.md §1.2). Toutes les comparaisons d'adresse passent par ici pour
-	// que cette règle n'ait qu'un seul point d'application le jour venu.
-	static bool SameAddr(in_addr_t a, in_addr_t b) { return a == b; }
+	// Deux adresses désignent-elles le même pair ? La question n'est PAS
+	// triviale en dual-stack : le même hôte v4 s'écrit `1.2.3.4` quand le
+	// contrôleur l'annonce, et `::ffff:1.2.3.4` quand son paquet arrive sur
+	// notre socket v6. `IPAddress::operator==` dé-mappe avant de comparer,
+	// donc le latching NAT ne se déclenche pas sur cette seule différence
+	// d'écriture — c'était LE piège du dual-stack (ipv6.md §1.2).
+	static bool SameAddr(const IPAddress& a, const IPAddress& b) { return a == b; }
+
+	// Destination dans la famille de NOTRE socket : forme v6 mappée quand la
+	// socket est dual-stack (le cas par défaut), forme native quand elle est
+	// liée à une adresse v4 précise. Un seul endroit décide, donc aucun site
+	// d'émission ne peut se tromper de forme.
+	IPEndpoint Dest(const IPAddress& addr, WORD port) const
+	{
+		return (socketFamily == AF_INET6) ? addr.ToDualStack(port) : addr.To(port);
+	}
 
 	// Pose la même destination sur les deux jambes. Les deux appelants
 	// (StartSending et le basculement sur candidat ICE) le faisaient ligne à
 	// ligne ; en oublier une donnerait un RTCP émis vers l'ancien pair.
-	void SetRemoteIp(in_addr_t addr)
+	void SetRemoteIp(const IPAddress& addr)
 	{
-		sendAddr.sin_addr.s_addr     = addr;
-		sendRtcpAddr.sin_addr.s_addr = addr;
+		sendAddr     = Dest(addr,sendAddr.Port());
+		sendRtcpAddr = Dest(addr,sendRtcpAddr.Port());
 	}
+
+	//Famille des sockets média : AF_INET6 + IPV6_V6ONLY=0 par défaut (les deux
+	//familles sur une socket), AF_INET si le profil d'adressage impose une
+	//adresse de bind v4. Posée par Init.
+	int socketFamily;
+
+	//IPV6_V6ONLY=0 sur une socket v6 : elle entend alors les deux familles.
+	void SetDualStack(int fd);
+
+	//Adresse à lier, vide = toutes interfaces. C'est elle qui décide de
+	//l'interface empruntée quand un profil d'adressage est demandé (§14 de
+	//ipv6.md) ; vide, on garde l'écoute historique sur `::`.
+	IPAddress bindAddress;
 
 	//Tipos
 	int 	sendType;
 
-	//Transmision
-	sockaddr_in sendAddr;
-	sockaddr_in sendRtcpAddr;
+	//Transmision. Destinations RTP et RTCP : deux endpoints DISTINCTS — le
+	//rattrapage NAT du RTCP est independant de celui du RTP (voir ReadRTCP).
+	IPEndpoint sendAddr;
+	IPEndpoint sendRtcpAddr;
 	//srtp_protect() chiffre en place ET ajoute le trailer SRTP (jusqu'a
 	//SRTP_MAX_TRAILER_LEN octets au-dela de la charge utile) : le tampon doit
 	//donc reserver MTU + trailer, sinon debordement a l'emission (le memset du
@@ -535,8 +568,10 @@ private:
 	DWORD	recSR;
 	//Recepcion
 	BYTE	recBuffer[MTU];
-	in_addr_t recIP;
-	in_addr_t iceRemoteIP;
+	//Source reellement observee, et pair ICE retenu. Dé-mappees a l'entree :
+	//un pair v4 arrivant sur la socket dual-stack se compare a son annonce v4.
+	IPAddress recIP;
+	IPAddress iceRemoteIP;
 	DWORD	  recPort;
 
 	//RTP Map types

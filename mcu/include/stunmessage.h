@@ -113,6 +113,8 @@ public:
 	void  AddAttribute(Attribute::Type type);
 	void  AddAddressAttribute(sockaddr_in *addr);
 	void  AddXorAddressAttribute(sockaddr_in *addr);
+	//Meme attribut, les deux familles : la famille est lue dans la sockaddr
+	void  AddXorAddressAttribute(const sockaddr *addr);
 	void  AddUsernameAttribute(const char* local,const char* remote);
 
 	Type GetType()		{ return type; }
