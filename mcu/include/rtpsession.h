@@ -481,8 +481,38 @@ private:
 	bool	natCorrected;
 	bool	natRtcpCorrected;
 	bool	NatCorrectable(in_addr_t announced);
-	static bool IsRFC1918(in_addr_t addr);
-	std::mutex mutex;	
+	std::mutex mutex;
+
+	//--- Prédicats d'adressage (étape 3 du chantier IPv6, cf. ipv6.md §1.5) ---
+	//
+	// « Pas encore d'adresse » se disait jusqu'ici `== INADDR_ANY`, répété sur
+	// une vingtaine de sites. Or INADDR_ANY est une ADRESSE (0.0.0.0, celle
+	// qu'on lie pour écouter partout), pas une sentinelle : la convention ne
+	// survit pas au passage en sockaddr_storage, où l'absence se dit
+	// `ss_family == AF_UNSPEC`. Ces prédicats rassemblent la convention en UN
+	// SEUL endroit — l'étape 5 les réécrit, pas leurs appelants.
+	//
+	// Ils sont volontairement à comportement CONSTANT : à ce stade, ils rendent
+	// exactement ce que rendaient les tests qu'ils remplacent.
+	bool HasRemote()     const { return sendAddr.sin_addr.s_addr     != INADDR_ANY; }
+	bool HasRemoteRtcp() const { return sendRtcpAddr.sin_addr.s_addr != INADDR_ANY; }
+	bool HasRecIP()      const { return recIP                        != INADDR_ANY; }
+	bool HasIceRemote()  const { return iceRemoteIP                  != INADDR_ANY; }
+
+	// Deux adresses désignent-elles le même pair ? Trivial en IPv4 — mais
+	// PAS en dual-stack, où `::ffff:1.2.3.4` et `1.2.3.4` sont le même hôte
+	// (ipv6.md §1.2). Toutes les comparaisons d'adresse passent par ici pour
+	// que cette règle n'ait qu'un seul point d'application le jour venu.
+	static bool SameAddr(in_addr_t a, in_addr_t b) { return a == b; }
+
+	// Pose la même destination sur les deux jambes. Les deux appelants
+	// (StartSending et le basculement sur candidat ICE) le faisaient ligne à
+	// ligne ; en oublier une donnerait un RTCP émis vers l'ancien pair.
+	void SetRemoteIp(in_addr_t addr)
+	{
+		sendAddr.sin_addr.s_addr     = addr;
+		sendRtcpAddr.sin_addr.s_addr = addr;
+	}
 
 	//Tipos
 	int 	sendType;

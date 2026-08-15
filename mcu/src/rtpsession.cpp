@@ -22,6 +22,7 @@
 #include "medkit/codecs.h"
 #include "rtp.h"
 #include "rtpsession.h"
+#include "ipaddress.h"
 #include "stunmessage.h"
 extern "C" {
 #include <libavutil/base64.h>
@@ -62,6 +63,23 @@ public:
 SRTPLib srtp;
 
 DWORD RTPSession::minLocalPort = 49152;
+
+/***********************************
+* V4Address
+*	Passerelle entre l'etat d'adressage encore IPv4 de RTPSession (in_addr_t, en
+*	ordre reseau) et le type d'adresse commun. Elle disparaitra avec lui a
+*	l'etape 5 du chantier IPv6 (voir ipv6.md §6) : d'ici la, elle evite de
+*	dupliquer une deuxieme fois la connaissance des plages d'adresses.
+***********************************/
+static IPAddress V4Address(in_addr_t addr)
+{
+	sockaddr_in sa;
+	memset(&sa,0,sizeof(sa));
+	sa.sin_family      = AF_INET;
+	sa.sin_addr.s_addr = addr;
+	return IPAddress::FromSockaddr((const sockaddr*)&sa);
+}
+
 DWORD RTPSession::maxLocalPort = 65535;
 
 bool RTPSession::SetPortRange(int minPort, int maxPort)
@@ -1040,31 +1058,6 @@ bool RTPSession::SetSendingCodec(DWORD codec)
 }
 
 /***********************************
-* IsRFC1918
-*	Adresse non routable sur l'Internet public : le pair qui l'annonce dans son
-*	SDP est derrière un NAT (ou nous ment), son média ne peut pas nous parvenir
-*	de là. Seule une telle annonce ouvre droit au rattrapage (voir SendPacket) :
-*	sur une adresse publique, une divergence est plus probablement du routage
-*	asymétrique légitime qu'un NAT à corriger.
-***********************************/
-bool RTPSession::IsRFC1918(in_addr_t addr)
-{
-	//addr est en ordre réseau
-	DWORD ip = ntohl(addr);
-
-	//10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (RFC 1918)
-	if ((ip & 0xFF000000) == 0x0A000000) return true;
-	if ((ip & 0xFFF00000) == 0xAC100000) return true;
-	if ((ip & 0xFFFF0000) == 0xC0A80000) return true;
-	//100.64.0.0/10 : NAT opérateur (RFC 6598), même symptôme
-	if ((ip & 0xFFC00000) == 0x64400000) return true;
-	//169.254.0.0/16 : link-local (RFC 3927), jamais routable jusqu'à nous
-	if ((ip & 0xFFFF0000) == 0xA9FE0000) return true;
-
-	return false;
-}
-
-/***********************************
 * NatCorrectable
 *	Règle commune aux rattrapages RTP et RTCP : le contrôleur l'autorise, ICE
 *	n'est pas en jeu, et l'adresse annoncée est privée. La *preuve* (un paquet
@@ -1081,7 +1074,11 @@ bool RTPSession::NatCorrectable(in_addr_t announced)
 	if (iceRemotePwd || iceLocalPwd)
 		return false;
 
-	return IsRFC1918(announced);
+	//Plages privées v4 au sens propre (10/8, 172.16/12, 192.168/16, 100.64/10,
+	//169.254/16) : exactement l'ancienne IsRFC1918, désormais portée par IPAddress.
+	//IsPrivate() NE convient PAS ici : elle répond « non routable », ce qui couvre
+	//aussi les plages de documentation ou réservées — nullement NATées.
+	return V4Address(announced).IsPrivateV4();
 }
 
 /***********************************
@@ -1109,7 +1106,7 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 		natLatch = true;
 
 	//If we already have one and it is a NATed
-	if (recIP!=INADDR_ANY && ipAddr==INADDR_ANY)
+	if (HasRecIP() && ipAddr==INADDR_ANY)
 	{
 		//Exit
 		Log("-SetRemotePort NAT already bound to [%s:%d]\n",inet_ntoa(sendAddr.sin_addr),recPort);
@@ -1126,8 +1123,7 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	natRtcpCorrected = false;
 
 	//Ip y puerto de destino
-	sendAddr.sin_addr.s_addr 	= ipAddr;
-	sendRtcpAddr.sin_addr.s_addr 	= ipAddr;
+	SetRemoteIp(ipAddr);
 	sendAddr.sin_port 		= htons(sendPort);
 	
 	//Check if doing rtcp muxing
@@ -1195,7 +1191,7 @@ void RTPSession::FlushDTLS()
 {
 	//Rien à émettre tant que la destination n'est pas connue (StartSending /
 	//candidat ICE / latch STUN n'ont pas encore fixé sendAddr).
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		return;
 
 	BYTE buffer[MTU];
@@ -1223,7 +1219,7 @@ void RTPSession::DriveDTLSClientHandshake()
 	//Rôle client uniquement, DTLS prêt, handshake pas terminé, destination connue.
 	if (!dtls.IsInited() || !dtls.IsClientRole() || dtls.IsHandshakeCompleted())
 		return;
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		return;
 
 	//Première émission : le ClientHello généré par dtls.Init() attend dans write_bio.
@@ -1272,7 +1268,7 @@ void RTPSession::SendICEBindingRequest()
 	//Il faut les credentials (locales+distantes) et une destination connue.
 	if (!iceLocalUsername || !iceRemoteUsername || !iceRemotePwd)
 		return;
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		return;
 
 	//Transaction id (0 | timestamp), mémorisé pour corréler la réponse.
@@ -1310,7 +1306,7 @@ void RTPSession::DriveICEChecks()
 		return;
 	if (!iceLocalUsername || !iceRemoteUsername || !iceRemotePwd)
 		return;
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		return;
 
 	//Première émission immédiate.
@@ -1336,12 +1332,12 @@ void RTPSession::DriveICEChecks()
 void RTPSession::OnICEConnectivityConfirmed(sockaddr_in* from)
 {
 	//Latch symétrique de l'adresse distante si pas encore fixée.
-	if (recIP == INADDR_ANY)
+	if (!HasRecIP())
 	{
 		recIP   = from->sin_addr.s_addr;
 		recPort = ntohs(from->sin_port);
 	}
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 	{
 		sendAddr.sin_addr.s_addr = from->sin_addr.s_addr;
 		sendAddr.sin_port        = from->sin_port;
@@ -1413,8 +1409,7 @@ int RTPSession::AddICECandidate(const char* candidate)
 
 	//Reconfigure la cible d'envoi RTP/RTCP
 	mutex.lock();
-	sendAddr.sin_addr.s_addr     = ipAddr;
-	sendRtcpAddr.sin_addr.s_addr = ipAddr;
+	SetRemoteIp(ipAddr);
 	sendAddr.sin_port            = htons(port);
 	sendRtcpAddr.sin_port        = htons(muxRTCP ? port : port+1);
 	iceRemotePriority            = priority;
@@ -1433,7 +1428,7 @@ int RTPSession::AddICECandidate(const char* candidate)
 int RTPSession::SendEmptyPacket()
 {
 	//Check if we have sendinf ip address
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		//Exit
 		return 0;
 
@@ -1451,7 +1446,7 @@ int RTPSession::SendEmptyPacket()
 int RTPSession::SendNATPrimingPacket()
 {
 	//Destination inconnue : rien à émettre
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		return 0;
 
 	//En-tête RTP minimal mais valide (V=2, P=0, X=0, CC=0, M=0). PT = type d'envoi
@@ -1479,7 +1474,7 @@ void RTPSession::ArmNATPriming()
 {
 	if (encript)
 		return;
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 		return;
 
 	natPrimingLeft = NAT_PRIMING_BURST;
@@ -1641,7 +1636,7 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 	int ret = 0;
 
 	//Check if we have sendinf ip address
-	if (sendRtcpAddr.sin_addr.s_addr == INADDR_ANY && !muxRTCP)
+	if (!HasRemoteRtcp() && !muxRTCP)
 	{
 		//Debug
 		Debug("-Error sending rtcp packet, no remote IP yet\n");
@@ -1703,10 +1698,10 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	if (!running) return 0;
 	
 	//Check if we have sendinf ip address
-	if (sendAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemote())
 	{
 		//Do we have rec ip?
-		if (recIP!=INADDR_ANY )
+		if (HasRecIP())
 		{
 			//Do NAT
 			sendAddr.sin_addr.s_addr = recIP;
@@ -1725,7 +1720,7 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			return 0;
 		}
 	}
-	else if ( recIP != INADDR_ANY && recIP != sendAddr.sin_addr.s_addr )
+	else if ( HasRecIP() && !SameAddr(recIP,sendAddr.sin_addr.s_addr) )
         {
 		//Le pair a annoncé une adresse privée dans son SDP mais son RTP nous arrive
 		//d'ailleurs : c'est le mapping d'un NAT symétrique, qui a réécrit l'adresse ET
@@ -2011,8 +2006,8 @@ int RTPSession::ReadRTCP()
 	//port RTCP est indépendant de celui du RTP : on le prend sur *ce* paquet plutôt
 	//que de le deviner à recPort+1. Sans objet en rtcp-mux, où le RTCP part sur
 	//sendAddr (déjà corrigé côté RTP).
-	if (sendRtcpAddr.sin_addr.s_addr != INADDR_ANY
-	    && sendRtcpAddr.sin_addr.s_addr != from_addr.sin_addr.s_addr
+	if (HasRemoteRtcp()
+	    && !SameAddr(sendRtcpAddr.sin_addr.s_addr,from_addr.sin_addr.s_addr)
 	    && !natRtcpCorrected
 	    && NatCorrectable(sendRtcpAddr.sin_addr.s_addr))
 	{
@@ -2024,7 +2019,7 @@ int RTPSession::ReadRTCP()
 	}
 
 	//Check if we have sendinf ip address
-	if (sendRtcpAddr.sin_addr.s_addr == INADDR_ANY)
+	if (!HasRemoteRtcp())
 	{
 		//Do NAT
 		sendRtcpAddr.sin_addr.s_addr = from_addr.sin_addr.s_addr;
@@ -2143,7 +2138,7 @@ int RTPSession::ReadRTP()
 			//Clean response
 			delete(resp);
 
-			if ( iceRemoteIP == INADDR_ANY )
+			if ( !HasIceRemote() )
 			{
 				iceRemoteIP = from_addr.sin_addr.s_addr;
 			}
@@ -2159,13 +2154,13 @@ int RTPSession::ReadRTP()
 			//If set
 			if (stun->HasAttribute(STUNMessage::Attribute::IceControlled)
 				|| stun->HasAttribute(STUNMessage::Attribute::UseCandidate)
-				|| iceRemoteIP == from_addr.sin_addr.s_addr)
+				|| SameAddr(iceRemoteIP,from_addr.sin_addr.s_addr))
 			{
 				// We should check that username matches
 				if (iceRemoteUsername)
 				{
 					// ICE is enabled
-					if ( recIP == INADDR_ANY )
+					if ( !HasRecIP() )
 					{
 						// set recIP if not set
 						recIP = from_addr.sin_addr.s_addr;
@@ -2173,7 +2168,7 @@ int RTPSession::ReadRTP()
 					}
 					
 					
-					if ( sendAddr.sin_addr.s_addr != recIP 
+					if ( !SameAddr(sendAddr.sin_addr.s_addr,recIP) 
 					     || 
 					     sendAddr.sin_port != htons(recPort) )
 					{
@@ -2277,7 +2272,7 @@ int RTPSession::ReadRTP()
 			//Validation pragmatique (parité avec le niveau ICE existant : pas de
 			//vérif MESSAGE-INTEGRITY sur l'entrant) : une Binding Response provenant du
 			//pair attendu confirme la connectivité.
-			if (iceRemoteIP == INADDR_ANY || iceRemoteIP == from_addr.sin_addr.s_addr)
+			if (!HasIceRemote() || SameAddr(iceRemoteIP,from_addr.sin_addr.s_addr))
 				OnICEConnectivityConfirmed(&from_addr);
 			else
 				Debug("ICE: Binding Response d'une source inattendue, ignorée [%p]\n",this);
@@ -2350,7 +2345,7 @@ int RTPSession::ReadRTP()
 	}
 	
 	//If we don't have originating IP
-	if (recIP != from_addr.sin_addr.s_addr)
+	if (!SameAddr(recIP,from_addr.sin_addr.s_addr))
 	{
 		//Bind it to first received packet ip
 		recIP = from_addr.sin_addr.s_addr;
@@ -2671,18 +2666,18 @@ int RTPSession::Run()
 		//non terminé, destination connue). Le cas serveur/passive reste inchangé.
 		bool dtlsDriving = dtls.IsInited() && dtls.IsClientRole()
 				&& !dtls.IsHandshakeCompleted()
-				&& sendAddr.sin_addr.s_addr != INADDR_ANY;
+				&& HasRemote();
 
 		//P3 : émettons-nous des checks STUN sortants ? (creds connues, destination
 		//connue, connectivité pas encore confirmée). Face à un pair ICE-lite qui
 		//n'initie jamais ; s'arrête dès la 1re réponse/check entrant.
 		bool iceDriving = !iceConnected && iceLocalUsername && iceRemoteUsername
-				&& iceRemotePwd && sendAddr.sin_addr.s_addr != INADDR_ANY;
+				&& iceRemotePwd && HasRemote();
 
 		//P6 : reste-t-il des paquets d'amorçage NAT à émettre ? (rafale armée, clair,
 		//destination connue). Cadencés ~20 ms par le poll borné ci-dessous.
 		bool natPriming = natPrimingLeft > 0 && !encript
-				&& sendAddr.sin_addr.s_addr != INADDR_ANY;
+				&& HasRemote();
 
 		//Attente : infinie par défaut, bornée si watchdog armé et/ou handshake DTLS
 		//client / checks ICE en cours (on prend le plus court des seuils).

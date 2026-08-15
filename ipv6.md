@@ -155,6 +155,28 @@ Sur `sockaddr_storage` cette sentinelle disparaît : il faut une garde explicite
 treize tests dispersés par un prédicat unique `HasRemote()` est un refactor à
 comportement constant, testable seul, qui rend toute la suite mécanique.
 
+> **Fait le 2026-08-15** (étape 3). `rtpsession.h` porte désormais quatre
+> prédicats inline — `HasRemote()`, `HasRemoteRtcp()`, `HasRecIP()`,
+> `HasIceRemote()` — plus `SameAddr(a,b)` par où passent **toutes** les
+> comparaisons d'adresse, et `SetRemoteIp()` qui pose la cible sur les deux
+> jambes d'un coup (les deux appelants le faisaient ligne à ligne : en oublier
+> une donnait un RTCP émis vers l'ancien pair). Vingt-huit sites convertis, à
+> comportement **strictement constant** — les suites `RtpLatching`,
+> `RtpRtcp` et `RtpRenegotiation` en font foi.
+>
+> Ne restent que trois `INADDR_ANY`, et ils sont légitimes : l'initialisation de
+> `recIP`, qui *définit* la sentinelle, et les deux tests sur `ipAddr` dans
+> `SetRemotePort` — celui-là est l'**argument du contrôleur**, pas notre état :
+> « 0.0.0.0 » y veut dire « latche-moi » (§1.3).
+>
+> `IsRFC1918` a disparu, remplacée par `IPAddress::IsPrivateV4()` via une
+> passerelle `V4Address(in_addr_t)` locale, qui s'en ira avec l'état v4 à
+> l'étape 5. C'est le point où le vocabulaire compte : `NatCorrectable` consulte
+> `IsPrivateV4()` et **non** `IsPrivate()`, qui répond « non routable » et
+> couvrirait donc les plages de documentation ou réservées — nullement NATées.
+> Un test le verrouille (`RtpLatching.DoesNotReAimFromANonRoutableButNonPrivateAnnouncement`,
+> sur `192.0.2.1`), en plus de celui qui existait déjà sur `240.0.0.1`.
+
 ### 1.6 Adresse annoncée dans le SDP
 
 `mcu/src/rtpsession.cpp` l. 101-197. Point sensible : `CLAUDE.md` pose comme
@@ -499,7 +521,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 0 | Type d'adresse commun `IPAddress`/`IPEndpoint` (§13, §14.5) | moyen | — | supprime `inet_addr`/`inet_ntoa`/`in_addr_t` du vocabulaire ; socle de tout le reste | **fait** (`556233d`) |
 | 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | 0 | valide le motif sur du code réel ; **3 bugs réels trouvés en chemin** | **fait** |
 | 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrigeait un bug présent, hors IPv6** | **fait** (§11) |
-| 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivate()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | à faire |
+| 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivateV4()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | **fait** |
 | 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | à faire |
 | 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | à faire |
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | à faire |
@@ -747,7 +769,9 @@ c'est ce qui permet à une même conférence d'avoir un participant interne en
 --public-ip  <adresse v6 globale attachée à l'hôte>
 
 --internal-ip <adresse v4 RFC 1918 attachée à l'hôte>
---internal-ip <adresse v6 ULA (fc00::/7) attachée à l'hôte>
+--internal-ip <adresse v6 ULA ou unicast global attachée à l'hôte>
+
+--default-profile <publicv4|publicv6|internalv4|internalv6>
 ```
 
 `--public-ip` et `--internal-ip` sont **répétables**, au plus une fois par
@@ -759,6 +783,21 @@ apparier `--nat` au `--public-ip` **précédent** rendrait le sens de la ligne d
 commande dépendant de l'ordre des arguments, ce qui est un piège d'exploitation
 classique (et invisible dans un fichier `/etc/sysconfig/mediaserver` édité à
 quatre mains).
+
+`--default-profile` désigne le profil qu'emploie un appel **qui n'en demande
+aucun** ; à défaut d'option, c'est `publicv4`, le comportement historique. Elle
+existe pour un cas précis et réel : sur un hôte **v6-only**, un contrôleur non
+mis à jour n'enverra jamais de paramètre de profil, demandera donc `publicv4`,
+et **échouera systématiquement** — le déploiement serait inutilisable tant que le
+contrôleur n'a pas bougé. `--default-profile publicv6` le débloque **sans toucher
+au contrat de contrôle** : c'est une décision d'exploitation, prise là où vit
+déjà le reste de la configuration réseau, et elle laisse intact le principe selon
+lequel un contrôleur qui demande explicitement un profil obtient celui-là ou une
+erreur.
+
+Le profil désigné par `--default-profile` doit être **disponible** au démarrage,
+sinon refus : une valeur par défaut qui échoue à chaque appel est le pire des
+deux mondes.
 
 Contrôles au démarrage, tous **bloquants** — mieux vaut un serveur qui refuse de
 démarrer qu'un serveur qui annonce une adresse fausse pendant six mois :
@@ -807,8 +846,9 @@ positionnel : c'est la seule position qui ne casse pas les appelants).
 - valeurs : `"publicv4"`, `"publicv6"`, `"internalv4"`, `"internalv6"` — des chaînes,
   pas des entiers : elles se lisent dans une trace d'exploitation, et un
   désalignement d'énuméré entre elixip et le mcu serait un bug silencieux ;
-- **absent ou vide ⇒ `publicv4`**, ce qui reproduit à l'identique le comportement
-  actuel ;
+- **absent ou vide ⇒ le profil par défaut**, qui vaut `publicv4` sauf si
+  `--default-profile` en désigne un autre (§14.2) — soit, dans la configuration
+  historique, exactement le comportement actuel ;
 - **profil demandé indisponible ⇒ échec explicite**, avec un code distinguable
   d'une erreur générique (« profil d'adressage indisponible »), de sorte que le
   contrôleur puisse retomber sur un autre profil au lieu de deviner ;
@@ -914,12 +954,8 @@ que `SetAnnouncedIp` avait supprimée.
 
 ### 14.6 Ce qui reste à trancher
 
-1. **Le défaut `publicv4` sur un hôte v6-only.** Un contrôleur non mis à jour
-   n'enverra pas de profil, donc demandera `publicv4`, donc échouera
-   systématiquement. C'est cohérent (« si le profil est indisponible, on
-   échoue »), mais ça rend un tel déploiement inutilisable sans mise à jour du
-   contrôleur. Une option `--default-profile <profil>` lèverait le problème sans
-   toucher au contrat. À décider.
+1. ~~**Le défaut `publicv4` sur un hôte v6-only.**~~ **Tranché** :
+   `--default-profile` est retenue, voir §14.2.
 2. ~~**Nommage exposé.**~~ **Tranché** : `--internal-ip` et `internalv4` /
    `internalv6` d'un côté, `IsPrivate()` au sens des standards de l'autre. Voir
    §14.5. L'option historique `--public-ip` ne bouge pas — d'où la paire

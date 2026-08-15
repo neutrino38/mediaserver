@@ -306,6 +306,25 @@ TEST(RtpLatching, DoesNotReAimFromAPublicAnnouncement)
 		<< "annonce publique : pas de rattrapage (routage asymetrique legitime)";
 }
 
+// ADVERSE — le piège du vocabulaire, appliqué à la POLITIQUE. 192.0.2.1 est une
+// adresse de DOCUMENTATION (RFC 5737) : `IPAddress::IsPrivate()` la dit non
+// routable sur l'Internet public, et pourtant elle n'est nullement NATée. Si
+// `NatCorrectable` consultait `IsPrivate()` plutôt que `IsPrivateV4()`, le
+// rattrapage s'ouvrirait ici — sur une adresse qui n'en relève pas.
+TEST(RtpLatching, DoesNotReAimFromANonRoutableButNonPrivateAnnouncement)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char announced[] = "192.0.2.1";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "non routable n'est pas privee : aucun rattrapage NAT ici";
+}
+
 // Un nouveau SetRemotePort (re-INVITE, UPDATE) rouvre le droit au rattrapage :
 // sinon un pair qui change de mapping resterait coincé sur l'ancienne cible.
 // Ici le pair déplacé se manifeste AVANT toute nouvelle émission — le mécanisme
