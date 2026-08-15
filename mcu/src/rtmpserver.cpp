@@ -1,3 +1,4 @@
+#include "ipaddress.h"
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -44,7 +45,7 @@ RTMPServer::~RTMPServer()
 *************************/
 int RTMPServer::Init(int port)
 {
-	sockaddr_in addr;
+
 
 	//Check not already inited
 	if (inited)
@@ -56,21 +57,27 @@ int RTMPServer::Init(int port)
 	//Save server port
 	serverPort = port;
 
-	//Create socket
-	server = socket(AF_INET, SOCK_STREAM, 0);
+	//Create socket. AF_INET6 + IPV6_V6ONLY=0 : UNE socket pour les deux familles
+	//(un client v4 arrive en ::ffff:a.b.c.d). Les plans de contrôle doivent tout
+	//entendre (§14.5 d'ipv6.md).
+	server = socket(AF_INET6, SOCK_STREAM, 0);
 
 	//Set SO_REUSEADDR on a socket to true (1):
 	int optval = 1;
 	setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
+	//Sans cela une socket v6 n'entend QUE de l'IPv6, et la bascule ferait perdre
+	//tous les clients v4. Échec non fatal, mais journalisé : il change le
+	//service rendu.
+	int v6only = 0;
+	if (setsockopt(server, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
+		Error("-RTMP Server: cannot clear IPV6_V6ONLY (errno %d) — IPv4 clients will not be served\n",errno);
+
 	//Bind to first available port
-	memset(&addr,0,sizeof(addr));
-	addr.sin_family 	= AF_INET;
-	addr.sin_addr.s_addr 	= INADDR_ANY;
-	addr.sin_port 		= htons(serverPort);
+	const IPEndpoint listenOn = IPAddress::Any(AF_INET6).To(serverPort);
 
 	//Bind
-     	if (bind(server, (sockaddr *) &addr, sizeof(addr)) < 0)
+     	if (bind(server, listenOn, listenOn.Len()) < 0)
 		//Error
 		return Error("Can't bind server socket. errno = %d.\n", errno);
 	//I am inited

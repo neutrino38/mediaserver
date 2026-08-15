@@ -1,3 +1,4 @@
+#include "ipaddress.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h> 
@@ -56,27 +57,31 @@ TCPEndpoint::TCPEndpoint(unsigned int nbcnx)
 
 int TCPEndpoint::Init(int port, TCPProtoHandler * handler)
 {
-    sockaddr_in addr;
+
     this->handler = handler;
     
     if ( serverfd >= 0 )
 	return Error("TCPEndpoint: already inited.\n");
 	
-    //Create socket
-    serverfd = socket(AF_INET, SOCK_STREAM, 0);
+    //Create socket. AF_INET6 + IPV6_V6ONLY=0 : les deux familles sur une socket
+    //(§14.5 d'ipv6.md).
+    serverfd = socket(AF_INET6, SOCK_STREAM, 0);
 
     //Set SO_REUSEADDR on a socket to true (1):
     int optval = 1;
     setsockopt(serverfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
+    //Sans cela une socket v6 n'entend QUE de l'IPv6 : les clients v4 seraient
+    //perdus. Échec non fatal, mais journalisé.
+    int v6only = 0;
+    if (setsockopt(serverfd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
+	Error("TCPEndpoint: cannot clear IPV6_V6ONLY (errno %d) — IPv4 clients will not be served\n",errno);
+
     //Bind to first available port
-    memset(&addr,0,sizeof(addr));
-    addr.sin_family 	= AF_INET;
-    addr.sin_addr.s_addr 	= INADDR_ANY;
-    addr.sin_port 		= htons(port);
+    const IPEndpoint listenOn = IPAddress::Any(AF_INET6).To(port);
 
     //Bind
-    if (bind(serverfd, (sockaddr *) &addr, sizeof(addr)) < 0)
+    if (bind(serverfd, listenOn, listenOn.Len()) < 0)
 	//Error
 	return Error("Can't bind server socket. errno = %d.\n", errno);
 

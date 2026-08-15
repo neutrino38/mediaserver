@@ -417,6 +417,27 @@ Options à prévoir, selon l'arbitrage retenu :
 Tous les trois : `sockaddr_in` + `AF_INET` + `INADDR_ANY` + `bind`. Comme le
 serveur WebSocket, ils n'exploitent pas l'adresse du pair — conversion mécanique.
 
+> **Fait le 2026-08-15** (étape 8) : les trois écoutes passent en `AF_INET6` +
+> `IPV6_V6ONLY=0`.
+>
+> **UN DÉFAUT PRÉEXISTANT MIS AU JOUR, À REPRENDRE À PART.** Le test
+> `IPv6Servers.LeServeurRtmpAccepteUnClientV6` passe — un client `[::1]` est bien
+> accepté — mais le démontage se bloque **environ une fois sur dix** :
+> `RTMPServer::End()` → `DeleteAllConnections()` → `RTMPConnection::End()`, juste
+> après le démarrage du thread d'écriture de la connexion (dernières lignes du
+> log : `>Delete all connections`, `>End RTMP connection`, `-RTMP Write
+> Connecttion Thread`). Le blocage **ne se reproduit pas sous gdb** — Heisenbug de
+> synchronisation, réveil perdu au plus probable ; l'attachement à chaud est par
+> ailleurs interdit ici (`ptrace_scope=1`), d'où l'absence de pile.
+>
+> Ce n'est PAS un défaut IPv6 : avant cette étape la connexion v6 échouait, aucune
+> connexion n'était créée, et ce chemin n'était jamais parcouru. Le test le rend
+> atteignable, il ne le cause pas. Il reste donc `DISABLED_` — le garder dans
+> `make check` installerait un blocage aléatoire dans une suite saine, c'est-à-dire
+> payer le prix d'un défaut RTMP dans le chantier IPv6 — et jouable par
+> `make check-ipv6`. Scénario à reprendre : démontage d'une `RTMPConnection` dont
+> le pair raccroche aussitôt après le TCP.
+
 ### 5.2 Client RTMP sortant
 
 `mcu/src/rtmpclientconnection.cpp` l. 81-111 : `gethostbyname(server)` (l. 99) puis
@@ -498,6 +519,30 @@ code déjà en production.
 > Plus un défaut du constructeur de copie (`m_remoteAddressStr` recevait
 > `m_remoteAddressAndPort`).
 
+> **Fait le 2026-08-15** (étape 8). Les quatre écoutes TCP passent en
+> `AF_INET6` + `IPV6_V6ONLY=0` : **une** socket entend les deux familles, un
+> client v4 arrivant en `::ffff:a.b.c.d`. Contrairement au média — dont la
+> famille est choisie par le profil d'adressage — les plans de contrôle doivent
+> tout entendre.
+>
+> Le cas d'Abyss demandait plus qu'un changement de constante : `ServerCreate()`
+> ouvre lui-même une socket `AF_INET`. La socket est donc créée par le
+> mediaserver (bind + listen) et passée telle quelle à `ServerCreateSocket()`.
+>
+> **Restriction de sûreté, ajoutée en cours d'étape** : dès qu'un réseau interne
+> est déclaré (`--internal-ip`), l'API de contrôle XML-RPC **s'y restreint** —
+> elle pilote entièrement le serveur média, elle n'a rien à faire sur une
+> interface publique. Sans `--internal-ip`, on garde l'écoute historique sur
+> toutes les interfaces : le déploiement simple ne doit pas casser.
+> Deux conséquences à connaître :
+> - une seule socket, donc **une seule famille** quand l'adresse est précise. Si
+>   les deux profils internes sont configurés, l'**IPv4 l'emporte** (choix
+>   déterministe, majoritaire sur les plans de contrôle) et le démarrage le
+>   journalise ;
+> - **la loopback n'est plus une porte d'entrée** : un script d'administration
+>   local qui tapait `http://127.0.0.1:8080/mcu` doit viser l'adresse interne.
+>   C'est la contrepartie directe d'un bind sur une adresse précise.
+
 ### 5.5 Côté Java
 
 **`jsr309impl/src/org/murillo/mscontrol/networkconnection/SdpPortManagerImpl.java`** :
@@ -544,7 +589,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | **fait** |
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | **fait côté serveur** ; protos MOTELI à faire dans elixip |
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | **fait** |
-| 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | à faire |
+| 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | **fait** |
 | 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | **XOR-MAPPED fait** ; reste l'adresse annoncée derrière NAT |
 | 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient`, `jsr309impl` (§5.5) | moyen | 6 | la couche JSR-309 suit | à faire |
 
@@ -677,6 +722,12 @@ Le tag est porté par une double convention de nommage — GoogleTest refuse `:`
 un nom, c'est le séparateur de `--gtest_filter` : suites préfixées `IPv6`
 (sélection), tests préfixés `DISABLED_` (exclusion par défaut).
 
+> **État au 2026-08-15, après les étapes 0 à 8 : 40 PASSED, 1 SKIPPED,
+> 0 FAILED.** Le tableau de bord est intégralement vert. Un seul test reste
+> `DISABLED_` — `IPv6Servers.LeServeurRtmpAccepteUnClientV6` — et **il passe** :
+> il est exclu de `make check` parce qu'il expose une course de démontage RTMP
+> préexistante (voir §5.1), pas parce qu'IPv6 y échoue.
+>
 > **État au 2026-08-15, après les étapes 0 à 5 : 37 PASSED, 2 SKIPPED,
 > 2 FAILED.** Les tests devenus verts ont **perdu leur préfixe `DISABLED_`**,
 > comme prévu : ils sont désormais joués par `make check` et servent de

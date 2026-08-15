@@ -280,6 +280,25 @@ si les ports ne sont pas conservés, avec le détail observé.
 Réservé au cas qu'il sert : `--public-ip` doit porter une adresse **RFC 1918
 attachée à l'hôte**. Sur une adresse publique il n'y a rien à découvrir.
 
+#### Où le serveur écoute
+
+| Plan | Écoute | Famille |
+|---|---|---|
+| Média RTP/RTCP | `::` (toutes interfaces), ou l'adresse du profil demandé | dual-stack, ou celle du profil |
+| RTMP, WebSocket, TCPEndpoint | `::` (toutes interfaces) | dual-stack |
+| **API de contrôle XML-RPC** | **l'adresse interne si `--internal-ip` est donnée**, sinon `::` | dual-stack, ou celle de l'adresse interne |
+
+Toutes les écoutes sont **dual-stack** : une seule socket `AF_INET6` avec
+`IPV6_V6ONLY=0`, où un client IPv4 arrive en `::ffff:a.b.c.d`.
+
+> ⚠️ **`--internal-ip` restreint l'API de contrôle.** Elle pilote entièrement le
+> serveur média : dès qu'un réseau interne est déclaré, elle ne doit pas rester
+> exposée sur une interface publique. Deux conséquences : si les deux profils
+> internes sont configurés, la socket ne peut porter qu'une famille et **l'IPv4
+> l'emporte** (le démarrage le journalise) ; et la **loopback n'est plus une
+> porte d'entrée** — un script local qui tapait `http://127.0.0.1:8080/mcu` doit
+> viser l'adresse interne.
+
 #### Contrôles au démarrage
 
 Tous **bloquants**, avec un message destiné à l'exploitant : adresse non

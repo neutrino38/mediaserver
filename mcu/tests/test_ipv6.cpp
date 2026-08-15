@@ -966,7 +966,7 @@ TEST(IPv6Dns, UnHoteDoublePileChoisitDeFaconDeterministe)
  *       client IPv6 ne peut s'y connecter, même en loopback.
  * ========================================================================= */
 
-TEST(IPv6Servers, DISABLED_LeServeurWebSocketAccepteUnClientV6)
+TEST(IPv6Servers, LeServeurWebSocketAccepteUnClientV6)
 {
 	REQUIRE_IPV6_LOOPBACK();
 
@@ -988,6 +988,23 @@ TEST(IPv6Servers, DISABLED_LeServeurWebSocketAccepteUnClientV6)
 		   "donc [::1] est injoignable";
 }
 
+// DÉSACTIVÉ, ET PAS POUR UNE RAISON IPv6 — ce test PASSE : le serveur RTMP
+// accepte bien un client [::1]. Mais il expose une course PRÉEXISTANTE au
+// démontage : `RTMPServer::End()` -> `DeleteAllConnections()` ->
+// `RTMPConnection::End()` se bloque environ une fois sur dix, juste après le
+// démarrage du thread d'écriture de la connexion (dernières lignes du log :
+// « >Delete all connections », « >End RTMP connection », « -RTMP Write
+// Connecttion Thread »). Le blocage ne se reproduit pas sous gdb — Heisenbug de
+// synchronisation, réveil perdu au plus probable.
+//
+// Avant l'étape 8 la connexion v6 échouait, donc aucune connexion n'était créée
+// et ce chemin n'était jamais parcouru : le test le rend atteignable, il ne le
+// cause pas. Le laisser dans `make check` y installerait un blocage aléatoire
+// d'une suite par ailleurs saine — ce serait payer le prix d'un défaut RTMP
+// dans le chantier IPv6. Il reste jouable par `make check-ipv6`.
+//
+// À REPRENDRE À PART : démontage d'une RTMPConnection dont le pair raccroche
+// aussitôt après le TCP (`ipv6.md` §5.1).
 TEST(IPv6Servers, DISABLED_LeServeurRtmpAccepteUnClientV6)
 {
 	REQUIRE_IPV6_LOOPBACK();
