@@ -34,6 +34,7 @@
 #include "rtp.h"
 #include "remoterateestimator.h"
 #include "remoteratecontrol.h"
+#include "rembthrottler.h"
 
 namespace {
 
@@ -327,6 +328,183 @@ TEST(RateControlDetector, QuelquesPertesRaresNeSontPasUneCongestion)
 	}
 	EXPECT_NE(RemoteRateControl::OverUsing, ctrl.GetUsage())
 		<< "6 pertes isolées sur ~3000 paquets déclarées congestion (§3.3)";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOT 2 — l'amortisseur du feedback sortant (RembThrottler) et le paquet REMB.
+//
+// L'amortisseur est pur : horloge donnée par l'appelant, aucune émission. Les
+// tests énoncent la règle du témoin — une baisse part tout de suite, une hausse
+// attend 200 ms, un plafond externe compose par min().
+// ─────────────────────────────────────────────────────────────────────────────
+
+// La toute première estimation part sans attendre : rien n'a encore été dit au
+// pair, et le retenir 200 ms retarderait l'ouverture de la boucle.
+TEST(RateControlThrottler, LaPremiereAnnoncePartTOutDeSuite)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	EXPECT_TRUE(throttler.OnEstimateChanged(500000, 0, out));
+	EXPECT_EQ(500000u, out);
+}
+
+// Une hausse est une bonne nouvelle : elle peut attendre la période. C'est tout
+// l'objet de l'amortisseur — ne pas émettre un paquet RTCP par soubresaut de
+// l'estimateur.
+TEST(RateControlThrottler, UneHausseAttendLaPeriode)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(500000, 1000, out));
+
+	EXPECT_FALSE(throttler.OnEstimateChanged(600000, 1100, out))
+		<< "hausse annoncée avant les 200 ms de la période";
+	EXPECT_TRUE(throttler.OnEstimateChanged(600000, 1201, out));
+	EXPECT_EQ(600000u, out);
+}
+
+// Une baisse franche est le message urgent : le lien sature, le pair doit
+// ralentir maintenant, pas dans 200 ms.
+TEST(RateControlThrottler, UneBaisseFranchePartImmediatement)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(500000, 1000, out));
+
+	EXPECT_TRUE(throttler.OnEstimateChanged(300000, 1010, out))
+		<< "baisse de 40 % retenue par la période";
+	EXPECT_EQ(300000u, out);
+}
+
+// Le seuil de 3 % sépare la baisse d'un bruit de mesure : sous le seuil, on
+// attend la période comme pour une hausse.
+TEST(RateControlThrottler, UneBaisseDansLeBruitAttendLaPeriode)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+
+	// -1 % : 990000 * 1,03 = 1 019 700 > 1 000 000, donc retenu.
+	EXPECT_FALSE(throttler.OnEstimateChanged(990000, 1100, out));
+	// -5 % : 950000 * 1,03 = 978 500 < 1 000 000, donc immédiat.
+	EXPECT_TRUE(throttler.OnEstimateChanged(950000, 1110, out));
+	EXPECT_EQ(950000u, out);
+}
+
+// Le plafond venu de l'autre patte (lot 5) compose par min() : on annonce le
+// plus contraint des deux, jamais la mesure locale seule.
+TEST(RateControlThrottler, LePlafondExterneComposeParMin)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_EQ(2000000u, out);
+
+	// Le plafond mord : il part tout de suite.
+	EXPECT_TRUE(throttler.SetMaxBitrate(800000, 1010, out));
+	EXPECT_EQ(800000u, out);
+
+	// Et il continue de mordre sur les estimations suivantes.
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1300, out));
+	EXPECT_EQ(800000u, out) << "l'estimation locale a ignoré le plafond externe";
+
+	// La mesure locale reste la mesure locale : c'est elle qui est mémorisée,
+	// pas la composition — sinon la levée du plafond ne rendrait rien.
+	EXPECT_EQ(2000000u, throttler.GetLastSent());
+}
+
+// Un plafond qui ne mord pas et qui arrive dans la période n'a rien à dire au
+// pair : pas de paquet.
+TEST(RateControlThrottler, UnPlafondQuiNeMordPasNEmetRien)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(500000, 1000, out));
+
+	EXPECT_FALSE(throttler.SetMaxBitrate(900000, 1050, out));
+}
+
+// Le plafond ne s'oublie pas quand la mesure locale passe en dessous puis
+// remonte : la levée doit être explicite.
+TEST(RateControlThrottler, LePlafondSurvitAUneMesureBasse)
+{
+	RembThrottler throttler;
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(800000, 1010, out));
+
+	// Mesure locale sous le plafond : c'est elle qui gouverne.
+	ASSERT_TRUE(throttler.OnEstimateChanged(400000, 1050, out));
+	EXPECT_EQ(400000u, out);
+
+	// Elle remonte : le plafond reprend la main.
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1400, out));
+	EXPECT_EQ(800000u, out);
+
+	// Levée explicite du plafond.
+	ASSERT_TRUE(throttler.SetMaxBitrate(RembThrottler::NoLimit, 1700, out));
+	EXPECT_EQ(2000000u, out);
+}
+
+// Le champ REMB annonce le NOMBRE de SSRC qu'il porte : la valeur était écrite
+// en dur à 1 alors que la liste en sérialise autant qu'elle en contient — un
+// REMB à deux flux se lisait amputé du second.
+TEST(RateControlRemb, LeChampAnnonceTousSesSSRC)
+{
+	std::list<DWORD> ssrcs;
+	ssrcs.push_back(0x11111111);
+	ssrcs.push_back(0x22222222);
+
+	RTCPPayloadFeedback::ApplicationLayerFeeedbackField* field =
+		RTCPPayloadFeedback::ApplicationLayerFeeedbackField::CreateReceiverEstimatedMaxBitrate(ssrcs, 500000);
+
+	BYTE* payload = field->GetPayload();
+	ASSERT_EQ(8u + 4 * 2, field->GetLength());
+	EXPECT_EQ('R', payload[0]);
+	EXPECT_EQ('E', payload[1]);
+	EXPECT_EQ('M', payload[2]);
+	EXPECT_EQ('B', payload[3]);
+	EXPECT_EQ(2, payload[4]) << "Num SSRC ne compte pas les SSRC réellement portés";
+	EXPECT_EQ(0x11111111u, get4(payload, 8));
+	EXPECT_EQ(0x22222222u, get4(payload, 12));
+
+	delete field;
+}
+
+// L'exposant/mantisse du REMB : le débit relu doit retomber sur celui qu'on a
+// demandé, à la précision des 18 bits de mantisse près (0,4 % au pire).
+TEST(RateControlRemb, LeDebitSeRelitAvecSaPrecision)
+{
+	const DWORD rates[] = { 16000, 300000, 2500000, 30000000, 0xFFFFFFFF };
+
+	for (DWORD rate : rates)
+	{
+		std::list<DWORD> ssrcs;
+		ssrcs.push_back(0x33333333);
+
+		RTCPPayloadFeedback::ApplicationLayerFeeedbackField* field =
+			RTCPPayloadFeedback::ApplicationLayerFeeedbackField::CreateReceiverEstimatedMaxBitrate(ssrcs, rate);
+
+		BYTE* payload  = field->GetPayload();
+		BYTE  exp      = payload[5] >> 2;
+		QWORD mantissa = ((QWORD)(payload[5] & 0x03) << 16) | ((QWORD)payload[6] << 8) | payload[7];
+		QWORD decoded  = mantissa << exp;
+
+		// La troncature de la mantisse ne peut que sous-estimer, jamais gonfler
+		// le débit annoncé — annoncer plus que mesuré dirait « fonce » à un pair
+		// qui sature.
+		EXPECT_LE(decoded, (QWORD)rate) << "débit " << rate;
+		EXPECT_GE(decoded * 1000, (QWORD)rate * 995) << "débit " << rate;
+
+		delete field;
+	}
 }
 
 } // namespace

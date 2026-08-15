@@ -277,6 +277,41 @@ retenue, seuil 3 %, composition `min`) ; construction du paquet REMB (la suite
 et **varient** avec les conditions ; sur un appel SIP `ccm tmmbr`, le
 comportement actuel est inchangé.
 
+> **FAIT (2026-08-15), sauf la recette pcap.** Réalisé : (1) `sendBitrateFeedback`
+> est devenu `bitrateFeedbackMode` — `{None, REMB, TMMBR}` — résolu **hors de la
+> boucle** de `SetProperties` (l'ordre d'itération d'un `Properties` ne se
+> présume pas ; TMMBR prime, et une renégociation muette sur le sujet ne retire
+> pas le mode acquis) ; (2) `mcu/include/rembthrottler.h`, pur, horloge donnée
+> par l'appelant, `Compose()` sans effet de bord pour la redite périodique ;
+> (3) `SendReceiverEstimatedMaxBitrate(DWORD)` + le constructeur de champ
+> partagé `CreateReceiverEstimatedMaxBitrateFeedback` — le chemin SR n'émet plus
+> le TMMBR qu'en mode TMMBR, et il annonce la valeur **composée**, sinon la
+> répétition défaisait le plafond que le lot 5 vient de poser ;
+> (4) côté elixip, `"goog-remb" => "remb"` dans les DEUX contrôleurs
+> (`Kelix.Mod.Mcu.Adapter.Conn` pour la conférence, `MediaServer.Mendooze.Conn`
+> pour JSR-309) — la propriété voyage dans les maps existantes, rien à changer
+> dans moteli. Tests : 7 sur le throttler + 2 sur le paquet REMB
+> (`make check-ratecontrol` 20/20, `make check` 402 verts) ; côté elixip
+> 841+10+360+510 verts.
+>
+> **Deux défauts du paquet REMB trouvés en le factorisant** — il n'était émis
+> que dans le mode qui n'a jamais servi, ils n'avaient donc jamais mordu :
+> `Num SSRC` était écrit **en dur à 1** alors que la boucle sérialise toute la
+> liste (un REMB à deux flux se lisait amputé du second, et le champ était plus
+> long qu'il ne le déclarait) ; et la recherche d'exposant décalait `0x3FFFF`
+> en `int`, débordement signé dès `i=14`. Corrigés, chacun sous son test.
+>
+> **Anticipé du lot 5 (5.1, partie dialecte seulement)** : `RTPEndpoint::SetREMB`
+> passe par le nouveau `SetMaxReceiveBitrate` — amorti et dans le dialecte
+> négocié — au lieu d'un `SendTempMaxMediaStreamBitrateRequest` cru. Sans cela le
+> lot 2 aurait livré « le dialecte est négocié » avec un chemin d'émission qui
+> l'ignore : un navigateur relayé recevait toujours du TMMBR qu'il ne comprend
+> pas. Ce chemin reste **non verrouillé** par la négociation (c'est une
+> contrainte venue de l'aval, pas une initiative de l'estimateur) et garde TMMBR
+> par défaut quand rien n'est négocié — le comportement validé en trafic le
+> 2026-08-14. Le reste du 5.1 (retirer `SetTemporalMaxLimit` du véhicule de
+> propagation) est inchangé, au lot 5.
+
 ---
 
 ## Lot 3 — Mesurer (le portillon)
@@ -361,7 +396,28 @@ limite et n'est pas amortie.
    et n'est plus le véhicule de la propagation.
 4. Cohérence avec le chantier transcodeur (P1-P5 faits) : la limite TMMBR
    persistante et stricte posée par ce chantier reste la source du plafond côté
-   encodeur ; ce lot ne touche que le chemin **relayé** (contre-propagation).
+   encodeur.
+5. **La contrainte amont existe AUSSI en transcodage** (arbitrage mainteneur,
+   2026-08-15 — révision : ce lot ne couvre plus seulement le relais).
+   Aujourd'hui `VideoTranscoder::SetREMB` en mode transcodage (state 1)
+   **absorbe** la demande dans l'encodeur et rien ne remonte ; seule la
+   consigne *négociée* est poussée une fois à la source
+   (`PushSourceBitrateLimit`). Deux gaspillages en découlent : on décode un
+   flux inutilement fort quand l'aval est contraint bas, et — sémantique TMMBR
+   collante oblige — rien ne fait jamais **remonter** la source quand la
+   contrainte se relâche. Le signal amont devient dynamique et bidirectionnel :
+
+   ```
+   TMMBR vers la source = min( estimation de réception du leg amont,
+                               max sur les consommateurs (besoin_i) × marge )
+   ```
+
+   ré-évalué à chaque changement de besoin, passé par le throttler (baisse
+   immédiate, hausse amortie et EXPLICITE — un TMMBR ne se libère que par un
+   TMMBR plus haut). En 1:1 le besoin est la cible effective de l'encodeur
+   aval ; l'**agrégation en conférence** (consommateurs = pattes sortantes via
+   le mixeur, besoin fonction du slot de mosaïque) est hors lot 5, notée comme
+   chantier de suite.
 
 **Tests** : scénario scripté « B se congestionne » (séquence de REMB décroissants
 puis croissants injectée) → vérifier que la suite de TMMBR émis vers A descend
@@ -409,8 +465,34 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
   Linphone↔Linphone (négociation elixip), ensuite un décodeur RFC 8627 en
   réception pour le chemin transcodé (l'association est in-band via CSRC —
   pas besoin de bundle pour décoder).
-- **Dégradation résolution/cadence pilotée par le QP** (`QualityScaler`, §5.4) :
-  demande une remontée du QP encodeur — chantier libmedikit.
+- **Dégradation résolution/cadence — conception ACTÉE (discussion mainteneur,
+  2026-08-15), implémentation ultérieure.** Constat : aujourd'hui résolution et
+  cadence sont figées par la signalisation (la boucle suit seulement la taille
+  native de l'entrée, `VideoEncoderWorker.cpp:386-399`), la bande passante
+  n'ajuste que le débit, et la boucle à cadence fixe **sur-échantillonne** une
+  entrée plus lente (entrée 15 fps × encodeur 30 fps = chaque image encodée
+  deux fois). Conception, calquée sur le partage amont codec/politique :
+  1. **le codec publie ses bornes, il ne décide pas** — table
+     `pixels → [débit min, cible, max]` par encodeur dans libmedikit (formule
+     bits/pixel × facteur d'efficacité : AV1 ≈ 0,55 × H.264), homologue de
+     `EncoderInfo::resolution_bitrate_limits` et conforme à la doctrine
+     `codec_capabilities_plan.md` ;
+  2. **une politique commune, DEUX PROFILS** (= `DegradationPreference` amont) :
+     « fluidité » pour la **langue des signes** — plancher ≥ 20 im/s, on
+     descend la résolution d'abord — et « netteté » pour le **partage de
+     document** — plancher de résolution, la cadence descend jusqu'à ~2-5
+     im/s. Ratio d'image conservé, paliers discrets (÷1,33, dimensions paires
+     4:2:0), hystérésis (un changement de résolution coûte une image clé :
+     pas en pleine congestion) ; l'échelle du §5.4 reste : débit d'abord ;
+  3. **cadence encodeur asservie à la cadence CONSTATÉE en sortie de
+     décodeur** (fin du sur-échantillonnage) — symétrique du suivi de taille
+     native déjà en place ; mesure lissée, paliers, `SetFrameRate` à chaud ;
+     le plancher LS contraint nos choix de dégradation, pas la source (si
+     elle signe à 12 fps, on encode à 12) ; valable en 1:1 — en conférence la
+     sortie est cadencée par la composition mosaïque.
+  Le déclencheur QP (`QualityScaler`) demande une remontée du QP encodeur —
+  chantier libmedikit, complémentaire (le QP dit « le débit ne suffit plus »,
+  les profils disent « quoi sacrifier »).
 - **Abandon de couche** : sans simulcast/SVC dans le mcu, sans objet aujourd'hui.
 
 ## Arbitrages à trancher (avec recommandation)
@@ -422,12 +504,13 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
 | A3 | lot 1bis (descente sur débit acquitté, `beta` unique 0,85) | **après le lot 3 seulement**, si la mesure le réclame |
 | A4 | CCFB (fmt 11) dans le lot 4 ou différé ? | dans le lot 4 mais **en second**, derrière la même interface ; transport-cc débloque l'interop seul |
 | A5 | licence : recopier des fichiers BSD-3 libwebrtc dans ce projet GPL ? | BSD-3 est compatible GPL (sens BSD→GPL, en conservant les en-têtes) ; recommandation néanmoins : **réécrire en style maison** — tout ce qui est listé ici tient en modules courts, et la dette de vendoring coûterait plus que la réécriture. Instruction formelle avec le mainteneur avant toute recopie. |
+| A6 | signal amont en transcodage : marge d'entrée au-dessus de la cible de l'encodeur ? | **×1,25** — ré-encoder à X depuis un flux reçu à X cumule deux générations de pertes ; l'entrée doit respirer au-dessus de la cible. **TRANCHÉ sur le principe** (mainteneur, 2026-08-15) : le signal amont existe en transcodage, dans les deux sens ; seule la valeur de la marge reste ajustable au lot 3/5. |
 
 ## Suivi
 
 - [x] Lot 0 — harnais + traces (2026-08-15 : 11 tests, 7 DISABLED_/4 gardes-fous, `make check-ratecontrol`, 386 verts au total)
 - [x] Lot 1 — boucle fermée (2026-08-15 : échanges, §3.4 a-g, constantes 16k/30M, verrou, listeners multiples ; 7 DISABLED_ levés, 393 verts, binaire lié)
-- [ ] Lot 2 — feedback négocié + `RembThrottler`
+- [x] Lot 2 — feedback négocié + `RembThrottler` (2026-08-15 : mode `{None,REMB,TMMBR}`, throttler, `SendReceiverEstimatedMaxBitrate`, propriété `remb` posée par les deux contrôleurs elixip ; 2 défauts du paquet REMB corrigés ; 20/20 et 402 verts. **Reste la recette pcap sur appel Chrome réel**)
 - [ ] Lot 3 — mesures netem + annexe D + décision GO/NO-GO
 - [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live

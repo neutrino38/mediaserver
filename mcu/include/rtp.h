@@ -1468,11 +1468,14 @@ public:
 
             //Init exp
             BYTE bitrateExp = 0;
-            //Find 18 most significants bits
-            for( BYTE i = 0; i < 64; i++ )
+            //Find 18 most significants bits. Le décalage se fait en 64 bits :
+            //en int il débordait dès i=14 (0x3FFFF tient sur 18 bits), soit
+            //pour tout débit au-dessus de ~4 Gb/s en théorie, et surtout un
+            //comportement indéfini que le compilateur est libre d'exploiter.
+            for( BYTE i = 0; i < 32; i++ )
             {
                 //If bitrate is less than
-                if( bitrate <= (0x003FFFF << i) )
+                if( bitrate <= ( (QWORD)0x003FFFF << i ) )
                 {
                     //That's the exp
                     bitrateExp = i;
@@ -1481,10 +1484,13 @@ public:
             }
             //Get mantisa
             DWORD bitrateMantissa = (bitrate >> bitrateExp);
+            //Num SSRC est un champ de 8 bits : au-delà, la liste est tronquée
+            //ici plutôt que sur le fil.
+            DWORD num = ssrcs.size() < 255 ? ssrcs.size() : 255;
             //Create field
             ApplicationLayerFeeedbackField *field = new ApplicationLayerFeeedbackField();
             //Set size of data
-            field->length = 8 + 4 * ssrcs.size();
+            field->length = 8 + 4 * num;
             //Allocate memory
             field->payload = (BYTE *)malloc( field->length );
             //Set id
@@ -1492,15 +1498,19 @@ public:
             field->payload[1] = 'E';
             field->payload[2] = 'M';
             field->payload[3] = 'B';
-            //Set data
-            field->payload[4] = 1;
+            //Set data. Num SSRC annonce le NOMBRE de SSRC qui suivent : la
+            //valeur 1 était écrite en dur alors que la boucle ci-dessous en
+            //sérialise autant que la liste en contient — un REMB portant deux
+            //flux se lisait donc amputé du second (et le champ était plus long
+            //que ce qu'il déclarait).
+            field->payload[4] = num;
             field->payload[5] = bitrateExp << 2 | (bitrateMantissa >> 16 & 0x03);
             field->payload[6] = bitrateMantissa >> 8;
             field->payload[7] = bitrateMantissa;
             //Num of ssrcs
             DWORD i = 0;
             //For each ssrc
-            for( std::list<DWORD>::iterator it = ssrcs.begin(); it != ssrcs.end(); ++it )
+            for( std::list<DWORD>::iterator it = ssrcs.begin(); it != ssrcs.end() && i < num; ++it )
                 //Set ssrc
                 set4( field->payload, 8 + 4 * (i++), (*it) );
             //Return it

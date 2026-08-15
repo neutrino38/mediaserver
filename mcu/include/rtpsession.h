@@ -19,6 +19,7 @@
 #include "fecdecoder.h"
 #include "medkit/stunmessage.h"
 #include "remoterateestimator.h"
+#include "rembthrottler.h"
 #include "dtls.h"
 #include "ipaddress.h"
 #include "addressprofiles.h"
@@ -51,10 +52,23 @@ public:
 		//via ArmRTPReceivedNotification(). Non pur (Listener existants inchangés).
 		virtual void onRTPPacketReceived( RTPSession *session ) {}
 	};
-	
+
+	//Ce que la session émet comme feedback de débit vers le pair, posé par la
+	//NÉGOCIATION (propriétés "tmmbr"/"remb", cf. SetProperties) et par elle
+	//seule : un pair qui n'a pas demandé d'AVPF n'en reçoit pas. TMMBR
+	//(RFC 5104) est le dialecte SIP, REMB (draft-alvestrand-rmcat-remb-03)
+	//celui des navigateurs, qui n'offrent que "goog-remb". Le mode TMMBR émet
+	//les deux — c'est le comportement historique, et un pair qui comprend
+	//TMMBR ne perd rien à recevoir aussi le REMB.
+	enum BitrateFeedbackMode
+	{
+		BitrateFeedbackNone	= 0,
+		BitrateFeedbackREMB	= 1,
+		BitrateFeedbackTMMBR	= 2
+	};
+
 public:
-	
-public:
+
 	static bool SetPortRange(int minPort, int maxPort);
 	static DWORD GetMinPort() { return minLocalPort; }
 	static DWORD GetMaxPort() { return maxLocalPort; }
@@ -149,7 +163,7 @@ public:
 	
 	
 	RemoteRateEstimator* 	GetRemoteRateEstimator() 	{	return remoteRateEstimator; };
-	bool 			SendBitrateFeedback() 		{	return sendBitrateFeedback; };
+	BitrateFeedbackMode	GetBitrateFeedbackMode()	{	return bitrateFeedbackMode; };
 	bool 			IsNACKEnabled() 		{	return isNACKEnabled; }
 	bool 			IsRequestFPU() 			{	return requestFPU; };
 	bool 			UseFEC()			{	return useFEC; };
@@ -269,10 +283,23 @@ public:
 	//consigne négociée) — non verrouillé par la propriété "tmmbr", qui ne
 	//gouverne que le feedback spontané de l'estimateur.
 	int SendTempMaxMediaStreamBitrateRequest(DWORD bitrate);
+	//Annonce au pair le débit qu'on estime pouvoir recevoir de lui (REMB,
+	//draft-alvestrand-rmcat-remb-03). Même rôle que le TMMBR ci-dessus dans un
+	//autre dialecte, sans retransmission : REMB n'a pas d'accusé, il se redit
+	//simplement au rapport suivant.
+	int SendReceiverEstimatedMaxBitrate(DWORD bitrate);
+	//Plafond de débit posé de l'EXTÉRIEUR (l'autre patte d'un relais) : composé
+	//par min() avec l'estimation locale dans l'amortisseur, et annoncé au pair
+	//dans le dialecte négocié. Rend 0 si rien n'est parti (rien de neuf à dire).
+	int SetMaxReceiveBitrate(DWORD bitrate);
 
 	virtual void onTargetBitrateRequested(DWORD bitrate);
 	virtual void onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DWORD localMasterKeySize,BYTE* remoteMasterKey,DWORD remoteMasterKeySize);
 private:
+	//Le champ REMB (identifiant 'REMB' + débit + SSRC couverts) prêt à être
+	//ajouté à un paquet composé. Un seul constructeur pour les deux chemins qui
+	//l'émettent : l'annonce immédiate et la répétition dans le rapport.
+	RTCPPayloadFeedback* CreateReceiverEstimatedMaxBitrateFeedback(DWORD bitrate);
 	int SetLocalCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	void SetRTT(DWORD rtt);
@@ -639,7 +666,10 @@ private:
 	bool			useFEC;
 	bool			useNACK;
 	bool			isNACKEnabled;
-	bool			sendBitrateFeedback;
+	//Le dialecte de feedback négocié, et l'amortisseur qui décide QUAND redire
+	//au pair combien il peut envoyer (baisse immédiate, hausse retenue 200 ms).
+	BitrateFeedbackMode	bitrateFeedbackMode;
+	RembThrottler		bitrateFeedbackThrottler;
 	bool			useAbsTime;
 	bool 			useOriSeqNum;
 	bool 			useOriTS;

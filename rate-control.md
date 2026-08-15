@@ -145,6 +145,15 @@ Donc :
 C'est ce demi-circuit ouvert qui explique le reste : **une valeur qu'on n'émet
 pas, personne ne vient dire qu'elle est fausse.**
 
+> **Fermé au lot 2 (2026-08-15).** La porte unique est devenue un **mode**
+> `{None, REMB, TMMBR}` (`bitrateFeedbackMode`), posé par la propriété `tmmbr`
+> **ou** par la nouvelle propriété `remb`, que les deux contrôleurs elixip
+> posent désormais sur `a=rtcp-fb:… goog-remb`. La patte Chrome/Firefox reçoit
+> donc du REMB, amorti par le `RembThrottler` (baisse immédiate, hausse retenue
+> 200 ms). Le sens sortant reste **piloté par la négociation** (arbitrage A2) :
+> un pair qui n'a rien demandé ne reçoit toujours rien. Restent ouverts, comme
+> annoncé : `transport-cc` (lot 4), et la mesure elle-même (lot 3).
+
 ---
 
 ## 3. Ce que l'estimation vaut aujourd'hui

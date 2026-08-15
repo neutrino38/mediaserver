@@ -504,11 +504,14 @@ void RTPEndpoint::SetREMB(DWORD estimation)
 
 	//Demande EXPLICITE venue de l'aval (mode pont : TMMBR/REMB du puits relayé,
 	//ou consigne négociée poussée au basculement). L'émettre sur le fil tout de
-	//suite : le feedback spontané ci-dessus est verrouillé par la propriété
-	//"tmmbr" (défaut : désactivé) et SetTemporalMaxLimit seul ne produit AUCUN
-	//paquet — la limite restait lettre morte. La retransmission tant que le
-	//TMMBN du pair n'arrive pas est assurée par SendSenderReport (pendingTMBR).
-	SendTempMaxMediaStreamBitrateRequest(estimation);
+	//suite : le feedback spontané ci-dessus est verrouillé par la négociation
+	//(défaut : aucun) et SetTemporalMaxLimit seul ne produit AUCUN paquet — la
+	//limite restait lettre morte. SetMaxReceiveBitrate la compose avec
+	//l'estimation locale, l'amortit (une baisse part tout de suite, une hausse
+	//attend 200 ms) et l'émet dans le dialecte négocié — un navigateur ne
+	//comprend que REMB. La retransmission tant que le TMMBN du pair n'arrive
+	//pas est assurée par SendSenderReport (pendingTMBR).
+	SetMaxReceiveBitrate(estimation);
 }
 
 int RTPEndpoint::RequestUpdate()

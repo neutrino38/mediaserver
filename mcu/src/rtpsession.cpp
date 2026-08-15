@@ -344,7 +344,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	running = false;
 	//No stimator
 	remoteRateEstimator = NULL;
-	sendBitrateFeedback = false; // test
+	//Aucun feedback tant que la négociation n'en a pas demandé (arbitrage A2 du
+	//plan) : un pair AVP strict ne doit pas recevoir d'AVPF.
+	bitrateFeedbackMode = BitrateFeedbackNone;
 
 	//Set family
 	//Sockets media : dual-stack par defaut (AF_INET6 + IPV6_V6ONLY=0), sauf
@@ -526,6 +528,10 @@ int RTPSession::SetProperties(const Properties& properties)
 	mutex.lock();
 	//Clean txtension map
 	extMap.clear();
+	//Le dialecte de feedback tel qu'il est aujourd'hui : une renégociation qui
+	//ne reparle pas de TMMBR/REMB ne le retire pas.
+	bool askedTMMBR = (bitrateFeedbackMode == BitrateFeedbackTMMBR);
+	bool askedREMB  = (bitrateFeedbackMode == BitrateFeedbackREMB);
 	//For each property
 	for (Properties::const_iterator it=properties.begin();it!=properties.end();++it)
 	{
@@ -549,8 +555,16 @@ int RTPSession::SetProperties(const Properties& properties)
 		}
 		else if (it->first.compare("tmmbr")==0)
 		{
-			sendBitrateFeedback = atoi(it->second.c_str());
-			if ( sendBitrateFeedback ) Log("Activated bitrate feedback on %s stream %p.\n", MediaFrame::TypeToString(media), this);
+			//TMMBR prime sur REMB : c'est la version normalisée (RFC 5104), et
+			//le mode émet les deux. La résolution se fait APRÈS la boucle —
+			//l'ordre d'itération d'un Properties ne se présume pas.
+			askedTMMBR = atoi(it->second.c_str());
+		}
+		else if (it->first.compare("remb")==0)
+		{
+			//Le dialecte des navigateurs : ils offrent "goog-remb" et pas
+			//"ccm tmmbr". Sans cette propriété, rien ne partait jamais vers eux.
+			askedREMB = atoi(it->second.c_str());
 		}
 		else if (it->first.compare("ssrc")==0) {
 			//Set ssrc for sending
@@ -611,7 +625,16 @@ int RTPSession::SetProperties(const Properties& properties)
 			Error("Unknown RTP property [%s]\n",it->first.c_str());
 		}
 	}
-	mutex.unlock();	
+	//Résolution du dialecte, hors boucle : TMMBR l'emporte quel que soit l'ordre
+	//dans lequel les deux propriétés sont arrivées.
+	bitrateFeedbackMode = askedTMMBR ? BitrateFeedbackTMMBR
+			    : askedREMB  ? BitrateFeedbackREMB
+					 : BitrateFeedbackNone;
+	if (bitrateFeedbackMode != BitrateFeedbackNone)
+		Log("Activated %s bitrate feedback on %s stream %p.\n",
+		    bitrateFeedbackMode == BitrateFeedbackTMMBR ? "TMMBR+REMB" : "REMB",
+		    MediaFrame::TypeToString(media), this);
+	mutex.unlock();
 	return 1;
 }
 
@@ -3342,19 +3365,55 @@ void RTPSession::SetRTT(DWORD rtt)
 
 void RTPSession::onTargetBitrateRequested(DWORD bitrate)
 {
-    bool fb;
+    BitrateFeedbackMode mode;
+    DWORD announce = 0;
+    bool  send;
 
     // Memory barrier
     mutex.lock();
-    fb = sendBitrateFeedback;
+    mode = bitrateFeedbackMode;
+    //L'amortisseur suit la mesure locale même quand rien ne part : c'est lui qui
+    //compose le min() avec un éventuel plafond venu de l'autre patte.
+    send = bitrateFeedbackThrottler.OnEstimateChanged(bitrate, getTimeMS(), announce);
     mutex.unlock();
-    Debug("-RTPSession::onTargetBitrateRequested() %i, bitrate [%d] for %s stream %p.\n", fb, bitrate, MediaFrame::TypeToString(media), this);
-    if (fb)
-	//Feedback SPONTANÉ de l'estimateur : reste verrouillé par la propriété
-	//"tmmbr" (sendBitrateFeedback) — c'est son rôle. L'envoi lui-même est
-	//partagé avec le chemin explicite (RTPEndpoint::SetREMB, mode pont), qui
-	//n'est PAS verrouillé.
-	SendTempMaxMediaStreamBitrateRequest(bitrate);
+
+    Debug("-RTPSession::onTargetBitrateRequested() mode %d, bitrate [%d] -> [%d] send %d for %s stream %p.\n",
+	  (int)mode, bitrate, announce, (int)send, MediaFrame::TypeToString(media), this);
+
+    //Feedback SPONTANÉ de l'estimateur : verrouillé par la NÉGOCIATION (arbitrage
+    //A2) — pas d'AVPF vers un pair qui n'en a pas demandé. Le chemin explicite
+    //(SetMaxReceiveBitrate, contrainte venue de l'aval) ne l'est PAS.
+    if (!send || mode == BitrateFeedbackNone)
+	return;
+
+    if (mode == BitrateFeedbackREMB)
+	SendReceiverEstimatedMaxBitrate(announce);
+    else
+	SendTempMaxMediaStreamBitrateRequest(announce);
+}
+
+int RTPSession::SetMaxReceiveBitrate(DWORD bitrate)
+{
+	DWORD announce = 0;
+	BitrateFeedbackMode mode;
+	bool send;
+
+	mutex.lock();
+	mode = bitrateFeedbackMode;
+	send = bitrateFeedbackThrottler.SetMaxBitrate(bitrate, getTimeMS(), announce);
+	mutex.unlock();
+
+	//Rien de neuf à dire au pair.
+	if (!send)
+		return 0;
+
+	//Contrainte venue de l'aval (relais, consigne négociée) : elle n'est pas
+	//verrouillée par la négociation — ce n'est pas une initiative de
+	//l'estimateur — mais elle parle le dialecte négocié quand il y en a un.
+	//Sans négociation, TMMBR reste le défaut historique de ce chemin.
+	return (mode == BitrateFeedbackREMB)
+		? SendReceiverEstimatedMaxBitrate(announce)
+		: SendTempMaxMediaStreamBitrateRequest(announce);
 }
 
 int RTPSession::SendTempMaxMediaStreamBitrateRequest(DWORD bitrate)
@@ -3380,6 +3439,46 @@ int RTPSession::SendTempMaxMediaStreamBitrateRequest(DWORD bitrate)
 	pendingTMBR = true;
 	//Store values
 	pendingTMBBitrate = bitrate;
+
+	//Send packet
+	int ret = SendPacket(*rtcp);
+
+	//Delete it
+	delete(rtcp);
+
+	return ret;
+}
+
+RTCPPayloadFeedback* RTPSession::CreateReceiverEstimatedMaxBitrateFeedback(DWORD bitrate)
+{
+	std::list<DWORD> ssrcs;
+
+	//Les flux que l'estimation couvre : ceux que l'estimateur observe, ou à
+	//défaut le flux entrant courant — un REMB sans SSRC ne dit pas de qui il
+	//parle.
+	if (remoteRateEstimator)
+		remoteRateEstimator->GetSSRCs(ssrcs);
+	if (ssrcs.empty() && defaultStream && defaultStream->GetRecSSRC())
+		ssrcs.push_back(defaultStream->GetRecSSRC());
+
+	//SSRC of media source (32 bits) : toujours 0, même convention que le TMMBN
+	//de la RFC 5104 §4.2.2.2 — les flux visés sont dans le corps du champ.
+	RTCPPayloadFeedback *remb = RTCPPayloadFeedback::Create(RTCPPayloadFeedback::ApplicationLayerFeeedbackMessage,sendSSRC,0);
+	remb->AddField(RTCPPayloadFeedback::ApplicationLayerFeeedbackField::CreateReceiverEstimatedMaxBitrate(ssrcs,bitrate));
+
+	return remb;
+}
+
+int RTPSession::SendReceiverEstimatedMaxBitrate(DWORD bitrate)
+{
+	Debug("-RTPSession::SendReceiverEstimatedMaxBitrate [%d] on %s stream\n",bitrate,MediaFrame::TypeToString(media));
+
+	//Create rtcp sender report
+	RTCPCompoundPacket* rtcp = CreateSenderReport();
+
+	//Add the REMB. Pas de retransmission armée : REMB n'a pas d'accusé de
+	//réception, il se redit au rapport suivant (SendSenderReport).
+	rtcp->AddRTCPacket(CreateReceiverEstimatedMaxBitrateFeedback(bitrate));
 
 	//Send packet
 	int ret = SendPacket(*rtcp);
@@ -3710,29 +3809,29 @@ int RTPSession::SendSenderReport()
 		rfb->AddField( new RTCPRTPFeedback::TempMaxMediaStreamBitrateField(recSSRC,pendingTMBBitrate,0));
 		//Add to packet
 		rtcp->AddRTCPacket(rfb);
-	} else if (remoteRateEstimator && sendBitrateFeedback )	{
-		//Get lastest estimation and convert to kbps
-		DWORD estimation = remoteRateEstimator->GetEstimatedBitrate();
+	} else if (remoteRateEstimator && bitrateFeedbackMode != BitrateFeedbackNone )	{
+		//Get lastest estimation, bornée par un éventuel plafond venu de l'autre
+		//patte : cette répétition périodique ne doit pas défaire ce que
+		//SetMaxReceiveBitrate vient d'annoncer. Compose() est sans effet de bord
+		//— c'est une redite, pas une nouvelle décision.
+		DWORD estimation = bitrateFeedbackThrottler.Compose(remoteRateEstimator->GetEstimatedBitrate());
 		//If it was ok
-		if (estimation)
+		if (estimation && estimation != RembThrottler::NoLimit)
 		{
-			//Resend TMMBR
-			RTCPRTPFeedback *rfb = RTCPRTPFeedback::Create(RTCPRTPFeedback::TempMaxMediaStreamBitrateRequest,sendSSRC,recSSRC);
-			//Limit incoming bitrate
-			rfb->AddField( new RTCPRTPFeedback::TempMaxMediaStreamBitrateField(recSSRC,estimation,0));
+			//Le mode TMMBR émet les deux dialectes (comportement historique) ;
+			//le mode REMB n'émet que le REMB.
+			if (bitrateFeedbackMode == BitrateFeedbackTMMBR)
+			{
+				//Resend TMMBR
+				RTCPRTPFeedback *rfb = RTCPRTPFeedback::Create(RTCPRTPFeedback::TempMaxMediaStreamBitrateRequest,sendSSRC,recSSRC);
+				//Limit incoming bitrate
+				rfb->AddField( new RTCPRTPFeedback::TempMaxMediaStreamBitrateField(recSSRC,estimation,0));
+				//Add to packet
+				rtcp->AddRTCPacket(rfb);
+			}
 			//Add to packet
-			rtcp->AddRTCPacket(rfb);
-			std::list<DWORD> ssrcs;
-			//Get ssrcs
-			remoteRateEstimator->GetSSRCs(ssrcs);
-			//Create feedback
-			// SSRC of media source (32 bits):  Always 0; this is the same convention as in [RFC5104] section 4.2.2.2 (TMMBN).
-			RTCPPayloadFeedback *remb = RTCPPayloadFeedback::Create(RTCPPayloadFeedback::ApplicationLayerFeeedbackMessage,sendSSRC,0);
-			//Send estimation
-			remb->AddField(RTCPPayloadFeedback::ApplicationLayerFeeedbackField::CreateReceiverEstimatedMaxBitrate(ssrcs,estimation));
-			//Add to packet
-			rtcp->AddRTCPacket(remb);
-			Debug("SR: reporting estimated bandwidth of %d to %s", estimation,  sendRtcpAddr.Address().ToString().c_str());
+			rtcp->AddRTCPacket(CreateReceiverEstimatedMaxBitrateFeedback(estimation));
+			Debug("SR: reporting estimated bandwidth of %d to %s\n", estimation,  sendRtcpAddr.Address().ToString().c_str());
 		}
 	}
 	
