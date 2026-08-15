@@ -208,6 +208,18 @@ public:
 	// appelant d'en décider autrement en connaissance de cause. <<<
 	bool IsPrivate() const;
 
+	// La MOITIÉ v4 de la règle ci-dessus, isolée : vrai uniquement pour une
+	// adresse v4 privée — 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 —
+	// y compris à travers le mapping, et TOUJOURS faux pour une v6.
+	//
+	// C'est ce prédicat, et non `IsPrivate()`, que doit consulter la politique
+	// de rattrapage NAT (`RTPSession::NatCorrectable`) : le rattrapage n'a de
+	// sens qu'en IPv4, puisqu'on ne supporte pas le NAT en v6 (§14 de ipv6.md).
+	// Les garder distincts évite qu'une ULA — légitimement « privée » au sens
+	// de la portée — ouvre par ricochet un rattrapage qui n'a aucune raison
+	// d'exister en v6.
+	bool IsPrivateV4() const;
+
 	bool IsTeredo() const;        // 2001::/32
 	bool Is6to4()   const;        // 2002::/16
 

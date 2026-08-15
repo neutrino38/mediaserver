@@ -5,8 +5,14 @@
 > **Suivi.** Les bugs que cet audit a mis au jour et qui étaient **réels dès
 > aujourd'hui, en IPv4** ont été corrigés (§11). Une suite de tests adverses
 > décrivant la cible IPv6 existe et est **volontairement en échec** :
-> `make -C mcu check-ipv6` (voir §12). Aucun support IPv6 n'a été
-> ajouté : l'arbitrage du §7 reste ouvert.
+> `make -C mcu check-ipv6` (voir §12).
+>
+> **2026-08-15, branche `feat/ipv6` — l'arbitrage du §7 est RENDU** (réponses
+> inscrites dans le §7 lui-même), et le modèle d'adressage retenu est décrit au
+> **§14 : quatre profils d'adressage, choisis par le contrôleur appel par appel**.
+> Première étape livrée : `IPAddress`/`IPEndpoint` (`mcu/include/ipaddress.h`,
+> `mcu/src/ipaddress.cpp`, 52 tests actifs dans `make check`). Aucun appelant
+> n'est encore branché : le tableau de bord du §12 est toujours à 27 échecs.
 
 Ce document **recense**, il ne migre pas. Il liste, zone par zone, tout ce qui
 empêche aujourd'hui le mediaserver de fonctionner en IPv6, avec `fichier:ligne`,
@@ -457,39 +463,60 @@ continuer de prouver le chemin v4.
 
 ## 6. Synthèse — ordre de traitement proposé
 
-| # | Zone | Effort | Dépend de | Gain |
-|---|---|---|---|---|
-| 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | — | valide le motif `sockaddr_storage` sur du code réel |
-| 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrige un bug présent, hors IPv6** |
-| 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivate()` (§1.1, §1.5) | moyen | — | refactor à comportement constant ; rend la suite mécanique |
-| 4 | `sockaddr_storage` + sockets dual-stack dans `RTPSession` (§1.1-1.5) | **fort** | 3 | le média passe en v6 |
-| 5 | Adresse annoncée par famille + contrat XML-RPC (§1.6, §2.2) | moyen | 4 | **engage elixip / MOTELI — à arbitrer avant de coder** |
-| 6 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | — | les plans de contrôle passent en v6 |
-| 7 | STUN v6 : famille + XOR sur 16 octets (§1.7) | moyen | 4 | ICE complet en v6 |
-| 8 | Java : `SdpPortManagerImpl`, `SubNetInfo` (§5.5) | moyen | 5 | la couche JSR-309 suit |
+Ordre révisé au 2026-08-15, après l'arbitrage du §7 et l'adoption du modèle de
+profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 
-Les étapes 1, 2, 3 et 6 sont **indépendantes de l'arbitrage** et utiles en
-elles-mêmes. Les étapes 4, 5, 7, 8 n'ont de sens que si la décision est prise.
+| # | Zone | Effort | Dépend de | Gain | État |
+|---|---|---|---|---|---|
+| 0 | Type d'adresse commun `IPAddress`/`IPEndpoint` (§13, §14.5) | moyen | — | supprime `inet_addr`/`inet_ntoa`/`in_addr_t` du vocabulaire ; socle de tout le reste | **fait** (`556233d`) |
+| 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | 0 | valide le motif sur du code réel | à faire |
+| 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrigeait un bug présent, hors IPv6** | **fait** (§11) |
+| 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivate()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | à faire |
+| 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--private-ip` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | à faire |
+| 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | à faire |
+| 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | à faire |
+| 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | à faire |
+| 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | à faire |
+| 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | à faire |
+| 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient`, `jsr309impl` (§5.5) | moyen | 6 | la couche JSR-309 suit | à faire |
+
+Les étapes 1, 3 et 8 restent **indépendantes du contrat de contrôle** : elles
+peuvent avancer sans elixip. Les étapes 6, 7 et 10 l'engagent — et l'étape 7 n'est
+pas facultative, voir §14.4.
 
 ---
 
-## 7. Ce que ce document ne tranche pas
+## 7. Arbitrage — rendu le 2026-08-15
 
-Trois questions restent ouvertes, à arbitrer avant tout codage :
+Les trois questions que ce document laissait ouvertes ont été tranchées, et une
+quatrième (le type d'adresse, §13) avec elles.
 
-1. **Socket unique dual-stack (`IPV6_V6ONLY = 0`, adresses mappées) ou deux sockets
-   par famille ?** La plage de ports RTP, le nombre de threads `Run` et toute la
-   logique de latching NAT en dépendent. La socket unique est recommandée ici, mais
-   elle impose que `SameAddr` traite `::ffff:1.2.3.4` et `1.2.3.4` comme identiques.
+1. **Socket unique dual-stack (`IPV6_V6ONLY = 0`) ou deux sockets par famille ?**
+   → **Socket unique**, avec `SameAddr` traitant `::ffff:1.2.3.4` et `1.2.3.4`
+   comme identiques. C'est fait dans `IPAddress` : le dé-mappage a lieu **à
+   l'entrée** (`Parse`, `FromSockaddr`) et toute la classification travaille sur
+   la forme dé-mappée, donc aucun appelant ne peut se tromper de forme.
+   **Nuance apportée par le §14** : « une socket » ne veut pas dire « une socket
+   qui écoute tout ». Dès lors que le profil d'adressage désigne une **adresse
+   locale de bind**, la socket est liée à cette adresse — donc à sa famille. Le
+   dual-stack `IPV6_V6ONLY=0` reste le mode par défaut (bind `::`, compatibilité
+   ascendante) et le mode des **plans de contrôle** ; il ne s'applique plus au
+   média dès qu'un profil explicite est demandé. Voir §14.5.
 
-2. **Le contrôleur elixip est-il prêt à recevoir une adresse v6 en `returnVal[1]`
-   de `StartReceiving` ?** Sans réponse, l'option (b) du §2.2 (ajout purement
-   additif d'un `returnVal[3]`) est la seule sûre.
+2. **elixip est-il prêt à recevoir une adresse v6 en `returnVal[1]` ?** → La
+   question est **dépassée** par le §14 : ce n'est plus au serveur de deviner la
+   famille, c'est au contrôleur de la demander. Le contrat évolue par l'**entrée**
+   (un paramètre de profil, option (a) du §2.2 généralisée), pas par la sortie ;
+   `returnVal[1]` porte alors l'adresse annoncée du profil demandé, et un
+   contrôleur qui n'envoie pas le paramètre obtient exactement ce qu'il obtient
+   aujourd'hui. La vérification côté elixip reste à faire avant de livrer
+   l'étape 6.
 
-3. **IPv6 est-il demandé pour le média (RTP), ou seulement pour les plans de
-   contrôle (XML-RPC, WebSocket) ?** La réponse change radicalement le périmètre :
-   les seules étapes 1, 2, 6 couvrent le second cas ; le premier impose les
-   étapes 4, 5 et 7, c'est-à-dire l'essentiel du coût.
+3. **IPv6 pour le média, ou seulement pour les plans de contrôle ?** → **Les
+   deux : dual-stack complet**, étapes 1 à 10 du §6.
+
+4. **Quel type d'adresse convergent ?** (§13) → **Type maison**, pas
+   `boost::asio::ip::address` : `IPAddress`/`IPEndpoint`, livrés au §14.5.
 
 ---
 
@@ -639,3 +666,208 @@ sous-modules, dépendances système minimales) et parce que `libbfcp` en contien
 déjà l'esquisse (`PrintAddress`, comparaison par famille, `inet_pton` sur les deux
 familles) : il y aurait là une base à extraire plutôt qu'à réécrire. À arbitrer en
 même temps que la question 1 du §7.
+
+> **Tranché (2026-08-15) : type maison.** `mcu/include/ipaddress.h` +
+> `mcu/src/ipaddress.cpp`, 53 tests dans `make check`. Voir §14.5.
+
+---
+
+## 14. Profils d'adressage — le contrôleur choisit, le serveur détient
+
+Modèle retenu le 2026-08-15. Il remplace l'idée d'« une adresse annoncée, par
+famille » du §1.6 et du §2.2 par quelque chose de plus large, et qui répond
+aussi à un besoin qui n'était pas dans l'audit : le **fonctionnement en SBC**,
+où le serveur a un pied sur un réseau interne et un pied sur l'extérieur.
+
+### 14.1 Le modèle : quatre profils, deux adresses chacun
+
+Un **profil d'adressage** est le croisement de deux axes :
+
+|  | IPv4 | IPv6 |
+|---|---|---|
+| **externe** (« publique ») | profil `public4` — peut être **natté** | profil `public6` — **jamais natté** |
+| **interne** (« privée », réseau de service) | profil `private4` | profil `private6` |
+
+Chaque profil porte **deux adresses distinctes**, et c'est là tout l'intérêt :
+
+- une **adresse de bind** — réellement attachée à une interface de la machine.
+  C'est elle que la socket média lie, donc elle qui décide de l'interface
+  empruntée ;
+- une **adresse annoncée** — celle que le pair verra dans le SDP. Elle est
+  **égale** à l'adresse de bind, sauf pour `public4` derrière NAT, où elle vaut
+  l'adresse publique du routeur.
+
+Cette séparation est le vrai apport du modèle. Aujourd'hui les deux notions sont
+confondues dans une unique variable statique (`RTPSession::announcedIp`), et
+c'est précisément ce qui rend indescriptible un déploiement derrière NAT : on ne
+peut annoncer une adresse qu'on ne peut pas binder.
+
+**Pas de NAT en IPv6, par choix.** `--nat` n'est accepté qu'avec une adresse v4,
+et une tentative sur un profil v6 est un refus explicite au démarrage, pas un
+silence. NPTv6 et NAT66 existent — le mediaserver ne les couvrira pas : un
+déploiement v6 correct délègue un préfixe et filtre, il ne translate pas.
+
+**Le profil est une propriété de la jambe**, pas de la conférence ni du serveur :
+c'est ce qui permet à une même conférence d'avoir un participant interne en
+`private4` et un participant externe en `public6`. C'est le cas d'usage SBC.
+
+### 14.2 Ligne de commande
+
+```
+--public-ip  <adresse v4 publique attachée à l'hôte>
+--public-ip  <adresse v4 RFC 1918 attachée à l'hôte> --nat <adresse publique vue de l'extérieur>
+--public-ip  <adresse v6 globale attachée à l'hôte>
+
+--private-ip <adresse v4 attachée à l'hôte>
+--private-ip <adresse v6 attachée à l'hôte>
+```
+
+`--public-ip` et `--private-ip` sont **répétables**, au plus une fois par
+famille ; **la famille est déduite de la valeur** (`IPAddress::Parse` la donne),
+il n'y a donc pas d'option `--public-ip6` à retenir, ni d'ordre significatif
+entre les options — un `--nat` s'applique à l'adresse **v4 publique**, où qu'il
+soit sur la ligne. C'est le seul point où je m'écarte de la proposition initiale :
+apparier `--nat` au `--public-ip` **précédent** rendrait le sens de la ligne de
+commande dépendant de l'ordre des arguments, ce qui est un piège d'exploitation
+classique (et invisible dans un fichier `/etc/sysconfig/mediaserver` édité à
+quatre mains).
+
+Contrôles au démarrage, tous **bloquants** — mieux vaut un serveur qui refuse de
+démarrer qu'un serveur qui annonce une adresse fausse pendant six mois :
+
+- deux `--public-ip` (ou deux `--private-ip`) de la même famille → refus ;
+- `--nat` sans `--public-ip` v4 → refus ;
+- `--nat` avec une valeur v6, ou appliqué à un profil v6 → refus motivé ;
+- une adresse de bind qui **n'est attachée à aucune interface locale**
+  (`getifaddrs`) → refus. Seule l'adresse de `--nat` échappe à ce contrôle, par
+  construction : elle vit sur le routeur, pas sur nous ;
+- une adresse de bind non annonçable (loopback, multicast, link-local) → refus ;
+- **aucun profil disponible du tout** → refus de démarrer, comme aujourd'hui
+  (`main.cpp` l. 378-402), mais pour la bonne raison et avec un message qui dit
+  laquelle des quatre cases est vide.
+
+**Compatibilité ascendante** : `--public-ip <v4>` seul se comporte exactement
+comme aujourd'hui, et son absence garde l'auto-détection actuelle (première
+adresse non loopback du nom d'hôte) comme profil `public4`. Un déploiement
+existant ne change pas de comportement.
+
+### 14.3 Le contrat de contrôle
+
+`StartSending` et `StartReceiving` — MCU **et** JSR-309 — reçoivent un
+**paramètre de profil supplémentaire**, ajouté **en fin de liste** (XML-RPC est
+positionnel : c'est la seule position qui ne casse pas les appelants).
+
+- valeurs : `"public4"`, `"public6"`, `"private4"`, `"private6"` — des chaînes,
+  pas des entiers : elles se lisent dans une trace d'exploitation, et un
+  désalignement d'énuméré entre elixip et le mcu serait un bug silencieux ;
+- **absent ou vide ⇒ `public4`**, ce qui reproduit à l'identique le comportement
+  actuel ;
+- **profil demandé indisponible ⇒ échec explicite**, avec un code distinguable
+  d'une erreur générique (« profil d'adressage indisponible »), de sorte que le
+  contrôleur puisse retomber sur un autre profil au lieu de deviner ;
+- côté MOTELI, la même information est un **enum protobuf** dont la valeur `0`
+  vaut `PUBLIC_V4` : le zéro protobuf est implicite, donc la compatibilité
+  ascendante tombe juste sans champ optionnel supplémentaire.
+
+**`StartSending` et `StartReceiving` doivent s'accorder.** En RTP symétrique, la
+socket est la même dans les deux sens : le profil est fixé par le premier des
+deux appels, et le second, s'il en porte un **différent**, est un échec — pas une
+recréation silencieuse de la socket. De même, la famille de l'adresse distante
+passée à `StartSending` doit être **cohérente** avec le profil : émettre vers une
+v6 depuis une socket liée en v4 est impossible, autant le dire à l'appel plutôt
+qu'au premier paquet.
+
+> **Rappel `CLAUDE.md`** : cette évolution touche l'API XML-RPC `/mcu` et
+> `/jsr309`, elle **doit** donc arriver dans le même jeu de changements que la
+> mise à jour des schémas protobuf MOTELI v2 (`moteli_*.proto`, dépôt elixip), et
+> que celle de `MCU-API.md` / `xmlrpc_jsr309_api.md`.
+
+### 14.4 L'introspection n'est pas facultative
+
+Si le contrôleur doit **choisir** un profil, il doit pouvoir **demander lesquels
+existent**. Une méthode d'interrogation (`GetNetworkProfiles`, ou l'équivalent
+dans l'événement de démarrage) rendant, pour chacun des quatre profils, sa
+disponibilité et son adresse annoncée, fait partie de la livraison — étape 7
+du §6, et non « plus tard ».
+
+Ce n'est pas du confort. `CLAUDE.md` porte déjà le précédent, et il a coûté un
+appel : les codecs supportés ne sont interrogeables par aucune API, donc elixip a
+**déclaré** de son côté ce qu'il croyait que le serveur savait faire, et un appel
+AV1 ↔ AV1 est mort en 488 avec un audio parfait des deux côtés (2026-08-12). Une
+capacité qui existe dans le code mais qu'aucune API ne permet d'interroger est un
+**défaut**. Les profils d'adressage sont exactement la même figure : quatre cases
+dont deux ou trois seront vides selon le déploiement, et un contrôleur qui, faute
+de pouvoir demander, écrira la liste dans sa propre configuration — laquelle
+dérivera.
+
+### 14.5 Conséquences techniques
+
+**Le socle est livré.** `IPAddress` (adresse + zone) et `IPEndpoint` (adresse +
+port + `sockaddr` prête pour les appels système) sont dans
+`mcu/include/ipaddress.h` et `mcu/src/ipaddress.cpp`, avec 53 tests joués par
+`make check`. Trois invariants : une adresse est vide **ou** valide (plus de
+sentinelle `INADDR_ANY`/`INADDR_NONE`) ; le port n'est pas dans l'adresse ;
+`::ffff:a.b.c.d` est dé-mappée à l'entrée et toute classification travaille sur
+la forme dé-mappée.
+
+**`IsPrivate()` et `IsPrivateV4()` ne sont pas la même question** — et le modèle
+de profils est précisément ce qui oblige à les séparer. « Privé » a désormais
+deux sens dans le produit :
+
+- la **portée** d'un profil (interne / externe), qui est une décision
+  d'exploitation et n'a rien à voir avec les plages RFC ;
+- l'appartenance aux **plages non routables** (RFC 1918, 6598, 3927, ou ULA
+  `fc00::/7` côté v6), qui est un fait sur l'adresse.
+
+C'est le second sens que porte `IPAddress::IsPrivate()`. Et la **politique de
+rattrapage NAT** (`RTPSession::NatCorrectable`) doit consulter `IsPrivateV4()`,
+pas `IsPrivate()` : le rattrapage n'a de sens qu'en v4, puisqu'on ne supporte pas
+le NAT en v6. Sans ce découpage, une ULA — légitimement « privée » — ouvrirait
+par ricochet un rattrapage qui n'a aucune raison d'exister.
+
+**Bind par adresse, et non plus `INADDR_ANY`.** C'est le vrai coût technique du
+modèle : « utiliser la bonne interface » impose de lier la socket média à
+l'adresse de bind du profil. Conséquences à assumer :
+
+- la socket devient **mono-famille** (une adresse v4 ou une adresse v6), donc
+  une session est v4 **ou** v6 — ce qui est de toute façon ce que le contrôleur
+  vient de demander ;
+- la plage de ports RTP est aujourd'hui globale ; elle devient **par adresse de
+  bind**, ce qui réduit les collisions plutôt que l'inverse ;
+- le mode par défaut (aucun profil demandé, aucun `--private-ip`) reste le bind
+  dual-stack `::` avec `IPV6_V6ONLY=0` : un déploiement qui ne configure rien ne
+  voit aucune différence ;
+- les **plans de contrôle** (XML-RPC/Abyss, WebSocket, RTMP) restent en écoute
+  dual-stack `::` : eux doivent tout entendre, la sélection par profil ne les
+  concerne pas.
+
+**STUN et ICE portent l'adresse ANNONCÉE, pas l'adresse de bind.** Derrière NAT,
+`XOR-MAPPED-ADDRESS` et les candidats ICE doivent porter l'adresse que le pair
+peut joindre. C'est vrai dès aujourd'hui, mais le modèle rend l'erreur facile :
+il faudra vérifier `mcu/src/stunmessage.cpp` et
+`Endpoint::GetMediaCandidates` sur ce point précis à l'étape 9.
+
+**`--websocket-host` reste une source d'adresse concurrente** (§3.2) : elle
+alimente l'URL des candidats WebSocket. À terme elle devrait devenir l'adresse
+annoncée d'un profil, sans quoi on aura reconstitué exactement la duplication
+que `SetAnnouncedIp` avait supprimée.
+
+### 14.6 Ce qui reste à trancher
+
+1. **Le défaut `public4` sur un hôte v6-only.** Un contrôleur non mis à jour
+   n'enverra pas de profil, donc demandera `public4`, donc échouera
+   systématiquement. C'est cohérent (« si le profil est indisponible, on
+   échoue »), mais ça rend un tel déploiement inutilisable sans mise à jour du
+   contrôleur. Une option `--default-profile <profil>` lèverait le problème sans
+   toucher au contrat. À décider.
+2. **Nommage exposé.** `public`/`private` est ce que comprend l'exploitant, mais
+   entre en collision de vocabulaire avec `IsPrivate()` (RFC 1918). En interne,
+   les nommer par leur axe — `scope: External|Internal` × `family: V4|V6` — évite
+   l'ambiguïté ; reste à décider si l'API de contrôle reprend ce vocabulaire ou
+   garde `public4`/`private4`.
+3. **Plusieurs adresses d'une même famille et d'une même portée** (deux cartes
+   sur le même réseau externe) : hors modèle, volontairement. Si le besoin
+   apparaît, c'est une liste par profil, pas un cinquième profil.
+4. **Tests.** La suite `:ipv6` du §12 ne couvre pas les profils : il faudra une
+   suite `IPv6Profile*` (résolution CLI, refus au démarrage, sélection par appel,
+   échec si indisponible, introspection).

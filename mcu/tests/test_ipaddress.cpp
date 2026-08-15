@@ -268,6 +268,23 @@ TEST(IPAddressRange, PrivateReprendExactementLesPlagesHistoriques)
 	EXPECT_FALSE(IPAddress::Parse("8.8.8.8").IsPrivate());
 }
 
+// IsPrivateV4 est la moitié v4 d'IsPrivate, isolée : c'est ELLE que consulte la
+// politique de rattrapage NAT, qui n'a de sens qu'en v4 (pas de NAT en v6).
+TEST(IPAddressRange, PrivateV4EstFauxPourToutV6MemePrive)
+{
+	EXPECT_TRUE(IPAddress::Parse("192.168.1.1").IsPrivateV4());
+	EXPECT_TRUE(IPAddress::Parse("::ffff:192.168.1.1").IsPrivateV4())
+		<< "à travers le mapping, comme IsPrivate";
+	EXPECT_FALSE(IPAddress::Parse("8.8.8.8").IsPrivateV4());
+
+	//Une ULA est « privée » au sens de la portée, mais ne doit PAS ouvrir de
+	//rattrapage NAT : c'est tout l'intérêt de séparer les deux prédicats.
+	EXPECT_TRUE(IPAddress::Parse("fd00:1234::1").IsPrivate());
+	EXPECT_FALSE(IPAddress::Parse("fd00:1234::1").IsPrivateV4());
+	EXPECT_FALSE(IPAddress::Parse("fe80::1%lo").IsPrivateV4());
+	EXPECT_FALSE(IPAddress().IsPrivateV4());
+}
+
 TEST(IPAddressRange, UlaEstLAnalogueV6DuRFC1918)
 {
 	EXPECT_TRUE(IPAddress::Parse("fd00:1234::1").IsPrivate());

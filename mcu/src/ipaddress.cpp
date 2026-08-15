@@ -404,23 +404,31 @@ bool IPAddress::IsLinkLocal() const
 	return false;
 }
 
+bool IPAddress::IsPrivateV4() const
+{
+	const IPAddress a = Unmapped();
+
+	if (a.family != AF_INET)
+		return false;
+
+	//Transposition à l'identique de l'historique RTPSession::IsRFC1918.
+	const DWORD ip = ntohl(a.addr.v4.s_addr);
+
+	if ((ip & 0xFF000000) == 0x0A000000) return true;   //10.0.0.0/8
+	if ((ip & 0xFFF00000) == 0xAC100000) return true;   //172.16.0.0/12
+	if ((ip & 0xFFFF0000) == 0xC0A80000) return true;   //192.168.0.0/16
+	if ((ip & 0xFFC00000) == 0x64400000) return true;   //100.64.0.0/10, NAT opérateur (RFC 6598)
+	if ((ip & 0xFFFF0000) == 0xA9FE0000) return true;   //169.254.0.0/16 (RFC 3927)
+
+	return false;
+}
+
 bool IPAddress::IsPrivate() const
 {
 	const IPAddress a = Unmapped();
 
 	if (a.family == AF_INET)
-	{
-		//Transposition à l'identique de l'historique RTPSession::IsRFC1918.
-		const DWORD ip = ntohl(a.addr.v4.s_addr);
-
-		if ((ip & 0xFF000000) == 0x0A000000) return true;   //10.0.0.0/8
-		if ((ip & 0xFFF00000) == 0xAC100000) return true;   //172.16.0.0/12
-		if ((ip & 0xFFFF0000) == 0xC0A80000) return true;   //192.168.0.0/16
-		if ((ip & 0xFFC00000) == 0x64400000) return true;   //100.64.0.0/10, NAT opérateur (RFC 6598)
-		if ((ip & 0xFFFF0000) == 0xA9FE0000) return true;   //169.254.0.0/16 (RFC 3927)
-
-		return false;
-	}
+		return IsPrivateV4();
 
 	if (a.family == AF_INET6)
 	{
