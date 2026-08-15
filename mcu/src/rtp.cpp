@@ -1536,13 +1536,15 @@ void RTPRedundantPacket::DecodeRedundantPayload(BYTE *payload,DWORD redsize)
         if ( redsize == 0 )  return;
 
     	//Number of bytes to skip of text until primary data
-	WORD skip = 0;
+	//DWORD, et non WORD : une suite de blocs annoncant chacun jusqu'a 1023 octets
+	//fait deborder un compteur 16 bits bien avant la fin du paquet.
+	DWORD skip = 0;
 
 	//The the payload
 	//BYTE *payload = GetMediaData();
 
 	//redundant counter
-	WORD i = 0;
+	DWORD i = 0;
 
 	//Check if it is the last
 	bool last = !(payload[i]>>7);
@@ -1575,14 +1577,23 @@ void RTPRedundantPacket::DecodeRedundantPayload(BYTE *payload,DWORD redsize)
 
 		 */
 
+		//Un bloc d'en-tete redondant fait QUATRE octets, et il en faut encore un
+		//derriere lui (celui du bloc primaire) pour que la boucle puisse tester sa
+		//sortie. Sans cette borne, le bit « un autre bloc suit » se suivait hors
+		//du paquet, aussi loin qu'il restait des octets impairs en memoire.
+		if (i+4+1>redsize)
+			//Paquet incoherent : rien d'exploitable
+			return;
 		//Get Type
 		BYTE type = payload[i++] & 0x7F;
 		//Get offset
 		WORD offset = payload[i++];
 		offset = offset <<6 | payload[i]>>2;
 		//Get size
+		//La longueur du bloc fait DIX bits : deux dans cet octet, huit dans le
+		//suivant (le decalage etait de 6, ce qui melangeait les deux moities).
 		WORD size = payload[i++] & 0x03;
-		size = size <<6 | payload[i++];
+		size = size <<8 | payload[i++];
 		//Append new red header
 		headers.push_back(RedHeader(type,offset,skip,size));
 		//Skip the redundant payload
@@ -1590,12 +1601,25 @@ void RTPRedundantPacket::DecodeRedundantPayload(BYTE *payload,DWORD redsize)
 		//Check if it is the last
 		last = !(payload[i]>>7);
 	}
+	//L'en-tete du bloc primaire fait un octet : il doit etre la
+	if (i>=redsize)
+		//Exit
+		return;
 	//Get primaty type
 	primaryType = payload[i] & 0x7F;
 	//Skip it
 	i++;
 	//Get redundant payload
 	redundantData = payload+i;
+	//Les longueurs annoncees par les blocs redondants doivent tenir dans ce qui
+	//reste : sinon la taille du bloc primaire (`redsize-i-skip`) passe sous zero,
+	//et primaryData pointe derriere la fin du paquet.
+	if (skip>redsize-i)
+	{
+		//Paquet incoherent : on n'expose ni redondance ni primaire
+		headers.clear();
+		return;
+	}
 	//Get prymary payload
 	primaryData = redundantData+skip;
 	//Get size of primary payload

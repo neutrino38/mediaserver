@@ -76,24 +76,32 @@ bool FECDecoder::AddPacket(RTPTimedPacket* packet)
 		//Add media packet
 		medias[packet->GetExtSeqNum()] = packet->Clone();
 	}
+	//Une table vide n'a ni dernier ni premier element : sans ce test, le nettoyage
+	//ci-dessous dereferencait un iterateur de fin des le premier paquet recu.
+	if (medias.empty())
+		//Rien a nettoyer
+		return true;
+
 	//Get last seq number
 	DWORD seq = medias.rbegin()->first;
-	
+
 	//Remove unused packets
 	RTPOrderedPackets::iterator it = medias.begin();
 	//Delete everything until seq-63
-	while (it->first<seq-63 && it!=medias.end())
+	//Le test de fin passe AVANT le dereferencement (il etait ecrit dans l'autre
+	//ordre, donc evalue sur un iterateur deja invalide).
+	while (it!=medias.end() && it->first<seq-63)
 	{
 		//Delete rtp packet
 		delete (it->second);
 		//Erase it
 		medias.erase(it++);
 	}
-	
+
 	//Now clean recovery codes
 	FECOrderedData::iterator it2 = codes.begin();
 	//Check base sequence
-	while (it2->first<seq-63 && it2!=codes.end())
+	while (it2!=codes.end() && it2->first<seq-63)
 	{
 		//Delete object
 		delete(it2->second);
@@ -198,10 +206,14 @@ RTPTimedPacket* FECDecoder::Recover()
 				BYTE  pt = fec->GetRecoveryType();
 				DWORD ts = fec->GetRecoveryTimestamp();
 				WORD  l  = fec->GetRecoveryLength();
-				//Get protection length
+				//Get protection length (deja bornee a ce qui a ete recu, cf. FECData)
 				DWORD level0Size = fec->GetLevel0Size();
 				//Copy data
 				memcpy(recovered,fec->GetLevel0Data(),level0Size);
+				//Le reste du tampon n'a jamais ete ecrit : le mettre a zero evite
+				//qu'une longueur reconstruite trop grande ne renvoie sur le reseau
+				//des octets de pile qui ne sont pas du media.
+				memset(recovered+level0Size,0,sizeof(recovered)-level0Size);
 				//Set value in temp buffer
 				set8(aux,0,fecMask);
 				//Get bit reader
@@ -213,7 +225,14 @@ RTPTimedPacket* FECDecoder::Recover()
 					if (r.Get(1))
 					{
 						//Get media packet
-						RTPTimedPacket* media = medias[fec->GetBaseExtSeq()+r.GetPos()-1];
+						//find() et non operator[] : celui-ci INSERE un pointeur nul
+						//quand la sequence est absente, qu'on dereferencait aussitot.
+						RTPOrderedPackets::iterator itm = medias.find(fec->GetBaseExtSeq()+r.GetPos()-1);
+						//Check we have it
+						if (itm==medias.end() || !itm->second)
+							//Next
+							continue;
+						RTPTimedPacket* media = itm->second;
 						//Calculate receovered attributes
 						p  ^= media->GetP();
 						x  ^= media->GetX();
@@ -243,6 +262,10 @@ RTPTimedPacket* FECDecoder::Recover()
 				packet->SetSeqCycles(fec->GetBaseSeqCylcles());
 				//Set ssrc
 				packet->SetSSRC(ssrc);
+				//La longueur reconstruite est un XOR de longueurs annoncees : elle
+				//ne peut pas depasser le bloc de protection reellement recu.
+				if (l>level0Size)
+					l = level0Size;
 				//Set payload and recovered length
 				packet->SetPayload(recovered,l);
 
