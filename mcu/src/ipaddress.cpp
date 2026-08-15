@@ -423,24 +423,59 @@ bool IPAddress::IsPrivateV4() const
 	return false;
 }
 
+bool IPAddress::IsUniqueLocalV6() const
+{
+	//fc00::/7 (RFC 4193). Une ULA n'est jamais mappée : pas de Unmapped() ici.
+	return family == AF_INET6 && (Bytes(addr.v6)[0] & 0xFE) == 0xFC;
+}
+
 bool IPAddress::IsPrivate() const
 {
 	const IPAddress a = Unmapped();
 
 	if (a.family == AF_INET)
-		return IsPrivateV4();
+	{
+		//Registre IANA « IPv4 Special-Purpose Address » (RFC 6890). Les plages
+		//PRIVÉES au sens propre sont dans IsPrivateV4 ; s'y ajoutent ici celles
+		//qui ne sont pas routables sans être privées pour autant.
+		const DWORD ip = ntohl(a.addr.v4.s_addr);
+
+		if (IsPrivateV4())                   return true;
+		if ((ip & 0xFF000000) == 0x00000000) return true;   //0.0.0.0/8      « this network »
+		if ((ip & 0xFF000000) == 0x7F000000) return true;   //127.0.0.0/8    loopback
+		if ((ip & 0xFFFFFF00) == 0xC0000000) return true;   //192.0.0.0/24   IETF protocol assignments
+		if ((ip & 0xFFFFFF00) == 0xC0000200) return true;   //192.0.2.0/24   documentation (RFC 5737)
+		if ((ip & 0xFFFE0000) == 0xC6120000) return true;   //198.18.0.0/15  benchmarking (RFC 2544)
+		if ((ip & 0xFFFFFF00) == 0xC6336400) return true;   //198.51.100.0/24 documentation
+		if ((ip & 0xFFFFFF00) == 0xCB007100) return true;   //203.0.113.0/24 documentation
+		if ((ip & 0xF0000000) == 0xF0000000) return true;   //240.0.0.0/4    réservé + 255.255.255.255
+
+		//Le multicast (224/4) est EXCLU : routable, simplement pas unicast.
+		return false;
+	}
 
 	if (a.family == AF_INET6)
 	{
-		//fc00::/7 — Unique Local Address (RFC 4193), l'analogue direct du 1918.
-		if ((Bytes(a.addr.v6)[0] & 0xFE) == 0xFC)
+		const BYTE* b = Bytes(a.addr.v6);
+
+		if (IN6_IS_ADDR_UNSPECIFIED(&a.addr.v6)) return true;   //::/128
+		if (IN6_IS_ADDR_LOOPBACK(&a.addr.v6))    return true;   //::1/128
+		if (a.IsUniqueLocalV6())                 return true;   //fc00::/7  ULA (RFC 4193)
+		if (IN6_IS_ADDR_LINKLOCAL(&a.addr.v6))   return true;   //fe80::/10
+		if (IN6_IS_ADDR_SITELOCAL(&a.addr.v6))   return true;   //fec0::/10 déprécié (RFC 3879)
+
+		//100::/64 — trou noir de mise au rebut (RFC 6666)
+		if (b[0] == 0x01 && b[1] == 0x00 && !b[2] && !b[3] && !b[4] && !b[5] && !b[6] && !b[7])
 			return true;
 
-		//Link-local : jamais routable jusqu'à nous, même raisonnement qu'en v4.
-		if (IN6_IS_ADDR_LINKLOCAL(&a.addr.v6))
+		//2001:db8::/32 (RFC 3849) et 3fff::/20 (RFC 9637) — documentation
+		if (b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0D && b[3] == 0xB8)
+			return true;
+		if (b[0] == 0x3F && b[1] == 0xFF && (b[2] & 0xF0) == 0x00)
 			return true;
 
-		//Teredo et 6to4 sont GLOBALES : voir le point de revue dans ipaddress.h.
+		//Teredo et 6to4 sont GLOBALES : voir le commentaire dans ipaddress.h.
+		//Le multicast (ff00::/8) est exclu, comme en v4.
 		return false;
 	}
 

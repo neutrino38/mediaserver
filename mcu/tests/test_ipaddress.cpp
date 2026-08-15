@@ -252,45 +252,110 @@ TEST(IPAddressMapped, MappedToV6EstIdempotentSurUneV6)
  *      erreur ici rouvre le latching sur des adresses publiques.
  * ========================================================================= */
 
-TEST(IPAddressRange, PrivateReprendExactementLesPlagesHistoriques)
+// IsPrivateV4 porte la POLITIQUE de rattrapage NAT : les plages v4 privées au
+// sens propre, ni plus ni moins. C'est la règle historique IsRFC1918, dont tout
+// élargissement rouvrirait le latching sur des adresses qui n'en relèvent pas.
+TEST(IPAddressRange, PrivateV4ReprendExactementLesPlagesHistoriques)
 {
-	EXPECT_TRUE(IPAddress::Parse("10.0.0.1").IsPrivate());
-	EXPECT_TRUE(IPAddress::Parse("172.16.0.1").IsPrivate());
-	EXPECT_TRUE(IPAddress::Parse("172.31.255.254").IsPrivate());
-	EXPECT_TRUE(IPAddress::Parse("192.168.1.1").IsPrivate());
-	EXPECT_TRUE(IPAddress::Parse("100.64.0.1").IsPrivate())  << "RFC 6598, NAT opérateur";
-	EXPECT_TRUE(IPAddress::Parse("169.254.1.1").IsPrivate()) << "RFC 3927, link-local";
+	EXPECT_TRUE(IPAddress::Parse("10.0.0.1").IsPrivateV4());
+	EXPECT_TRUE(IPAddress::Parse("172.16.0.1").IsPrivateV4());
+	EXPECT_TRUE(IPAddress::Parse("172.31.255.254").IsPrivateV4());
+	EXPECT_TRUE(IPAddress::Parse("192.168.1.1").IsPrivateV4());
+	EXPECT_TRUE(IPAddress::Parse("100.64.0.1").IsPrivateV4())  << "RFC 6598, NAT opérateur";
+	EXPECT_TRUE(IPAddress::Parse("169.254.1.1").IsPrivateV4()) << "RFC 3927, link-local";
+	EXPECT_TRUE(IPAddress::Parse("::ffff:192.168.1.1").IsPrivateV4()) << "à travers le mapping";
 
 	//Les bornes, dans le bon sens : 172.15 et 172.32 sont PUBLIQUES.
-	EXPECT_FALSE(IPAddress::Parse("172.15.255.254").IsPrivate());
-	EXPECT_FALSE(IPAddress::Parse("172.32.0.1").IsPrivate());
-	EXPECT_FALSE(IPAddress::Parse("100.63.255.254").IsPrivate());
-	EXPECT_FALSE(IPAddress::Parse("8.8.8.8").IsPrivate());
-}
-
-// IsPrivateV4 est la moitié v4 d'IsPrivate, isolée : c'est ELLE que consulte la
-// politique de rattrapage NAT, qui n'a de sens qu'en v4 (pas de NAT en v6).
-TEST(IPAddressRange, PrivateV4EstFauxPourToutV6MemePrive)
-{
-	EXPECT_TRUE(IPAddress::Parse("192.168.1.1").IsPrivateV4());
-	EXPECT_TRUE(IPAddress::Parse("::ffff:192.168.1.1").IsPrivateV4())
-		<< "à travers le mapping, comme IsPrivate";
+	EXPECT_FALSE(IPAddress::Parse("172.15.255.254").IsPrivateV4());
+	EXPECT_FALSE(IPAddress::Parse("172.32.0.1").IsPrivateV4());
+	EXPECT_FALSE(IPAddress::Parse("100.63.255.254").IsPrivateV4());
 	EXPECT_FALSE(IPAddress::Parse("8.8.8.8").IsPrivateV4());
 
-	//Une ULA est « privée » au sens de la portée, mais ne doit PAS ouvrir de
-	//rattrapage NAT : c'est tout l'intérêt de séparer les deux prédicats.
-	EXPECT_TRUE(IPAddress::Parse("fd00:1234::1").IsPrivate());
+	//Jamais vrai pour une v6, ULA comprise : il n'y a pas de NAT en v6.
 	EXPECT_FALSE(IPAddress::Parse("fd00:1234::1").IsPrivateV4());
 	EXPECT_FALSE(IPAddress::Parse("fe80::1%lo").IsPrivateV4());
 	EXPECT_FALSE(IPAddress().IsPrivateV4());
 }
 
-TEST(IPAddressRange, UlaEstLAnalogueV6DuRFC1918)
+// ADVERSE, LE PIÈGE DU VOCABULAIRE — IsPrivate répond « non routable sur
+// l'Internet public », ce qui est PLUS LARGE que « privée ». 192.0.2.1 est une
+// adresse de documentation : non routable, et pourtant nullement NATée. Les
+// confondre ferait ouvrir un rattrapage NAT sur une adresse qui n'en relève pas.
+TEST(IPAddressRange, PrivateEstUnSurEnsembleStrictDePrivateV4)
 {
+	const char* const nonRoutablesMaisPasPrivees[] = {
+		"0.0.0.0",            //0.0.0.0/8      « this network »
+		"127.0.0.1",          //127/8          loopback
+		"192.0.0.1",          //192.0.0.0/24   affectations de protocole IETF
+		"192.0.2.1",          //192.0.2.0/24   documentation (RFC 5737)
+		"198.18.0.1",         //198.18.0.0/15  benchmarking (RFC 2544)
+		"198.51.100.1",       //198.51.100/24  documentation
+		"203.0.113.1",        //203.0.113/24   documentation
+		"240.0.0.1",          //240/4          réservé (classe E)
+		"255.255.255.255",    //broadcast
+	};
+
+	for (size_t i = 0; i < sizeof(nonRoutablesMaisPasPrivees) / sizeof(*nonRoutablesMaisPasPrivees); ++i)
+	{
+		const IPAddress a = IPAddress::Parse(nonRoutablesMaisPasPrivees[i]);
+		ASSERT_TRUE(a.IsSet()) << nonRoutablesMaisPasPrivees[i];
+		EXPECT_TRUE(a.IsPrivate())    << nonRoutablesMaisPasPrivees[i] << " : non routable";
+		EXPECT_FALSE(a.IsPrivateV4()) << nonRoutablesMaisPasPrivees[i]
+			<< " : non routable, mais PAS privée — aucun rattrapage NAT ici";
+	}
+
+	//Et le sur-ensemble contient bien le sous-ensemble.
+	EXPECT_TRUE(IPAddress::Parse("192.168.1.1").IsPrivate());
+	EXPECT_TRUE(IPAddress::Parse("10.0.0.1").IsPrivate());
+
+	//Une adresse réellement routable n'est ni l'un ni l'autre.
+	EXPECT_FALSE(IPAddress::Parse("8.8.8.8").IsPrivate());
+	EXPECT_FALSE(IPAddress::Parse("2001:4860:4860::8888").IsPrivate());
+}
+
+// Le multicast est EXCLU d'IsPrivate : il est routable, simplement pas unicast.
+TEST(IPAddressRange, LeMulticastNEstPasClasseNonRoutable)
+{
+	EXPECT_FALSE(IPAddress::Parse("224.0.0.1").IsPrivate());
+	EXPECT_FALSE(IPAddress::Parse("ff02::1").IsPrivate());
+	EXPECT_TRUE(IPAddress::Parse("224.0.0.1").IsMulticast());
+	EXPECT_TRUE(IPAddress::Parse("ff02::1").IsMulticast());
+}
+
+// L'ULA est l'analogue v6 du RFC 1918 — et c'est ELLE que `--internal-ip`
+// exigera du côté v6, comme IsPrivateV4 du côté v4.
+TEST(IPAddressRange, UniqueLocalEstLAnalogueV6DuRFC1918)
+{
+	EXPECT_TRUE(IPAddress::Parse("fd00:1234::1").IsUniqueLocalV6());
+	EXPECT_TRUE(IPAddress::Parse("fc00::1").IsUniqueLocalV6());
+	EXPECT_TRUE(IPAddress::Parse("fdff:ffff::1").IsUniqueLocalV6());
+
+	//fe00:: est hors de fc00::/7 (le 7e bit fait la limite), fe80:: est
+	//link-local — aucune des deux n'est une ULA.
+	EXPECT_FALSE(IPAddress::Parse("fe00::1").IsUniqueLocalV6());
+	EXPECT_FALSE(IPAddress::Parse("fe80::1%lo").IsUniqueLocalV6());
+	EXPECT_FALSE(IPAddress::Parse("2001:db8::1").IsUniqueLocalV6());
+	EXPECT_FALSE(IPAddress::Parse("192.168.1.1").IsUniqueLocalV6()) << "jamais vrai pour une v4";
+
+	//Non routable, mais sans rapport avec le NAT.
 	EXPECT_TRUE(IPAddress::Parse("fd00:1234::1").IsPrivate());
-	EXPECT_TRUE(IPAddress::Parse("fc00::1").IsPrivate());
-	EXPECT_FALSE(IPAddress::Parse("2001:db8::1").IsPrivate());
-	EXPECT_FALSE(IPAddress::Parse("2000::1").IsPrivate());
+	EXPECT_FALSE(IPAddress::Parse("fd00:1234::1").IsPrivateV4());
+}
+
+// Les plages v6 non routables qui ne sont ni ULA ni link-local.
+TEST(IPAddressRange, LesPlagesV6NonRoutablesSontClassees)
+{
+	EXPECT_TRUE(IPAddress::Parse("::1").IsPrivate())            << "loopback";
+	EXPECT_TRUE(IPAddress::Parse("::").IsPrivate())             << "non spécifiée";
+	EXPECT_TRUE(IPAddress::Parse("2001:db8::1").IsPrivate())    << "documentation (RFC 3849)";
+	EXPECT_TRUE(IPAddress::Parse("3fff::1").IsPrivate())        << "documentation (RFC 9637)";
+	EXPECT_TRUE(IPAddress::Parse("100::1").IsPrivate())         << "discard-only (RFC 6666)";
+	EXPECT_TRUE(IPAddress::Parse("fec0::1").IsPrivate())        << "site-local déprécié (RFC 3879)";
+	EXPECT_TRUE(IPAddress::Parse("fe80::1%lo").IsPrivate())     << "link-local";
+
+	EXPECT_FALSE(IPAddress::Parse("2000::1").IsPrivate())       << "unicast global";
+	EXPECT_FALSE(IPAddress::Parse("3ffe::1").IsPrivate())       << "hors 3fff::/20";
+	EXPECT_FALSE(IPAddress::Parse("2001:db9::1").IsPrivate())   << "voisin de la doc, mais global";
 }
 
 // Point de revue tranché dans ipaddress.h : Teredo et 6to4 sont classés NON

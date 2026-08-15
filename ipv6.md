@@ -500,7 +500,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | 0 | valide le motif sur du code réel ; **3 bugs réels trouvés en chemin** | **fait** |
 | 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrigeait un bug présent, hors IPv6** | **fait** (§11) |
 | 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivate()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | à faire |
-| 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--private-ip` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | à faire |
+| 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | à faire |
 | 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | à faire |
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | à faire |
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | à faire |
@@ -713,8 +713,8 @@ Un **profil d'adressage** est le croisement de deux axes :
 
 |  | IPv4 | IPv6 |
 |---|---|---|
-| **externe** (« publique ») | profil `public4` — peut être **natté** | profil `public6` — **jamais natté** |
-| **interne** (« privée », réseau de service) | profil `private4` | profil `private6` |
+| **publique** (côté extérieur) | profil `publicv4` — peut être **natté** | profil `publicv6` — **jamais natté** |
+| **interne** (réseau de service) | profil `internalv4` — **RFC 1918 exigée** | profil `internalv6` — **ULA exigée** |
 
 Chaque profil porte **deux adresses distinctes**, et c'est là tout l'intérêt :
 
@@ -722,7 +722,7 @@ Chaque profil porte **deux adresses distinctes**, et c'est là tout l'intérêt 
   C'est elle que la socket média lie, donc elle qui décide de l'interface
   empruntée ;
 - une **adresse annoncée** — celle que le pair verra dans le SDP. Elle est
-  **égale** à l'adresse de bind, sauf pour `public4` derrière NAT, où elle vaut
+  **égale** à l'adresse de bind, sauf pour `publicv4` derrière NAT, où elle vaut
   l'adresse publique du routeur.
 
 Cette séparation est le vrai apport du modèle. Aujourd'hui les deux notions sont
@@ -737,7 +737,7 @@ déploiement v6 correct délègue un préfixe et filtre, il ne translate pas.
 
 **Le profil est une propriété de la jambe**, pas de la conférence ni du serveur :
 c'est ce qui permet à une même conférence d'avoir un participant interne en
-`private4` et un participant externe en `public6`. C'est le cas d'usage SBC.
+`internalv4` et un participant externe en `publicv6`. C'est le cas d'usage SBC.
 
 ### 14.2 Ligne de commande
 
@@ -746,11 +746,11 @@ c'est ce qui permet à une même conférence d'avoir un participant interne en
 --public-ip  <adresse v4 RFC 1918 attachée à l'hôte> --nat <adresse publique vue de l'extérieur>
 --public-ip  <adresse v6 globale attachée à l'hôte>
 
---private-ip <adresse v4 attachée à l'hôte>
---private-ip <adresse v6 attachée à l'hôte>
+--internal-ip <adresse v4 RFC 1918 attachée à l'hôte>
+--internal-ip <adresse v6 ULA (fc00::/7) attachée à l'hôte>
 ```
 
-`--public-ip` et `--private-ip` sont **répétables**, au plus une fois par
+`--public-ip` et `--internal-ip` sont **répétables**, au plus une fois par
 famille ; **la famille est déduite de la valeur** (`IPAddress::Parse` la donne),
 il n'y a donc pas d'option `--public-ip6` à retenir, ni d'ordre significatif
 entre les options — un `--nat` s'applique à l'adresse **v4 publique**, où qu'il
@@ -763,7 +763,21 @@ quatre mains).
 Contrôles au démarrage, tous **bloquants** — mieux vaut un serveur qui refuse de
 démarrer qu'un serveur qui annonce une adresse fausse pendant six mois :
 
-- deux `--public-ip` (ou deux `--private-ip`) de la même famille → refus ;
+- deux `--public-ip` (ou deux `--internal-ip`) de la même famille → refus ;
+- `--internal-ip` **v4** hors des plages privées (`IsPrivateV4()` : 10/8,
+  172.16/12, 192.168/16, 100.64/10, 169.254/16) → refus. Une adresse publique
+  déclarée comme interne serait annoncée à des pairs internes qui n'y ont rien à
+  faire, et masquerait une erreur de configuration ;
+- `--internal-ip` **v6** hors de `fc00::/7` (`IsUniqueLocalV6()`, ULA RFC 4193) →
+  refus. C'est l'analogue direct, et **c'est le point où l'analogie v4 est la
+  moins solide** : en IPv6, un réseau interne d'entreprise est très souvent
+  numéroté en **unicast global** (une plage déléguée par l'opérateur) et protégé
+  par filtrage, précisément parce qu'il n'y a plus de NAT à motiver l'adressage
+  privé. L'ULA existe et sert exactement à cela (RFC 4193), mais elle n'est pas
+  l'usage dominant, et la préférence d'adresse de la RFC 6724 la traite à part.
+  **Exiger l'ULA est donc un choix strict, assumé** : il interdit le déploiement
+  « interne en GUA + pare-feu ». Si ce cas se présente, l'ouverture se fera par
+  une option explicite (`--allow-global-internal`), jamais en silence ;
 - `--nat` sans `--public-ip` v4 → refus ;
 - `--nat` avec une valeur v6, ou appliqué à un profil v6 → refus motivé ;
 - une adresse de bind qui **n'est attachée à aucune interface locale**
@@ -776,7 +790,7 @@ démarrer qu'un serveur qui annonce une adresse fausse pendant six mois :
 
 **Compatibilité ascendante** : `--public-ip <v4>` seul se comporte exactement
 comme aujourd'hui, et son absence garde l'auto-détection actuelle (première
-adresse non loopback du nom d'hôte) comme profil `public4`. Un déploiement
+adresse non loopback du nom d'hôte) comme profil `publicv4`. Un déploiement
 existant ne change pas de comportement.
 
 ### 14.3 Le contrat de contrôle
@@ -785,10 +799,10 @@ existant ne change pas de comportement.
 **paramètre de profil supplémentaire**, ajouté **en fin de liste** (XML-RPC est
 positionnel : c'est la seule position qui ne casse pas les appelants).
 
-- valeurs : `"public4"`, `"public6"`, `"private4"`, `"private6"` — des chaînes,
+- valeurs : `"publicv4"`, `"publicv6"`, `"internalv4"`, `"internalv6"` — des chaînes,
   pas des entiers : elles se lisent dans une trace d'exploitation, et un
   désalignement d'énuméré entre elixip et le mcu serait un bug silencieux ;
-- **absent ou vide ⇒ `public4`**, ce qui reproduit à l'identique le comportement
+- **absent ou vide ⇒ `publicv4`**, ce qui reproduit à l'identique le comportement
   actuel ;
 - **profil demandé indisponible ⇒ échec explicite**, avec un code distinguable
   d'une erreur générique (« profil d'adressage indisponible »), de sorte que le
@@ -838,20 +852,33 @@ sentinelle `INADDR_ANY`/`INADDR_NONE`) ; le port n'est pas dans l'adresse ;
 `::ffff:a.b.c.d` est dé-mappée à l'entrée et toute classification travaille sur
 la forme dé-mappée.
 
-**`IsPrivate()` et `IsPrivateV4()` ne sont pas la même question** — et le modèle
-de profils est précisément ce qui oblige à les séparer. « Privé » a désormais
-deux sens dans le produit :
+**« Privé » et « interne » sont deux mots pour deux choses, et le produit dit
+désormais lequel il emploie** (arbitrage du 2026-08-15) :
 
-- la **portée** d'un profil (interne / externe), qui est une décision
-  d'exploitation et n'a rien à voir avec les plages RFC ;
-- l'appartenance aux **plages non routables** (RFC 1918, 6598, 3927, ou ULA
-  `fc00::/7` côté v6), qui est un fait sur l'adresse.
+- **interne** = décision d'**exploitation**. C'est un côté du serveur, celui du
+  réseau de service, choisi par celui qui déploie. C'est le vocabulaire de la
+  ligne de commande (`--internal-ip`) et des profils (`internalv4`,
+  `internalv6`) ;
+- **privée** = **fait** sur l'adresse, au sens des standards : non routable sur
+  l'Internet public. Aucun exploitant n'en décide.
 
-C'est le second sens que porte `IPAddress::IsPrivate()`. Et la **politique de
-rattrapage NAT** (`RTPSession::NatCorrectable`) doit consulter `IsPrivateV4()`,
-pas `IsPrivate()` : le rattrapage n'a de sens qu'en v4, puisqu'on ne supporte pas
-le NAT en v6. Sans ce découpage, une ULA — légitimement « privée » — ouvrirait
-par ricochet un rattrapage qui n'a aucune raison d'exister.
+Trois prédicats en découlent, et les confondre coûterait cher :
+
+| Prédicat | Répond à | Sert à |
+|---|---|---|
+| `IsPrivate()` | l'adresse est-elle **non routable** sur l'Internet public ? (registre IANA « special-purpose », RFC 6890 : RFC 1918, CGNAT, loopback, link-local, **documentation**, benchmarking, réservé, ULA, site-local déprécié) | diagnostic, garde-fous, refus de configuration |
+| `IsPrivateV4()` | l'adresse est-elle une **v4 privée au sens propre** (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16) ? | **la politique de rattrapage NAT** — c'est l'ancienne `IsRFC1918` |
+| `IsUniqueLocalV6()` | l'adresse est-elle une **ULA** (`fc00::/7`, RFC 4193) ? | le contrôle d'`--internal-ip` côté v6 |
+
+`IsPrivateV4()` est un **sous-ensemble strict** d'`IsPrivate()`, et c'est là le
+piège : `192.0.2.1` est non routable (plage de documentation) et pourtant
+nullement NATée. Faire porter le rattrapage par `IsPrivate()` ouvrirait le
+latching sur des adresses qui n'en relèvent pas — et sur les ULA, où il n'y a de
+toute façon pas de NAT. `RTPSession::NatCorrectable` consulte donc
+`IsPrivateV4()`, jamais `IsPrivate()`.
+
+Le **multicast est exclu** d'`IsPrivate()` : il est routable, simplement pas
+unicast. C'est `IsMulticast()` qui répond à cette question-là.
 
 **Bind par adresse, et non plus `INADDR_ANY`.** C'est le vrai coût technique du
 modèle : « utiliser la bonne interface » impose de lier la socket média à
@@ -862,7 +889,7 @@ l'adresse de bind du profil. Conséquences à assumer :
   vient de demander ;
 - la plage de ports RTP est aujourd'hui globale ; elle devient **par adresse de
   bind**, ce qui réduit les collisions plutôt que l'inverse ;
-- le mode par défaut (aucun profil demandé, aucun `--private-ip`) reste le bind
+- le mode par défaut (aucun profil demandé, aucun `--internal-ip`) reste le bind
   dual-stack `::` avec `IPV6_V6ONLY=0` : un déploiement qui ne configure rien ne
   voit aucune différence ;
 - les **plans de contrôle** (XML-RPC/Abyss, WebSocket, RTMP) restent en écoute
@@ -882,17 +909,17 @@ que `SetAnnouncedIp` avait supprimée.
 
 ### 14.6 Ce qui reste à trancher
 
-1. **Le défaut `public4` sur un hôte v6-only.** Un contrôleur non mis à jour
-   n'enverra pas de profil, donc demandera `public4`, donc échouera
+1. **Le défaut `publicv4` sur un hôte v6-only.** Un contrôleur non mis à jour
+   n'enverra pas de profil, donc demandera `publicv4`, donc échouera
    systématiquement. C'est cohérent (« si le profil est indisponible, on
    échoue »), mais ça rend un tel déploiement inutilisable sans mise à jour du
    contrôleur. Une option `--default-profile <profil>` lèverait le problème sans
    toucher au contrat. À décider.
-2. **Nommage exposé.** `public`/`private` est ce que comprend l'exploitant, mais
-   entre en collision de vocabulaire avec `IsPrivate()` (RFC 1918). En interne,
-   les nommer par leur axe — `scope: External|Internal` × `family: V4|V6` — évite
-   l'ambiguïté ; reste à décider si l'API de contrôle reprend ce vocabulaire ou
-   garde `public4`/`private4`.
+2. ~~**Nommage exposé.**~~ **Tranché** : `--internal-ip` et `internalv4` /
+   `internalv6` d'un côté, `IsPrivate()` au sens des standards de l'autre. Voir
+   §14.5. L'option historique `--public-ip` ne bouge pas — d'où la paire
+   asymétrique `public`/`internal` plutôt qu'`external`/`internal` : renommer
+   une option existante casserait tous les déploiements pour un gain cosmétique.
 3. **Plusieurs adresses d'une même famille et d'une même portée** (deux cartes
    sur le même réseau externe) : hors modèle, volontairement. Si le besoin
    apparaît, c'est une liste par profil, pas un cinquième profil.

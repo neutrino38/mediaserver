@@ -192,33 +192,60 @@ public:
 	bool IsMulticast()   const;   // 224.0.0.0/4 · ff00::/8
 	bool IsLinkLocal()   const;   // 169.254.0.0/16 · fe80::/10
 
-	// Adresse privée / non routable sur l'Internet public : le pair qui
-	// l'annonce est derrière un NAT (ou nous ment), son média ne peut pas nous
-	// parvenir de là. C'est le SEUL cas qui ouvre droit au rattrapage — la
-	// règle historique `RTPSession::IsRFC1918`, transposée :
-	//   v4 : 10/8, 172.16/12, 192.168/16, 100.64/10 (RFC 6598), 169.254/16
-	//   v6 : fc00::/7 (ULA, RFC 4193) — l'analogue direct du RFC 1918.
-	//
-	// >>> POINT DE REVUE : Teredo (2001::/32) et 6to4 (2002::/16) sont
-	// classés NON privés. Ce sont des tunnels v6-sur-v4 : globaux au sens du
-	// routage, mais encapsulant une adresse v4 NATée. Les compter comme privés
-	// rouvrirait le rattrapage NAT sur des adresses globales — l'inverse de la
-	// prudence recherchée. Ils restent des destinations parfaitement valides
-	// (`IsUnicastDestination`), et `IsTeredo()`/`Is6to4()` permettent à un
-	// appelant d'en décider autrement en connaissance de cause. <<<
+	/**
+	 * IsPrivate — l'adresse est-elle NON ROUTABLE sur l'Internet public ?
+	 *
+	 * Au sens des standards, pas au sens d'un déploiement : c'est un fait sur
+	 * l'adresse, pas une décision d'exploitation. Registres IANA
+	 * « special-purpose » (RFC 6890) :
+	 *
+	 *   v4 : 0.0.0.0/8 · 10/8 · 100.64/10 (CGNAT, RFC 6598) · 127/8 ·
+	 *        169.254/16 · 172.16/12 · 192.0.0/24 · 192.0.2/24 · 192.168/16 ·
+	 *        198.18/15 (bench, RFC 2544) · 198.51.100/24 · 203.0.113/24 ·
+	 *        240/4 (réservé, y compris 255.255.255.255)
+	 *   v6 : ::/128 · ::1/128 · 100::/64 (discard, RFC 6666) · fc00::/7 (ULA,
+	 *        RFC 4193) · fe80::/10 · fec0::/10 (site-local, déprécié RFC 3879) ·
+	 *        2001:db8::/32 et 3fff::/20 (documentation, RFC 3849 / RFC 9637)
+	 *
+	 * Le MULTICAST en est volontairement EXCLU : il est routable, simplement
+	 * pas unicast. C'est `IsMulticast()` qui répond à cette question-là.
+	 *
+	 * Teredo (2001::/32) et 6to4 (2002::/16) sont classés NON privés : ce sont
+	 * des tunnels v6-sur-v4 conçus pour être joignables globalement, via relais.
+	 * `IsTeredo()`/`Is6to4()` permettent d'en décider autrement en connaissance
+	 * de cause.
+	 *
+	 * ATTENTION — ce prédicat n'est PAS la politique de rattrapage NAT : voir
+	 * `IsPrivateV4()` juste en dessous, qui en est un sous-ensemble strict.
+	 */
 	bool IsPrivate() const;
 
-	// La MOITIÉ v4 de la règle ci-dessus, isolée : vrai uniquement pour une
-	// adresse v4 privée — 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 —
-	// y compris à travers le mapping, et TOUJOURS faux pour une v6.
-	//
-	// C'est ce prédicat, et non `IsPrivate()`, que doit consulter la politique
-	// de rattrapage NAT (`RTPSession::NatCorrectable`) : le rattrapage n'a de
-	// sens qu'en IPv4, puisqu'on ne supporte pas le NAT en v6 (§14 de ipv6.md).
-	// Les garder distincts évite qu'une ULA — légitimement « privée » au sens
-	// de la portée — ouvre par ricochet un rattrapage qui n'a aucune raison
-	// d'exister en v6.
+	/**
+	 * IsPrivateV4 — adresse v4 PRIVÉE au sens propre : 10/8, 172.16/12,
+	 * 192.168/16, 100.64/10 (RFC 6598), 169.254/16 (RFC 3927). Y compris à
+	 * travers le mapping, et TOUJOURS faux pour une v6.
+	 *
+	 * C'est la règle historique `RTPSession::IsRFC1918`, et c'est CE prédicat —
+	 * pas `IsPrivate()` — que doit consulter la politique de rattrapage NAT
+	 * (`RTPSession::NatCorrectable`) : le pair qui annonce une telle adresse est
+	 * derrière un NAT, son média ne peut pas nous parvenir de là.
+	 *
+	 * Sous-ensemble STRICT d'`IsPrivate()`, qui couvre en plus des plages non
+	 * routables mais nullement privées (documentation, benchmarking, réservé) :
+	 * `192.0.2.1` est non routable **et** publique — la confondre avec une
+	 * adresse NATée ouvrirait un rattrapage sur une adresse qui n'en relève pas.
+	 */
 	bool IsPrivateV4() const;
+
+	/**
+	 * IsUniqueLocalV6 — `fc00::/7` (RFC 4193), l'analogue v6 du RFC 1918 : une
+	 * adresse d'usage local, unique par construction, jamais annoncée à
+	 * l'Internet public. C'est le critère qu'applique `--internal-ip` du côté
+	 * v6, comme `IsPrivateV4()` l'applique du côté v4 (§14 de ipv6.md).
+	 *
+	 * Elle n'ouvre AUCUN rattrapage NAT : il n'y a pas de NAT en v6.
+	 */
+	bool IsUniqueLocalV6() const;
 
 	bool IsTeredo() const;        // 2001::/32
 	bool Is6to4()   const;        // 2002::/16
