@@ -14,6 +14,7 @@
 #include "websocketserver.h"
 #include "websockets.h"
 #include "jsr309/WSEndpoint.h"
+#include "addressprofiles.h"
 #include <signal.h>
 #include <limits.h>
 #include <string.h>
@@ -150,6 +151,10 @@ int main(int argc,char **argv)
 	int maxPort = RTPSession::GetMaxPort();
 	//Adresse annoncée dans le SDP : NULL → auto-détectée
 	const char* publicIp = NULL;
+	const char* natIp        = NULL;
+	const char* internalIp[2] = { NULL, NULL };   //une par famille, ordre libre
+	int         internalCount = 0;
+	const char* defaultProfile = NULL;
 	int vadPeriod = 5000;
 	//Délai de grâce (s) sans long-poll sur une file d'événements avant
 	//destruction de la file et des objets qui en dépendent (0 = désactivé).
@@ -189,6 +194,14 @@ int main(int argc,char **argv)
 				" --public-ip      Set the IP address announced in the SDP (c= line and ICE candidates).\r\n"
 				"                  Required behind a NAT, where it differs from the bound address;\r\n"
 				"                  defaults to the first non-loopback IPv4 address of the host\r\n"
+				" --nat            Public IPv4 address seen from outside, when --public-ip carries\r\n"
+				"                  the locally bound address of a NATed host (IPv4 only)\r\n"
+				" --internal-ip    Address of the internal (service) network. Repeatable, at most\r\n"
+				"                  once per family; IPv4 must be RFC 1918. Option order is not\r\n"
+				"                  significant: the family is deduced from the value\r\n"
+				" --default-profile\r\n"
+				"                  Addressing profile used by a call that requests none:\r\n"
+				"                  publicv4 (default), publicv6, internalv4, internalv6\r\n"
 				" --rtmp-port      Set RTMP port\r\n"
 				" --websocket-port Set WebSocket server port \r\n"
 				" --websocket-secure Enable secure WebSocket (wss://)\r\n"
@@ -236,6 +249,22 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--public-ip")==0 && (i+1<argc))
 			//Get the IP to announce in the SDP
 			publicIp = argv[++i];
+		else if (strcmp(argv[i],"--nat")==0 && (i+1<argc))
+			//Adresse publique vue de l'exterieur, quand --public-ip porte
+			//l'adresse locale d'un hote natte (v4 uniquement)
+			natIp = argv[++i];
+		else if (strcmp(argv[i],"--internal-ip")==0 && (i+1<argc))
+		{
+			//Repetable, au plus une fois par famille : la famille se deduit
+			//de la valeur, l'ordre des options n'est pas significatif
+			if (internalCount < 2)
+				internalIp[internalCount++] = argv[++i];
+			else
+				++i;
+		}
+		else if (strcmp(argv[i],"--default-profile")==0 && (i+1<argc))
+			//Profil employe par un appel qui n'en demande aucun
+			defaultProfile = argv[++i];
 		else if (strcmp(argv[i],"--mcu-log")==0 && (i+1<argc))
 			//Get rtmp port
 			logfile = argv[++i];
@@ -399,6 +428,71 @@ int main(int argc,char **argv)
 
 		//On ne démarre pas
 		return -1;
+	}
+
+	//Table des profils d'adressage (ipv6.md §14). Elle se construit APRÈS la
+	//résolution ci-dessus, dont elle reprend le résultat comme profil public :
+	//l'adresse annoncée historique devient une entrée de la table, et rien ne
+	//change pour un déploiement qui ne configure que --public-ip.
+	{
+		std::string error;
+
+		if (!AddressProfiles::AddPublic(IPAddress::Parse(RTPSession::GetAnnouncedIp()),error))
+		{
+			Error("-MCU cannot start: --public-ip: %s\n",error.c_str());
+			return -1;
+		}
+
+		if (natIp && !AddressProfiles::SetNat(IPAddress::Parse(natIp),error))
+		{
+			Error("-MCU cannot start: --nat: %s\n",error.c_str());
+			return -1;
+		}
+
+		for (int i=0;i<internalCount;++i)
+		{
+			if (!AddressProfiles::AddInternal(IPAddress::Parse(internalIp[i]),error))
+			{
+				Error("-MCU cannot start: --internal-ip %s: %s\n",internalIp[i],error.c_str());
+				return -1;
+			}
+		}
+
+		if (defaultProfile)
+		{
+			AddressProfiles::Id id;
+
+			if (!AddressProfiles::ParseId(defaultProfile,id))
+			{
+				Error("-MCU cannot start: --default-profile: profil inconnu \"%s\"\n"
+				      "  Valeurs acceptees : publicv4, publicv6, internalv4, internalv6\n",
+				      defaultProfile);
+				return -1;
+			}
+
+			if (!AddressProfiles::SetDefault(id,error))
+			{
+				Error("-MCU cannot start: --default-profile: %s\n",error.c_str());
+				return -1;
+			}
+		}
+
+		//Contrôles croisés : c'est ici que --nat sans --public-ip v4, ou un
+		//profil par défaut indisponible, font échouer le démarrage. L'ordre des
+		//options n'a donc aucune importance.
+		if (!AddressProfiles::Freeze(error))
+		{
+			Error("-MCU cannot start: adressage: %s\n",error.c_str());
+			return -1;
+		}
+
+		//Le profil par défaut décide de l'adresse annoncée par les appels qui
+		//n'en demandent aucun : les deux sources restent alignées.
+		const IPAddress announced = AddressProfiles::AnnouncedAddress(AddressProfiles::Default());
+		if (announced.IsSet())
+			RTPSession::SetAnnouncedIp(announced.ToString().c_str());
+
+		Log("-Profils d'adressage :\n%s",AddressProfiles::Describe().c_str());
 	}
 
 

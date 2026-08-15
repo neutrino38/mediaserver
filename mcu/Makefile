@@ -86,7 +86,7 @@ OBJS+=xmlrpcmediagateway.o textmixer.o textmixerworker.o textstream.o participan
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
-OBJS+=ipaddress.o
+OBJS+=ipaddress.o addressprofiles.o
 
 OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ)
 TARGETS=mcu rtmptest mediagw
@@ -95,7 +95,7 @@ OBJS2=mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomix
 OBJS2+=overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.omediagateway.o mediabridgesession.o mcustatushandler.o
 OBJS2+=xmlrpcmediagateway.o textstream.o pipetextinput.o pipetextoutput.o audioencoder.o audiodecoder.o textencoder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o vad.o 
 OBJS2+=remoterateestimator.o eventstreaminghandler.o VideoTranscoder.o videopipe.o redcodec.o
-OBJS2+=ipaddress.o
+OBJS2+=ipaddress.o addressprofiles.o
 OBJS2+= $(JSR309OBJ) $(DOCSHARINGOBJ)
 
 ifeq ($(FLASHSTREAMER),yes)

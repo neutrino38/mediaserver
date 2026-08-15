@@ -522,7 +522,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | 0 | valide le motif sur du code réel ; **3 bugs réels trouvés en chemin** | **fait** |
 | 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrigeait un bug présent, hors IPv6** | **fait** (§11) |
 | 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivateV4()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | **fait** |
-| 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | à faire |
+| 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip`/`--default-profile` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | **fait** |
 | 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | à faire |
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | à faire |
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | à faire |
@@ -783,6 +783,26 @@ apparier `--nat` au `--public-ip` **précédent** rendrait le sens de la ligne d
 commande dépendant de l'ordre des arguments, ce qui est un piège d'exploitation
 classique (et invisible dans un fichier `/etc/sysconfig/mediaserver` édité à
 quatre mains).
+
+> **Fait le 2026-08-15** (étape 4) : `mcu/include/addressprofiles.h`,
+> `src/addressprofiles.cpp`, câblage dans `main.cpp`, 20 tests actifs. La table
+> est **figée** après lecture de la ligne de commande (`Freeze`), et le serveur
+> journalise les quatre profils au démarrage — c'est déjà la matière de
+> l'introspection du §14.4.
+>
+> **Une asymétrie assumée entre `--public-ip` et `--internal-ip`** : l'adresse
+> interne DOIT être attachée à une interface locale (elle sert à choisir
+> l'interface de service, elle n'a aucun sens sinon), l'adresse publique NON.
+> `--public-ip` a toujours désigné « l'adresse que les pairs atteignent, qui
+> n'est pas celle liée localement » : derrière NAT elle n'est attachée à aucune
+> de nos interfaces, et l'exiger casserait ces déploiements du jour au
+> lendemain. Une publique attachée sert donc aussi d'adresse de bind ; une
+> publique non attachée laisse l'écoute historique « toutes interfaces » et ne
+> sert qu'à l'annonce.
+>
+> Rien ne change pour un déploiement existant : l'adresse annoncée est résolue
+> comme avant (option, sinon auto-détection, sinon refus de démarrer), puis
+> devient l'entrée `publicv4` de la table.
 
 `--default-profile` désigne le profil qu'emploie un appel **qui n'en demande
 aucun** ; à défaut d'option, c'est `publicv4`, le comportement historique. Elle
