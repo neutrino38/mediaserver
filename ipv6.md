@@ -798,6 +798,7 @@ c'est ce qui permet à une même conférence d'avoir un participant interne en
 ```
 --public-ip  <adresse v4 publique attachée à l'hôte>
 --public-ip  <adresse v4 RFC 1918 attachée à l'hôte> --nat <adresse publique vue de l'extérieur>
+--public-ip  <adresse v4 RFC 1918 attachée à l'hôte> --nat auto [--stun-server <hôte[:port]>]
 --public-ip  <adresse v6 globale attachée à l'hôte>
 
 --internal-ip <adresse v4 RFC 1918 attachée à l'hôte>
@@ -805,6 +806,46 @@ c'est ce qui permet à une même conférence d'avoir un participant interne en
 
 --default-profile <publicv4|publicv6|internalv4|internalv6>
 ```
+
+**Aucune de ces options ⇒ auto-détection.** Le serveur prend la première adresse
+annonçable de son nom d'hôte — qui peut parfaitement être une **RFC 1918** — et
+en fait son profil `publicv4`. « Public » désigne ici le côté extérieur du
+serveur, pas la classe de l'adresse (§14.5). C'est le comportement historique, et
+il ne change pas. **Aucune détection de NAT dans ce cas** : rien ne dit qu'il y en
+a un, et aller deviner l'adresse vue de l'extérieur sans que personne ne l'ait
+demandé serait une initiative que l'exploitant n'a pas prise. L'auto-détection
+n'a lieu que si **ni `--public-ip` ni `--internal-ip`** n'est donné : dès que
+l'exploitant décrit son adressage, le serveur s'en tient à ce qu'il a dit.
+
+**`--nat auto`** découvre l'adresse publique en interrogeant un serveur STUN, et
+**vérifie que le NAT est bien 1:1**. Réservé au cas qu'il sert : `--public-ip`
+doit porter une adresse **RFC 1918 réellement attachée** — c'est l'adresse locale
+depuis laquelle la sonde part, et sur une adresse publique il n'y a rien à
+découvrir. Le refus est explicite si la condition n'est pas remplie.
+
+La vérification 1:1 n'est pas un luxe : **le mediaserver annonce des PORTS**, pas
+seulement une adresse. Si le NAT translate aussi les ports, le port RTP publié
+dans chaque `m=` est faux pour tout le monde — le pair émet vers un port que le
+routeur n'a jamais ouvert, et l'appel est muet. Découvrir l'adresse sans vérifier
+la conservation des ports produirait une configuration qui a l'air juste et ne
+marche pas.
+
+La sonde est donc faite **deux fois, depuis deux ports locaux différents** : une
+seule ne prouverait rien, un NAT à traduction pouvant avoir conservé ce port-là
+par hasard. Verdict 1:1 = même adresse publique **et** deux ports conservés
+(mapping « endpoint-independent », RFC 4787 §4.1). Sinon, refus de démarrer avec
+le détail des ports observés — annoncer quand même produirait des appels muets
+sans un mot dans le log.
+
+Ce que la sonde ne prouve pas, et qu'il ne faut pas lui faire dire : rien sur le
+**filtrage** du NAT (RFC 4787 §5, c'est le rôle du rattrapage et de l'amorçage),
+et rien sur la **durée** du mapping — la découverte a lieu au démarrage, l'adresse
+annoncée est figée ensuite.
+
+`--stun-server` vaut `stun.l.google.com:19302` par défaut, pour que l'option
+marche sans configuration. **Un déploiement de production devrait poser le
+sien** : dépendre d'un tiers pour démarrer est un point de panne, et c'est
+précisément pourquoi cette valeur est un défaut et non une constante enfouie.
 
 `--public-ip` et `--internal-ip` sont **répétables**, au plus une fois par
 famille ; **la famille est déduite de la valeur** (`IPAddress::Parse` la donne),
@@ -874,7 +915,12 @@ démarrer qu'un serveur qui annonce une adresse fausse pendant six mois :
   démarrage qu'un profil interne v6 est en unicast global rappelle à
   l'exploitant que la protection repose entièrement sur son filtrage), jamais en
   refus ;
-- `--nat` sans `--public-ip` v4 → refus ;
+- `--nat` sans `--public-ip` v4 → refus ; `--nat auto` sans `--public-ip`
+  **RFC 1918 attachée** → refus (rien à découvrir depuis une adresse publique, et
+  sans adresse locale la sonde ne partirait pas de la bonne interface) ;
+- `--nat auto` dont la sonde STUN échoue, ou dont le verdict n'est pas 1:1 →
+  refus. L'échec réseau et le verdict négatif sont deux sorties DISTINCTES du
+  client STUN : les confondre ferait passer un pare-feu pour un NAT symétrique ;
 - `--nat` avec une valeur v6, ou appliqué à un profil v6 → refus motivé ;
 - une adresse de bind qui **n'est attachée à aucune interface locale**
   (`getifaddrs`) → refus. Seule l'adresse de `--nat` échappe à ce contrôle, par

@@ -169,7 +169,7 @@ OPTIONS="--http-port 9090 --websocket-port 8100"
 > the foreground. `--mcu-pid` is likewise useless (systemd tracks the PID).
 
 > ⚠️ Behind a NAT, `--public-ip <ip>` is **mandatory** — without it the SDP
-> announces the private address and no media flows. See *Adresse média annoncée*
+> announces the private address and no media flows. See *Adressage*
 > below.
 
 After editing the unit or the sysconfig file, reload systemd:
@@ -187,7 +187,8 @@ mcu [-h|--help] [-f] [-d]
     [--websocket-port <ws_port>] [--websocket-host hôte]
     [--websocket-secure] [--websocket-cert <pem>] [--websocket-key <pem>]
     [--min-rtp-port <min_port>] [--max-rtp-port port]
-    [--public-ip <ip>]
+    [--public-ip <ip>] [--nat <ip>|auto] [--stun-server <hôte[:port]>]
+    [--internal-ip <ip>] [--default-profile <profil>]
     [--vad-period <m>]
     [--event-queue-expires <s>]
 ```
@@ -212,49 +213,95 @@ mcu [-h|--help] [-f] [-d]
 | `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Non listé dans l'aide `--help`. |
 | `--min-rtp-port port` | `49152` | Borne basse de la plage de ports UDP allouée aux sessions RTP/RTCP. |
 | `--max-rtp-port port` | `65535` | Borne haute de la plage de ports RTP/RTCP. |
-| `--public-ip ip` | *(auto-détectée)* | Adresse IPv4 **annoncée** dans le SDP : ligne `c=` et candidats ICE, pour les deux API de contrôle. **Obligatoire derrière un NAT.** Voir *Adresse média annoncée* ci-dessous. |
+| `--public-ip ip` | *(auto-détectée)* | Adresse du côté **extérieur** : liée si elle est attachée à l'hôte, annoncée dans le SDP (ligne `c=`, candidats ICE) pour les deux API de contrôle. IPv4 **ou IPv6**. **Obligatoire derrière un NAT.** Voir *Adressage* ci-dessous. |
+| `--nat ip\|auto` | *(aucun)* | Adresse publique vue de l'extérieur, quand `--public-ip` porte l'adresse **locale** d'un hôte natté (IPv4 seulement). `auto` la découvre par STUN et vérifie que le NAT est **1:1**. |
+| `--stun-server hôte[:port]` | `stun.l.google.com:19302` | Serveur interrogé par `--nat auto`. À poser sur son propre serveur en production. |
+| `--internal-ip ip` | *(aucune)* | Adresse du côté **interne** (réseau de service, mode SBC). Répétable, au plus une par famille ; en IPv4 elle doit être **RFC 1918**. |
+| `--default-profile nom` | `publicv4` | Profil employé par un appel qui n'en demande aucun : `publicv4`, `publicv6`, `internalv4`, `internalv6`. |
 
-### Adresse média annoncée (`--public-ip`)
+### Adressage : les quatre profils
 
-Les sockets RTP/RTCP sont bindées sur `0.0.0.0` : le serveur n'écoute pas sur une
-interface particulière, seul le *port* est choisi (dans la plage `--min/max-rtp-port`).
-Il n'y a donc pas d'« IP RTP » à configurer côté écoute — il y a l'adresse que le
-serveur **annonce** au pair, et c'est le seul choix à faire.
+Le serveur peut porter jusqu'à **quatre adresses**, croisement de deux axes — le
+côté (**publique**, vers l'extérieur ; **interne**, réseau de service) et la
+famille (**IPv4**, **IPv6**) :
 
-Cette adresse est un réglage **global** (`RTPSession::SetAnnouncedIp`), partagé par
-les deux API de contrôle, qui ne peuvent donc pas annoncer des adresses différentes :
+| Profil | Option | Contrainte |
+|---|---|---|
+| `publicv4` | `--public-ip <v4>` | peut être **nattée** (`--nat`) |
+| `publicv6` | `--public-ip <v6>` | jamais nattée — pas de NAT IPv6, par choix |
+| `internalv4` | `--internal-ip <v4>` | **RFC 1918 exigée**, et attachée à l'hôte |
+| `internalv6` | `--internal-ip <v6>` | ULA ou unicast global, attachée à l'hôte |
 
-| Où elle sort | API |
-|---|---|
-| `GetMediaCandidates` → `"rtp://<ip>:<port>"` | JSR-309 (`xmlrpc_jsr309_api.md` §6) |
-| `StartReceiving` → `returnVal[1]` | MCU (`MCU-API.md` §4) |
+Chaque profil porte **deux adresses distinctes**, et c'est tout l'intérêt :
 
-Sans `--public-ip`, elle est **auto-détectée** au démarrage : `gethostname()`, puis
-`gethostbyname()` sur ce nom, puis la **première** adresse rendue qui n'est pas
-exactement `127.0.0.1`. C'est donc l'adresse du **nom d'hôte** (`/etc/hosts` puis
-DNS), pas celle d'une interface. Trois conséquences :
+- l'adresse **liée** — réellement attachée à une interface. C'est elle que la
+  socket média lie, donc elle qui décide de l'interface empruntée ;
+- l'adresse **annoncée** — celle que le pair verra dans le SDP. Égale à la
+  précédente, **sauf** pour `publicv4` derrière NAT.
 
-- **derrière un NAT c'est faux par construction** : le nom résout vers l'adresse
-  privée, injoignable par le pair. Comme la socket écoute sur `0.0.0.0`, il suffit
-  d'annoncer l'adresse publique avec `--public-ip` — rien à re-binder ;
-- seule `127.0.0.1` est écartée, pas `127.0.0.0/8` : un nom d'hôte mappé sur
-  `127.0.1.1` (courant en conteneur) serait annoncé tel quel ;
-- sur un hôte multi-adressé, c'est l'ordre du résolveur qui décide — donc à fixer
-  explicitement.
+Confondre les deux rend un déploiement natté indescriptible : on ne peut pas
+annoncer une adresse qu'on ne peut pas lier. C'est ce que faisait l'unique
+réglage global d'avant.
 
-Une adresse fournie qui n'est pas une IPv4 littérale est **refusée** (log d'erreur)
-et l'auto-détection s'applique. Si aucune adresse ne peut être déterminée, le
-serveur **refuse de démarrer** avec un message indiquant le nom d'hôte en cause et
-les deux corrections possibles : mieux vaut ne pas démarrer que servir des SDP
-injoignables appel après appel.
+**Le contrôleur choisit, appel par appel.** `StartSending`/`StartReceiving` (MCU)
+et `EndpointStartSending`/`EndpointStartReceiving` (JSR-309) acceptent un dernier
+paramètre facultatif `profile`. Absent, c'est le profil par défaut — donc le
+comportement d'un contrôleur qui ignore cette notion. Un profil inconnu ou
+indisponible est un **échec explicite**, jamais un repli silencieux : voir
+`MCU-API.md` §6.7 bis et `xmlrpc_jsr309_api.md` §6.7 bis.
 
-L'adresse retenue est écrite dans le log de démarrage, ce qui est le premier
-endroit à regarder devant un appel sans média :
+#### Sans aucune option : auto-détection
+
+Le serveur prend la première adresse annonçable de son nom d'hôte (`/etc/hosts`
+puis DNS, enregistrements **A et AAAA**, IPv4 préférée) et en fait son profil
+`publicv4`. Cette adresse **peut être une RFC 1918** : « publique » désigne ici le
+côté extérieur du serveur, pas la classe de l'adresse. **Aucune détection de NAT
+dans ce cas** — rien ne dit qu'il y en a un.
+
+L'auto-détection n'a lieu que si **ni `--public-ip` ni `--internal-ip`** n'est
+donné : dès que l'exploitant décrit son adressage, le serveur s'en tient à ce
+qu'il a dit. Si rien n'est déterminable, il **refuse de démarrer** — mieux vaut ne
+pas démarrer que servir des SDP injoignables appel après appel.
+
+#### Derrière un NAT
+
+```sh
+mediaserver --public-ip 192.168.1.10 --nat 203.0.113.12     # adresse publique connue
+mediaserver --public-ip 192.168.1.10 --nat auto             # découverte par STUN
+```
+
+`--nat auto` interroge un serveur STUN et **vérifie que le NAT est 1:1**. Ce n'est
+pas un luxe : le serveur annonce des **ports** RTP, et un NAT qui les translate
+rend faux tout ce qu'il publie — le pair émet vers un port que le routeur n'a
+jamais ouvert, et l'appel est muet. La sonde est faite **deux fois, depuis deux
+ports locaux différents** (une seule ne prouverait rien), et le démarrage échoue
+si les ports ne sont pas conservés, avec le détail observé.
+
+Réservé au cas qu'il sert : `--public-ip` doit porter une adresse **RFC 1918
+attachée à l'hôte**. Sur une adresse publique il n'y a rien à découvrir.
+
+#### Contrôles au démarrage
+
+Tous **bloquants**, avec un message destiné à l'exploitant : adresse non
+annonçable (loopback, multicast, link-local), adresse interne hors RFC 1918,
+adresse interne attachée à aucune interface, deux adresses pour un même profil,
+`--nat` en IPv6 ou sans `--public-ip` v4, profil par défaut indisponible. Mieux
+vaut un serveur qui ne démarre pas qu'un serveur qui annonce une adresse fausse
+pendant six mois.
+
+Le démarrage journalise la table — premier endroit à regarder devant un appel
+sans média :
 
 ```
--RTPSession announced IP set to "203.0.113.12"              # via --public-ip
--RTPSession announced IP auto-detected as "172.21.105.71"   # sans l'argument
+-Profils d'adressage :
+publicv4 : bind 192.168.1.10, annoncee 203.0.113.12 (NAT) [defaut]
+publicv6 : indisponible
+internalv4 : bind 172.16.0.5
+internalv6 : indisponible
 ```
+
+> Détail complet du modèle, des arbitrages et de ce que la sonde STUN ne prouve
+> **pas** : `ipv6.md` §14.
 
 ### Média
 

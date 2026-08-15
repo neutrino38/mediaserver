@@ -15,6 +15,7 @@
 #include "websockets.h"
 #include "jsr309/WSEndpoint.h"
 #include "addressprofiles.h"
+#include "stunclient.h"
 #include <signal.h>
 #include <limits.h>
 #include <string.h>
@@ -155,6 +156,7 @@ int main(int argc,char **argv)
 	const char* internalIp[2] = { NULL, NULL };   //une par famille, ordre libre
 	int         internalCount = 0;
 	const char* defaultProfile = NULL;
+	const char* stunIp        = NULL;
 	int vadPeriod = 5000;
 	//Délai de grâce (s) sans long-poll sur une file d'événements avant
 	//destruction de la file et des objets qui en dépendent (0 = désactivé).
@@ -195,7 +197,11 @@ int main(int argc,char **argv)
 				"                  Required behind a NAT, where it differs from the bound address;\r\n"
 				"                  defaults to the first non-loopback IPv4 address of the host\r\n"
 				" --nat            Public IPv4 address seen from outside, when --public-ip carries\r\n"
-				"                  the locally bound address of a NATed host (IPv4 only)\r\n"
+				"                  the locally bound address of a NATed host (IPv4 only).\r\n"
+				"                  \"auto\" discovers it with a STUN server and checks that the NAT\r\n"
+				"                  is 1:1 (ports preserved); requires --public-ip <RFC 1918 address>\r\n"
+				" --stun-server    STUN server queried by --nat auto, host[:port]\r\n"
+				"                  (default: stun.l.google.com:19302)\r\n"
 				" --internal-ip    Address of the internal (service) network. Repeatable, at most\r\n"
 				"                  once per family; IPv4 must be RFC 1918. Option order is not\r\n"
 				"                  significant: the family is deduced from the value\r\n"
@@ -262,6 +268,9 @@ int main(int argc,char **argv)
 			else
 				++i;
 		}
+		else if (strcmp(argv[i],"--stun-server")==0 && (i+1<argc))
+			//Serveur STUN interroge par --nat auto (hote[:port])
+			stunIp = argv[++i];
 		else if (strcmp(argv[i],"--default-profile")==0 && (i+1<argc))
 			//Profil employe par un appel qui n'en demande aucun
 			defaultProfile = argv[++i];
@@ -398,55 +407,33 @@ int main(int argc,char **argv)
 	else
 		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 
-	//Adresse annoncée dans le SDP (ligne c= et candidats ICE des deux API de
-	//contrôle). Résolue ici, avant toute initialisation de serveur : sans elle
-	//aucun SDP joignable ne peut être publié, donc chaque appel échouerait à la
-	//réponse. Un refus de démarrer est la panne honnête — visible tout de suite,
-	//au bon endroit — plutôt qu'un serveur en apparence sain qui casse appel
-	//par appel.
-	if (!RTPSession::SetAnnouncedIp(publicIp) && *RTPSession::GetAnnouncedIp())
-		//Auto-détectée : premier IPv4 non loopback du nom d'hôte
-		Log("-RTPSession announced IP auto-detected as \"%s\"\n",RTPSession::GetAnnouncedIp());
-
-	if (!*RTPSession::GetAnnouncedIp())
-	{
-		char hostname[HOST_NAME_MAX];
-
-		//Le nom qu'on a tenté de résoudre fait partie du diagnostic
-		if (gethostname(hostname, sizeof hostname)!=0)
-			strcpy(hostname,"(unknown)");
-
-		Error("-MCU cannot start: no IP address to announce in the SDP.\n"
-		      "  The c= line and the ICE candidates of every call need one, and it cannot be\n"
-		      "  guessed from the control channel.\n"
-		      "  Host name \"%s\" does not resolve to a non-loopback IPv4 address.\n"
-		      "  Fix it with one of:\n"
-		      "    - pass --public-ip <ip> (mandatory behind a NAT: the address the peers reach,\n"
-		      "      which is not the one bound locally),\n"
-		      "    - or make \"%s\" resolve to the host IPv4 address (/etc/hosts or DNS).\n",
-		      hostname,hostname);
-
-		//On ne démarre pas
-		return -1;
-	}
-
-	//Table des profils d'adressage (ipv6.md §14). Elle se construit APRÈS la
-	//résolution ci-dessus, dont elle reprend le résultat comme profil public :
-	//l'adresse annoncée historique devient une entrée de la table, et rien ne
-	//change pour un déploiement qui ne configure que --public-ip.
+	//Table des profils d'adressage (ipv6.md §14) : ce que le serveur peut lier,
+	//et ce qu'il annonce. Construite ici, avant toute initialisation de serveur —
+	//sans adresse annonçable aucun SDP joignable ne peut être publié, donc chaque
+	//appel échouerait à la réponse. Un refus de démarrer est la panne honnête,
+	//visible tout de suite et au bon endroit, plutôt qu'un serveur en apparence
+	//sain qui casse appel par appel.
 	{
 		std::string error;
 
-		if (!AddressProfiles::AddPublic(IPAddress::Parse(RTPSession::GetAnnouncedIp()),error))
-		{
-			Error("-MCU cannot start: --public-ip: %s\n",error.c_str());
-			return -1;
-		}
+		//Le contrôleur a-t-il dit quelque chose de l'adressage ?
+		const bool explicitAddressing = (publicIp && *publicIp) || internalCount > 0;
 
-		if (natIp && !AddressProfiles::SetNat(IPAddress::Parse(natIp),error))
+		//--public-ip : littéral v4/v6 ou nom d'hôte. SetAnnouncedIp valide,
+		//résout et journalise ; la table reprend son résultat canonique.
+		if (publicIp && *publicIp)
 		{
-			Error("-MCU cannot start: --nat: %s\n",error.c_str());
-			return -1;
+			if (!RTPSession::SetAnnouncedIp(publicIp))
+			{
+				Error("-MCU cannot start: --public-ip \"%s\" is not a usable address.\n",publicIp);
+				return -1;
+			}
+
+			if (!AddressProfiles::AddPublic(IPAddress::Parse(RTPSession::GetAnnouncedIp()),error))
+			{
+				Error("-MCU cannot start: --public-ip: %s\n",error.c_str());
+				return -1;
+			}
 		}
 
 		for (int i=0;i<internalCount;++i)
@@ -456,6 +443,115 @@ int main(int argc,char **argv)
 				Error("-MCU cannot start: --internal-ip %s: %s\n",internalIp[i],error.c_str());
 				return -1;
 			}
+		}
+
+		//AUCUNE adresse demandée : on détecte la nôtre — la première adresse
+		//annonçable du nom d'hôte, qui peut parfaitement être une RFC 1918. Elle
+		//devient le profil public : « public » désigne ici le côté extérieur du
+		//serveur, pas la classe de l'adresse (§14.5). Aucune détection de NAT
+		//dans ce cas : rien ne dit qu'il y en a un, et deviner l'adresse vue de
+		//l'extérieur sans que personne ne l'ait demandé serait une initiative
+		//que l'exploitant n'a pas prise.
+		if (!explicitAddressing)
+		{
+			const char* detected = RTPSession::GetAnnouncedIp();
+
+			if (!detected || !*detected)
+			{
+				char hostname[HOST_NAME_MAX];
+
+				//Le nom qu'on a tenté de résoudre fait partie du diagnostic
+				if (gethostname(hostname, sizeof hostname)!=0)
+					strcpy(hostname,"(unknown)");
+
+				Error("-MCU cannot start: no IP address to announce in the SDP.\n"
+				      "  The c= line and the ICE candidates of every call need one, and it cannot be\n"
+				      "  guessed from the control channel.\n"
+				      "  Host name \"%s\" does not resolve to an announceable address.\n"
+				      "  Fix it with one of:\n"
+				      "    - pass --public-ip <ip> (mandatory behind a NAT: the address the peers reach,\n"
+				      "      which is not the one bound locally),\n"
+				      "    - pass --internal-ip <ip> if this server only serves an internal network,\n"
+				      "    - or make \"%s\" resolve to the host address (/etc/hosts or DNS).\n",
+				      hostname,hostname);
+
+				//On ne démarre pas
+				return -1;
+			}
+
+			Log("-RTPSession announced IP auto-detected as \"%s\"\n",detected);
+
+			if (!AddressProfiles::AddPublic(IPAddress::Parse(detected),error))
+			{
+				Error("-MCU cannot start: auto-detected address: %s\n",error.c_str());
+				return -1;
+			}
+		}
+
+		//--nat : l'adresse vue de l'extérieur. « auto » la DÉCOUVRE par STUN, et
+		//vérifie au passage que le NAT est bien 1:1 — sans quoi les ports RTP
+		//annoncés dans nos SDP seraient faux (voir stunclient.h).
+		if (natIp && strcasecmp(natIp,"auto")==0)
+		{
+			const IPAddress local = AddressProfiles::BindAddress(AddressProfiles::PublicV4);
+
+			//Réservé au cas qu'il sert : une adresse privée v4 réellement
+			//attachée. Sur une adresse publique il n'y a rien à découvrir ; sans
+			//--public-ip il n'y a pas de socket à sonder depuis la bonne
+			//interface, et le résultat vaudrait pour n'importe quel chemin.
+			if (!(publicIp && *publicIp) || !local.IsSet() || !local.IsPrivateV4())
+			{
+				Error("-MCU cannot start: --nat auto requires --public-ip <adresse RFC 1918 attachee a l'hote>.\n"
+				      "  C'est l'adresse locale depuis laquelle le serveur STUN est interroge ;\n"
+				      "  sur une adresse publique il n'y a pas de NAT a decouvrir.\n");
+				return -1;
+			}
+
+			IPEndpoint stunServer;
+			if (!StunClient::ParseServer(stunIp ? stunIp : StunClient::DefaultServer(),stunServer,error))
+			{
+				Error("-MCU cannot start: --stun-server: %s\n",error.c_str());
+				return -1;
+			}
+
+			Log("-NAT auto: interrogation du serveur STUN %s depuis %s\n",
+			    stunServer.ToString().c_str(),local.ToString().c_str());
+
+			IPAddress discovered;
+			bool      oneToOne = false;
+
+			if (!StunClient::Discover(local,stunServer,discovered,oneToOne,error))
+			{
+				Error("-MCU cannot start: --nat auto: %s\n",error.c_str());
+				return -1;
+			}
+
+			//Le NAT translate les ports : l'adresse est bonne, mais les ports
+			//RTP que nous annoncerions ne seraient pas ceux que le pair doit
+			//joindre. Annoncer quand même produirait des appels muets, sans un
+			//mot dans le log — refuser est la seule reponse honnete.
+			if (!oneToOne)
+			{
+				Error("-MCU cannot start: --nat auto: adresse publique %s decouverte, mais %s\n"
+				      "  Un NAT qui translate les ports rend faux TOUS les ports RTP annonces.\n"
+				      "  Configurer le routeur en NAT 1:1, ou passer --nat <adresse> en connaissance de cause.\n",
+				      discovered.ToString().c_str(),error.c_str());
+				return -1;
+			}
+
+			Log("-NAT auto: adresse publique %s, NAT 1:1 confirme (ports conserves)\n",
+			    discovered.ToString().c_str());
+
+			if (!AddressProfiles::SetNat(discovered,error))
+			{
+				Error("-MCU cannot start: --nat auto: %s\n",error.c_str());
+				return -1;
+			}
+		}
+		else if (natIp && !AddressProfiles::SetNat(IPAddress::Parse(natIp),error))
+		{
+			Error("-MCU cannot start: --nat: %s\n",error.c_str());
+			return -1;
 		}
 
 		if (defaultProfile)
