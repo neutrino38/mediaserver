@@ -3,6 +3,7 @@
 #include "rtp.h"
 #include "audio.h"
 #include <h264/h264depacketizer.h>
+#include <vp8/vp8depacketizer.h>
 
 void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 {
@@ -125,6 +126,27 @@ private:
 	H264Depacketizer impl;
 };
 
+// Même adaptateur pour le VP8Depacketizer de libmedkit (RFC 7741). Le mark RTP
+// est transmis par symétrie d'interface, mais c'est l'appelant qui s'en sert
+// pour clore la trame (comme pour H264).
+class VP8RTPDepacketizer : public RTPDepacketizer
+{
+public:
+	VP8RTPDepacketizer() : RTPDepacketizer(MediaFrame::Video, VideoCodec::VP8) {}
+	virtual ~VP8RTPDepacketizer() {}
+	virtual void SetTimestamp(DWORD ts)           { impl.SetTimestamp(ts); }
+	virtual MediaFrame* AddPacket(RTPPacket* pkt) {
+		impl.SetTimestamp(pkt->GetTimestamp());
+		return impl.AddPayload(pkt->GetMediaData(), pkt->GetMediaLength(), pkt->GetMark());
+	}
+	virtual MediaFrame* AddPayload(BYTE* data, DWORD len) {
+		return impl.AddPayload(data, len, false);
+	}
+	virtual void ResetFrame()                     { impl.ResetFrame(); }
+private:
+	VP8Depacketizer impl;
+};
+
 class DummyAudioDepacketizer : public RTPDepacketizer
 {
 public:
@@ -184,6 +206,8 @@ RTPDepacketizer* RTPDepacketizer::Create(MediaFrame::Type mediaType,DWORD codec)
 			 {
 				 case VideoCodec::H264:
 					 return new H264RTPDepacketizer();
+				 case VideoCodec::VP8:
+					 return new VP8RTPDepacketizer();
 			 }
 			 break;
 		 case MediaFrame::Audio:
