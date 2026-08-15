@@ -57,3 +57,8 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_codec_type.cpp` | `CodecType` | — (le membre `type` d'un codec doit être lisible via un pointeur de base) |
 | `test_rtp_latching.cpp` | `RtpLatching` | — (latching RTP symétrique : où le média atterrit réellement, via un socket sonde en loopback) |
 | `test_rtp_renegotiation.cpp` | `RtpRenegotiation` | — (le trou de l'offre/réponse : un payload type renuméroté par un re-INVITE est rattrapé, un codec retiré ne l'est pas) |
+| `test_rtcp_hardening.cpp` | `Rtcp*` (11 suites) | — (suite ADVERSE RTCP : longueurs et compteurs menteurs, page de garde) |
+| `test_rtp_header_hardening.cpp` | `RtpHeader` | — (suite ADVERSE de l'en-tête RTP : CSRC et extension qui ne tiennent pas dans le datagramme) |
+| `test_red_fec_hardening.cpp` | `RedPayload`, `FecData`, `FecDecoder` | — (suite ADVERSE RED/ULPFEC : blocs sans fin, longueurs de protection mensongères) |
+| `test_rtmp_hardening.cpp` | `RtmpMessage`, `RtmpMediaFrame`, `RtmpChunkInput` | — (suite ADVERSE RTMP : message de longueur nulle, trame vide, flux sans message ouvert) |
+| `test_websocket_http_hardening.cpp` | `WebSocketHandshake` | — (poignée de main envoyée octet par octet : URL et en-têtes doivent être réassemblés) |
