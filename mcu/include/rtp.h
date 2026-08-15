@@ -728,6 +728,13 @@ public:
     virtual DWORD GetSize();
     virtual DWORD Parse( BYTE *data, DWORD size );
     virtual DWORD Serialize( BYTE *data, DWORD size );
+
+    void SetSSRC( DWORD ssrc ) { this->ssrc = ssrc; }
+    void SetFSN( WORD fsn ) { this->fsn = fsn; }
+    void SetBLP( WORD blp ) { this->blp = blp; }
+    DWORD GetSSRC() const { return ssrc; }
+    WORD GetFSN() const { return fsn; }
+    WORD GetBLP() const { return blp; }
 private:
     DWORD ssrc;
     WORD fsn;
@@ -852,6 +859,12 @@ public:
     virtual DWORD GetSize();
     virtual DWORD Parse( BYTE *data, DWORD size );
     virtual DWORD Serialize( BYTE *data, DWORD size );
+
+    DWORD GetSSRC() const { return ssrc; }
+    BYTE GetSubType() const { return subtype; }
+    const char *GetName() const { return name; }
+    const BYTE *GetData() const { return data; }
+    DWORD GetDataSize() const { return size; }
 private:
     BYTE subtype;
     DWORD ssrc;
@@ -1138,7 +1151,10 @@ public:
             number = data[1] & 0x07;
             number = number << 8 | data[2];
             number = number << 2 | data[3] >> 6;
-            pictureId = data[4] & 0x3F;
+            //Le champ fait QUATRE octets (c'est ce que GetSize et Serialize
+            //disent) : le pictureId tient dans les 6 bits bas du quatrieme,
+            //pas dans un cinquieme octet qui n'existe pas.
+            pictureId = data[3] & 0x3F;
             return 4;
         }
         virtual DWORD Serialize( BYTE *data, DWORD size )
@@ -1522,7 +1538,11 @@ public:
         //Calculate
         for( RTCPPackets::iterator it = packets.begin(); it != packets.end(); ++it )
             //Append size
-            size = sizeof( rtcp_common_t ) + (*it)->GetSize();
+            //`=` au lieu de `+=` : la taille annoncee etait celle du DERNIER
+            //sous-paquet, et Serialize acceptait donc un tampon trop petit pour
+            //le compound entier. Le GetSize() de chaque sous-paquet compte deja
+            //son propre en-tete commun.
+            size += (*it)->GetSize();
         //Return total size
         return size;
     }
