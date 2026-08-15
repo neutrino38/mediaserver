@@ -109,9 +109,13 @@ private:
 
 			BYTE  out[1500];
 			DWORD outLen = resp->NonAuthenticatedFingerPrint(out, sizeof(out));
-			sendto(fd, out, outLen, 0, (sockaddr*)&from, len);
 
+			//Compté AVANT l'envoi : sinon le client peut recevoir sa réponse,
+			//terminer, et lire le compteur avant que ce thread ne l'incrémente.
+			//La course était dans le test, pas dans le client — et elle ne se
+			//voyait qu'en suite complète, jamais en test isolé.
 			++served;
+			sendto(fd, out, outLen, 0, (sockaddr*)&from, len);
 			delete resp;
 			delete req;
 		}

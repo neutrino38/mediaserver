@@ -543,7 +543,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip`/`--default-profile` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | **fait** |
 | 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | **fait** |
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | **fait côté serveur** ; protos MOTELI à faire dans elixip |
-| 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | à faire |
+| 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | **fait** |
 | 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | à faire |
 | 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | **XOR-MAPPED fait** ; reste l'adresse annoncée derrière NAT |
 | 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient`, `jsr309impl` (§5.5) | moyen | 6 | la couche JSR-309 suit | à faire |
@@ -1001,6 +1001,14 @@ capacité qui existe dans le code mais qu'aucune API ne permet d'interroger est 
 dont deux ou trois seront vides selon le déploiement, et un contrôleur qui, faute
 de pouvoir demander, écrira la liste dans sa propre configuration — laquelle
 dérivera.
+
+> **Fait le 2026-08-15** (étape 7) : `GetNetworkProfiles`, dans les DEUX API
+> (`/mcu` et `/jsr309`), sans paramètre. Elle rend les quatre profils —
+> disponibles ou non, l'absence étant elle-même une information — avec, pour
+> chacun, l'adresse liée, l'adresse annoncée et le drapeau « par défaut ».
+> Vérifiée par un appel XML-RPC réel sur un serveur démarré derrière NAT :
+> `publicv4` y ressort avec `bind 172.21.105.71` et `announced 198.51.100.7`,
+> c'est-à-dire la divergence que tout le modèle sert à décrire.
 
 ### 14.5 Conséquences techniques
 

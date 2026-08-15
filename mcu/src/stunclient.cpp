@@ -184,51 +184,57 @@ bool StunClient::ParseServer(const char* text, IPEndpoint& out, std::string& err
 	return true;
 }
 
-bool StunClient::Probe(const IPAddress& localBind, const IPEndpoint& server,
-                       Mapping& out, std::string& error)
+namespace
 {
-	if (!server.IsSet())
+	//Ouvre une socket UDP liée à `localBind` sur un port ÉPHÉMÈRE, hors de la
+	//plage RTP : la découverte ne doit pas consommer un port que le média
+	//utilisera. Rend -1 et remplit `error` en cas d'échec.
+	int OpenProbeSocket(const IPAddress& localBind, int family, WORD& localPort, std::string& error)
 	{
-		error = "serveur STUN inconnu";
-		return false;
-	}
-
-	const int fd = socket(server.Address().Family(), SOCK_DGRAM, 0);
-	if (fd < 0)
-	{
-		error = std::string("socket: ") + strerror(errno);
-		return false;
-	}
-
-	//Lié à l'adresse privée de la machine, sur un port ÉPHÉMÈRE : la découverte
-	//ne doit pas consommer un port de la plage RTP, que le média utilisera.
-	if (localBind.IsSet())
-	{
-		const IPEndpoint bindTo = localBind.To(0);
-		if (bind(fd, bindTo, bindTo.Len()) != 0)
+		const int fd = socket(family, SOCK_DGRAM, 0);
+		if (fd < 0)
 		{
-			error = "bind sur " + localBind.ToString() + " : " + strerror(errno);
-			close(fd);
-			return false;
+			error = std::string("socket: ") + strerror(errno);
+			return -1;
 		}
-	}
 
-	//Port local réellement obtenu : c'est LUI qu'on comparera au port public.
-	IPEndpoint local;
-	if (getsockname(fd, local.Data(), local.LenPtr()) != 0)
-	{
-		error = std::string("getsockname: ") + strerror(errno);
-		close(fd);
-		return false;
-	}
+		if (localBind.IsSet())
+		{
+			const IPEndpoint bindTo = localBind.To(0);
+			if (bind(fd, bindTo, bindTo.Len()) != 0)
+			{
+				error = "bind sur " + localBind.ToString() + " : " + strerror(errno);
+				close(fd);
+				return -1;
+			}
+		}
 
-	out.localPort = local.Port();
+		//Port local réellement obtenu : c'est LUI qu'on comparera au port public.
+		IPEndpoint local;
+		if (getsockname(fd, local.Data(), local.LenPtr()) != 0)
+		{
+			error = std::string("getsockname: ") + strerror(errno);
+			close(fd);
+			return -1;
+		}
+
+		localPort = local.Port();
+		return fd;
+	}
+}
+
+//Sonde sur une socket DÉJÀ ouverte : c'est ce que Discover appelle, après avoir
+//ouvert ses deux sockets — voir là-bas pourquoi elles doivent coexister.
+static bool ProbeOn(int fd, WORD localPort, const IPEndpoint& server,
+                    StunClient::Mapping& out, std::string& error)
+{
+	out.localPort = localPort;
 
 	//Transaction ID : 96 bits qui doivent être imprévisibles (RFC 5389 §6). Le
 	//temps courant et le descripteur suffisent ici — nous ne sommes pas exposés,
 	//c'est nous qui initions, et la réponse est appariée sur ce même ID.
 	BYTE transId[12];
-	set4(transId, 0, (DWORD)fd);
+	set4(transId, 0, (DWORD)localPort);
 	set8(transId, 4, getTime());
 
 	STUNMessage request(STUNMessage::Request, STUNMessage::Binding, transId);
@@ -243,7 +249,6 @@ bool StunClient::Probe(const IPAddress& localBind, const IPEndpoint& server,
 		if (sendto(fd, buffer, len, 0, server, server.Len()) != (ssize_t)len)
 		{
 			error = std::string("sendto: ") + strerror(errno);
-			close(fd);
 			return false;
 		}
 
@@ -261,7 +266,6 @@ bool StunClient::Probe(const IPAddress& localBind, const IPEndpoint& server,
 		if (ret < 0)
 		{
 			error = std::string("poll: ") + strerror(errno);
-			close(fd);
 			return false;
 		}
 
@@ -299,14 +303,11 @@ bool StunClient::Probe(const IPAddress& localBind, const IPEndpoint& server,
 		if (!decoded)
 		{
 			error = "reponse STUN sans adresse exploitable";
-			close(fd);
 			return false;
 		}
 
 		answered = true;
 	}
-
-	close(fd);
 
 	if (!answered)
 	{
@@ -317,21 +318,68 @@ bool StunClient::Probe(const IPAddress& localBind, const IPEndpoint& server,
 	return true;
 }
 
+bool StunClient::Probe(const IPAddress& localBind, const IPEndpoint& server,
+                       Mapping& out, std::string& error)
+{
+	if (!server.IsSet())
+	{
+		error = "serveur STUN inconnu";
+		return false;
+	}
+
+	WORD      localPort = 0;
+	const int fd = OpenProbeSocket(localBind, server.Address().Family(), localPort, error);
+
+	if (fd < 0)
+		return false;
+
+	const bool ok = ProbeOn(fd, localPort, server, out, error);
+	close(fd);
+	return ok;
+}
+
 bool StunClient::Discover(const IPAddress& localBind, const IPEndpoint& server,
                           IPAddress& publicAddress, bool& oneToOne, std::string& error)
 {
 	oneToOne = false;
 
-	Mapping first;
-	if (!Probe(localBind, server, first, error))
+	if (!server.IsSet())
+	{
+		error = "serveur STUN inconnu";
+		return false;
+	}
+
+	//LES DEUX SOCKETS SONT OUVERTES D'ABORD, ET TENUES OUVERTES pendant les deux
+	//sondes. Sonder l'une puis l'autre en fermant entre les deux laisserait le
+	//noyau réattribuer le MÊME port éphémère à la seconde — et le verdict
+	//deviendrait impossible à rendre, de façon intermittente et seulement sous
+	//charge. Deux sockets vivantes ne peuvent pas partager un port.
+	WORD      firstPort = 0, secondPort = 0;
+	const int firstFd  = OpenProbeSocket(localBind, server.Address().Family(), firstPort, error);
+
+	if (firstFd < 0)
 		return false;
 
-	Mapping second;
-	if (!Probe(localBind, server, second, error))
+	const int secondFd = OpenProbeSocket(localBind, server.Address().Family(), secondPort, error);
+
+	if (secondFd < 0)
+	{
+		close(firstFd);
+		return false;
+	}
+
+	Mapping first, second;
+	const bool ok = ProbeOn(firstFd, firstPort, server, first, error)
+	             && ProbeOn(secondFd, secondPort, server, second, error);
+
+	close(firstFd);
+	close(secondFd);
+
+	if (!ok)
 		return false;
 
-	//Deux sondes depuis deux ports locaux différents : une seule ne prouverait
-	//rien, un NAT à traduction pouvant avoir conservé ce port-là par hasard.
+	//Garde-fou : deux sockets ouvertes ne peuvent pas porter le même port, mais
+	//si cela arrivait le verdict n'aurait aucune valeur.
 	if (first.localPort == second.localPort)
 	{
 		error = "les deux sondes ont obtenu le meme port local, verdict impossible";

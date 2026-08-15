@@ -802,6 +802,27 @@ serveur.
   réception — il renvoyait auparavant `returnCode: 1` avec un port `0`, que le
   contrôleur annonçait tel quel.
 
+#### `GetNetworkProfiles`
+Les adresses que le serveur peut employer, et celle qu'il emploie par défaut.
+- **Params** : aucun.
+- **Retour** : tableau des **quatre** profils, disponibles ou non —
+
+```
+[ { name: "publicv4", available: true, announced: "203.0.113.12",
+    bind: "192.168.1.10", default: true }, … ]
+```
+
+`bind` vaut `""` quand le serveur écoute sur toutes les interfaces (cas d'une
+adresse publique non attachée, mode NAT historique). `announced` est ce qu'il faut
+publier dans le SDP.
+
+> **À interroger, plutôt qu'à recopier.** Un profil indisponible est refusé à
+> l'appel : le contrôleur doit savoir *avant* ce qu'il peut demander. Écrire la
+> liste dans sa propre configuration produirait une copie, et cette copie
+> dériverait — c'est exactement ce qui s'est passé sur les codecs, où l'absence
+> d'API interrogeable a fait déclarer H.264/VP8 à elixip pendant que le serveur
+> portait AV1 (appel mort en 488, 2026-08-12).
+
 ### 6.7 bis Profils d'adressage (`profile`)
 
 Le serveur peut porter jusqu'à **quatre adresses**, et c'est le contrôleur qui dit

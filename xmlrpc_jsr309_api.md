@@ -672,6 +672,22 @@ média `media` vers `endpointId`.
   armer.
 
 
+### 6.7 ter `GetNetworkProfiles`
+
+Les adresses que le serveur peut employer, et celle qu'il emploie par défaut.
+Aucun paramètre — c'est une propriété du serveur, pas d'une session.
+
+| Méthode | Paramètres | `returnVal` |
+|---------|-----------|-------------|
+| `GetNetworkProfiles` | — | `[ { name, available, announced, bind, default }, … ]` (les quatre profils) |
+
+`bind` vaut `""` quand le serveur écoute sur toutes les interfaces ; `announced`
+est ce qu'il faut publier dans le SDP. Même méthode, même contrat que côté MCU.
+
+> **À interroger, plutôt qu'à recopier** : un profil indisponible est refusé à
+> l'appel, donc le contrôleur doit savoir *avant* ce qu'il peut demander. La liste
+> écrite côté contrôleur serait une copie, et elle dériverait.
+
 ### 6.7 bis Profils d'adressage (`profile`)
 
 Le serveur peut porter jusqu'à **quatre adresses**, et c'est le contrôleur qui

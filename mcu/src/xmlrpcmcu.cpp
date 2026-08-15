@@ -1,3 +1,4 @@
+#include "addressprofiles.h"
 #include <string>
 #include <vector>
 #include <string.h>
@@ -2369,6 +2370,49 @@ xmlrpc_value* StopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *us
 	return xmlok(env);
 }
 
+/**
+ * GetNetworkProfiles — ce que le serveur peut annoncer, et par ou.
+ *
+ * Sans elle, un controleur qui doit CHOISIR un profil (StartSending /
+ * StartReceiving, §14.3 d'ipv6.md) n'a d'autre ressource que d'ecrire la liste
+ * dans sa propre configuration — et cette copie derive. Le precedent a coute un
+ * appel : les codecs supportes n'etant interrogeables par aucune API, elixip a
+ * declare H.264/VP8 pendant que le serveur portait AV1, et un appel AV1 est mort
+ * en 488 avec un audio parfait des deux cotes (2026-08-12).
+ *
+ * Retour : un tableau des QUATRE profils, disponibles ou non — l'absence est une
+ * information, elle dit au controleur de ne pas la demander.
+ *   [ { name, available, announced, bind, default }, ... ]
+ * `bind` vaut "" quand le serveur ecoute sur toutes les interfaces.
+ */
+static xmlrpc_value* GetNetworkProfiles(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	xmlrpc_value* arr = xmlrpc_array_new(env);
+
+	for (int i=0;i<AddressProfiles::Count;++i)
+	{
+		const AddressProfiles::Id id = (AddressProfiles::Id)i;
+
+		const bool        available = AddressProfiles::IsAvailable(id);
+		const IPAddress   bind      = AddressProfiles::BindAddress(id);
+		const IPAddress   announced = AddressProfiles::AnnouncedAddress(id);
+		const std::string bindStr   = bind.IsSet() ? bind.ToString() : std::string();
+		const std::string annStr    = announced.IsSet() ? announced.ToString() : std::string();
+
+		xmlrpc_value* profile = xmlrpc_build_value(env,"{s:s,s:b,s:s,s:s,s:b}",
+			"name",      AddressProfiles::NameOf(id),
+			"available", (xmlrpc_bool)available,
+			"announced", annStr.c_str(),
+			"bind",      bindStr.c_str(),
+			"default",   (xmlrpc_bool)(id==AddressProfiles::Default()));
+
+		xmlrpc_array_append_item(env,arr,profile);
+		xmlrpc_DECREF(profile);
+	}
+
+	return xmlok(env,arr);
+}
+
 xmlrpc_value* GetSupportedCodecs(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	AudioCodec::Type audioCodecs[] = 
@@ -2616,6 +2660,7 @@ XmlHandlerCmd mcuCmdList[] =
 	{"SetRTPProperties",SetRTPProperties},
 	{"GetMosaicPositions",GetMosaicPositions},
 	{"GetSupportedCodecs",GetSupportedCodecs},
+	{"GetNetworkProfiles",GetNetworkProfiles},
 	{"IsCodecSupported",IsCodecSupported},
 	{"AcceptDocSharingRequest",AcceptDocSharingRequest},
 	{"RefuseDocSharingRequest",RefuseDocSharingRequest},

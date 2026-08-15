@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "xmlhandler.h"
+#include "addressprofiles.h"
 #include "JSR309Manager.h"
 #include "MediaSession.h"
 #include "medkit/codecs.h"
@@ -2881,8 +2882,45 @@ xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_arra
 }
 
 
+/**
+ * GetNetworkProfiles — mêmes profils, même contrat que l'API MCU.
+ *
+ * Le contrôleur doit pouvoir DEMANDER ce que le serveur sait de lui-même : une
+ * capacité qui existe dans le code mais qu'aucune API ne permet d'interroger
+ * force le contrôleur à la déclarer de son côté, et cette copie dérive (§14.4
+ * d'ipv6.md). Retour : les QUATRE profils, disponibles ou non.
+ */
+static xmlrpc_value* GetNetworkProfiles(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	xmlrpc_value* arr = xmlrpc_array_new(env);
+
+	for (int i=0;i<AddressProfiles::Count;++i)
+	{
+		const AddressProfiles::Id id = (AddressProfiles::Id)i;
+
+		const bool        available = AddressProfiles::IsAvailable(id);
+		const IPAddress   bind      = AddressProfiles::BindAddress(id);
+		const IPAddress   announced = AddressProfiles::AnnouncedAddress(id);
+		const std::string bindStr   = bind.IsSet() ? bind.ToString() : std::string();
+		const std::string annStr    = announced.IsSet() ? announced.ToString() : std::string();
+
+		xmlrpc_value* profile = xmlrpc_build_value(env,"{s:s,s:b,s:s,s:s,s:b}",
+			"name",      AddressProfiles::NameOf(id),
+			"available", (xmlrpc_bool)available,
+			"announced", annStr.c_str(),
+			"bind",      bindStr.c_str(),
+			"default",   (xmlrpc_bool)(id==AddressProfiles::Default()));
+
+		xmlrpc_array_append_item(env,arr,profile);
+		xmlrpc_DECREF(profile);
+	}
+
+	return xmlok(env,arr);
+}
+
 XmlHandlerCmd jsr309CmdList[] =
 {
+	{"GetNetworkProfiles",			GetNetworkProfiles},
 	{"EndpointGetLocalCryptoDTLSFingerprint",EndpointGetLocalCryptoDTLSFingerprint},
 	{"EventQueueCreate",			EventQueueCreate},
 	{"EventQueueDelete",			EventQueueDelete},
