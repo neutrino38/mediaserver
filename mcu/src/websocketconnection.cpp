@@ -499,19 +499,50 @@ void WebSocketConnection::SendMessage(const BYTE* data, const DWORD size)
 
 int WebSocketConnection::on_url (HTTPParser* parser, const char *at, DWORD length)
 {
-	//Get value
-	std::string uri(at,length);
-	//Get method
-	std::string method(parser->GetMethodStr());
-	//Create request
-	request = new HTTPRequest(method,uri,parser->GetHttpMajor(),parser->GetHttpMinor());
+	//ACCUMULER, et non remplacer : le parseur rend l'URL par morceaux (un par
+	//segment TCP). L'ancien code creait une requete neuve a chaque morceau, donc
+	//abandonnait la precedente et ne gardait que le dernier fragment d'URL.
+	requestUrl.append(at,length);
 	//OK
 	return 0;
 }
-int WebSocketConnection::on_header_field (HTTPParser*, const char *at, DWORD length)
+
+//Ferme le couple (champ, valeur) en cours et le pose sur la requete.
+void WebSocketConnection::FlushPendingHeader()
 {
-	//Get field
-	headerField = std::string(at,length);
+	//Rien en cours
+	if (!parsingHeaderValue)
+		return;
+	//La requete existe forcement ici (creee au premier champ d'en-tete)
+	if (request && !headerField.empty())
+		request->AddHeader(headerField,headerValue);
+	//Pret pour le suivant
+	headerField.clear();
+	headerValue.clear();
+	parsingHeaderValue = false;
+}
+
+//Cree la requete des que l'URL est complete : le parseur termine l'URL avant
+//d'annoncer le premier champ d'en-tete.
+void WebSocketConnection::EnsureRequest(HTTPParser* parser)
+{
+	//Deja creee
+	if (request)
+		return;
+	//Get method
+	std::string method(parser->GetMethodStr());
+	//Create request
+	request = new HTTPRequest(method,requestUrl,parser->GetHttpMajor(),parser->GetHttpMinor());
+}
+
+int WebSocketConnection::on_header_field (HTTPParser* parser, const char *at, DWORD length)
+{
+	//L'URL est complete des le premier champ d'en-tete
+	EnsureRequest(parser);
+	//Un nouveau champ ferme le couple precedent
+	FlushPendingHeader();
+	//Get field (par morceaux, comme l'URL)
+	headerField.append(at,length);
 	//OK
 	return 0;
 }
@@ -522,10 +553,11 @@ int WebSocketConnection::on_header_value (HTTPParser*, const char *at, DWORD len
 	if (!request)
 		//Error
 		return 1;
-	//Get value
-	headerValue = std::string(at,length);
-	//Add to request
-	request->AddHeader(headerField,headerValue);
+	//Get value (par morceaux : c'est ainsi qu'une cle Sec-WebSocket-Key coupee
+	//en deux se retrouvait tronquee, et la reponse d'acceptation fausse)
+	headerValue.append(at,length);
+	//Une valeur est en cours
+	parsingHeaderValue = true;
 	//OK
 	return 0;
 }
@@ -543,12 +575,22 @@ int WebSocketConnection::on_status_complete (HTTPParser*)
 {
 	return 0;
 }
-int WebSocketConnection::on_headers_complete (HTTPParser*)
+int WebSocketConnection::on_headers_complete (HTTPParser* parser)
 {
+	//Une requete sans le moindre en-tete n'est jamais passee par on_header_field
+	EnsureRequest(parser);
+	//Poser le dernier couple (champ, valeur)
+	FlushPendingHeader();
 	return 0;
 }
 int WebSocketConnection::on_message_complete (HTTPParser*)
 {
+	//Une requete que le parseur n'a pas menee jusqu'a son URL ne donne rien a
+	//traiter : ne pas la dereferencer pour le seul plaisir de la tracer.
+	if (!request)
+		//Error
+		return 1;
+
 	//Debug
 	Log("-Incoming websocket connection for url:%s\n",request->GetRequestURI().c_str());
 
