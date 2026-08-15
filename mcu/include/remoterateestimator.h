@@ -11,6 +11,7 @@
 #include "use.h"
 #include "remoteratecontrol.h"
 #include "rtp.h"
+#include <set>
 
 class RemoteRateEstimator
 {
@@ -47,12 +48,17 @@ public:
 public:
 	RemoteRateEstimator();
 	~RemoteRateEstimator();
-	void SetListener(Listener *listener);
+	//Plusieurs sessions partagent un estimateur (RTPParticipant) : chacune
+	//s'inscrit/se desinscrit, plus de "dernier SetListener gagne".
+	void AddListener(Listener *listener);
+	void RemoveListener(Listener *listener);
 	void AddStream(DWORD ssrc);
 	void RemoveStream(DWORD ssrc);
 	void UpdateRTT(DWORD ssrc,DWORD rtt, QWORD now);
 	void UpdateLost(DWORD ssrc,DWORD lost, QWORD now);
-	void Update(DWORD ssrc, RTPTimedPacket* packet, DWORD size);
+	//La taille vient du paquet lui-meme (GetSize()) : le 3e parametre qui
+	//recevait un horodatage a disparu (rate-control.md §3.1).
+	void Update(DWORD ssrc, RTPTimedPacket* packet);
 	void Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool mark);
 	DWORD GetEstimatedBitrate();
 	void GetSSRCs(std::list<DWORD> &ssrcs);
@@ -60,6 +66,7 @@ public:
 	void SetTemporalMinLimit(DWORD limit);
 	void SetEventSource(EvenSource *eventSource) {	this->eventSource = eventSource; }
 private:
+	DWORD GetEstimatedBitrateUnlocked() const;
 	double RateIncreaseFactor(QWORD now, QWORD last, DWORD reactionTime) const;
 	void Update(RemoteRateControl::BandwidthUsage usage,bool reactNow,QWORD now);
 	void UpdateChangePeriod(QWORD now);
@@ -69,7 +76,7 @@ private:
 private:
 	typedef std::map<DWORD,RemoteRateControl*> Streams;
 private:
-	Listener*	listener;
+	std::set<Listener*> listeners;
 	EvenSource*	eventSource;
 	Acumulator	bitrateAcu;
 	Streams		streams;

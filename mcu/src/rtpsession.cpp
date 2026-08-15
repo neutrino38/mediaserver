@@ -371,9 +371,9 @@ RTPSession::~RTPSession()
 {
     End();
 	//Check listener
-	if (remoteRateEstimator && sendBitrateFeedback)
-		//Add as listener
-		remoteRateEstimator->SetListener(NULL);
+	if (remoteRateEstimator)
+		//Se desinscrire (plusieurs sessions partagent l'estimateur)
+		remoteRateEstimator->RemoveListener(this);
 	if (rtpMapIn)
 		delete(rtpMapIn);
 	if (rtpMapInPrev)
@@ -1520,7 +1520,7 @@ void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
 	remoteRateEstimator = estimator;
 
 	//Add as listener
-	remoteRateEstimator->SetListener(this);
+	remoteRateEstimator->AddListener(this);
 }
 
 /********************************
@@ -3789,7 +3789,7 @@ bool RTPSession::RTPStream::Add(RTPTimedPacket *packet, DWORD size)
 	//If remote estimator
 	if ( s->GetRemoteRateEstimator() )
 		//Update rate control
-		s->GetRemoteRateEstimator()->Update(recSSRC,packet,getTimeMS());
+		s->GetRemoteRateEstimator()->Update(recSSRC,packet);
 
 	//Increase stats
 	numRecvPackets++;
@@ -3820,7 +3820,7 @@ bool RTPSession::RTPStream::Add(RTPTimedPacket *packet, DWORD size)
 			//If remote estimator
 			if ( s->GetRemoteRateEstimator() )
 				//Update estimator
-				s->GetRemoteRateEstimator()->UpdateLost(recSSRC,lost, size);
+				s->GetRemoteRateEstimator()->UpdateLost(recSSRC,lost, getTimeMS());
 
 			//If nack is enable t waiting for a PLI/FIR response (to not oeverflow)
 			if (s->IsNACKEnabled() && !s->IsRequestFPU())

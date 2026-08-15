@@ -10,7 +10,9 @@
 #include <cmath>
 #include "log.h"
 
-RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packetCalc(100), lostCalc(100)
+//packetCalc/lostCalc : fenetres ALIGNEES (1 s, meme horloge appelant) pour que
+//le ratio de pertes compare des choses comparables (§3.3 du diagnostic).
+RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packetCalc(1000), lostCalc(1000)
 {
 	eventSource = NULL;
 	rtt = 0;
@@ -22,14 +24,16 @@ RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packet
 	curTime = 0;
 	curSize = 0;
 	curDelta = 0;
-	prevDelta = 0;
+	lastFrameTS = 0;
 	slope = 8.0/512.0;
 	E[0][0] = 100;
 	E[0][1] = 0;
 	E[1][0] = 0;
 	E[1][1] = 1e-1;
-	processNoise[0] = 1e-10;
-	processNoise[1] = 1e-2;
+	//Constantes du temoin (overuse_estimator.h:59) — les valeurs locales
+	//1e-10/1e-2 etaient 1000x/10x l'amont, jamais validees en production.
+	processNoise[0] = 1e-13;
+	processNoise[1] = 1e-3;
 	avgNoise = 0;
 	varNoise = 50;
 	threshold = 25;
@@ -66,38 +70,44 @@ void RemoteRateControl::Update(QWORD time,QWORD ts,DWORD size, bool mark)
 		curDelta += (curTime - prevTime) - (curTS - prevTS);
 				
 	//Add new frame
-	if (mark) 
+	if (mark)
 	{
 		//New frame
 		fpsCalc.Update(time,1);
-		//Update Kalman filter as per google algorithm from the previous frame
-		UpdateKalman(curDelta - prevDelta, curSize - prevSize);
+		//§3.4 e : le filtre recoit curDelta LUI-MEME — la premiere difference
+		//du delai (t_delta − ts_delta du temoin), accumulee sur l'image. On
+		//passait curDelta−prevDelta, la derivee SECONDE : une file qui se
+		//remplit lineairement etait invisible (mesure lot 0). Premiere image :
+		//pas de periode inter-images encore, on ne filtre pas.
+		if (lastFrameTS)
+			UpdateKalman(curDelta, curSize - prevSize, (double)(curTS - lastFrameTS));
+		lastFrameTS = curTS;
 		//reset frame stats
 		prevSize = curSize;
-		prevDelta = curDelta;
 		curSize = 0;
 		curDelta = 0;
-	} 
+	}
 	//Update current stats
 	prevTS = curTS;
 	prevTime = curTime;
 }
 
-void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize)
+//Aligne ligne a ligne sur le temoin ../webrtc (overuse_estimator.cc), les
+//divergences §3.4 du diagnostic corrigees une a une — voir rate-control.md.
+void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelta)
 {
-	//Debug("RemoteRateControl::UpdateKalman() deltas [time:%d size:%d]\n",deltaTime, deltaSize);
+	//Debug("RemoteRateControl::UpdateKalman() deltas [time:%d size:%d ts:%f]\n",deltaTime, deltaSize, tsDelta);
 
-	//Get scaling factor
-	double scaleFactor = 30.0/fpsCalc.GetInstantAvg();
-
-	// Update the Kalman filter
-	E[0][0] += processNoise[0]*scaleFactor;
-	E[1][1] += processNoise[1]*scaleFactor;
+	//§3.4 f : bruit de processus du temoin, SANS mise a l'echelle 30/fps
+	//(l'amont ne la fait pas ; la locale multipliait un reglage deja 1000x
+	//trop grand).
+	E[0][0] += processNoise[0];
+	E[1][1] += processNoise[1];
 
 	if ((hypothesis==OverUsing && offset<prevOffset) || (hypothesis==UnderUsing && offset>prevOffset))
-		E[1][1] += 10*processNoise[1]*scaleFactor;
+		E[1][1] += 10*processNoise[1];
 
-	const double h[2] = 
+	const double h[2] =
 	{
 		(double)deltaSize,
 		1.0
@@ -110,31 +120,49 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize)
 
 	const double residual = deltaTime-slope*h[0]-offset;
 
-	// Only update the noise estimate if we're not over-using and in stable state
-	//if (hypothesis!=OverUsing && (fmin(fpsCalc.GetAcumulated(),30)*std::fabs(offset)<threshold))
+	//Periode d'image minimale sur les 60 dernieres (temoin :
+	//UpdateMinFramePeriod, overuse_estimator.cc:105-115) : les images en
+	//retard ne doivent pas ETIRER le facteur d'oubli.
+	double minFramePeriod = tsDelta;
+	if (tsDeltaHist.size() >= 60)
+		tsDeltaHist.pop_front();
+	for (double oldTsDelta : tsDeltaHist)
+		minFramePeriod = fmin(oldTsDelta, minFramePeriod);
+	tsDeltaHist.push_back(tsDelta);
+
+	//§3.4 a : filtre remis a l'endroit — le residu normal PASSE, l'aberrant
+	//(image cle : hors modele gaussien) est ecrete a ±3σ AVEC son signe. La
+	//version locale faisait l'inverse et perdait le signe.
+	double residualFiltered = residual;
+	const double maxResidual = 3*sqrt(varNoise);
+	if (std::fabs(residual) > maxResidual)
+		residualFiltered = residual < 0 ? -maxResidual : maxResidual;
+
+	//§3.4 d : le bruit ne se mesure qu'en etat STABLE (temoin l.62-68) —
+	//mesurer pendant la congestion, c'est prendre la congestion pour du
+	//bruit. La condition etait en commentaire depuis 2013.
+	if (hypothesis == Normal)
 	{
-		double residualFiltered = residual;
-
-		// We try to filter out very late frames. For instance periodic key
-		// frames doesn't fit the Gaussian model well.
-		if (std::fabs(residual)<3*sqrt(varNoise))
-			residualFiltered = 3*sqrt(varNoise);
-
 		// Faster filter during startup to faster adapt to the jitter level
-		// of the network alpha is tuned for 30 frames per second, but
+		// of the network. alpha is tuned for 30 frames per second.
 		double alpha = 0.01;
-		if (fpsCalc.GetAcumulated()> 60)
+		//§3.4 f : bascule a 300 images comme le temoin (10 s a 30 fps)
+		if (fpsCalc.GetAcumulated() > 300)
 			alpha = 0.002;
 
-		// beta is a function of alpha and the time delta since
-		// the previous update.
-		const double beta = pow(1-alpha, deltaSize*30/1000.0);
+		//§3.2 : l'exposant du facteur d'oubli est un TEMPS (la periode
+		//inter-images), plus jamais une difference de tailles signee — c'est
+		//elle qui rendait varNoise negative puis NaN.
+		const double beta = pow(1-alpha, minFramePeriod*30/1000.0);
 		avgNoise = beta*avgNoise + (1-beta)*residualFiltered;
 		varNoise = beta*varNoise + (1-beta)*(avgNoise-residualFiltered)*(avgNoise-residualFiltered);
+		//§3.4 b : plancher du temoin (l.136-138) — varNoise reste une variance.
+		if (varNoise < 1)
+			varNoise = 1;
 	}
 
 	const double denom = varNoise+h[0]*Eh[0]+h[1]*Eh[1];
-	const double K[2] = 
+	const double K[2] =
 	{
 		Eh[0] / denom,
 		Eh[1] / denom
@@ -145,11 +173,20 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize)
 		{    -K[1]*h[0] , 1.0-K[1]*h[1] }
 	};
 
+	//§3.4 c : temporaires du temoin (l.80-87) — sans eux les deux dernieres
+	//lignes lisaient E[0][0]/E[0][1] DEJA reecrits.
+	const double e00 = E[0][0];
+	const double e01 = E[0][1];
+
 	// Update state
-	E[0][0] = E[0][0]*IKh[0][0] + E[1][0]*IKh[0][1];
-	E[0][1] = E[0][1]*IKh[0][0] + E[1][1]*IKh[0][1];
-	E[1][0] = E[0][0]*IKh[1][0] + E[1][0]*IKh[1][1];
-	E[1][1] = E[0][1]*IKh[1][0] + E[1][1]*IKh[1][1];
+	E[0][0] = e00*IKh[0][0] + E[1][0]*IKh[0][1];
+	E[0][1] = e01*IKh[0][0] + E[1][1]*IKh[0][1];
+	E[1][0] = e00*IKh[1][0] + E[1][0]*IKh[1][1];
+	E[1][1] = e01*IKh[1][0] + E[1][1]*IKh[1][1];
+
+	//Le controle que l'amont fait en RTC_DCHECK (l.89-98)
+	if (!CovarianceIsPositiveSemiDefinite())
+		Debug("BWE: covariance no longer positive semi-definite\n");
 
 	slope = slope+K[0]*residual;
 	prevOffset = offset;
@@ -171,13 +208,17 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize)
 				//Check 
 				if (overUseCount>2)
 				{
-					Debug("BWE: Overusing bitrate:%.0llf max:%.0llf min:%.0llf T:%f,threshold:%f\n",bitrateCalc.GetInstantAvg(),bitrateCalc.GetMaxAvg(),bitrateCalc.GetMinAvg(),std::fabs(T),threshold);
+					//Formats : long double -> cast double + %f ("%llf" n'existe pas,
+					//les valeurs affichees etaient fausses).
+					Debug("BWE: Overusing bitrate:%.0f max:%.0f min:%.0f T:%f,threshold:%f\n",(double)bitrateCalc.GetInstantAvg(),(double)bitrateCalc.GetMaxAvg(),(double)bitrateCalc.GetMinAvg(),std::fabs(T),threshold);
 					//Overusing
 					hypothesis = OverUsing;
 					//Reset counter
 					overUseCount=0;
 				} else {
-					Debug("BWE: Overusing bitrate:%.0llf max:%.0llf min:%.0llf T:%f,threshold:%f\n",overUseCount,bitrateCalc.GetInstantAvg(),bitrateCalc.GetMaxAvg(),bitrateCalc.GetMinAvg(),std::fabs(T),threshold);
+					//Le compteur etait passe en 1er argument SANS % correspondant :
+					//tous les champs affiches etaient decales d'un cran.
+					Debug("BWE: Overusing candidate %u/3 bitrate:%.0f max:%.0f min:%.0f T:%f,threshold:%f\n",overUseCount,(double)bitrateCalc.GetInstantAvg(),(double)bitrateCalc.GetMaxAvg(),(double)bitrateCalc.GetMinAvg(),std::fabs(T),threshold);
 					//increase counter
 					overUseCount++;
 				}
@@ -186,7 +227,7 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize)
 			//If we change state
 			if (hypothesis!=UnderUsing)
 			{
-				Debug("BWE:  UnderUsing bitrate:%.0llf max:%.0llf min:%.0llf T:%d\n",bitrateCalc.GetInstantAvg(),bitrateCalc.GetMaxAvg(),bitrateCalc.GetMinAvg(),std::fabs(T));
+				Debug("BWE:  UnderUsing bitrate:%.0f max:%.0f min:%.0f T:%f\n",(double)bitrateCalc.GetInstantAvg(),(double)bitrateCalc.GetMaxAvg(),(double)bitrateCalc.GetMinAvg(),std::fabs(T));
 				//Reset bitrate
 				bitrateCalc.ResetMinMax();
 				//Under using, do nothing until going back to normal
@@ -201,7 +242,7 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize)
 		if (hypothesis!=Normal)
 		{
 			//Log
-			Debug("BWE:  Normal  bitrate:%.0llf max:%.0llf min:%.0llf\n",bitrateCalc.GetInstantAvg(),bitrateCalc.GetMaxAvg(),bitrateCalc.GetMinAvg());
+			Debug("BWE:  Normal  bitrate:%.0f max:%.0f min:%.0f\n",(double)bitrateCalc.GetInstantAvg(),(double)bitrateCalc.GetMaxAvg(),(double)bitrateCalc.GetMinAvg());
 			//Reset
 			bitrateCalc.ResetMinMax();
 			//Normal
@@ -240,22 +281,25 @@ bool RemoteRateControl::UpdateRTT(DWORD rtt)
 	return hypothesis==OverUsing;
 }
 
-bool RemoteRateControl::UpdateLost(DWORD num)
+bool RemoteRateControl::UpdateLost(DWORD num, QWORD now)
 {
-	//Update lost count
-	lostCalc.Update(getTime(),num);
-	
+	//§3.3 : meme horloge que les paquets (celle de l'appelant, en ms) — la
+	//version locale melait un getTime() en µs a des fenetres en ms, gonflant
+	//le ratio au point que quelques pertes isolees valaient congestion
+	//(mesure lot 0 : bascule au 5e rapport d'UNE perte).
+	lostCalc.Update(now,num);
+
 	//If we are in window
 	if (packetCalc.IsInWindow() && lostCalc.IsInWindow())
 	{
 		//Get packets
 		long double packets = packetCalc.GetInstantAvg();
 		long double lost    = lostCalc.GetInstantAvg();
-		
+
 		//Check lost is more than 2.5%
 		if (lost*1000/(packets+lost)>25)
 		{
-			//Check 
+			//Check
 			if (overUseCount>2)
 			{
 				//Overusing
@@ -263,9 +307,9 @@ bool RemoteRateControl::UpdateLost(DWORD num)
 				//Reset counter
 				overUseCount=0;
 				//Reset lost counter
-				lostCalc.Reset(getTime());
+				lostCalc.Reset(now);
 				//Debug
-				Debug("BWE: UpdateLostlost:%d hipothesis:%s,num:%d,packets:%f,lost:%f\n",num,GetName(hypothesis),num,packets,lost);
+				Debug("BWE: UpdateLost lost:%u hipothesis:%s,packets:%.1f,lost:%.1f\n",num,GetName(hypothesis),(double)packets,(double)lost);
 			} else {
 				//increase counter
 				overUseCount++;
@@ -273,7 +317,8 @@ bool RemoteRateControl::UpdateLost(DWORD num)
 		}
 	}
 
-	if (eventSource) eventSource->SendEvent("rrc.lost","[%llu,\"%s\",\"%d\"]",getTimeMS(),GetName(hypothesis),rtt);
+	//L'evenement envoyait le RTT a la place du nombre de pertes.
+	if (eventSource) eventSource->SendEvent("rrc.lost","[%llu,\"%s\",\"%u\"]",getTimeMS(),GetName(hypothesis),num);
 
 	//true if overusing
 	return hypothesis==OverUsing;

@@ -335,7 +335,13 @@ check: tests/runtests
 check-ipv6: tests/runtests
 	./tests/runtests --gtest_filter='IPv6*' --gtest_also_run_disabled_tests
 
-.PHONY: tests check check-ipv6
+# Suite contrôle de débit (chantier rate-control, cf. tests/test_rate_control.cpp).
+# Tableau de bord du chantier : joue AUSSI les tests DISABLED_ (caractérisation
+# des défauts de rate-control.md §3, leves un a un par le lot 1 du plan).
+check-ratecontrol: tests/runtests
+	./tests/runtests --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
+
+.PHONY: tests check check-ipv6 check-ratecontrol
 
 ############################################
 # Dependances generees automatiquement (headers -> objets)

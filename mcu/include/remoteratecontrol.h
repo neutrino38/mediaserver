@@ -11,6 +11,7 @@
 #include "config.h"
 #include "acumulator.h"
 #include "eventstreaminghandler.h"
+#include <deque>
 
 class RemoteRateControl
 {
@@ -63,14 +64,21 @@ public:
 	RemoteRateControl();
 	void Update(QWORD time,QWORD ts,DWORD size, bool mark);
 	bool UpdateRTT(DWORD rtt);
-	bool UpdateLost(DWORD num);
+	//now : la MEME horloge (ms) que Update — plus de getTime() µs interne (§3.3)
+	bool UpdateLost(DWORD num, QWORD now);
 	void SetRateControlRegion(Region region);
 	BandwidthUsage GetUsage()	{ return hypothesis; }
 	double GetNoise()		{ return varNoise;   }
+	//Observabilite pour les tests (lot 0 du chantier rate-control) :
+	//l'invariant que l'amont verifie par RTC_DCHECK (overuse_estimator.cc:90-93).
+	bool CovarianceIsPositiveSemiDefinite() const
+	{
+		return E[0][0]+E[1][1]>=0 && E[0][0]*E[1][1]-E[0][1]*E[1][0]>=0 && E[0][0]>=0;
+	}
 	void SetEventSource(EvenSource *eventSource) {	this->eventSource = eventSource; }
 
 private:
-	void UpdateKalman(int deltaTime, int deltaSize);
+	void UpdateKalman(int deltaTime, int deltaSize, double tsDelta);
 private:
 	EvenSource *eventSource;
 	Acumulator bitrateCalc;
@@ -87,7 +95,11 @@ private:
 	DWORD curSize;
 	DWORD prevTarget;
 	int64_t curDelta;
-	int64_t prevDelta;
+	//Horodatage media (ms) de la derniere image close : donne la periode
+	//inter-images, l'exposant du facteur d'oubli du bruit (temoin :
+	//overuse_estimator.cc:105-115, UpdateMinFramePeriod).
+	QWORD lastFrameTS;
+	std::deque<double> tsDeltaHist;
 	double slope;
 	double offset;
 	double E[2][2];
