@@ -21,6 +21,7 @@
 #include "remoterateestimator.h"
 #include "dtls.h"
 #include "ipaddress.h"
+#include "addressprofiles.h"
 
 
 
@@ -97,6 +98,26 @@ public:
 	//inutilisable ; la session reste alors sur le défaut.
 	bool SetBindAddress(const IPAddress& addr);
 	const IPAddress& GetBindAddress() const { return bindAddress; }
+
+	//Profil d'adressage de CETTE jambe (§14 de ipv6.md) : le contrôleur le
+	//demande dans StartSending/StartReceiving, le serveur en tire l'adresse à
+	//lier — donc l'interface — et l'adresse à annoncer.
+	//
+	//Le profil se fixe UNE FOIS : le second appel, s'il en porte un différent,
+	//est un ÉCHEC et non une reconfiguration silencieuse. En RTP symétrique la
+	//socket est la même dans les deux sens, et changer d'adresse en cours
+	//d'appel voudrait dire la relier sous le média — le port publié dans le SDP
+	//changerait sans que le pair en sache rien.
+	//
+	//`profile` : "publicv4" | "publicv6" | "internalv4" | "internalv6", ou NULL
+	/// chaîne vide pour « le profil par défaut », c'est-à-dire le comportement
+	//d'un contrôleur qui ignore cette notion. Rend false et remplit `error` si
+	//le nom est inconnu, le profil indisponible, ou déjà fixé à un autre.
+	bool SetAddressProfile(const char* profile, std::string& error);
+
+	//Adresse à publier dans le SDP pour cette jambe : celle du profil retenu
+	//(NATée s'il y a lieu). Vide si aucun profil n'est disponible.
+	IPAddress GetAnnouncedAddress() const;
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetLocalPort(int recvPort);
 	int GetLocalPort();
@@ -545,6 +566,17 @@ private:
 	//l'interface empruntée quand un profil d'adressage est demandé (§14 de
 	//ipv6.md) ; vide, on garde l'écoute historique sur `::`.
 	IPAddress bindAddress;
+
+	//Profil d'adressage retenu, et le drapeau qui dit qu'il l'a été
+	//explicitement — sans quoi on ne pourrait pas distinguer « le contrôleur a
+	//demandé publicv4 » de « personne n'a rien demandé ».
+	AddressProfiles::Id addressProfile;
+	bool                addressProfileSet;
+
+	//Relie les sockets à une autre adresse : arrête la réception, ferme, rouvre,
+	//redémarre. Le port local CHANGE — c'est pourquoi cela ne peut se produire
+	//qu'avant que le contrôleur n'ait publié le SDP.
+	int Rebind(const IPAddress& addr);
 
 	//Tipos
 	int 	sendType;

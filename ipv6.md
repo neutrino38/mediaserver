@@ -542,7 +542,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivateV4()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | **fait** |
 | 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--internal-ip`/`--default-profile` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | **fait** |
 | 5 | Sockets `RTPSession` : bind selon le profil, famille de la session (§1.1-1.5, §14.5) | **fort** | 3, 4 | le média passe en v6 et l'interface devient choisie, pas subie | **fait** |
-| 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | à faire |
+| 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | **fait côté serveur** ; protos MOTELI à faire dans elixip |
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | à faire |
 | 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | à faire |
 | 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | **XOR-MAPPED fait** ; reste l'adresse annoncée derrière NAT |
@@ -920,6 +920,23 @@ qu'au premier paquet.
 > `/jsr309`, elle **doit** donc arriver dans le même jeu de changements que la
 > mise à jour des schémas protobuf MOTELI v2 (`moteli_*.proto`, dépôt elixip), et
 > que celle de `MCU-API.md` / `xmlrpc_jsr309_api.md`.
+
+> **Fait le 2026-08-15** (étape 6) : `profile` est le dernier paramètre,
+> facultatif, de `StartSending`/`StartReceiving` (MCU) et
+> `EndpointStartSending`/`EndpointStartReceiving` (JSR-309). Chaîne de repli
+> complète : un contrôleur qui ne l'envoie pas est parsé par la signature
+> précédente, exactement comme avant. Le profil descend jusqu'à `RTPSession`,
+> qui relie ses sockets sur l'adresse du profil (`Rebind` — le port local change,
+> d'où l'obligation de poser le profil AVANT de publier le port) et rend
+> l'adresse annoncée correspondante dans `returnVal[1]` et dans les candidats
+> JSR-309. Documenté dans `MCU-API.md` §6.7 bis et `xmlrpc_jsr309_api.md`
+> §6.7 bis ; 7 tests (`RtpAddressProfile`).
+>
+> **RESTE À FAIRE, hors de ce dépôt** : les schémas protobuf MOTELI v2
+> (`apps/elixip2/priv/proto/moteli_*.proto`, dépôt elixip) doivent gagner le même
+> champ — un enum dont la valeur `0` vaut `PUBLIC_V4`, pour que la compatibilité
+> ascendante tombe juste sans champ optionnel. `CLAUDE.md` en fait une règle :
+> l'API HTTP et le transport RabbitMQ ne doivent jamais diverger.
 
 ### 14.4 L'introspection n'est pas facultative
 

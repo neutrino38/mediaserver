@@ -50,6 +50,14 @@ public:
 	virtual int Init();
 	virtual int End();
 
+	//Profil d'adressage demandé par le contrôleur pour CETTE jambe (§14 de
+	//ipv6.md) : il décide de l'adresse liée — donc de l'interface — et de
+	//l'adresse annoncée. À appeler AVANT StartSending/StartReceiving, qui
+	//publient le port. NULL ou chaîne vide = profil par défaut, soit le
+	//comportement d'un contrôleur qui ignore cette notion.
+	int SetAddressProfile(MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//Adresse à publier dans le SDP pour cette jambe (celle du profil retenu).
+	IPAddress GetAnnouncedAddress(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StartSending(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);

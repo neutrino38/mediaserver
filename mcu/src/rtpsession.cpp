@@ -350,6 +350,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Sockets media : dual-stack par defaut (AF_INET6 + IPV6_V6ONLY=0), sauf
 	//adresse de bind v4 imposee par un profil. Init fixe la valeur definitive.
 	socketFamily = AF_INET6;
+	addressProfile = AddressProfiles::Default();
+	addressProfileSet = false;
 	
 	defaultStream = NULL;
 	
@@ -1569,6 +1571,122 @@ bool RTPSession::SetBindAddress(const IPAddress& addr)
 
 	bindAddress = addr;
 	return true;
+}
+
+/***********************************
+* Rebind
+*	Relie les sockets media a une autre adresse : on arrete la reception, on
+*	ferme, on rouvre, on redemarre. Le PORT LOCAL CHANGE au passage — c'est
+*	pourquoi cela ne peut arriver qu'avant que le controleur n'ait publie son
+*	SDP, c'est-a-dire au premier StartReceiving/StartSending qui porte un profil.
+***********************************/
+int RTPSession::Rebind(const IPAddress& addr)
+{
+	//Deja la bonne adresse (y compris « les deux vides ») : rien a faire.
+	if (addr == bindAddress)
+		return 1;
+
+	const bool wasRunning = running;
+
+	//Ferme les sockets et arrete le thread de reception
+	if (wasRunning)
+		End();
+
+	if (!SetBindAddress(addr))
+		return 0;
+
+	//Rien a rouvrir si la session n'etait pas encore demarree : Init s'en
+	//chargera, et prendra l'adresse au passage.
+	if (!wasRunning)
+		return 1;
+
+	if (!Init())
+		return Error("-RTPSession Rebind: impossible de relier les sockets sur [%s] [%p]\n",
+		             addr.ToString().c_str(),this);
+
+	Log("-RTPSession relie sur [%s], nouveau port local %d [%p]\n",
+	    addr.IsSet() ? addr.ToString().c_str() : "toutes interfaces",simPort,this);
+
+	return 1;
+}
+
+/***********************************
+* SetAddressProfile
+*	Le controleur choisit, le serveur detient (§14 de ipv6.md).
+***********************************/
+bool RTPSession::SetAddressProfile(const char* profile, std::string& error)
+{
+	AddressProfiles::Id id = AddressProfiles::Default();
+
+	//Rien de demande : le profil par defaut, c'est-a-dire le comportement d'un
+	//controleur qui ignore cette notion. On ne fixe RIEN — un appel muet ne doit
+	//pas verrouiller la jambe et faire echouer un appel ulterieur explicite.
+	if (!profile || !*profile)
+		return true;
+
+	if (!AddressProfiles::ParseId(profile,id))
+	{
+		error = std::string("profil d'adressage inconnu \"") + profile +
+		        "\" (publicv4, publicv6, internalv4, internalv6)";
+		return false;
+	}
+
+	//Deja fixe : le meme est un no-op, un autre est un echec. Recreer la socket
+	//sous un media en cours changerait le port publie dans le SDP.
+	if (addressProfileSet)
+	{
+		if (id == addressProfile)
+			return true;
+
+		error = std::string("profil deja fixe a ") + AddressProfiles::NameOf(addressProfile) +
+		        " sur cette jambe, refus de basculer vers " + AddressProfiles::NameOf(id);
+		return false;
+	}
+
+	if (!AddressProfiles::IsAvailable(id))
+	{
+		error = std::string("profil d'adressage ") + AddressProfiles::NameOf(id) +
+		        " indisponible sur ce serveur";
+		return false;
+	}
+
+	//L'adresse de bind peut etre VIDE (profil public herite du mode NAT sans
+	//--nat, cf. AddressProfiles::AddPublic) : on reste alors sur l'ecoute
+	//dual-stack, seule l'adresse annoncee change.
+	const IPAddress bind = AddressProfiles::BindAddress(id);
+
+	if (!Rebind(bind))
+	{
+		error = std::string("impossible de relier les sockets sur ") + bind.ToString();
+		return false;
+	}
+
+	addressProfile    = id;
+	addressProfileSet = true;
+
+	Log("-RTPSession profil d'adressage [%s] bind [%s] annonce [%s] [%p]\n",
+	    AddressProfiles::NameOf(id),
+	    bind.IsSet() ? bind.ToString().c_str() : "toutes interfaces",
+	    AddressProfiles::AnnouncedAddress(id).ToString().c_str(),this);
+
+	return true;
+}
+
+/***********************************
+* GetAnnouncedAddress
+*	Ce que le controleur doit publier pour CETTE jambe.
+***********************************/
+IPAddress RTPSession::GetAnnouncedAddress() const
+{
+	const AddressProfiles::Id id = addressProfileSet ? addressProfile : AddressProfiles::Default();
+	const IPAddress           addr = AddressProfiles::AnnouncedAddress(id);
+
+	//Table non renseignee (tests unitaires, point d'entree qui aurait saute la
+	//configuration) : on retombe sur l'adresse annoncee globale.
+	if (addr.IsSet())
+		return addr;
+
+	return IPAddress::Parse(GetAnnouncedIp());
 }
 
 int RTPSession::Init()

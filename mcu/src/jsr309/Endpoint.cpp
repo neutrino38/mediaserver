@@ -756,6 +756,25 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 
 
 
+bool Endpoint::SetAddressProfile(MediaFrame::Type media, const char* profile, std::string& error,
+                                 MediaFrame::MediaRole role)
+{
+	//Rien demandé : profil par défaut, comportement d'un contrôleur qui ignore
+	//cette notion.
+	if (!profile || !*profile)
+		return true;
+
+	RTPEndpoint* rtp = GetRTPEndpoint(media,role);
+
+	if (!rtp)
+	{
+		error = "pas de session RTP pour ce media";
+		return false;
+	}
+
+	return rtp->SetAddressProfile(profile,error);
+}
+
 char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFrame::Type media ) 
 {
 	//Aucun tampon de taille fixe ici. `host` peut venir de --websocket-host, une
@@ -815,6 +834,21 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 		//comme une adresse v6. La règle vaut pour les URL SEULEMENT : jamais
 		//dans un `c=` ni un `a=candidate:`, où les champs sont séparés par des
 		//espaces et l'ambiguïté n'existe pas.
+		//Adresse du PROFIL de cette jambe si elle en a un — la même que
+		//l'adresse annoncée globale tant que le contrôleur n'en demande pas
+		//d'autre, celle du profil sinon (NATée s'il y a lieu). Une seule source
+		//pour les deux API de contrôle, comme depuis --public-ip.
+		std::string profileHost;
+		if (RTPEndpoint* rtp = GetRTPEndpoint(media))
+		{
+			const IPAddress addr = rtp->GetAnnouncedAddress();
+			if (addr.IsSet() && !wshost)
+			{
+				profileHost = addr.ToString();
+				host = profileHost.c_str();
+			}
+		}
+
 		const IPAddress hostAddr = IPAddress::Parse(host);
 		const std::string authority = hostAddr.IsV6() ? hostAddr.ToUrlString() : std::string(host);
 

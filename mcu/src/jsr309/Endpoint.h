@@ -22,6 +22,12 @@ class RTPEndpoint;
 class Endpoint
 {
 public:
+	//Profil d'adressage demandé par le contrôleur pour cette jambe (§14 de
+	//ipv6.md) : décide de l'adresse liée — donc de l'interface — et de l'adresse
+	//annoncée dans les candidats. À poser AVANT StartReceiving/StartSending.
+	bool SetAddressProfile(MediaFrame::Type media, const char* profile, std::string& error,
+	                       MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+
 	class Port : public RTPMultiplexer
 	{
 	public:

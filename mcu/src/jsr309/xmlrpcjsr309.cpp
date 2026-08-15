@@ -997,7 +997,19 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 	char *sendIp;
 	int sendPort;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiisiS)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap);
+	//Profil d'adressage (§14 d'ipv6.md) : DERNIER paramètre, facultatif. Absent
+	//=> profil par défaut, soit exactement le comportement d'avant.
+	const char *profile = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiisiSs)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap,&profile);
+
+	if (env->fault_occurred)
+	{
+		// Try without the addressing profile (contrôleur antérieur)
+		xmlrpc_env_clean(env);
+		xmlrpc_env_init(env);
+		profile = NULL;
+		xmlrpc_parse_value(env, param_array, "(iiisiS)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap);
+	}
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1033,6 +1045,16 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 	}
 
 	//Start sending video
+	//Profil d'adressage d'abord : il décide de l'adresse liée, donc de
+	//l'interface d'émission. Un profil inconnu, indisponible ou en désaccord
+	//avec celui déjà fixé sur cette jambe est un ÉCHEC — retomber en silence sur
+	//le défaut émettrait par la mauvaise interface, sans que rien ne le dise.
+	{
+		std::string error;
+		if (!session->EndpointSetAddressProfile(endpointId,(MediaFrame::Type)media,profile,error))
+			return xmlerror(env,(char*)error.c_str());
+	}
+
 	res = session->EndpointStartSending(endpointId,(MediaFrame::Type)media,sendIp,sendPort,map);
 
 
@@ -1156,7 +1178,18 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//"fmtp", une struct PT -> paramètres. Struct plutôt que fmtp nu pour que le
 	//négociateur puisse en demander plus sans un énième paramètre positionnel.
 	xmlrpc_value *offer = NULL;
-	xmlrpc_parse_value(env, param_array, "(iiiSS)", &sessionId,&endpointId,&media,&rtpMap,&offer);
+	//Profil d'adressage (§14 d'ipv6.md) : DERNIER paramètre, facultatif.
+	const char *profile = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiiSSs)", &sessionId,&endpointId,&media,&rtpMap,&offer,&profile);
+
+	if (env->fault_occurred)
+	{
+		// Try without the addressing profile (contrôleur antérieur)
+		xmlrpc_env_clean(env);
+		xmlrpc_env_init(env);
+		profile = NULL;
+		xmlrpc_parse_value(env, param_array, "(iiiSS)", &sessionId,&endpointId,&media,&rtpMap,&offer);
+	}
 
 	if (env->fault_occurred)
 	{
@@ -1164,6 +1197,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		xmlrpc_env_clean(env);
 		xmlrpc_env_init(env);
 		offer = NULL;
+		profile = NULL;
 		xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&rtpMap);
 	}
 
@@ -1239,6 +1273,15 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//Start receiving video and get listening port + fmtp négocié (phase 4).
 	//P8a : le fmtp de l'offre descend jusqu'au négociateur, posé par PT.
 	std::map<int,std::string> fmtpMap;
+	//Profil d'adressage AVANT d'ouvrir la réception : c'est lui qui décide de
+	//l'adresse liée, donc du port publié juste après — le relier ensuite
+	//changerait un port que le contrôleur aurait déjà mis dans son SDP.
+	{
+		std::string error;
+		if (!session->EndpointSetAddressProfile(endpointId,(MediaFrame::Type)media,profile,error))
+			return xmlerror(env,(char*)error.c_str());
+	}
+
 	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map,fmtpMap,
 	                                          offer ? &offerFmtp : NULL);
 

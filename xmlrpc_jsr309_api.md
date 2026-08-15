@@ -122,11 +122,11 @@ JSR309Manager
 3. `EndpointCreate(sessionId, name, audio, video, text)` → `endpointId`
 4. Sécurité : `EndpointSetLocalCryptoSDES` / `EndpointSetRemoteCryptoSDES` ou
    DTLS / STUN selon le transport.
-5. `EndpointStartReceiving(sessionId, endpointId, media, rtpMap)` → port local
+5. `EndpointStartReceiving(sessionId, endpointId, media, rtpMap[, offer[, profile]])` → port local
    d'écoute **et** `fmtp` par PT accepté (`returnVal[1]`, à publier dans le SDP
    local). Précéder au besoin d'`EndpointSetRTPProperties(codec.*)` pour piloter
    le `fmtp` local (voir `CODECS.md`).
-6. `EndpointStartSending(sessionId, endpointId, media, ip, port, rtpMap)` (à
+6. `EndpointStartSending(sessionId, endpointId, media, ip, port, rtpMap[, profile])` (à
    partir du SDP distant).
 7. Attaches média (vers un autre endpoint, un mixer, un player, un transcoder…).
 8. `EndpointStartRTPTimeout(…, timeoutMs)` **après émission du SDP answer** pour
@@ -559,13 +559,16 @@ média `media` vers `endpointId`.
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
 | `EndpointSetRTPProperties` | `i sessionId, i endpointId, i media, S properties` | `[]` |
-| `EndpointStartSending` | `i sessionId, i endpointId, i media, s sendIp, i sendPort, S rtpMap` | `[]` |
+| `EndpointStartSending` | `i sessionId, i endpointId, i media, s sendIp, i sendPort, S rtpMap [, s profile]` | `[]` |
 | `EndpointStopSending` | `i sessionId, i endpointId, i media` | `[]` |
-| `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap [, S offer]` | `[ int recvPort, S fmtpByPt ]` |
+| `EndpointStartReceiving` | `i sessionId, i endpointId, i media, S rtpMap [, S offer [, s profile]]` | `[ int recvPort, S fmtpByPt ]` |
 | `EndpointStopReceiving` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointRequestUpdate` | `i sessionId, i endpointId, i media` | `[]` |
 | `EndpointAddICECandidate` | `i sessionId, i endpointId, i media, s candidate` | `[]` |
 | `EndpointStartRTPTimeout` | `i sessionId, i endpointId, i media, i timeoutMs` | `[]` |
+
+- **`profile`** (dernier paramètre des deux méthodes, **optionnel**) : le
+  **profil d'adressage** de cette jambe. Voir §6.7 bis.
 
 - **`rtpMap`** : struct XML-RPC dont **chaque clé est un payload type** (chaîne,
   ex. `"96"`) et **chaque valeur est un code codec entier** (`i`) selon
@@ -667,6 +670,54 @@ média `media` vers `endpointId`.
   (`sendonly`/hold) puis ré-armer à la reprise. La propriété RTP `rtpTimeout`
   (via `EndpointSetRTPProperties`) ne fait que **pré-régler le seuil** sans
   armer.
+
+
+### 6.7 bis Profils d'adressage (`profile`)
+
+Le serveur peut porter jusqu'à **quatre adresses**, et c'est le contrôleur qui
+dit laquelle employer, **appel par appel** :
+
+| Profil | Côté | Famille |
+|---|---|---|
+| `publicv4` | publique (extérieur) | IPv4, éventuellement **nattée** |
+| `publicv6` | publique | IPv6, jamais nattée |
+| `internalv4` | interne (réseau de service) | IPv4, **RFC 1918 exigée** |
+| `internalv6` | interne | IPv6, ULA ou unicast global |
+
+Chaque profil porte **deux adresses** : celle que le serveur **lie** (donc
+l'interface qu'il emprunte) et celle qu'il **annonce** — la ligne `c=` du SDP et
+les candidats rendus par `EndpointGetMediaCandidates`. Elles ne diffèrent que
+pour `publicv4` derrière NAT. Configuration serveur : `--public-ip`, `--nat`,
+`--internal-ip`, `--default-profile` (`ipv6.md` §14.2).
+
+Règles du contrat, identiques à celles de l'API MCU (`MCU-API.md` §6.7 bis) :
+
+- **paramètre facultatif, en fin de liste** : XML-RPC est positionnel, c'est la
+  seule position qui ne casse aucun appelant. Un contrôleur qui l'ignore obtient
+  exactement le comportement d'avant ;
+- **absent ou vide ⇒ profil par défaut** (`publicv4`, sauf `--default-profile`) ;
+- **profil inconnu, indisponible, ou en désaccord avec celui déjà fixé sur cette
+  jambe ⇒ échec** (`xmlerror`), jamais un repli silencieux : un repli enverrait
+  le média par la mauvaise interface sans que rien ne le dise, et le contrôleur
+  ne pourrait pas retomber sur un autre profil ;
+- **le profil se fixe une fois par jambe** : `EndpointStartSending` et
+  `EndpointStartReceiving` doivent porter le même (le répéter est un no-op). En
+  RTP symétrique la socket est la même dans les deux sens, et la relier en cours
+  d'appel changerait le port publié dans le SDP ;
+- **poser le profil avant de publier le port** : le serveur l'applique au moment
+  du `Start*` qui le porte, et c'est ce qui alloue le port rendu par
+  `EndpointStartReceiving`.
+
+`EndpointGetMediaCandidates` suit le profil de la jambe : l'URL rendue porte
+l'adresse annoncée du profil, et un littéral IPv6 y est **encadré de crochets**
+(RFC 3986 §3.2.2) — jamais dans un `c=` ni un `a=candidate:`, où les champs sont
+séparés par des espaces.
+
+> Un `internalv4` ne peut être demandé que si `--internal-ip` a été donné au
+> démarrage : le serveur ne devine pas ses réseaux. Pour savoir ce qui est
+> disponible, **le demander au serveur** plutôt que de le déclarer côté
+> contrôleur — l'API d'introspection est l'étape 7 du chantier (`ipv6.md` §14.4).
+
 
 ### 6.8 Audio mixers
 

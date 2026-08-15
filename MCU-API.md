@@ -143,8 +143,9 @@ CreateConference(tag, vad, rate, queueId)  → confId
 CreateMosaic(confId, comp, size)       → mosaicId
 CreateParticipant(confId, name, type, mosaicId, sidebarId) → partId
 SetAudioCodec / SetVideoCodec / SetTextCodec …
-StartReceiving(confId, partId, media, rtpMap, role, proto)  → recvPort, ip
-StartSending(confId, partId, media, ip, port, rtpMap, role)
+StartReceiving(confId, partId, media, rtpMap, role, proto, offer, profile)
+                                                    → recvPort, ip, fmtpByPt
+StartSending(confId, partId, media, ip, port, rtpMap, role, profile)
 AddMosaicParticipant(confId, mosaicId, partId)
 …                                      (conférence active)
 DeleteParticipant(confId, partId)
@@ -731,9 +732,11 @@ numériques** (en chaîne) et les **valeurs les identifiants de codec** (int).
 
 #### `StartReceiving`
 Ouvre la réception RTP d'un média, alloue un port local, et **négocie les codecs**.
-- **Params** `(iiiSiiS)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
+- **Params** `(iiiSiiSs)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
   `rtpMap` (struct PT→codec), `role` (`MediaRole`), `proto`
-  (`MediaFrame::MediaProtocol`), `offer` (struct, voir ci-dessous).
+  (`MediaFrame::MediaProtocol`), `offer` (struct, voir ci-dessous),
+  `profile` (chaîne, **profil d'adressage**, voir §6.7 bis).
+- **Params** (sans profile) `(iiiSiiS)` : idem, profil par défaut.
 - **Params** (sans offer) `(iiiSii)` : idem, pas d'entrée distante — le serveur
   annonce alors sa propre configuration.
 - **Params** (sans proto) `(iiiSi)` : idem, `proto` = TCP (3).
@@ -792,10 +795,58 @@ serveur.
 - `returnVal[0]` **reste le port** et `returnVal[1]` l'adresse : un client qui ne lit
   que l'index 0 (le `XmlRpcMcuClient` Java) ou les index 0-1 (un contrôleur pré-P8a)
   est inchangé. Les ajouts se font en fin de tableau, jamais par déplacement.
-- `ip` est toujours renseignée : le serveur ne démarre pas sans (§1).
+- `ip` est toujours renseignée : le serveur ne démarre pas sans (§1). C'est
+  l'adresse annoncée du **profil d'adressage de cette jambe** — identique à
+  l'adresse globale tant que le contrôleur n'en demande pas d'autre.
 - Échoue désormais (enveloppe `xmlerror`) quand le serveur n'a pas pu ouvrir la
   réception — il renvoyait auparavant `returnCode: 1` avec un port `0`, que le
   contrôleur annonçait tel quel.
+
+### 6.7 bis Profils d'adressage (`profile`)
+
+Le serveur peut porter jusqu'à **quatre adresses**, et c'est le contrôleur qui dit
+laquelle employer, **appel par appel** :
+
+| Profil | Côté | Famille |
+|---|---|---|
+| `publicv4` | publique (extérieur) | IPv4, éventuellement **nattée** |
+| `publicv6` | publique | IPv6, jamais nattée |
+| `internalv4` | interne (réseau de service) | IPv4, **RFC 1918 exigée** |
+| `internalv6` | interne | IPv6, ULA ou unicast global |
+
+Chaque profil porte **deux adresses** : celle que le serveur **lie** (donc
+l'interface qu'il emprunte) et celle qu'il **annonce** (la ligne `c=` du SDP).
+Elles ne diffèrent que pour `publicv4` derrière NAT. C'est ce qui rend un
+déploiement natté descriptible : on ne peut pas annoncer une adresse qu'on ne peut
+pas lier. Configuration côté serveur : `--public-ip`, `--nat`, `--internal-ip`,
+`--default-profile` (voir `ipv6.md` §14.2).
+
+Règles du contrat, dans les deux API :
+
+- **paramètre facultatif, en fin de liste.** XML-RPC est positionnel : c'est la
+  seule position qui ne casse aucun appelant. Un contrôleur qui l'ignore obtient
+  exactement le comportement d'avant ;
+- **absent ou vide ⇒ profil par défaut**, `publicv4` sauf si le serveur a été
+  démarré avec `--default-profile` ;
+- **profil inconnu, indisponible, ou en désaccord avec celui déjà fixé sur cette
+  jambe ⇒ échec** (`xmlerror`), jamais un repli silencieux. Un repli enverrait le
+  média par la mauvaise interface, et rien ne le dirait avant que le pair ne
+  constate l'absence de son ⇒ le contrôleur doit pouvoir **retomber sur un autre
+  profil**, ce qu'il ne peut pas faire si on lui a répondu « d'accord » ;
+- **le profil se fixe une fois par jambe.** En RTP symétrique la socket est la
+  même dans les deux sens : `StartSending` et `StartReceiving` doivent porter le
+  même profil (le second appel avec le même profil est un no-op). En demander un
+  autre en cours d'appel voudrait dire relier la socket sous le média — le port
+  publié dans le SDP changerait sans que le pair en sache rien ;
+- **poser le profil AVANT de publier le port.** Le serveur applique le profil au
+  moment du `Start*` qui le porte, et c'est ce qui alloue le port rendu par
+  `StartReceiving`.
+
+> **Note d'implémentation.** Un `internalv4` ne peut être demandé que si
+> `--internal-ip` a été donné au démarrage : le serveur ne devine pas ses réseaux.
+> Pour savoir ce qui est disponible, le contrôleur doit **le demander au serveur**
+> plutôt que de le déclarer de son côté — l'API d'introspection est l'étape 7 du
+> chantier (`ipv6.md` §14.4).
 
 #### `StopReceiving`
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
@@ -825,11 +876,16 @@ Miroir de `EndpointStartRTPTimeout` côté JSR-309.
 
 #### `StartSending`
 Ouvre l'émission RTP d'un média vers une destination.
-- **Params** `(iiisiSi)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
+- **Params** `(iiisiSis)` : `confId`, `partId`, `media` (`MediaFrame::Type`),
   `sendIp` (IP de destination), `sendPort` (port), `rtpMap` (struct PT→codec),
-  `role` (`MediaRole`).
+  `role` (`MediaRole`), `profile` (chaîne, **profil d'adressage**, §6.7 bis).
+- **Params** (sans profile) `(iiisiSi)` : idem, profil par défaut.
 - **Params** (sans role) `(iiisiS)` : idem, `role` = VIDEO_MAIN.
 - **Retour** : vide.
+
+`sendIp` accepte désormais un littéral **IPv4 ou IPv6** — la chaîne traverse
+l'API sans être interprétée, c'est la couche transport qui la résout. `0.0.0.0`
+**et** `::` valent tous deux la demande de latch (§ NAT).
 
 #### `StopSending`
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.

@@ -1491,15 +1491,29 @@ xmlrpc_value* StartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	int role;
 	int sendPort;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiisiSi)", &confId,&partId,&media,&sendIp,&sendPort,&rtpMap,&role);
-	
-	
+	//Profil d'adressage (§14 d'ipv6.md) : DERNIER parametre, et facultatif.
+	//Absent => profil par defaut, soit exactement le comportement d'avant.
+	//XML-RPC est positionnel : la fin de liste est la seule place qui ne casse
+	//aucun appelant.
+	const char *profile = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiisiSis)", &confId,&partId,&media,&sendIp,&sendPort,&rtpMap,&role,&profile);
+
+	if (env->fault_occurred)
+	{
+	    // Try without the addressing profile (controleur anterieur)
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    profile = NULL;
+	    xmlrpc_parse_value(env, param_array, "(iiisiSi)", &confId,&partId,&media,&sendIp,&sendPort,&rtpMap,&role);
+	}
+
 	if (env->fault_occurred)
 	{
 	    // Try without role argument
 	    xmlrpc_env_clean(env);
 	    xmlrpc_env_init(env);
 	    role = MediaFrame::VIDEO_MAIN;
+	    profile = NULL;
 	    xmlrpc_parse_value(env, param_array, "(iiisiS)", &confId,&partId,&media,&sendIp,&sendPort,&rtpMap);
 	
 	}
@@ -1536,6 +1550,17 @@ xmlrpc_value* StartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 		//Obtenemos la referencia
 	if(!mcu->GetConferenceRef(confId,conf))
 		return xmlerror(env,"Conference does not exist");
+
+	//Profil d'adressage d'abord : il decide de l'adresse liee, donc de
+	//l'interface d'emission. Un profil inconnu, indisponible, ou en desaccord
+	//avec celui deja fixe sur cette jambe est un ECHEC — retomber en silence sur
+	//le defaut emettrait par la mauvaise interface, et personne ne le verrait
+	//avant l'absence de media chez le pair.
+	{
+		std::string error;
+		if (!conf->SetAddressProfile(partId,(MediaFrame::Type)media,profile,error,(MediaFrame::MediaRole)role))
+			return xmlerror(env,(char*)error.c_str());
+	}
 
 	//La borramos
 	int res = conf->StartSending(partId,(MediaFrame::Type)media,sendIp,sendPort,map,(MediaFrame::MediaRole)role);
@@ -2027,7 +2052,18 @@ MCU *mcu = (MCU *)user_data;
 	//pour que le negociateur puisse en demander plus sans un enieme parametre
 	//positionnel et son repli de signature.
 	xmlrpc_value *offer = NULL;
-	xmlrpc_parse_value(env, param_array, "(iiiSiiS)", &confId,&partId,&media,&rtpMap,&role,&proto,&offer);
+	//Profil d'adressage (§14 d'ipv6.md) : DERNIER parametre, facultatif.
+	const char *profile = NULL;
+	xmlrpc_parse_value(env, param_array, "(iiiSiiSs)", &confId,&partId,&media,&rtpMap,&role,&proto,&offer,&profile);
+
+	if (env->fault_occurred)
+	{
+	    // Try without the addressing profile (controleur anterieur)
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    profile = NULL;
+	    xmlrpc_parse_value(env, param_array, "(iiiSiiS)", &confId,&partId,&media,&rtpMap,&role,&proto,&offer);
+	}
 
 	if (env->fault_occurred)
 	{
@@ -2035,6 +2071,7 @@ MCU *mcu = (MCU *)user_data;
 	    xmlrpc_env_clean(env);
 	    xmlrpc_env_init(env);
 	    offer = NULL;
+	    profile = NULL;
 	    xmlrpc_parse_value(env, param_array, "(iiiSii)", &confId,&partId,&media,&rtpMap,&role,&proto);
 	}
 
@@ -2045,6 +2082,7 @@ MCU *mcu = (MCU *)user_data;
 	    xmlrpc_env_init(env);
 	    proto = MediaFrame::TCP;
 	    offer = NULL;
+	    profile = NULL;
 		xmlrpc_parse_value(env, param_array, "(iiiSi)", &confId,&partId,&media,&rtpMap,&role);
 
 	}
@@ -2119,6 +2157,15 @@ MCU *mcu = (MCU *)user_data;
 
 	//La borramos. `negotiatedFmtp` non NULL demande la variante negociee : la map
 	//installee est la map FILTREE, et `map` est reecrite avec elle.
+	//Profil d'adressage AVANT d'ouvrir la reception : c'est lui qui decide de
+	//l'adresse liee, donc du port publie juste apres — le relier ensuite
+	//changerait un port que le controleur aurait deja mis dans son SDP.
+	{
+		std::string error;
+		if (!conf->SetAddressProfile(partId,(MediaFrame::Type)media,profile,error,(MediaFrame::MediaRole)role))
+			return xmlerror(env,(char*)error.c_str());
+	}
+
 	std::map<int,std::string> negotiatedFmtp;
 	int recVideoPort = conf->StartReceiving(partId,(MediaFrame::Type)media,map,(MediaFrame::MediaRole)role,confId,(MediaFrame::MediaProtocol)proto,
 	                                        &offerFmtp,&negotiatedFmtp);
@@ -2132,7 +2179,12 @@ MCU *mcu = (MCU *)user_data;
 	//d'équivalent de GetMediaCandidates, si bien que le contrôleur devait la tenir
 	//dans sa propre configuration — dupliquée, et fausse dès que le serveur bougeait.
 	//Elle est ici la même que celle des candidats JSR-309, réglée par --public-ip.
-	const char* announcedIp = RTPSession::GetAnnouncedIp();
+	//Adresse du PROFIL de cette jambe : la meme que l'adresse globale tant que
+	//le controleur n'en demande pas d'autre, celle du profil sinon (NATee s'il y
+	//a lieu). Une seule source, toujours celle du serveur.
+	const IPAddress announced = conf->GetAnnouncedAddress(partId,(MediaFrame::Type)media,(MediaFrame::MediaRole)role);
+	const std::string announcedStr = announced.IsSet() ? announced.ToString() : std::string(RTPSession::GetAnnouncedIp());
+	const char* announcedIp = announcedStr.c_str();
 
 	//Garde-fou : main() refuse de démarrer sans adresse annonçable, donc ceci ne
 	//peut arriver que depuis un point d'entrée qui aurait sauté ce contrôle.

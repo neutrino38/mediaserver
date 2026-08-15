@@ -1008,6 +1008,25 @@ int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
 	return endpoint->StopSending(media);
 }
 
+bool MediaSession::EndpointSetAddressProfile(int endpointId,MediaFrame::Type media,const char* profile,std::string& error)
+{
+	//Rien demandé : profil par défaut, rien à verrouiller.
+	if (!profile || !*profile)
+		return true;
+
+	std::lock_guard<std::mutex> lock(mutex);
+
+	Endpoints::iterator it = endpoints.find(endpointId);
+
+	if (it==endpoints.end())
+	{
+		error = "endpoint inconnu";
+		return false;
+	}
+
+	return it->second->SetAddressProfile(media,profile,error);
+}
+
 int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut,
                                          const std::map<int,std::string>* offerFmtp)
 {

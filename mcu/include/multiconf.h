@@ -118,6 +118,11 @@ public:
 
 	int GetMosaicPositions(int mosaicId,std::list<int> &positions);
 	
+	//Profil d'adressage demandé par le contrôleur pour une jambe (§14 de
+	//ipv6.md). À appeler AVANT StartSending/StartReceiving, qui publient le port.
+	int SetAddressProfile(int partId,MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//Adresse à publier dans le SDP pour cette jambe.
+	IPAddress GetAnnouncedAddress(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StartSending(int partId,MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int StopSending(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//P8a : `offerFmtp` (fmtp de l'offre par PT) et `negotiatedFmtpOut` (fmtp par PT
