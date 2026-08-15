@@ -35,6 +35,26 @@ existe déjà et n'est pas touché.
    sont ceux que le témoin tranche ligne à ligne (§3.1, §3.4). Aucun réglage,
    aucune modernisation de l'AIMD sur ce chemin : il devient le dernier barreau
    (§5.1), pas le futur.
+
+   > **Pourquoi réparer un algorithme qu'on va remplacer.** Il y a deux
+   > estimateurs dans ce plan, pas un. Le neuf (lot 6, côté émission) sera un
+   > **trendline** — aucune ligne de Kalman ne sera écrite dans du code neuf.
+   > L'ancien (Kalman côté réception, celui du lot 1) ne meurt pas pour
+   > autant : il devient le **dernier barreau de l'échelle**, exactement comme
+   > chez libwebrtc 2026, où `overuse_estimator.cc` est toujours compilé et
+   > instancié par défaut pour les pairs sans transport-cc — un pair SIP qui
+   > n'offre que `ccm tmmbr` n'aura jamais que ce chemin, chez nous comme chez
+   > Google. Et il fallait le réparer *avant* tout le reste, pour trois
+   > dépendances concrètes : le **lot 2** va émettre le feedback par défaut,
+   > or émettre l'estimation d'avant-lot-1 — 1,28 Gb/s constant — en TMMBR
+   > serait dire « fonce » à un pair qui sature le lien, activement nuisible ;
+   > le **lot 3** doit mesurer une boucle, et on ne mesure pas des NaN ; le
+   > **lot 5** propage cette estimation entre pattes. La frontière tenue au
+   > lot 1 : corrections **mécaniques** tranchées par le témoin et constantes
+   > recopiées telles quelles (~50 lignes, chacune gardée par un test) — mais
+   > ni trendline en réception, ni `LinkCapacityEstimator` à la place des
+   > régions, ni réglage au jugé : investir dans ce côté-là du problème serait
+   > précisément l'erreur que la §5.1 du diagnostic nomme.
 3. **La mesure (lot 3) est un portillon.** Le lot 6 (estimateur émetteur) ne se
    conçoit pas avant d'avoir vu le chemin réparé réagir à un vrai `tc netem`.
    Les lots 4 et 5, eux, n'en dépendent pas : rapporter des arrivées et amortir
