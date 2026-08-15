@@ -430,6 +430,34 @@ La couche C++ `mcu/src/bfcp/` ne manipule aucune adresse. **Coût faible** — c
 la victoire rapide du chantier, et elle valide le motif `sockaddr_storage` sur du
 code déjà en production.
 
+> **Fait le 2026-08-15** (sous-module `third_party/libbfcp`). Le défaut d'écoute
+> est `::` en `AF_INET6`, avec `IPV6_V6ONLY=0` posé avant le `bind` — les clients
+> v4 continuent d'être servis, ils arrivent mappés. Le `sockaddr_in out_addr` mort
+> de `EntryPoint` est supprimé. Cinq tests actifs (`BfcpDualStack`,
+> `mcu/tests/test_bfcp_dualstack.cpp`) vérifient par `getsockname` **ce à quoi la
+> socket est réellement liée**, pas ce que la bibliothèque en dit.
+>
+> **Trois bugs réels trouvés en chemin, sans rapport avec IPv6** — la même figure
+> qu'au §11 :
+>
+> 1. `Client2ServerInfo::SetAddress` passait la `sockaddr` **entière** à
+>    `inet_pton`, qui déposait donc les octets de l'adresse à l'offset 0, sur
+>    `sa_family` et `sin_port` — que les deux lignes suivantes réécrivaient
+>    aussitôt. `sin_addr` restait à zéro : **toute adresse donnée sous forme de
+>    chaîne valait 0.0.0.0**, silencieusement. Invisible sur un bind local
+>    (`INADDR_ANY` fonctionne), fatal sur une destination UDP. Aucun accesseur ne
+>    le montrait, `getLocalAdress()` renvoyant la chaîne d'entrée et non l'état —
+>    d'où des tests qui lisent la socket.
+> 2. `setRemoteEndpoint` **ignorait le résultat** de la conversion et rendait
+>    toujours `true` : une adresse illisible était acceptée, la destination
+>    restant celle d'avant.
+> 3. L'envoi UDP passait `m_addrlen` — la longueur de l'adresse **locale** — à
+>    `sendto` pour une destination **distante**. Sans conséquence tant que tout
+>    était v4 (16 octets des deux côtés) ; une destination v6 aurait été tronquée.
+>
+> Plus un défaut du constructeur de copie (`m_remoteAddressStr` recevait
+> `m_remoteAddressAndPort`).
+
 ### 5.5 Côté Java
 
 **`jsr309impl/src/org/murillo/mscontrol/networkconnection/SdpPortManagerImpl.java`** :
@@ -469,7 +497,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | # | Zone | Effort | Dépend de | Gain | État |
 |---|---|---|---|---|---|
 | 0 | Type d'adresse commun `IPAddress`/`IPEndpoint` (§13, §14.5) | moyen | — | supprime `inet_addr`/`inet_ntoa`/`in_addr_t` du vocabulaire ; socle de tout le reste | **fait** (`556233d`) |
-| 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | 0 | valide le motif sur du code réel | à faire |
+| 1 | `libbfcp` : défaut dual-stack (§5.4) | faible | 0 | valide le motif sur du code réel ; **3 bugs réels trouvés en chemin** | **fait** |
 | 2 | Débordement `char url[50]` (§2.3) | faible | — | **corrigeait un bug présent, hors IPv6** | **fait** (§11) |
 | 3 | Prédicats `RTPSession` : `HasRemote()`, `SameAddr()`, `IsPrivate()` (§1.1, §1.5) | moyen | 0 | refactor à comportement constant ; rend la suite mécanique | à faire |
 | 4 | Table des profils d'adressage + CLI `--public-ip`/`--nat`/`--private-ip` (§14.1, §14.2) | moyen | 0 | le serveur SAIT ce qu'il peut annoncer, et le dit | à faire |
