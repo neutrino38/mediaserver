@@ -66,7 +66,7 @@
 #include "rtp.h"
 #include "rtpsession.h"
 #include "rtmpserver.h"
-#include "stunmessage.h"
+#include "medkit/stunmessage.h"
 #include "websocketserver.h"
 #include "../src/jsr309/Endpoint.h"
 

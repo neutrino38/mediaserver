@@ -244,6 +244,34 @@ ID** — alors que le code actuel n'XORe que sur le cookie (l. 372-375).
 Toute correction doit être faite deux fois, ou le doublon supprimé — comme l'a été
 `mcu/src/red.cpp` lors des tests libmedikit.
 
+> **Fait les 2026-08-15** (étapes 5 et 9).
+>
+> `XOR-MAPPED-ADDRESS` puis `MAPPED-ADDRESS` lisent désormais la famille **dans
+> la sockaddr** au lieu de la coder en dur, et écrivent 16 octets en v6 avec le
+> XOR étendu au transaction ID. La signature publique reste `sockaddr_in*` — une
+> surcharge `const sockaddr*` s'y ajoute — parce que `sa_family` et `sin_family`
+> occupent le même offset : aucun appelant n'a eu à changer.
+>
+> **LE DOUBLON EST SUPPRIMÉ, ET DANS LE SENS INVERSE DE CELUI QU'ON CROIT.** La
+> copie de libmedikit était **morte** : elle n'était dans aucun `OBJS`, elle
+> incluait un `crc32calc.h` que le sous-module ne possède pas (donc elle
+> n'aurait pas compilé), et elle portait encore l'appel `HMAC()` déprécié
+> d'OpenSSL 1. C'est donc la version du mcu — vivante, portée sur OpenSSL 3 et
+> désormais v6 — qui a été **rapatriée dans le sous-module**, avec `crc32calc`
+> dont le FINGERPRINT STUN est l'unique appelant. `mcu/src/stunmessage.cpp`,
+> `mcu/include/stunmessage.h`, `mcu/src/crc32calc.cpp` et
+> `mcu/include/crc32calc.h` sont supprimés ; le mcu consomme
+> `medkit/stunmessage.h` et l'objet vient de `libmedkit.a`. Il n'y a plus qu'une
+> implémentation de STUN dans le produit.
+>
+> **L'adresse annoncée n'a rien à faire dans XOR-MAPPED, vérification faite.**
+> L'attribut d'une *réponse* Binding décrit **l'expéditeur de la requête** vu par
+> nous (RFC 5389 §15.2), pas nous-mêmes : les deux appelants passent bien
+> `from_addr`. La règle du §14.5 — « ce qu'on publie porte l'adresse annoncée,
+> pas l'adresse de bind » — concerne les **candidats ICE**, traités à l'étape 6
+> via `Endpoint::GetMediaCandidates`. Rien à corriger ici, mais il fallait le
+> vérifier plutôt que le supposer.
+
 ---
 
 ## 2. API XML-RPC `StartSending` / `StartReceiving`
@@ -590,7 +618,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 6 | Contrat de contrôle : paramètre de profil dans `StartSending`/`StartReceiving`, MCU **et** JSR-309, + protos MOTELI (§2.2, §14.3) | moyen | 4, 5 | le contrôleur choisit sa famille et sa portée | **fait côté serveur** ; protos MOTELI à faire dans elixip |
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | **fait** |
 | 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | **fait** |
-| 9 | STUN v6 : famille + XOR sur 16 octets, et adresse **annoncée** dans XOR-MAPPED (§1.7, §14.5) | moyen | 5 | ICE complet en v6, et correct derrière NAT | **XOR-MAPPED fait** ; reste l'adresse annoncée derrière NAT |
+| 9 | STUN v6 : famille + XOR sur 16 octets, MAPPED-ADDRESS, et fin du doublon `stunmessage` (§1.7) | moyen | 5 | ICE complet en v6 | **fait** |
 | 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient`, `jsr309impl` (§5.5) | moyen | 6 | la couche JSR-309 suit | à faire |
 
 Les étapes 1, 3 et 8 restent **indépendantes du contrat de contrôle** : elles

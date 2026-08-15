@@ -71,7 +71,10 @@ JSR309OBJ=JSR309Event.o WSEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSes
 # Speex fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg AV_CODEC_ID_SPEEX). Repertoire mcu supprime.
 
 
-DOCSHARINGOBJ= stunmessage.o crc32calc.o remoteratecontrol.o uploadhandler.o http.o appmixer.o
+# stunmessage.o / crc32calc.o : fournis par libmedkit.a (medkit/stunmessage.h).
+# Le mcu en portait une copie, et libmedikit une autre — morte et perimee. Une
+# seule implementation desormais, dans le sous-module.
+DOCSHARINGOBJ= remoteratecontrol.o uploadhandler.o http.o appmixer.o
 
 MOTELIDIR=moteli
 MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o

@@ -23,7 +23,7 @@
 #include "rtp.h"
 #include "rtpsession.h"
 #include "ipaddress.h"
-#include "stunmessage.h"
+#include "medkit/stunmessage.h"
 extern "C" {
 #include <libavutil/base64.h>
 }

@@ -17,7 +17,7 @@
 #include "rtpbuffer.h"
 #include "remoteratecontrol.h"
 #include "fecdecoder.h"
-#include "stunmessage.h"
+#include "medkit/stunmessage.h"
 #include "remoterateestimator.h"
 #include "dtls.h"
 #include "ipaddress.h"

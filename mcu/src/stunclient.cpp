@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #include "log.h"
-#include "stunmessage.h"
+#include "medkit/stunmessage.h"
 #include "tools.h"
 
 /**

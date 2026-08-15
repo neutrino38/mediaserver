@@ -26,7 +26,7 @@
 #include <thread>
 
 #include "stunclient.h"
-#include "stunmessage.h"
+#include "medkit/stunmessage.h"
 
 namespace {
 
