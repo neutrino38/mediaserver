@@ -93,6 +93,11 @@ void RTMPChunkInputStream::StartChunkData()
 
 DWORD RTMPChunkInputStream::Parse(BYTE *data,DWORD size)
 {
+	//Aucun message ouvert (StartChunkData pas encore appele) : il n'y a rien a
+	//alimenter, et surtout rien a dereferencer.
+	if (!message)
+		//Rien consomme
+		return 0;
 	return message->Parse(data,size);
 }
 
@@ -104,7 +109,8 @@ RTMPMessage* RTMPChunkInputStream::GetMessage()
 {
 	RTMPMessage *ret = NULL;
 	//Check if it is parsed
-	if (message->IsParsed())
+	//IsParsed() (la methode du flux) teste deja le pointeur ; ici il manquait.
+	if (message && message->IsParsed())
 	{
 		//Return the parsed message
 		ret = message;
@@ -142,7 +148,9 @@ RTMPChunkOutputStream::~RTMPChunkOutputStream()
 
 	if (message)
 	{
-		delete(msgBuffer);
+		//msgBuffer vient de malloc (cf. GetNextChunk) : il se rend a free, pas
+		//a delete — les deux ne se melangent pas.
+		free(msgBuffer);
 		delete(message);
 	}
 	//Destroy mutex
@@ -303,9 +311,17 @@ DWORD RTMPChunkOutputStream::GetNextChunk(BYTE *data,DWORD size,DWORD maxChunkSi
 	if (payloadLen>length-pos)
 		//Just copy until the oend of the object
 		payloadLen = length-pos;
-	
+
+	//Le tampon de l'appelant borne ce qu'on peut y ecrire : ce qui ne tient pas
+	//partira dans le chunk suivant (type 3), pas derriere la fin du tampon.
+	if (headersLen>=size)
+		payloadLen = 0;
+	else if (payloadLen>size-headersLen)
+		payloadLen = size-headersLen;
+
 	//Copy
-	memcpy(data+headersLen,msgBuffer+pos,payloadLen);
+	if (payloadLen && msgBuffer)
+		memcpy(data+headersLen,msgBuffer+pos,payloadLen);
 
 	//Increase sent data from msg
 	pos += payloadLen;
@@ -363,8 +379,13 @@ bool RTMPChunkOutputStream::ResetStream(DWORD id)
 		RTMPMessage *msg = *it;
 		//Get message
 		if (msg && msg->GetStreamId()==id)
+		{
+			//La file POSSEDE ses messages : les retirer sans les detruire les
+			//faisait fuir a chaque reinitialisation de flux.
+			delete(msg);
 			//Remove it
 			it = messages.erase(it);
+		}
 		else
 			//next one;
 			 ++it;
