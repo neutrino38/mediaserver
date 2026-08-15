@@ -105,6 +105,8 @@ public:
     RTPPacket( MediaFrame::Type media, DWORD codec )
     {
         this->media = media;
+        //Paquet fabrique localement : coherent par construction
+        this->valid = true;
         //Set coced
         SetCodec( codec );
         //Get header pointer
@@ -134,6 +136,8 @@ public:
     RTPPacket( MediaFrame::Type media, BYTE *data, DWORD size )
     {
         this->media = media;
+        //Paquet RECU : c'est SetData qui dira s'il est exploitable
+        this->valid = false;
         //Get header pointer
         header = (rtp_hdr_t *)buffer;
         //Set Data
@@ -161,6 +165,8 @@ public:
     {
         this->media = media;
         this->codec = codec;
+        //Paquet fabrique localement : coherent par construction
+        this->valid = true;
         //Get header pointer
         header = (rtp_hdr_t *)buffer;
         //empty header
@@ -223,7 +229,10 @@ public:
     rtp_hdr_ext_t *GeExtensionHeader() const { return GetX() ? (rtp_hdr_ext_t *)(buffer + sizeof( rtp_hdr_t ) + 4 * header->cc) : NULL; }
     DWORD GetRTPHeaderLen() const { return sizeof( rtp_hdr_t ) + 4 * header->cc + GetExtensionSize(); }
     WORD GetExtensionType() const { return GeExtensionHeader()->ext_type; }
-    WORD GetExtensionLength() const { return GetX() ? htons( GeExtensionHeader()->len ) * 4 : 0; }
+    //DWORD, et non WORD : une extension peut annoncer 65535 mots, soit 262 140
+    //octets. Tronquer ce produit rendait la longueur annoncee incoherente avec
+    //celle qu'on verifie dans SetData.
+    DWORD GetExtensionLength() const { return GetX() ? (DWORD)ntohs( GeExtensionHeader()->len ) * 4 : 0; }
     const BYTE *GetExtensionData() const { return GetX() ? buffer + sizeof( rtp_hdr_t ) + 4 * header->cc + sizeof( rtp_hdr_ext_t ) : NULL; }
     DWORD GetExtensionSize() const { return GetX() ? GetExtensionLength() + sizeof( rtp_hdr_ext_t ) : 0; };
     DWORD GetCodec() const { return codec; }
@@ -274,17 +283,41 @@ public:
         return true;
     }
 
+    //Un paquet recu dont l'en-tete ne tient pas dans ce qui a ete recu est
+    //INEXPLOITABLE : GetMediaData() pointerait hors du tampon et
+    //GetMediaLength() passerait sous zero. Les appelants (RTPSession) doivent
+    //le jeter plutot que de le decoder.
+    bool IsValid() const { return valid; }
+
     bool SetData( BYTE *data, DWORD size )
     {
+        //Rien de lisible tant qu'on n'a pas prouve le contraire
+        valid = false;
+        len = 0;
         //Check
-        if( size > SIZE )
+        if( size > SIZE || size < sizeof( rtp_hdr_t ) )
             //Error
             return false;
         //Copy data
         memcpy( buffer, data, size );
+        //L'en-tete decrit sa propre longueur : `cc` CSRC de 4 octets, puis une
+        //extension dont la longueur est annoncee en mots de 32 bits (jusqu'a
+        //262 140 octets). Ce que le paquet ANNONCE doit tenir dans ce qu'on a
+        //RECU, sinon tout ce qui suit lit hors du tampon.
+        DWORD headerLen = sizeof( rtp_hdr_t ) + 4 * header->cc;
+        //L'en-tete d'extension lui-meme doit d'abord etre dans le tampon...
+        if( GetX() && headerLen + sizeof( rtp_hdr_ext_t ) > size )
+            //Error
+            return false;
+        //...apres quoi la longueur qu'il annonce est lisible sans risque
+        headerLen = GetRTPHeaderLen();
+        if( headerLen > size )
+            //Error
+            return false;
         //Set size
-        SetSize( size );
+        len = size - headerLen;
         //OK
+        valid = true;
         return true;
     }
 
@@ -325,6 +358,10 @@ private:
     DWORD len;
     rtp_hdr_t *header;
     HeaderExtension extension;
+    //Vrai tant que l'en-tete decrit un paquet coherent avec sa taille (cf. SetData).
+    //Un paquet FABRIQUE ici (les deux constructeurs sans donnees) l'est par
+    //construction ; seul un paquet RECU peut mentir.
+    bool valid;
 };
 
 class RTPPacketSched :

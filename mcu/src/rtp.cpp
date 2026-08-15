@@ -6,13 +6,19 @@
 
 void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 {
+	//Un paquet dont l'en-tete ne tient pas dans ce qui a ete recu n'a pas
+	//d'extension exploitable : la longueur annoncee y designe de la memoire
+	//qui n'a jamais ete recue.
+	if (!IsValid())
+		//Exit
+		return;
 	//Check extensions
 	if (GetX())
 	{
 		//Get extension data
 		const BYTE* ext = GetExtensionData();
 		//Get extesnion lenght
-		WORD length = GetExtensionLength();
+		DWORD length = GetExtensionLength();
 		//Read all
 		while (length)
 		{

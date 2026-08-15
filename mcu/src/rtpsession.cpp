@@ -2721,6 +2721,16 @@ int RTPSession::ReadRTP()
 		//Create normal packet
 		packet = new RTPTimedPacket(media,buffer,size);
 	}
+
+	//Un en-tete RTP decrit sa propre longueur (CSRC, extension) : si ce qu'il
+	//annonce ne tient pas dans le datagramme recu, tout ce qui suivrait lirait
+	//hors du tampon du paquet. On le jette ici, une fois, plutot que de le
+	//laisser traverser la chaine media.
+	if (!packet->IsValid())
+	{
+		delete(packet);
+		return Error("-RTP packet header does not fit in the received datagram [size:%d]\n",size);
+	}
 		//Set codec
 	packet->SetCodec(codec);
 	//Get ssrc
