@@ -465,8 +465,29 @@ public class XmlRPCJSR309Client {
 
     public boolean EndpointStartSending(int sessId,int endpointId,Codecs.MediaType media,String sendIp,int sendPort,HashMap<Integer,Integer> rtpMap) throws XmlRpcException
     {
-        //Create request
-        Object[] request = new Object[]{sessId,endpointId,media.valueOf(),sendIp,sendPort,rtpMap};
+        //Sans profil d'adressage : celui par defaut du serveur, soit exactement
+        //le comportement d'avant.
+        return EndpointStartSending(sessId,endpointId,media,sendIp,sendPort,rtpMap,null);
+    }
+
+    /**
+     * Ouvre l'emission RTP vers une destination, sur un PROFIL D'ADRESSAGE donne.
+     *
+     * <p>{@code profile} vaut "publicv4", "publicv6", "internalv4",
+     * "internalv6", ou {@code null} pour le defaut du serveur. Il decide de
+     * l'interface d'emission et de l'adresse annoncee. Un profil inconnu,
+     * indisponible, ou en desaccord avec celui deja fixe sur cette jambe fait
+     * ECHOUER l'appel : le serveur ne retombe pas en silence sur le defaut, ce
+     * qui emettrait par la mauvaise interface sans que rien ne le dise.</p>
+     */
+    public boolean EndpointStartSending(int sessId,int endpointId,Codecs.MediaType media,String sendIp,int sendPort,HashMap<Integer,Integer> rtpMap,String profile) throws XmlRpcException
+    {
+        //Create request. Le profil est le DERNIER parametre, et n'est envoye
+        //que s'il est demande : XML-RPC etant positionnel, un serveur anterieur
+        //rejetterait une liste plus longue qu'il ne connait.
+        Object[] request = (profile==null || profile.isEmpty())
+            ? new Object[]{sessId,endpointId,media.valueOf(),sendIp,sendPort,rtpMap}
+            : new Object[]{sessId,endpointId,media.valueOf(),sendIp,sendPort,rtpMap,profile};
         //Execute
         HashMap response = (HashMap) client.execute("EndpointStartSending", request);
         //Return
@@ -506,14 +527,52 @@ public class XmlRPCJSR309Client {
     
     public Integer EndpointStartReceiving(int sessId,int endpointId,Codecs.MediaType media,HashMap<Integer,Integer> rtpMap) throws XmlRpcException
     {
-        //Create request
-        Object[] request = new Object[]{sessId,endpointId,media.valueOf(),rtpMap};
+        //Sans profil d'adressage : celui par defaut du serveur.
+        return EndpointStartReceiving(sessId,endpointId,media,rtpMap,null);
+    }
+
+    /**
+     * Ouvre la reception RTP d'un media sur un PROFIL D'ADRESSAGE donne.
+     *
+     * <p>Memes valeurs et memes regles que {@link #EndpointStartSending}. Le
+     * profil decide de l'adresse liee — donc du port rendu ici — et de
+     * l'adresse annoncee dans les candidats.</p>
+     *
+     * <p>A poser AVANT que le controleur ne publie le port dans son SDP : le
+     * serveur relie ses sockets au moment de cet appel, et le port en change.</p>
+     */
+    public Integer EndpointStartReceiving(int sessId,int endpointId,Codecs.MediaType media,HashMap<Integer,Integer> rtpMap,String profile) throws XmlRpcException
+    {
+        //Create request : offer (5e parametre) doit etre present pour que le
+        //profil, qui le suit, soit a la bonne position. Une struct vide vaut
+        //« pas d'offre distante », ce que le serveur traite deja.
+        Object[] request = (profile==null || profile.isEmpty())
+            ? new Object[]{sessId,endpointId,media.valueOf(),rtpMap}
+            : new Object[]{sessId,endpointId,media.valueOf(),rtpMap,new HashMap<String,Object>(),profile};
         //Execute
         HashMap response = (HashMap) client.execute("EndpointStartReceiving", request);
         //Get result
         Object[] returnVal = (Object[]) response.get("returnVal");
         //Return port
         return (Integer)returnVal[0];
+    }
+
+    /**
+     * Les profils d'adressage que le serveur peut employer.
+     *
+     * <p>A INTERROGER plutot qu'a recopier : un profil indisponible est refuse
+     * a l'appel, donc il faut savoir AVANT ce qu'on peut demander — et une
+     * liste tenue des deux cotes derive. Chaque entree porte {@code name},
+     * {@code available}, {@code announced}, {@code bind} et {@code default}.</p>
+     */
+    public Object[] GetNetworkProfiles() throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{};
+        //Execute
+        HashMap response = (HashMap) client.execute("GetNetworkProfiles", request);
+        //Get result
+        return (Object[]) response.get("returnVal");
     }
     
     public boolean EndpointStopReceiving(int sessId,int endpointId,Codecs.MediaType media) throws XmlRpcException

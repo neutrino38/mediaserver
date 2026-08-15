@@ -583,6 +583,43 @@ code déjà en production.
 `Inet4Address.getByName(...)` lève sur une adresse v6. Toute la logique de
 sous-réseau est à généraliser en `InetAddress` + longueur de préfixe variable.
 
+> **Fait le 2026-08-15** (étape 10) — avec une réserve à lire avant de relire le
+> code : **rien de tout ceci n'est compilé sur cette machine**. Il n'y a qu'un
+> JRE (`java` 21), pas de JDK ni d'`ant` : `javac` n'existe pas ici. Les
+> changements Java ont donc été relus, pas vérifiés par un compilateur. Ils sont
+> à bâtir avant toute mise en service.
+>
+> **`SubNetInfo`** est réécrit : il raisonnait en **entier 32 bits** — lecture par
+> `Inet4Address.getByName()`, qui LÈVE sur une v6, et préfixe calculé par
+> décalage sur un `int`. Une adresse v6 fait 128 bits, aucune des deux hypothèses
+> ne survit. La comparaison se fait maintenant **octet par octet**, ce qui vaut
+> pour 4 comme pour 16. Une règle qui n'existait pas y est posée : **deux
+> familles différentes ne se contiennent jamais**. `isPrivate` couvre en plus les
+> plages qui manquaient — 100.64/10 (RFC 6598) et 169.254/16 côté v4, ULA
+> `fc00::/7`, link-local `fe80::/10` et `::1` côté v6.
+>
+> **`SdpPortManagerImpl`** : le type d'adresse **suit l'adresse** à la génération
+> (`IN IP4` / `IN IP6`, RFC 4566 §5.7), et l'analyse reconnaît les deux — les
+> `indexOf("\r\nc=IN IP4 ")` littéraux ne **voyaient tout simplement pas** un
+> SDP en v6. La convention de latch suit la famille : `::` en v6 là où le code
+> écrivait `0.0.0.0`.
+>
+> **Un défaut préexistant corrigé au passage** : quand aucune ligne `c=` n'était
+> trouvée, `indexOf` rendait −1 et le `substring(i+11, j)` qui suivait partait de
+> l'octet 10 — l'« adresse » obtenue était un morceau de la ligne `o=`, propagé
+> jusqu'au serveur média sans un mot. C'est maintenant une `SdpPortManagerException`.
+>
+> **`XmlRpcMcuClient` et `XmlRPCJSR309Client`** portent le paramètre de profil,
+> en **surcharges** : les appels existants de `jsr309impl` compilent sans
+> modification, et le profil n'est envoyé que s'il est demandé — XML-RPC étant
+> positionnel, une liste plus longue serait rejetée par un serveur antérieur.
+> `GetNetworkProfiles()` est exposée dans les deux clients.
+>
+> **Ce qui n'est PAS fait, et pourquoi** : `jsr309impl` ne demande aucun profil.
+> Choisir lequel pour quelle connexion est une décision de produit — elle
+> dépendrait d'une configuration par `MediaServer` que personne n'a spécifiée.
+> Le client sait le faire ; le brancher demande de savoir ce qu'on veut.
+
 **`sdp/`** : la bibliothèque d'analyse SDP **couvre déjà IPv6**. La grammaire ABNF
 définit `IP6-address` et `IP6-multicast` (`sdp/src/org/murillo/abnf/sdp.abnf`
 l. 110-144), et les règles générées existent (`Rule$IP6_address.java`,
@@ -619,7 +656,7 @@ profils du §14. Les étapes 2 et 3 de la liste d'origine sont faites.
 | 7 | Introspection : méthode « quels profils as-tu ? » (§14.4) | faible | 4 | **sans elle, le contrôleur devine — le défaut déjà payé sur les codecs** | **fait** |
 | 8 | Écoutes TCP : WebSocket, RTMP, TCPEndpoint, Abyss (§3, §5.1, §5.3) | moyen | 0 | les plans de contrôle passent en v6 | **fait** |
 | 9 | STUN v6 : famille + XOR sur 16 octets, MAPPED-ADDRESS, et fin du doublon `stunmessage` (§1.7) | moyen | 5 | ICE complet en v6 | **fait** |
-| 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient`, `jsr309impl` (§5.5) | moyen | 6 | la couche JSR-309 suit | à faire |
+| 10 | Java : `SdpPortManagerImpl`, `SubNetInfo`, `XmlRpcMcuClient` (§5.5) | moyen | 6 | la couche JSR-309 suit | **fait, NON COMPILÉ ici** |
 
 Les étapes 1, 3 et 8 restent **indépendantes du contrat de contrôle** : elles
 peuvent avancer sans elixip. Les étapes 6, 7 et 10 l'engagent — et l'étape 7 n'est
