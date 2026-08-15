@@ -322,8 +322,10 @@ TEST(IPAddressRange, LeMulticastNEstPasClasseNonRoutable)
 	EXPECT_TRUE(IPAddress::Parse("ff02::1").IsMulticast());
 }
 
-// L'ULA est l'analogue v6 du RFC 1918 — et c'est ELLE que `--internal-ip`
-// exigera du côté v6, comme IsPrivateV4 du côté v4.
+// L'ULA est l'analogue v6 du RFC 1918, mais elle N'EST PAS un critère de
+// configuration : `--internal-ip` accepte aussi l'unicast global en v6, parce
+// qu'un réseau interne v6 est le plus souvent numéroté dans une plage déléguée
+// (ipv6.md §14.2). Ce prédicat sert au diagnostic.
 TEST(IPAddressRange, UniqueLocalEstLAnalogueV6DuRFC1918)
 {
 	EXPECT_TRUE(IPAddress::Parse("fd00:1234::1").IsUniqueLocalV6());

@@ -238,10 +238,16 @@ public:
 	bool IsPrivateV4() const;
 
 	/**
-	 * IsUniqueLocalV6 — `fc00::/7` (RFC 4193), l'analogue v6 du RFC 1918 : une
-	 * adresse d'usage local, unique par construction, jamais annoncée à
-	 * l'Internet public. C'est le critère qu'applique `--internal-ip` du côté
-	 * v6, comme `IsPrivateV4()` l'applique du côté v4 (§14 de ipv6.md).
+	 * IsUniqueLocalV6 — `fc00::/7` (RFC 4193) : adresse d'usage local, unique
+	 * par construction, jamais annoncée à l'Internet public.
+	 *
+	 * C'est l'analogue v6 du RFC 1918, mais ATTENTION à ne pas en faire un
+	 * critère de configuration : un réseau interne IPv6 est le plus souvent
+	 * numéroté dans une plage GLOBALE déléguée par l'opérateur, son caractère
+	 * interne tenant au routage et au filtrage. `--internal-ip` accepte donc les
+	 * deux en v6 (§14.2 de ipv6.md) — contrairement à la v4, où trente ans de
+	 * NAT font qu'une adresse publique déclarée interne est une faute de frappe.
+	 * Ce prédicat sert au diagnostic et au journal, pas au refus.
 	 *
 	 * Elle n'ouvre AUCUN rattrapage NAT : il n'y a pas de NAT en v6.
 	 */

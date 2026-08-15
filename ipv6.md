@@ -714,7 +714,7 @@ Un **profil d'adressage** est le croisement de deux axes :
 |  | IPv4 | IPv6 |
 |---|---|---|
 | **publique** (côté extérieur) | profil `publicv4` — peut être **natté** | profil `publicv6` — **jamais natté** |
-| **interne** (réseau de service) | profil `internalv4` — **RFC 1918 exigée** | profil `internalv6` — **ULA exigée** |
+| **interne** (réseau de service) | profil `internalv4` — **RFC 1918 exigée** | profil `internalv6` — ULA **ou** unicast global (§14.2) |
 
 Chaque profil porte **deux adresses distinctes**, et c'est là tout l'intérêt :
 
@@ -768,16 +768,21 @@ démarrer qu'un serveur qui annonce une adresse fausse pendant six mois :
   172.16/12, 192.168/16, 100.64/10, 169.254/16) → refus. Une adresse publique
   déclarée comme interne serait annoncée à des pairs internes qui n'y ont rien à
   faire, et masquerait une erreur de configuration ;
-- `--internal-ip` **v6** hors de `fc00::/7` (`IsUniqueLocalV6()`, ULA RFC 4193) →
-  refus. C'est l'analogue direct, et **c'est le point où l'analogie v4 est la
-  moins solide** : en IPv6, un réseau interne d'entreprise est très souvent
-  numéroté en **unicast global** (une plage déléguée par l'opérateur) et protégé
-  par filtrage, précisément parce qu'il n'y a plus de NAT à motiver l'adressage
-  privé. L'ULA existe et sert exactement à cela (RFC 4193), mais elle n'est pas
-  l'usage dominant, et la préférence d'adresse de la RFC 6724 la traite à part.
-  **Exiger l'ULA est donc un choix strict, assumé** : il interdit le déploiement
-  « interne en GUA + pare-feu ». Si ce cas se présente, l'ouverture se fera par
-  une option explicite (`--allow-global-internal`), jamais en silence ;
+- `--internal-ip` **v6** : **aucune contrainte de plage**. ULA (`fc00::/7`) et
+  unicast global sont acceptées à égalité — seuls s'appliquent les contrôles
+  généraux ci-dessous (adresse réellement attachée, et annonçable). **Cette
+  asymétrie avec la v4 est délibérée**, et elle découle directement du §14.5 :
+  « interne » est une décision, « privée » est un fait. En IPv4, la décision
+  *coïncide* avec le fait — trente ans de NAT font qu'une adresse publique
+  déclarée interne est presque à coup sûr une faute de frappe, d'où le contrôle
+  RFC 1918. En IPv6, la coïncidence n'existe pas : un réseau interne est le plus
+  souvent numéroté dans **une plage globale déléguée par l'opérateur**, et son
+  caractère interne tient au **routage et au filtrage**, pas à l'adresse. Exiger
+  l'ULA reviendrait à réimporter le fait dans la décision — exactement ce que le
+  §14.5 sépare. `IsUniqueLocalV6()` reste utile en **diagnostic** (journaliser au
+  démarrage qu'un profil interne v6 est en unicast global rappelle à
+  l'exploitant que la protection repose entièrement sur son filtrage), jamais en
+  refus ;
 - `--nat` sans `--public-ip` v4 → refus ;
 - `--nat` avec une valeur v6, ou appliqué à un profil v6 → refus motivé ;
 - une adresse de bind qui **n'est attachée à aucune interface locale**
@@ -868,7 +873,7 @@ Trois prédicats en découlent, et les confondre coûterait cher :
 |---|---|---|
 | `IsPrivate()` | l'adresse est-elle **non routable** sur l'Internet public ? (registre IANA « special-purpose », RFC 6890 : RFC 1918, CGNAT, loopback, link-local, **documentation**, benchmarking, réservé, ULA, site-local déprécié) | diagnostic, garde-fous, refus de configuration |
 | `IsPrivateV4()` | l'adresse est-elle une **v4 privée au sens propre** (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16) ? | **la politique de rattrapage NAT** — c'est l'ancienne `IsRFC1918` |
-| `IsUniqueLocalV6()` | l'adresse est-elle une **ULA** (`fc00::/7`, RFC 4193) ? | le contrôle d'`--internal-ip` côté v6 |
+| `IsUniqueLocalV6()` | l'adresse est-elle une **ULA** (`fc00::/7`, RFC 4193) ? | diagnostic et journal — **pas** un contrôle : un profil interne v6 peut légitimement être en unicast global (§14.2) |
 
 `IsPrivateV4()` est un **sous-ensemble strict** d'`IsPrivate()`, et c'est là le
 piège : `192.0.2.1` est non routable (plage de documentation) et pourtant
