@@ -1,7 +1,7 @@
 /**
  * test_rtp_address_profile.cpp — profil d'adressage d'une session RTP.
  *
- * Étape 6 du chantier IPv6 (ipv6.md §14.3) : le contrôleur demande un profil
+ * Étape 6 du chantier IPv6 (MCU-API.md §6.7 bis) : le contrôleur demande un profil
  * dans StartSending/StartReceiving, le serveur en tire l'adresse à LIER (donc
  * l'interface) et l'adresse à ANNONCER (donc la ligne c= du SDP).
  *

@@ -118,8 +118,9 @@ public:
 
 	int GetMosaicPositions(int mosaicId,std::list<int> &positions);
 	
-	//Profil d'adressage demandé par le contrôleur pour une jambe (§14 de
-	//ipv6.md). À appeler AVANT StartSending/StartReceiving, qui publient le port.
+	//Profil d'adressage demandé par le contrôleur pour une jambe (voir
+	//NETWORK-CONFIGURATION.md). À appeler AVANT StartSending/StartReceiving, qui
+	//publient le port.
 	int SetAddressProfile(int partId,MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//Adresse à publier dans le SDP pour cette jambe.
 	IPAddress GetAnnouncedAddress(int partId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);

@@ -703,8 +703,9 @@ dit laquelle employer, **appel par appel** :
 Chaque profil porte **deux adresses** : celle que le serveur **lie** (donc
 l'interface qu'il emprunte) et celle qu'il **annonce** — la ligne `c=` du SDP et
 les candidats rendus par `EndpointGetMediaCandidates`. Elles ne diffèrent que
-pour `publicv4` derrière NAT. Configuration serveur : `--public-ip`, `--nat`,
-`--internal-ip`, `--default-profile` (`ipv6.md` §14.2).
+pour `publicv4` derrière NAT. **Configuration serveur** (`--public-ip`, `--nat`,
+`--internal-ip`, `--default-profile`, par cas d'usage) :
+`NETWORK-CONFIGURATION.md`.
 
 Règles du contrat, identiques à celles de l'API MCU (`MCU-API.md` §6.7 bis) :
 
@@ -731,8 +732,8 @@ séparés par des espaces.
 
 > Un `internalv4` ne peut être demandé que si `--internal-ip` a été donné au
 > démarrage : le serveur ne devine pas ses réseaux. Pour savoir ce qui est
-> disponible, **le demander au serveur** plutôt que de le déclarer côté
-> contrôleur — l'API d'introspection est l'étape 7 du chantier (`ipv6.md` §14.4).
+> disponible, **le demander au serveur** avec `GetNetworkProfiles` (§6.7 ter)
+> plutôt que de le déclarer côté contrôleur — une liste recopiée dérive.
 
 
 ### 6.8 Audio mixers
@@ -825,16 +826,15 @@ réponse à un `ExternalFIRRequestedEvent`.
   aussi **avant** `StartReceiving` (le port est déjà attribué à la création de
   l'endpoint). `url` vaut sans port (`"<proto>://<ip>"`) uniquement si le port n'est
   pas encore attribué (`0`).
-- L'**`ip`** est l'adresse annoncée **globale du serveur** : l'argument
-  `--public-ip`, à défaut le premier IPv4 non loopback du nom d'hôte (l'ancien
-  comportement, qui était le seul). Derrière un NAT, `--public-ip` est obligatoire —
-  sans lui le candidat porte l'adresse privée, injoignable par le pair. Un
+- L'**`ip`** est l'**adresse annoncée du profil d'adressage de la jambe** (§6.7 bis) —
+  à défaut de profil demandé, celle du profil par défaut. Un
   `Port::GetLocalMediaHost()` non nul (transports WebSocket) reste prioritaire sur
   cette adresse. La même valeur est renvoyée par le `StartReceiving` de l'API MCU
   (`MCU-API.md` §4), de sorte que les deux API annoncent nécessairement la même
-  adresse. Le serveur refuse de démarrer si aucune adresse n'est déterminable
-  (`readme.md`, *Adresse média annoncée*), donc `url` ne peut plus être `NULL`
-  faute d'adresse — seulement faute de média/protocole.
+  adresse. Le serveur refuse de démarrer si aucune adresse n'est déterminable, donc
+  `url` ne peut pas être `NULL` faute d'adresse — seulement faute de
+  média/protocole. Côté exploitation (NAT, réseau interne, ports) :
+  `NETWORK-CONFIGURATION.md`.
 - `ConfigureMediaConnection` : `token` d'association de la connexion,
   `expectedPayload` = payload attendu.
 

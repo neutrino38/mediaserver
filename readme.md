@@ -34,6 +34,15 @@ The mediaserver exposes three XML-RPC interfaces
 
 - other APIs are present but unmaintained.
 
+## Documentation
+
+| Document | Contenu |
+|---|---|
+| [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md) | **Configuration réseau, par cas d'usage** : IP publique portée par l'hôte, IP publique nattée 1:1, deux adresses (publique + interne). Ports à ouvrir, vérification, diagnostic. À lire avant tout déploiement. |
+| [MCU-API.md](MCU-API.md) | API XML-RPC MCU (conférences, participants, mosaïques) |
+| [xmlrpc_jsr309_api.md](xmlrpc_jsr309_api.md) | API XML-RPC JSR-309 |
+| [TEST.md](TEST.md) | Suite de tests du binaire `mcu` |
+
 
 ## Building
 
@@ -169,8 +178,8 @@ OPTIONS="--http-port 9090 --websocket-port 8100"
 > the foreground. `--mcu-pid` is likewise useless (systemd tracks the PID).
 
 > ⚠️ Behind a NAT, `--public-ip <ip>` is **mandatory** — without it the SDP
-> announces the private address and no media flows. See *Adressage*
-> below.
+> announces the private address and no media flows. See
+> [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md).
 
 After editing the unit or the sysconfig file, reload systemd:
 
@@ -213,103 +222,31 @@ mcu [-h|--help] [-f] [-d]
 | `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Non listé dans l'aide `--help`. |
 | `--min-rtp-port port` | `49152` | Borne basse de la plage de ports UDP allouée aux sessions RTP/RTCP. |
 | `--max-rtp-port port` | `65535` | Borne haute de la plage de ports RTP/RTCP. |
-| `--public-ip ip` | *(auto-détectée)* | Adresse du côté **extérieur** : liée si elle est attachée à l'hôte, annoncée dans le SDP (ligne `c=`, candidats ICE) pour les deux API de contrôle. IPv4 **ou IPv6**. **Obligatoire derrière un NAT.** Voir *Adressage* ci-dessous. |
-| `--nat ip\|auto` | *(aucun)* | Adresse publique vue de l'extérieur, quand `--public-ip` porte l'adresse **locale** d'un hôte natté (IPv4 seulement). `auto` la découvre par STUN et vérifie que le NAT est **1:1**. |
-| `--stun-server hôte[:port]` | `stun.l.google.com:19302` | Serveur interrogé par `--nat auto`. À poser sur son propre serveur en production. |
-| `--internal-ip ip` | *(aucune)* | Adresse du côté **interne** (réseau de service, mode SBC). Répétable, au plus une par famille ; en IPv4 elle doit être **RFC 1918**. |
+| `--public-ip ip` | *(auto-détectée)* | Adresse du côté **extérieur**, annoncée dans le SDP. IPv4 **ou IPv6**. **Obligatoire derrière un NAT.** |
+| `--nat ip\|auto` | *(aucun)* | Adresse publique vue de l'extérieur, quand `--public-ip` porte l'adresse **locale** d'un hôte natté (IPv4 seulement). `auto` la découvre par STUN. |
+| `--stun-server hôte[:port]` | `stun.l.google.com:19302` | Serveur interrogé par `--nat auto`. |
+| `--internal-ip ip` | *(aucune)* | Adresse du côté **interne** (réseau de service, mode SBC). **Restreint l'API de contrôle à cette adresse.** |
 | `--default-profile nom` | `publicv4` | Profil employé par un appel qui n'en demande aucun : `publicv4`, `publicv6`, `internalv4`, `internalv6`. |
 
-### Adressage : les quatre profils
+> 📖 **Ces cinq options se configurent ensemble, et le détail est dans un document
+> dédié : [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md).** Il procède par
+> cas d'usage — adresse publique portée par l'hôte, adresse publique nattée 1:1,
+> deux adresses (publique + interne) — et donne les ports à ouvrir, la
+> vérification au démarrage et le diagnostic des pannes de média.
 
-Le serveur peut porter jusqu'à **quatre adresses**, croisement de deux axes — le
-côté (**publique**, vers l'extérieur ; **interne**, réseau de service) et la
-famille (**IPv4**, **IPv6**) :
+### Adressage : le principe en dix lignes
 
-| Profil | Option | Contrainte |
-|---|---|---|
-| `publicv4` | `--public-ip <v4>` | peut être **nattée** (`--nat`) |
-| `publicv6` | `--public-ip <v6>` | jamais nattée — pas de NAT IPv6, par choix |
-| `internalv4` | `--internal-ip <v4>` | **RFC 1918 exigée**, et attachée à l'hôte |
-| `internalv6` | `--internal-ip <v6>` | ULA ou unicast global, attachée à l'hôte |
+Un serveur média manipule **deux adresses** : celle qu'il **lie** (portée par une
+carte de la machine, elle décide de l'interface d'émission) et celle qu'il
+**annonce** dans le SDP (celle que le correspondant utilisera pour lui envoyer le
+média). Elles sont identiques sur une machine directement exposée, et
+**différentes derrière un NAT** — confondre les deux est la panne de
+configuration la plus fréquente : l'appel s'établit, aucun média ne circule.
 
-Chaque profil porte **deux adresses distinctes**, et c'est tout l'intérêt :
-
-- l'adresse **liée** — réellement attachée à une interface. C'est elle que la
-  socket média lie, donc elle qui décide de l'interface empruntée ;
-- l'adresse **annoncée** — celle que le pair verra dans le SDP. Égale à la
-  précédente, **sauf** pour `publicv4` derrière NAT.
-
-Confondre les deux rend un déploiement natté indescriptible : on ne peut pas
-annoncer une adresse qu'on ne peut pas lier. C'est ce que faisait l'unique
-réglage global d'avant.
-
-**Le contrôleur choisit, appel par appel.** `StartSending`/`StartReceiving` (MCU)
-et `EndpointStartSending`/`EndpointStartReceiving` (JSR-309) acceptent un dernier
-paramètre facultatif `profile`. Absent, c'est le profil par défaut — donc le
-comportement d'un contrôleur qui ignore cette notion. Un profil inconnu ou
-indisponible est un **échec explicite**, jamais un repli silencieux : voir
-`MCU-API.md` §6.7 bis et `xmlrpc_jsr309_api.md` §6.7 bis.
-
-#### Sans aucune option : auto-détection
-
-Le serveur prend la première adresse annonçable de son nom d'hôte (`/etc/hosts`
-puis DNS, enregistrements **A et AAAA**, IPv4 préférée) et en fait son profil
-`publicv4`. Cette adresse **peut être une RFC 1918** : « publique » désigne ici le
-côté extérieur du serveur, pas la classe de l'adresse. **Aucune détection de NAT
-dans ce cas** — rien ne dit qu'il y en a un.
-
-L'auto-détection n'a lieu que si **ni `--public-ip` ni `--internal-ip`** n'est
-donné : dès que l'exploitant décrit son adressage, le serveur s'en tient à ce
-qu'il a dit. Si rien n'est déterminable, il **refuse de démarrer** — mieux vaut ne
-pas démarrer que servir des SDP injoignables appel après appel.
-
-#### Derrière un NAT
-
-```sh
-mediaserver --public-ip 192.168.1.10 --nat 203.0.113.12     # adresse publique connue
-mediaserver --public-ip 192.168.1.10 --nat auto             # découverte par STUN
-```
-
-`--nat auto` interroge un serveur STUN et **vérifie que le NAT est 1:1**. Ce n'est
-pas un luxe : le serveur annonce des **ports** RTP, et un NAT qui les translate
-rend faux tout ce qu'il publie — le pair émet vers un port que le routeur n'a
-jamais ouvert, et l'appel est muet. La sonde est faite **deux fois, depuis deux
-ports locaux différents** (une seule ne prouverait rien), et le démarrage échoue
-si les ports ne sont pas conservés, avec le détail observé.
-
-Réservé au cas qu'il sert : `--public-ip` doit porter une adresse **RFC 1918
-attachée à l'hôte**. Sur une adresse publique il n'y a rien à découvrir.
-
-#### Où le serveur écoute
-
-| Plan | Écoute | Famille |
-|---|---|---|
-| Média RTP/RTCP | `::` (toutes interfaces), ou l'adresse du profil demandé | dual-stack, ou celle du profil |
-| RTMP, WebSocket, TCPEndpoint | `::` (toutes interfaces) | dual-stack |
-| **API de contrôle XML-RPC** | **l'adresse interne si `--internal-ip` est donnée**, sinon `::` | dual-stack, ou celle de l'adresse interne |
-
-Toutes les écoutes sont **dual-stack** : une seule socket `AF_INET6` avec
-`IPV6_V6ONLY=0`, où un client IPv4 arrive en `::ffff:a.b.c.d`.
-
-> ⚠️ **`--internal-ip` restreint l'API de contrôle.** Elle pilote entièrement le
-> serveur média : dès qu'un réseau interne est déclaré, elle ne doit pas rester
-> exposée sur une interface publique. Deux conséquences : si les deux profils
-> internes sont configurés, la socket ne peut porter qu'une famille et **l'IPv4
-> l'emporte** (le démarrage le journalise) ; et la **loopback n'est plus une
-> porte d'entrée** — un script local qui tapait `http://127.0.0.1:8080/mcu` doit
-> viser l'adresse interne.
-
-#### Contrôles au démarrage
-
-Tous **bloquants**, avec un message destiné à l'exploitant : adresse non
-annonçable (loopback, multicast, link-local), adresse interne hors RFC 1918,
-adresse interne attachée à aucune interface, deux adresses pour un même profil,
-`--nat` en IPv6 ou sans `--public-ip` v4, profil par défaut indisponible. Mieux
-vaut un serveur qui ne démarre pas qu'un serveur qui annonce une adresse fausse
-pendant six mois.
-
-Le démarrage journalise la table — premier endroit à regarder devant un appel
-sans média :
+Le serveur décrit donc son adressage sous forme de **profils** — `publicv4`,
+`publicv6`, `internalv4`, `internalv6` —, chacun portant ce couple d'adresses. La
+plupart des déploiements n'en utilisent qu'un (`publicv4`). Le démarrage
+journalise la table, premier endroit à regarder devant un appel sans média :
 
 ```
 -Profils d'adressage :
@@ -319,8 +256,14 @@ internalv4 : bind 172.16.0.5
 internalv6 : indisponible
 ```
 
-> Détail complet du modèle, des arbitrages et de ce que la sonde STUN ne prouve
-> **pas** : `ipv6.md` §14.
+> 📖 **Tout le reste — les trois cas d'usage (IP publique portée par l'hôte, IP
+> publique nattée 1:1, deux adresses publique + interne), les ports à ouvrir, la
+> vérification, le diagnostic des pannes de média et la liste des contrôles
+> bloquants au démarrage — est dans
+> [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md).**
+>
+> Côté contrôleur, le paramètre `profile` de `StartSending`/`StartReceiving` est
+> décrit dans `MCU-API.md` §6.7 bis et `xmlrpc_jsr309_api.md` §6.7 bis.
 
 ### Média
 

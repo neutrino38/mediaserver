@@ -1,5 +1,6 @@
 /**
- * test_addressprofiles.cpp — table des profils d'adressage (ipv6.md §14).
+ * test_addressprofiles.cpp — table des profils d'adressage
+ * (NETWORK-CONFIGURATION.md).
  *
  * Étape 4 du chantier IPv6. Tests ACTIFS : la table doit être juste dès
  * maintenant, elle décide de l'adresse annoncée dans chaque SDP.
@@ -169,13 +170,13 @@ TEST_F(AddressProfilesTest, RefuseUneAdresseInterneV4NonPrivee)
 	EXPECT_NE(std::string::npos, error.find("privees")) << error;
 
 	//Une adresse de documentation n'est pas privée non plus : « non routable »
-	//et « privée » ne sont pas la même question (§14.5).
+	//et « privée » ne sont pas la même question.
 	EXPECT_FALSE(AddressProfiles::AddInternal(IPAddress::Parse("192.0.2.1"), error));
 	EXPECT_NE(std::string::npos, error.find("privees")) << error;
 }
 
 // ... alors que la v6 interne n'a AUCUNE contrainte de plage : un réseau
-// interne v6 est souvent numéroté dans une plage globale déléguée (§14.2).
+// interne v6 est souvent numéroté dans une plage globale déléguée.
 TEST_F(AddressProfilesTest, AccepteUneAdresseInterneV6QuelleQueSoitSaPlage)
 {
 	const IPAddress v6 = FirstAttached(AF_INET6, false);
@@ -356,7 +357,7 @@ TEST_F(AddressProfilesTest, UnProfilIndisponibleNeRendAucuneAdresse)
 	EXPECT_EQ(0, AddressProfiles::AvailableCount());
 }
 
-// Describe() est la matière de l'API d'introspection (§14.4) : elle doit citer
+// Describe() est la matière de l'API d'introspection : elle doit citer
 // les quatre profils, disponibles ou non, et désigner le défaut.
 TEST_F(AddressProfilesTest, DescribeCiteLesQuatreProfilsEtLeDefaut)
 {

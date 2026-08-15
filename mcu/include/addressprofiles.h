@@ -10,7 +10,8 @@
  * AddressProfiles — les quatre adresses que le serveur peut employer, et ce
  * qu'il en annonce.
  *
- * Modèle du §14 de `ipv6.md`. Un **profil** est le croisement de deux axes :
+ * Modèle décrit côté exploitation par `NETWORK-CONFIGURATION.md`. Un **profil**
+ * est le croisement de deux axes :
  *
  *                      IPv4              IPv6
  *   publique     publicv4 (nattable)   publicv6 (jamais nattée)
@@ -54,7 +55,7 @@ public:
 	};
 
 	// -----------------------------------------------------------------
-	// Noms exposés — ceux de l'API de contrôle (§14.3) et de la CLI
+	// Noms exposés — ceux de l'API de contrôle et de la CLI
 	// -----------------------------------------------------------------
 
 	// "publicv4" · "publicv6" · "internalv4" · "internalv6"
@@ -91,7 +92,7 @@ public:
 	//         faute de frappe, et le contrôle l'attrape ;
 	//   v6 -> AUCUNE contrainte de plage. Un réseau interne IPv6 est le plus
 	//         souvent numéroté dans une plage globale déléguée, son caractère
-	//         interne tenant au routage et au filtrage (§14.2). Exiger l'ULA
+	//         interne tenant au routage et au filtrage. Exiger l'ULA
 	//         réimporterait le fait dans la décision.
 	//
 	// L'attachement local est ici EXIGÉ, dans les deux familles : une adresse
@@ -130,7 +131,7 @@ public:
 	static int AvailableCount();
 
 	// Une ligne par profil, disponible ou non : c'est ce que le serveur
-	// journalise au démarrage, et la matière de l'API d'introspection (§14.4).
+	// journalise au démarrage, et la matière de l'API d'introspection.
 	// Un contrôleur qui ne peut pas DEMANDER ce que le serveur sait de lui-même
 	// finit par le déclarer de son côté, et cette copie dérive.
 	static std::string Describe();

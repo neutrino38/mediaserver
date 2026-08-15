@@ -998,7 +998,7 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 	char *sendIp;
 	int sendPort;
 	xmlrpc_value *rtpMap;
-	//Profil d'adressage (§14 d'ipv6.md) : DERNIER paramètre, facultatif. Absent
+	//Profil d'adressage (NETWORK-CONFIGURATION.md) : DERNIER paramètre, facultatif. Absent
 	//=> profil par défaut, soit exactement le comportement d'avant.
 	const char *profile = NULL;
 	xmlrpc_parse_value(env, param_array, "(iiisiSs)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap,&profile);
@@ -1179,7 +1179,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//"fmtp", une struct PT -> paramètres. Struct plutôt que fmtp nu pour que le
 	//négociateur puisse en demander plus sans un énième paramètre positionnel.
 	xmlrpc_value *offer = NULL;
-	//Profil d'adressage (§14 d'ipv6.md) : DERNIER paramètre, facultatif.
+	//Profil d'adressage (NETWORK-CONFIGURATION.md) : DERNIER paramètre, facultatif.
 	const char *profile = NULL;
 	xmlrpc_parse_value(env, param_array, "(iiiSSs)", &sessionId,&endpointId,&media,&rtpMap,&offer,&profile);
 
@@ -2887,8 +2887,9 @@ xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_arra
  *
  * Le contrôleur doit pouvoir DEMANDER ce que le serveur sait de lui-même : une
  * capacité qui existe dans le code mais qu'aucune API ne permet d'interroger
- * force le contrôleur à la déclarer de son côté, et cette copie dérive (§14.4
- * d'ipv6.md). Retour : les QUATRE profils, disponibles ou non.
+ * force le contrôleur à la déclarer de son côté, et cette copie dérive.
+ *
+ * Retour : les QUATRE profils, disponibles ou non.
  */
 static xmlrpc_value* GetNetworkProfiles(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {

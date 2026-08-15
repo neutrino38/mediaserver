@@ -10,7 +10,7 @@
  * StunClient — découverte de l'adresse publique par un serveur STUN, et
  * vérification que le NAT traversé est bien un **NAT 1:1**.
  *
- * Sert exactement un cas : `--nat auto` (§14.2 de ipv6.md). Le serveur est
+ * Sert exactement un cas : `--nat auto` (NETWORK-CONFIGURATION.md §5). Le serveur est
  * derrière un NAT, son `--public-ip` porte une adresse RFC 1918 réellement
  * attachée, et il faut découvrir l'adresse publique à ANNONCER dans les SDP.
  *

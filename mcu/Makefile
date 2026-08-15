@@ -328,7 +328,7 @@ tests: tests/runtests
 check: tests/runtests
 	./tests/runtests
 
-# Suite IPv6 (tag :ipv6, cf. tests/test_ipv6.cpp et ipv6.md a la racine).
+# Suite IPv6 (tag :ipv6, cf. tests/test_ipv6.cpp).
 # ATTENDUE EN ECHEC tant qu'IPv6 n'est pas implemente : elle n'est PAS jouee par
 # `make check`. Les tests sont prefixes DISABLED_ (exclus par defaut) et leurs
 # suites prefixees IPv6 (selectionnables par filtre) — d'ou les deux options.

@@ -93,13 +93,13 @@ public:
 	int Init();
 	//Adresse à lier par les sockets média, AVANT Init : c'est elle qui décide de
 	//l'interface empruntée, donc du profil d'adressage effectif de cette jambe
-	//(§14 de ipv6.md). Vide (le défaut) = écoute dual-stack sur toutes les
+	//(voir NETWORK-CONFIGURATION.md). Vide (le défaut) = écoute dual-stack sur
 	//interfaces, comportement historique. Rend false si l'adresse est
 	//inutilisable ; la session reste alors sur le défaut.
 	bool SetBindAddress(const IPAddress& addr);
 	const IPAddress& GetBindAddress() const { return bindAddress; }
 
-	//Profil d'adressage de CETTE jambe (§14 de ipv6.md) : le contrôleur le
+	//Profil d'adressage de CETTE jambe (NETWORK-CONFIGURATION.md) : le contrôleur le
 	//demande dans StartSending/StartReceiving, le serveur en tire l'adresse à
 	//lier — donc l'interface — et l'adresse à annoncer.
 	//
@@ -512,7 +512,7 @@ private:
 	bool	NatCorrectable(const IPAddress& announced);
 	std::mutex mutex;
 
-	//--- Prédicats d'adressage (étape 3 du chantier IPv6, cf. ipv6.md §1.5) ---
+	//--- Prédicats d'adressage (étape 3 du chantier IPv6) ---
 	//
 	// « Pas encore d'adresse » se disait jusqu'ici `== INADDR_ANY`, répété sur
 	// une vingtaine de sites. Or INADDR_ANY est une ADRESSE (0.0.0.0, celle
@@ -533,7 +533,7 @@ private:
 	// contrôleur l'annonce, et `::ffff:1.2.3.4` quand son paquet arrive sur
 	// notre socket v6. `IPAddress::operator==` dé-mappe avant de comparer,
 	// donc le latching NAT ne se déclenche pas sur cette seule différence
-	// d'écriture — c'était LE piège du dual-stack (ipv6.md §1.2).
+	// d'écriture — c'était LE piège du dual-stack.
 	static bool SameAddr(const IPAddress& a, const IPAddress& b) { return a == b; }
 
 	// Destination dans la famille de NOTRE socket : forme v6 mappée quand la
@@ -563,8 +563,8 @@ private:
 	void SetDualStack(int fd);
 
 	//Adresse à lier, vide = toutes interfaces. C'est elle qui décide de
-	//l'interface empruntée quand un profil d'adressage est demandé (§14 de
-	//ipv6.md) ; vide, on garde l'écoute historique sur `::`.
+	//l'interface empruntée quand un profil d'adressage est demandé (voir
+	//NETWORK-CONFIGURATION.md) ; vide, on garde l'écoute historique sur `::`.
 	IPAddress bindAddress;
 
 	//Profil d'adressage retenu, et le drapeau qui dit qu'il l'a été

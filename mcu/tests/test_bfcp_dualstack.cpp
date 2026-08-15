@@ -1,7 +1,7 @@
 /**
  * test_bfcp_dualstack.cpp — BFCP (sous-module libbfcp) : adresse d'écoute.
  *
- * Étape 1 du chantier IPv6 (ipv6.md §5.4, §6) : libbfcp est le seul composant
+ * Étape 1 du chantier IPv6 : libbfcp est le seul composant
  * déjà écrit en `sockaddr_storage`, seul son DÉFAUT était IPv4. C'est donc le
  * premier endroit où le motif dual-stack se vérifie sur du code de production.
  *

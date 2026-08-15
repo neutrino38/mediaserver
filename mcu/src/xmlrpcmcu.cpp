@@ -1492,7 +1492,7 @@ xmlrpc_value* StartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	int role;
 	int sendPort;
 	xmlrpc_value *rtpMap;
-	//Profil d'adressage (§14 d'ipv6.md) : DERNIER parametre, et facultatif.
+	//Profil d'adressage (NETWORK-CONFIGURATION.md) : DERNIER parametre, et facultatif.
 	//Absent => profil par defaut, soit exactement le comportement d'avant.
 	//XML-RPC est positionnel : la fin de liste est la seule place qui ne casse
 	//aucun appelant.
@@ -2053,7 +2053,7 @@ MCU *mcu = (MCU *)user_data;
 	//pour que le negociateur puisse en demander plus sans un enieme parametre
 	//positionnel et son repli de signature.
 	xmlrpc_value *offer = NULL;
-	//Profil d'adressage (§14 d'ipv6.md) : DERNIER parametre, facultatif.
+	//Profil d'adressage (NETWORK-CONFIGURATION.md) : DERNIER parametre, facultatif.
 	const char *profile = NULL;
 	xmlrpc_parse_value(env, param_array, "(iiiSiiSs)", &confId,&partId,&media,&rtpMap,&role,&proto,&offer,&profile);
 
@@ -2374,7 +2374,7 @@ xmlrpc_value* StopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *us
  * GetNetworkProfiles — ce que le serveur peut annoncer, et par ou.
  *
  * Sans elle, un controleur qui doit CHOISIR un profil (StartSending /
- * StartReceiving, §14.3 d'ipv6.md) n'a d'autre ressource que d'ecrire la liste
+ * StartReceiving) n'a d'autre ressource que d'ecrire la liste
  * dans sa propre configuration — et cette copie derive. Le precedent a coute un
  * appel : les codecs supportes n'etant interrogeables par aucune API, elixip a
  * declare H.264/VP8 pendant que le serveur portait AV1, et un appel AV1 est mort

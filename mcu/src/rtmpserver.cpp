@@ -59,7 +59,7 @@ int RTMPServer::Init(int port)
 
 	//Create socket. AF_INET6 + IPV6_V6ONLY=0 : UNE socket pour les deux familles
 	//(un client v4 arrive en ::ffff:a.b.c.d). Les plans de contrôle doivent tout
-	//entendre (§14.5 d'ipv6.md).
+	//entendre (NETWORK-CONFIGURATION.md).
 	server = socket(AF_INET6, SOCK_STREAM, 0);
 
 	//Set SO_REUSEADDR on a socket to true (1):

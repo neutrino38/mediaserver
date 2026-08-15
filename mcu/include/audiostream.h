@@ -29,7 +29,7 @@ public:
 	int Init(std::shared_ptr<AudioInput> input,std::shared_ptr<AudioOutput> output);
 	//M-6 : arme le listener géré par shared_ptr sur la session interne.
 	void SetWeakListener(std::weak_ptr<RTPSession::Listener> l) { rtp.SetWeakListener(std::move(l)); }
-	//Session RTP de ce flux : le profil d'adressage se pose dessus (§14 de ipv6.md).
+	//Session RTP de ce flux : le profil d'adressage se pose dessus (NETWORK-CONFIGURATION.md).
 	RTPSession& GetOwnSession() { return rtp; }
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetAudioCodec(AudioCodec::Type codec,const Properties& properties);

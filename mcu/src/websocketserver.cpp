@@ -88,7 +88,7 @@ int WebSocketServer::Init(int port)
 	//Create socket. AF_INET6 + IPV6_V6ONLY=0 : UNE socket entend les deux
 	//familles, un client v4 arrivant en ::ffff:a.b.c.d. Les plans de contrôle
 	//doivent tout entendre — contrairement au média, dont la famille est choisie
-	//par le profil d'adressage (§14.5 d'ipv6.md).
+	//par le profil d'adressage (NETWORK-CONFIGURATION.md).
 	server = socket(AF_INET6, SOCK_STREAM, 0);
 
 	//Set SO_REUSEADDR on a socket to true (1):

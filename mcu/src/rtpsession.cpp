@@ -68,7 +68,7 @@ DWORD RTPSession::minLocalPort = 49152;
 * V4Address
 *	Passerelle entre l'etat d'adressage encore IPv4 de RTPSession (in_addr_t, en
 *	ordre reseau) et le type d'adresse commun. Elle disparaitra avec lui a
-*	l'etape 5 du chantier IPv6 (voir ipv6.md §6) : d'ici la, elle evite de
+*	l'etape 5 du chantier IPv6 : d'ici la, elle evite de
 *	dupliquer une deuxieme fois la connaissance des plages d'adresses.
 ***********************************/
 static IPAddress V4Address(in_addr_t addr)
@@ -1612,7 +1612,7 @@ int RTPSession::Rebind(const IPAddress& addr)
 
 /***********************************
 * SetAddressProfile
-*	Le controleur choisit, le serveur detient (§14 de ipv6.md).
+*	Le controleur choisit, le serveur detient (NETWORK-CONFIGURATION.md).
 ***********************************/
 bool RTPSession::SetAddressProfile(const char* profile, std::string& error)
 {
@@ -1700,7 +1700,7 @@ int RTPSession::Init()
 	//C'est ce qui évite de doubler la plage de ports RTP et le thread de
 	//réception. Une adresse de bind imposée par un profil d'adressage fixe en
 	//revanche la famille — et donc restreint la session à celle-ci, ce qui est
-	//précisément ce que le contrôleur a demandé (§14.5 de ipv6.md).
+	//précisément ce que le contrôleur a demandé (NETWORK-CONFIGURATION.md).
 	socketFamily = bindAddress.IsSet() ? bindAddress.Family() : AF_INET6;
 
 	//Adresse d'écoute : celle du profil, sinon « toutes interfaces » dans la

@@ -50,8 +50,8 @@ public:
 	virtual int Init();
 	virtual int End();
 
-	//Profil d'adressage demandé par le contrôleur pour CETTE jambe (§14 de
-	//ipv6.md) : il décide de l'adresse liée — donc de l'interface — et de
+	//Profil d'adressage demandé par le contrôleur pour CETTE jambe (voir
+	//NETWORK-CONFIGURATION.md) : il décide de l'adresse liée — donc de l'interface — et de
 	//l'adresse annoncée. À appeler AVANT StartSending/StartReceiving, qui
 	//publient le port. NULL ou chaîne vide = profil par défaut, soit le
 	//comportement d'un contrôleur qui ignore cette notion.

@@ -13,8 +13,8 @@ class IPEndpoint;   // adresse + port, défini plus bas
 /**
  * IPAddress — adresse IP d'une famille ou de l'autre, valeur copiable.
  *
- * C'est le « type maison sur sockaddr_storage » arbitré au §13 de `ipv6.md` :
- * il porte exactement ce que la suite adverse `mcu/tests/test_ipv6.cpp` exige,
+ * C'est le « type maison sur sockaddr_storage » retenu plutôt qu'une dépendance
+ * externe : il porte exactement ce que la suite adverse `mcu/tests/test_ipv6.cpp` exige,
  * et rien de plus. Il remplace partout le triplet historique
  * `in_addr_t` + `inet_addr` + `inet_ntoa`, dont les trois défauts sont :
  * une famille câblée dans le type, une erreur de conversion indiscernable
@@ -27,7 +27,7 @@ class IPEndpoint;   // adresse + port, défini plus bas
  *  1. UNE ADRESSE N'EST JAMAIS À MOITIÉ CONSTRUITE. Une instance est soit
  *     vide (`!IsSet()`, famille AF_UNSPEC), soit une adresse valide. Il n'y a
  *     pas de valeur sentinelle : c'est `IsSet()` qui dit « pas encore de
- *     destination », plus `INADDR_ANY` (§1.5 de ipv6.md) — lequel redevient
+ *     destination », plus `INADDR_ANY` — lequel redevient
  *     ce qu'il est, une adresse d'écoute légitime.
  *
  *  2. LE PORT N'EST PAS ICI. « 2001:db8::1:5000 » est une adresse v6 entière
@@ -245,7 +245,7 @@ public:
 	 * critère de configuration : un réseau interne IPv6 est le plus souvent
 	 * numéroté dans une plage GLOBALE déléguée par l'opérateur, son caractère
 	 * interne tenant au routage et au filtrage. `--internal-ip` accepte donc les
-	 * deux en v6 (§14.2 de ipv6.md) — contrairement à la v4, où trente ans de
+	 * deux en v6 (NETWORK-CONFIGURATION.md) — contrairement à la v4, où trente ans de
 	 * NAT font qu'une adresse publique déclarée interne est une faute de frappe.
 	 * Ce prédicat sert au diagnostic et au journal, pas au refus.
 	 *

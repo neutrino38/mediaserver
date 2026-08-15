@@ -64,7 +64,7 @@ int TCPEndpoint::Init(int port, TCPProtoHandler * handler)
 	return Error("TCPEndpoint: already inited.\n");
 	
     //Create socket. AF_INET6 + IPV6_V6ONLY=0 : les deux familles sur une socket
-    //(§14.5 d'ipv6.md).
+    //(NETWORK-CONFIGURATION.md).
     serverfd = socket(AF_INET6, SOCK_STREAM, 0);
 
     //Set SO_REUSEADDR on a socket to true (1):

@@ -407,7 +407,7 @@ int main(int argc,char **argv)
 	else
 		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 
-	//Table des profils d'adressage (ipv6.md §14) : ce que le serveur peut lier,
+	//Table des profils d'adressage (NETWORK-CONFIGURATION.md) : ce que le serveur peut lier,
 	//et ce qu'il annonce. Construite ici, avant toute initialisation de serveur —
 	//sans adresse annonçable aucun SDP joignable ne peut être publié, donc chaque
 	//appel échouerait à la réponse. Un refus de démarrer est la panne honnête,
@@ -448,7 +448,7 @@ int main(int argc,char **argv)
 		//AUCUNE adresse demandée : on détecte la nôtre — la première adresse
 		//annonçable du nom d'hôte, qui peut parfaitement être une RFC 1918. Elle
 		//devient le profil public : « public » désigne ici le côté extérieur du
-		//serveur, pas la classe de l'adresse (§14.5). Aucune détection de NAT
+		//serveur, pas la classe de l'adresse. Aucune détection de NAT
 		//dans ce cas : rien ne dit qu'il y en a un, et deviner l'adresse vue de
 		//l'extérieur sans que personne ne l'ait demandé serait une initiative
 		//que l'exploitant n'a pas prise.

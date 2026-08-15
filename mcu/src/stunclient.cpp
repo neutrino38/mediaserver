@@ -160,7 +160,7 @@ bool StunClient::ParseServer(const char* text, IPEndpoint& out, std::string& err
 	}
 
 	//Résolution en IPv4 : --nat auto ne sert que le NAT IPv4, il n'y a pas de
-	//NAT IPv6 dans ce produit (§14.1 de ipv6.md).
+	//NAT IPv6 dans ce produit (NETWORK-CONFIGURATION.md).
 	int                  err = 0;
 	std::list<IPAddress> addrs = IPAddress::Resolve(host.c_str(), err, AF_INET);
 

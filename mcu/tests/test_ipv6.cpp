@@ -3,7 +3,7 @@
  *
  * ==========================================================================
  *  TAG :ipv6  — CES TESTS SONT ATTENDUS EN ÉCHEC ET NE DOIVENT PAS ÊTRE
- *  EXÉCUTÉS TANT QU'IPv6 N'EST PAS IMPLÉMENTÉ (cf. ipv6.md à la racine).
+ *  EXÉCUTÉS TANT QU'IPv6 N'EST PAS IMPLÉMENTÉ.
  * ==========================================================================
  *
  * Matérialisation du tag : GoogleTest n'accepte PAS le caractère ':' dans un nom
@@ -1004,7 +1004,7 @@ TEST(IPv6Servers, LeServeurWebSocketAccepteUnClientV6)
 // dans le chantier IPv6. Il reste jouable par `make check-ipv6`.
 //
 // À REPRENDRE À PART : démontage d'une RTMPConnection dont le pair raccroche
-// aussitôt après le TCP (`ipv6.md` §5.1).
+// aussitôt après le TCP.
 TEST(IPv6Servers, DISABLED_LeServeurRtmpAccepteUnClientV6)
 {
 	REQUIRE_IPV6_LOOPBACK();

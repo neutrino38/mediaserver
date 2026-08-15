@@ -74,7 +74,7 @@ namespace
 		}
 
 		//La v4 interne DOIT être privée ; la v6 interne n'a aucune contrainte
-		//de plage (§14.2 de ipv6.md). Ce contrôle passe AVANT celui de
+		//de plage (NETWORK-CONFIGURATION.md). Ce contrôle passe AVANT celui de
 		//l'attachement : à un exploitant qui déclare une adresse publique comme
 		//interne, « hors des plages privées » dit ce qu'il a fait de travers,
 		//là où « attachée à aucune interface » l'enverrait chercher ailleurs.
@@ -192,7 +192,7 @@ bool AddressProfiles::SetNat(const IPAddress& announced, std::string& error)
 		return false;
 	}
 
-	//Pas de NAT en IPv6, par choix (§14.1) : le refus est explicite, pas un
+	//Pas de NAT en IPv6, par choix : le refus est explicite, pas un
 	//silence. Un déploiement v6 correct délègue un préfixe et filtre.
 	if (!announced.IsV4())
 	{

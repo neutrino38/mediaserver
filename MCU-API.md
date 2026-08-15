@@ -32,15 +32,15 @@ n'est pas décrit ici (voir le `readme.md` pour les options de ligne de commande
 
 > **Adresse annoncée dans le SDP.** L'adresse que le contrôleur doit mettre dans
 > la ligne `c=` et dans les candidats ICE est celle que `StartReceiving` renvoie
-> (§4, `returnVal[1]`). C'est un réglage **global du serveur** : `--public-ip`,
-> à défaut le premier IPv4 non loopback du nom d'hôte. Derrière un NAT,
-> `--public-ip` est obligatoire — l'adresse bindée n'est alors pas joignable par
-> le pair. La même valeur alimente les candidats de `GetMediaCandidates` sur
-> l'API JSR-309, donc les deux API annoncent forcément la même adresse.
+> (§4, `returnVal[1]`) — jamais une adresse que le contrôleur déduirait de son
+> côté. Elle dépend du **profil d'adressage** de la jambe (§6.7 bis) ; la même
+> valeur alimente les candidats de `GetMediaCandidates` sur l'API JSR-309, donc
+> les deux API annoncent forcément la même adresse.
 >
 > Le serveur **refuse de démarrer** si aucune adresse ne peut être déterminée :
 > un serveur qui répond a donc toujours une adresse à annoncer, et le contrôleur
-> n'a pas à prévoir de repli. Voir `readme.md`, *Adresse média annoncée*.
+> n'a pas à prévoir de repli. Configuration côté serveur (NAT, réseau interne,
+> ports à ouvrir) : `NETWORK-CONFIGURATION.md`.
 
 Le `POST /mcu` est un XML-RPC standard :
 
@@ -839,8 +839,8 @@ Chaque profil porte **deux adresses** : celle que le serveur **lie** (donc
 l'interface qu'il emprunte) et celle qu'il **annonce** (la ligne `c=` du SDP).
 Elles ne diffèrent que pour `publicv4` derrière NAT. C'est ce qui rend un
 déploiement natté descriptible : on ne peut pas annoncer une adresse qu'on ne peut
-pas lier. Configuration côté serveur : `--public-ip`, `--nat`, `--internal-ip`,
-`--default-profile` (voir `ipv6.md` §14.2).
+pas lier. **Configuration côté serveur** (`--public-ip`, `--nat`, `--internal-ip`,
+`--default-profile`, par cas d'usage) : `NETWORK-CONFIGURATION.md`.
 
 Règles du contrat, dans les deux API :
 
@@ -866,8 +866,8 @@ Règles du contrat, dans les deux API :
 > **Note d'implémentation.** Un `internalv4` ne peut être demandé que si
 > `--internal-ip` a été donné au démarrage : le serveur ne devine pas ses réseaux.
 > Pour savoir ce qui est disponible, le contrôleur doit **le demander au serveur**
-> plutôt que de le déclarer de son côté — l'API d'introspection est l'étape 7 du
-> chantier (`ipv6.md` §14.4).
+> avec `GetNetworkProfiles` (§6.7) plutôt que de le déclarer de son côté — une
+> liste recopiée dérive.
 
 #### `StopReceiving`
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
