@@ -3064,6 +3064,9 @@ void RTPSession::ResetPacket(DWORD & ssrc, bool clear)
 }
 void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAddr)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	//For each packet
 	for (int i = 0; i<rtcp->GetPacketCount();i++)
 	{
@@ -3176,7 +3179,7 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
 						Debug("-TempMaxMediaStreamBitrateNotification received from [%s] on %s stream\n", fromAddr, MediaFrame::TypeToString(media));
 						pendingTMBR = false;
-						if (requestFPU)
+						if (requestFPU && defaultStream != NULL)
 						{
 							requestFPU = false;
 							DWORD ssrc=defaultStream->GetRecSSRC();
@@ -3269,6 +3272,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 
 int RTPSession::SendFIR(DWORD & ssrc)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 
 	Log("-SendFIR\n");
 
@@ -3302,6 +3308,9 @@ int RTPSession::SendFIR(DWORD & ssrc)
 
 int RTPSession::RequestFPU()
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	 if (defaultStream == NULL)
 		return 0;
 
@@ -3311,13 +3320,20 @@ int RTPSession::RequestFPU()
 
 int RTPSession::RequestFPU(DWORD & ssrc)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	//Send all the packets inmediatelly to the decoderso I frame can be handled as soon as possoble
 	RTPStream* stream = getStream(ssrc);
 	if (stream == NULL  )
 		stream = defaultStream;
 	
 	
-	if (stream != NULL) stream->HurryUp();
+	//Le test ne couvrait que HurryUp : GetRecSSRC dereferencait quand meme.
+	//Apres DeleteStreams les deux candidats sont NULL, ce n'est plus theorique.
+	if (stream == NULL)
+		return 0;
+	stream->HurryUp();
 	ssrc=stream->GetRecSSRC();	
 	//request FIR
 	SendFIR(ssrc);
@@ -3336,6 +3352,9 @@ int RTPSession::RequestFPU(DWORD & ssrc)
 
 void RTPSession::SetRTT(DWORD rtt)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	//Set it
 	this->rtt = rtt;
 	DWORD recSSRC =0;
@@ -3421,6 +3440,9 @@ int RTPSession::SetMaxReceiveBitrate(DWORD bitrate)
 
 int RTPSession::SendTempMaxMediaStreamBitrateRequest(DWORD bitrate)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	Debug("-RTPSession::SendTempMaxMediaStreamBitrateRequest [%d] on %s stream\n",bitrate,MediaFrame::TypeToString(media));
 
 	//Create rtcp sender retpor
@@ -3454,6 +3476,9 @@ int RTPSession::SendTempMaxMediaStreamBitrateRequest(DWORD bitrate)
 
 RTCPPayloadFeedback* RTPSession::CreateReceiverEstimatedMaxBitrateFeedback(DWORD bitrate)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	std::list<DWORD> ssrcs;
 
 	//Les flux que l'estimation couvre : ceux que l'estimateur observe, ou à
@@ -3494,6 +3519,9 @@ int RTPSession::SendReceiverEstimatedMaxBitrate(DWORD bitrate)
 
 void RTPSession::ReSendPacket(int seq)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	//Lock
 	if (!useNACK) 
 	{
@@ -3595,6 +3623,9 @@ void RTPSession::ReSendPacket(int seq)
 }
 int RTPSession::SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD overhead)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	Log("-SendTempMaxMediaStreamBitrateNotification [%d,%d]\n",bitrate,overhead);
 
 	//Create rtcp sender retpor
@@ -3630,6 +3661,7 @@ int RTPSession::SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD ov
  */
 bool RTPSession::AddStream( bool receiving, DWORD ssrc )
 {
+    bool created = false;
     if ( streamUse.WaitUnusedAndLock(500) )
     {
 	RTPStream* stream = getStream(ssrc);
@@ -3638,12 +3670,12 @@ bool RTPSession::AddStream( bool receiving, DWORD ssrc )
 		stream = new RTPStream(this,ssrc);
 		
 		streams[ssrc]=stream;
-		//If remote estimator
-		if (remoteRateEstimator)
-			//Add stream
-			remoteRateEstimator->AddStream(ssrc);
+		created = true;
 	}
         streamUse.Unlock();
+	//HORS du verrou streamUse : voir DeleteStreams, meme inversion.
+	if (created && remoteRateEstimator)
+		remoteRateEstimator->AddStream(ssrc);
 	return true;
     }
     else
@@ -3671,13 +3703,13 @@ bool RTPSession::DeleteStreams()
 {
     CancelStreams();
 
+    std::list<DWORD> removed;
+
     streamUse.WaitUnusedAndLock();
 
     for (Streams::iterator it = streams.begin(); it != streams.end(); it++)
     {
-        if (remoteRateEstimator)
-	//Add stream
-            remoteRateEstimator->RemoveStream(it->first);
+        removed.push_back(it->first);
         delete it->second;
     }
 
@@ -3685,6 +3717,17 @@ bool RTPSession::DeleteStreams()
 
     defaultStream = NULL;
     streamUse.Unlock();
+
+    //L'estimateur se previent HORS du verrou streamUse, sinon les deux verrous
+    //s'imbriquent dans les DEUX sens et se bloquent : ici streamUse(ecrivain) ->
+    //estimateur(ecrivain), et sur le chemin de notification
+    //estimateur(lecteur) -> onTargetBitrateRequested -> streamUse(lecteur).
+    //L'estimateur n'indexe que des SSRC, jamais nos RTPStream : les detruire
+    //avant de l'en avertir ne lui fait rien lire de mort.
+    if (remoteRateEstimator)
+        for (std::list<DWORD>::iterator it = removed.begin(); it != removed.end(); ++it)
+            remoteRateEstimator->RemoveStream(*it);
+
     return true;
 }
 /**
@@ -3698,7 +3741,13 @@ bool RTPSession::DeleteStreams()
 bool RTPSession::SetDefaultStream(bool receiving, DWORD ssrc )
 {
 	AddStream(receiving,ssrc);
+
+	//La map se lit et defaultStream s'ecrit sous le verrou ECRIVAIN : c'est le
+	//meme etat que DeleteStreams detruit, et tout le chemin RTCP le lit
+	//desormais sous le verrou lecteur.
+	streamUse.WaitUnusedAndLock();
 	defaultStream = getStream(ssrc);
+	streamUse.Unlock();
 
 	return true;
 }
@@ -3727,16 +3776,31 @@ RTPSession::RTPStream* RTPSession::getStream(DWORD ssrc)
  */
 bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 {
-	RTPStream* stream = getStream(oldssrc);
-	streams.erase(oldssrc);
-	stream->SetRecSSRC(newssrc);
-	streams[newssrc] =stream;
+	//Cette fonction MUTE la map : verrou ECRIVAIN. Elle n'en prenait aucun,
+	//alors que tout le chemin RTCP l'itere desormais sous le verrou lecteur.
+	//Appelee depuis onNewStream, ou ReadRTP a deja relache son verrou lecteur.
+	streamUse.WaitUnusedAndLock();
 
-	return true;
+	RTPStream* stream = getStream(oldssrc);
+	if (stream != NULL)
+	{
+		streams.erase(oldssrc);
+		stream->SetRecSSRC(newssrc);
+		streams[newssrc] =stream;
+	}
+
+	streamUse.Unlock();
+
+	return stream != NULL;
 }
 
 RTCPCompoundPacket* RTPSession::CreateSenderReport()
 {
+	//streams/defaultStream sont detruits par DeleteStreams (verrou ecrivain) alors
+	//que ce thread tourne encore : StopReceiving ne joint PAS le thread
+	//RTPSession::Run, et l'estimateur d'un Endpoint fait notifier cette session
+	//par le thread RTP d'une AUTRE jambe. Verrou lecteur obligatoire.
+	ScopedUse scopedStreams(streamUse);
 	timeval tv;
 
 	//Create packet
@@ -3806,6 +3870,9 @@ RTCPCompoundPacket* RTPSession::CreateSenderReport()
 
 int RTPSession::SendSenderReport()
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
 	//Create rtcp sender retpor
 	RTCPCompoundPacket* rtcp = CreateSenderReport();
 	DWORD recSSRC =0;
@@ -4129,6 +4196,9 @@ void RTPSession::onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DW
 
 bool RTPSession::GetStatistics( DWORD ssrc, MediaStatistics & stats)
 {
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
      memset(&stats, 0, sizeof(stats));
      
     if (! running || rtpMapOut == NULL)

@@ -95,4 +95,29 @@ private:
 	int			cont = 0;
 };
 
+/**
+ * Garde RAII sur le côté LECTEUR d'un Use (IncUse/DecUse).
+ *
+ * Rendre la main sans DecUse laisse le compteur à jamais non nul : tout
+ * WaitUnusedAndLock ultérieur attend pour toujours. Un `return` anticipé dans une
+ * fonction gardée suffit à le faire, et il n'y a aucune trace pour le dire — d'où
+ * ce garde plutôt que des paires posées à la main.
+ *
+ * Lecteur seulement : le côté écrivain (WaitUnusedAndLock/Unlock) rend la main EN
+ * TENANT deux mutex, avec une sémantique de transfert qu'un garde de portée
+ * décrirait mal.
+ */
+class ScopedUse
+{
+public:
+	explicit ScopedUse(Use& use) : use(use)	{ use.IncUse(); }
+	~ScopedUse()				{ use.DecUse(); }
+
+	ScopedUse(const ScopedUse&) = delete;
+	ScopedUse& operator=(const ScopedUse&) = delete;
+
+private:
+	Use&	use;
+};
+
 #endif
