@@ -349,6 +349,20 @@ regard par un petit script de dépouillement (gnuplot ou python, dans
 > (oscillation, gel d'hypothèse, écrêtage) sont **posés dans l'outil et
 > documentés** : ils se discutent en annexe D, ils ne se déplacent pas après
 > coup pour faire passer une mesure.
+>
+> **Correctif arraché par la première tentative de séance (2026-08-17).** Deux
+> appels record de 50 s n'ont produit **aucune** trace `BWE: estimation`, alors
+> que l'estimateur était bien branché (`RemoteRateEstimator adding stream`) et
+> alimenté (deux `Overusing candidate` sur le premier). Cause : le retard
+> initial de `500 + 60 000` ms (annexe B) combiné à la garde
+> `lastChange + 1000 < now` — **rien avant 61,5 s de vidéo continue**. Ramené à
+> 5 s, la valeur du témoin (`kInitializationTime`) ; les 60 s étaient un
+> « TMMBR skipping delay » devenu sans objet depuis que l'émission est
+> verrouillée par la négociation et amortie par le throttler (lot 2). Sous
+> test (`LEstimationArriveDansLesPremieresSecondes`, rouge sur l'ancienne
+> constante, 21/21 et 403 verts après). Ce n'est pas du réglage : c'est une
+> constante recopiée du témoin, exactement la frontière du lot 1 — et sans elle
+> le premier palier de chaque scénario serait aveugle.
 
 **Critères d'acceptation du chemin réparé** (comme dernier barreau, pas comme
 solution) :

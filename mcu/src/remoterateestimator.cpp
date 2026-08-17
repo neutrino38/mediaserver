@@ -10,6 +10,9 @@
 #include <cmath>
 #include "remoterateestimator.h"
 
+//Duree d'initialisation avant la premiere estimation (cf. Update, plus bas).
+static const QWORD kInitializationMs = 5000;
+
 RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(200)
 {
 	//Not last estimate
@@ -173,11 +176,17 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	//Normalize
 	noiseVar = streams.size() ? noiseVar/streams.size() : 0;
 
-	//If not firs update
+	//Initialisation : le temps de remplir les accumulateurs avant de prononcer
+	//une estimation, aligne sur le temoin (kInitializationTime, 5 s,
+	//aimd_rate_control.cc). Les 60 s qui s'y ajoutaient — un « TMMBR skipping
+	//delay » — n'ont plus d'objet : l'emission est desormais verrouillee par la
+	//negociation et amortie par le RembThrottler (lot 2), ce n'est plus a
+	//l'estimateur de se taire une minute. Elles rendaient surtout tout appel de
+	//moins de 61,5 s de video INOBSERVABLE : aucune reestimation periodique,
+	//donc aucune trace « BWE: estimation » (constate en mesure, 2026-08-17).
 	if (!lastChange)
-		//Skip the first half second + TMMBR skiping delay of 60sec
-		lastChange = now+500 + 60000;
-	
+		lastChange = now + kInitializationMs;
+
 	//Only update once per second or when the stream starts to overuse
 	if (lastChange+1000<now)
 	{

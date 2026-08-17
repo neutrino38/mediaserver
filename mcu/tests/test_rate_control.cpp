@@ -97,6 +97,37 @@ TEST(RateControlEstimator, LEstimationSuitUnFluxRegulier)
 	EXPECT_LE(estimation, kTargetBps * 3)     << "estimation " << estimation << " pour " << kTargetBps << " b/s entrants";
 }
 
+// L'estimation doit exister TÔT. L'initialisation valait 500 ms + 60 s (un
+// « TMMBR skipping delay »), et comme la réestimation périodique est gardée par
+// lastChange + 1000 < now, aucune estimation n'arrivait avant 61,5 s de vidéo
+// continue : tout appel plus court était inobservable — constaté en mesure le
+// 2026-08-17, deux appels de 50 s sans une seule trace « BWE: estimation ».
+// Contrat : une estimation sous les 10 s, et rien avant 2 s (les accumulateurs
+// ont le temps de se remplir : on ne prononce pas un débit sur trois paquets).
+TEST(RateControlEstimator, LEstimationArriveDansLesPremieresSecondes)
+{
+	RemoteRateEstimator estimator;
+	BitrateCapture capture;
+	const DWORD ssrc = 0x1234;
+	const QWORD start = 100000;
+
+	estimator.AddListener(&capture);
+
+	FeedRegular(estimator, ssrc, start, /*durationMs=*/2000);
+	EXPECT_TRUE(capture.targets.empty())
+		<< "estimation prononcée après 2 s : les accumulateurs n'ont pas eu le temps de se remplir";
+
+	FeedRegular(estimator, ssrc, start + 2000, /*durationMs=*/8000);
+	ASSERT_FALSE(capture.targets.empty())
+		<< "aucune estimation après 10 s de flux régulier — retard initial trop long";
+
+	DWORD estimation = estimator.GetEstimatedBitrate();
+	EXPECT_GE(estimation, kTargetBps / 2) << "estimation " << estimation;
+	EXPECT_LE(estimation, kTargetBps * 3) << "estimation " << estimation;
+
+	estimator.RemoveListener(&capture);
+}
+
 // §3.1 — le chemin de PRODUCTION : rtpsession.cpp:3792 passait getTimeMS()
 // comme TAILLE (chaque paquet déclarait ~2,6 milliards d'octets, estimation
 // écrêtée au maximum en permanence). Depuis le lot 1 la taille sort du paquet
