@@ -26,8 +26,11 @@
  * par `make check` et fait garde-fou.
  */
 #include <gtest/gtest.h>
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <list>
+#include <thread>
 #include <unistd.h>
 #include <vector>
 
@@ -536,6 +539,121 @@ TEST(RateControlRemb, LeDebitSeRelitAvecSaPrecision)
 
 		delete field;
 	}
+}
+
+// Le vrai listener n'est pas passif : RTPSession::onTargetBitrateRequested
+// envoie le REMB, et pour nommer les flux qu'il couvre il rappelle
+// GetSSRCs(). Le harnais, lui, ne rappelait jamais l'estimateur — c'est
+// exactement ce que ce test ajoute.
+class ReentrantCapture : public RemoteRateEstimator::Listener
+{
+public:
+	ReentrantCapture(RemoteRateEstimator& estimator) : estimator(estimator) {}
+
+	void onTargetBitrateRequested(DWORD bitrate) override
+	{
+		estimator.GetSSRCs(ssrcs);
+		estimated = estimator.GetEstimatedBitrate();
+		notifications++;
+	}
+
+	RemoteRateEstimator&	estimator;
+	std::list<DWORD>	ssrcs;
+	DWORD			estimated = 0;
+	int			notifications = 0;
+};
+
+// GARDE-FOU : un listener a le droit d'interroger l'estimateur depuis la
+// notification. La consigne était publiée SOUS le verrou écrivain, et Use n'est
+// pas réentrant : le premier REMB pendait le thread RTP définitivement — la
+// patte vidéo muette, puis toute destruction de session bloquée derrière
+// (RTPSession::DeleteStreams attend un IncUse qui ne sera jamais rendu).
+TEST(RateControlEstimator, UnListenerPeutInterrogerLEstimateurDepuisLaNotification)
+{
+	// Sur le tas et volontairement fui si le thread pend : un thread bloqué ne
+	// se joint pas, et détruire l'estimateur sous ses pieds remplacerait le
+	// diagnostic par un crash.
+	RemoteRateEstimator* estimator = new RemoteRateEstimator();
+	ReentrantCapture* listener = new ReentrantCapture(*estimator);
+
+	estimator->AddListener(listener);
+	estimator->AddStream(0x1234);
+
+	std::atomic<bool> done(false);
+	std::thread feeder([&] {
+		FeedRegular(*estimator, 0x1234, 1000, 8000);
+		done = true;
+	});
+
+	for (int i = 0; i < 500 && !done; i++)
+		usleep(10000);
+
+	if (!done)
+	{
+		feeder.detach();
+		FAIL() << "notification sous verrou : le thread qui nourrit l'estimateur est pendu";
+	}
+
+	feeder.join();
+	EXPECT_GT(listener->notifications, 0) << "aucune consigne publiée en 8 s de trafic";
+	EXPECT_FALSE(listener->ssrcs.empty()) << "le listener n'a pas pu lire les SSRC couverts";
+
+	estimator->RemoveListener(listener);
+	delete listener;
+	delete estimator;
+}
+
+// Listener lent : il tient la notification assez longtemps pour qu'un autre
+// thread tente de le retirer PENDANT qu'il est appelé.
+class SlowCapture : public RemoteRateEstimator::Listener
+{
+public:
+	void onTargetBitrateRequested(DWORD bitrate) override
+	{
+		notifying = true;
+		usleep(300000);
+		calls++;
+		notifying = false;
+	}
+
+	std::atomic<bool>	notifying{false};
+	std::atomic<int>	calls{0};
+};
+
+// GARDE-FOU : RemoveListener doit ATTENDRE la fin d'une notification en vol.
+// Sinon ~RTPSession libère la session alors que le thread RTP d'une autre jambe
+// du même Endpoint est en train de l'appeler — écriture après libération, tas
+// corrompu, et crash différé ailleurs (ici, dans le SSL_free du DTLS).
+TEST(RateControlEstimator, RemoveListenerAttendLaNotificationEnVol)
+{
+	RemoteRateEstimator estimator;
+	SlowCapture listener;
+
+	estimator.AddListener(&listener);
+	estimator.AddStream(0x1234);
+
+	std::atomic<bool> done(false);
+	std::thread feeder([&] {
+		FeedRegular(estimator, 0x1234, 1000, 8000);
+		done = true;
+	});
+
+	// Attendre d'être effectivement DANS la notification.
+	for (int i = 0; i < 1000 && !listener.notifying && !done; i++)
+		usleep(1000);
+	ASSERT_TRUE(listener.notifying) << "aucune notification observée : le test ne prouve rien";
+
+	estimator.RemoveListener(&listener);
+	// C'est l'assertion utile : au retour, plus rien ne tient le listener.
+	EXPECT_FALSE(listener.notifying)
+		<< "RemoveListener a rendu la main pendant une notification : "
+		   "le listener peut être détruit sous les pieds de l'appelant";
+
+	const int atRemoval = listener.calls;
+	usleep(500000);
+	EXPECT_EQ(atRemoval, listener.calls) << "notifié après RemoveListener";
+
+	feeder.join();
 }
 
 } // namespace

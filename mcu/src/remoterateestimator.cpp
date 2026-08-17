@@ -187,6 +187,8 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	if (!lastChange)
 		lastChange = now + kInitializationMs;
 
+	bool estimated = false;
+
 	//Only update once per second or when the stream starts to overuse
 	if (lastChange+1000<now)
 	{
@@ -194,15 +196,40 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 		Update(usage,streamOverusing,now);
 		//Reset min max
 		bitrateAcu.ResetMinMax();
+		estimated = true;
 	} else if ( streamOverusing) {
 		//Update but not reset
 		Update(usage,streamOverusing,now);
+		estimated = true;
 	}
-		
+
+	DWORD estimation = estimated ? GetEstimatedBitrateUnlocked() : 0;
+
 	//Unloc
 	lock.Unlock();
-	//Exit
-	return;
+
+	if (!estimated)
+		return;
+
+	//La consigne se publie sous le verrou LECTEUR — ni sous l'ecrivain, ni sans
+	//verrou. Les deux autres choix ont chacun leur panne :
+	//  - sous l'ecrivain, le premier REMB pendait le thread RTP pour toujours :
+	//    le listener rappelle l'estimateur (RTPSession::onTargetBitrateRequested
+	//    -> GetSSRCs, pour nommer les flux couverts) et IncUse attend l'ecrivain ;
+	//  - sans verrou, RemoveListener aboutit PENDANT la notification et
+	//    ~RTPSession libere la session sous nos pieds. L'estimateur est un membre
+	//    de l'Endpoint (jsr309/Endpoint.h), partage par ses jambes : le thread RTP
+	//    de l'une notifie les sessions des autres, que le thread XML-RPC detruit
+	//    par EndpointDelete. C'est une ecriture apres liberation, donc un tas
+	//    corrompu et un crash differe, ailleurs (mesure du 2026-08-17).
+	//IncUse tient les deux bouts : il est reentrant, et il bloque RemoveListener
+	//le temps de la notification. La liste n'est donc PAS copiee — un listener
+	//retire entre-temps n'y est simplement plus.
+	lock.IncUse();
+	for (Listener* l : listeners)
+		//Send it
+		l->onTargetBitrateRequested(estimation);
+	lock.DecUse();
 }
 
 void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool reactNow, QWORD now)
@@ -387,12 +414,8 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 			bitrateAcu.IsInMinMaxWindow()?(DWORD)bitrateAcu.GetMaxAvg()/1000:0
 		);
 
-	//Check if we need to send inmediate feedback. NB : on est sous le verrou
-	//ecrivain — lecture NON verrouillee obligatoire (IncUse bloquerait).
-	DWORD estimation = GetEstimatedBitrateUnlocked();
-	for (Listener* l : listeners)
-		//Send it
-		l->onTargetBitrateRequested(estimation);
+	//La notification des listeners appartient a l'appelant, qui l'emet apres
+	//avoir relache le verrou : cette fonction s'execute sous le verrou ecrivain.
 }
 
 double RemoteRateEstimator::RateIncreaseFactor(QWORD now, QWORD last, DWORD reactionTime) const

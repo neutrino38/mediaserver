@@ -371,11 +371,14 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 **************************/
 RTPSession::~RTPSession()
 {
-    End();
-	//Check listener
+	//Se desinscrire AVANT tout demontage : l'estimateur est partage par les
+	//jambes d'un meme Endpoint, donc le thread RTP d'une autre jambe peut nous
+	//notifier. RemoveListener attend la fin d'une notification en vol (verrou
+	//lecteur, cf. RemoteRateEstimator::Update) : au retour, plus personne ne
+	//tient cette session, et End() peut demonter.
 	if (remoteRateEstimator)
-		//Se desinscrire (plusieurs sessions partagent l'estimateur)
 		remoteRateEstimator->RemoveListener(this);
+    End();
 	if (rtpMapIn)
 		delete(rtpMapIn);
 	if (rtpMapInPrev)
@@ -3649,7 +3652,10 @@ bool RTPSession::AddStream( bool receiving, DWORD ssrc )
     }
 }
 
-bool RTPSession::DeleteStreams()
+//Reveil seul : aucun objet detruit, donc un thread qui lit encore les streams
+//survit a cet appel. C'est ce que DeleteStreams faisait en PREMIERE moitie, et
+//c'est la seule moitie utile avant un join.
+bool RTPSession::CancelStreams()
 {
     streamUse.IncUse();
     for (Streams::iterator it = streams.begin(); it != streams.end(); it++)
@@ -3658,6 +3664,12 @@ bool RTPSession::DeleteStreams()
         it->second->Cancel();
     }
     streamUse.DecUse();
+    return true;
+}
+
+bool RTPSession::DeleteStreams()
+{
+    CancelStreams();
 
     streamUse.WaitUnusedAndLock();
 
