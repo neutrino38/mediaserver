@@ -70,6 +70,57 @@ tail -f /var/log/mcu.log | grep BWE:      # doit défiler dès qu'un appel vidé
 Si rien ne défile alors qu'un appel vidéo est en cours, l'estimateur n'est pas
 branché sur cette patte — inutile de lancer le scénario, régler cela d'abord.
 
+## Phase 0 — sans quoi la séance ne mesure rien
+
+Deux vérifications à faire **appel établi, avant tout `netem`**. Elles coûtent
+deux minutes et évitent une séance à refaire.
+
+**1. Le dialecte négocié.** Le mode de feedback est tracé à la pose des
+propriétés :
+
+```sh
+grep 'Activated .* bitrate feedback' /var/log/mcu.log
+# Activated REMB bitrate feedback on Video stream 0x…      (navigateur, goog-remb)
+# Activated TMMBR+REMB bitrate feedback on Video stream 0x… (pair SIP, ccm tmmbr)
+```
+
+Aucune ligne = mode `None` : rien ne part vers le pair. Ce n'est pas une panne,
+c'est le défaut (arbitrage A2), et c'est même le montage voulu pour la mesure en
+**boucle ouverte** ci-dessous — mais il faut le savoir avant, pas après.
+
+**2. Le débit que la source sait produire.** Laisser tourner 60 s sans `netem` et
+lire le débit entrant :
+
+```sh
+grep 'BWE: estimation' /var/log/mcu.log | tail -20
+```
+
+Le champ `incoming=` (en kb/s) est le débit **réellement reçu**. Le lien injecté
+ensuite (`-r`) doit être **franchement en dessous** : un palier à 2 000 kb/s face
+à une source qui n'émet que 700 kb/s ne contraint rien, et le rapport le compte
+en `KO` (« -65 % du lien ») alors que la boucle a raison. Régler la source haut
+(720p ou plus) ou baisser `-r` en conséquence. En cas de doute, la colonne
+`(entrant …)` du verdict tranche : si l'entrant colle au palier, le lien mordait ;
+s'il est très en dessous, le palier n'était pas contraignant et le verdict ne
+vaut rien.
+
+## Boucle ouverte, boucle fermée : deux mesures différentes
+
+Face à un navigateur, **deux boucles agissent en même temps** : la nôtre (notre
+REMB fait ralentir le pair) et celle du pair (son propre contrôle de congestion
+voit la perte et ralentit tout seul). Le débit entrant baisse alors sans rien
+prouver de notre estimateur.
+
+- **boucle ouverte** — elixip ne pose ni `remb` ni `tmmbr` : rien ne part, la
+  source continue d'émettre, la file se remplit vraiment. C'est la mesure de
+  **l'estimateur seul**, celle qui exerce le détecteur de délai réparé au lot 1 ;
+- **boucle fermée** — le dialecte est négocié : c'est la mesure du **système**,
+  telle qu'elle se comportera en production.
+
+Faire au moins la marche d'escalier dans les deux configurations, et **dire
+laquelle** dans l'annexe D pour chaque série : la même courbe n'y raconte pas la
+même chose.
+
 ## Les trois scénarios
 
 Un appel réel établi via elixip (1:1 vidéo, le pair A émettant vers le
@@ -159,6 +210,29 @@ Le regroupement par patte se fait sur l'**identifiant de thread** du préfixe de
 trace (une `RTPSession` = un thread), et l'étiquette lisible vient du champ
 `stream=` de la ligne d'estimation. Un journal capturé **avant** l'ajout de ce
 champ reste lisible : les pattes s'appellent alors `tid 0x…`.
+
+## Au passage : la recette pcap du lot 2
+
+Le lot 2 (feedback négocié) attend une preuve au fil, qui se prend dans la même
+séance. Sur le mediaserver, avant de lancer les scénarios :
+
+```sh
+tcpdump -i eth0 -n -s0 -w feedback.pcap "udp and host <IP du pair>"
+```
+
+À lire ensuite : RTCP sur un port dynamique n'est pas reconnu tout seul, il faut
+le dire à l'analyseur.
+
+```sh
+tshark -r feedback.pcap -d udp.port==<port RTCP de la patte>,rtcp -Y rtcp
+```
+
+Attendu, face à un navigateur : des paquets **PSFB / Application Layer Feedback
+(REMB)** qui partent **et dont la valeur varie** avec les scénarios ; aucun TMMBR.
+Face à un pair SIP `ccm tmmbr` : le comportement historique, TMMBR + TMMBN.
+Les valeurs elles-mêmes se lisent plus commodément dans `events.csv`
+(colonne `value_kbps`, lignes `REMB`/`TMMBR`) — le pcap sert à prouver le
+**dialecte** et le fait que ça sort de la machine.
 
 ## Livrable
 
