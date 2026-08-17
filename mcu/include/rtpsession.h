@@ -187,6 +187,12 @@ public:
 
         bool DeleteStreams();
 	/**
+	 * Reveille les lecteurs des streams (disabled + Cancel) SANS rien detruire.
+	 * A appeler avant de joindre un thread qui lit les streams : DeleteStreams
+	 * fait les deux, donc l'utiliser pour reveiller detruit trop tot.
+	 **/
+	bool CancelStreams();
+	/**
 	 * Set the stream designated by SSRC as the defaut stream, if the stream does not exist create it
 	 *
 	 * @param: receiving whether it is receving or sending default stream

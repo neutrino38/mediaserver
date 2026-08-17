@@ -145,15 +145,19 @@ int RTPEndpoint::StopReceiving()
         //Not inited anymore
         receiving = false;
 
-	//Cancel grab
-	DeleteStreams();
+	//Cancel grab : RÉVEIL SEUL, rien n'est détruit. DeleteStreams réveillait ET
+	//détruisait, donc les streams disparaissaient avant le join ci-dessous — le
+	//thread lisait alors des objets libérés (tas corrompu, crash différé
+	//ailleurs, souvent dans un free() sans rapport).
+	CancelStreams();
 
 	//NB : l'ancien pthread_kill(SIGIO) ici était MORT : le thread bloque dans
 	//l'attente du jitter buffer (cv), pas dans poll ; c'est le Cancel des streams
-	//(DeleteStreams ci-dessus) qui le réveille réellement.
+	//(CancelStreams ci-dessus) qui le réveille réellement.
 
         //Y unimos
 	pthread_join(thread,NULL);
+	//Plus personne ne lit : on peut detruire.
 	DeleteStreams();
 
 	return 1;
