@@ -1,0 +1,442 @@
+[0x7f8e4b7fe700][1755292799.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:Normal
+[0x7f8e4b7fe700][1755292800.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1980 current=1980 incoming=1890 min=1606 max=2173
+[0x7f8e4b7fe700][1755292800.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1980685] -> [1980685] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292800.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1980685] on Video stream
+[0x7f8e4b7fe700][1755292801.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1931 current=1931 incoming=1891 min=1607 max=2175
+[0x7f8e4b7fe700][1755292802.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1937 current=1937 incoming=1863 min=1583 max=2142
+[0x7f8e4b7fe700][1755292803.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1975 current=1975 incoming=1944 min=1653 max=2236
+[0x7f8e4b7fe700][1755292804.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1964 current=1964 incoming=1941 min=1650 max=2233
+[0x7f8e4b7fe700][1755292805.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1961 current=1961 incoming=1916 min=1628 max=2203
+[0x7f8e4b7fe700][1755292806.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2001 current=2001 incoming=1833 min=1558 max=2108
+[0x7f8e4b7fe700][1755292807.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1979 current=1979 incoming=1920 min=1632 max=2208
+[0x7f8e4b7fe700][1755292808.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1845 current=1845 incoming=1832 min=1557 max=2107
+[0x7f8e4b7fe700][1755292808.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1845366] -> [1845366] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292808.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1845366] on Video stream
+[0x7f8e4b7fe700][1755292809.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1921 current=1921 incoming=1864 min=1585 max=2144
+[0x7f8e4b7fe700][1755292809.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1921908] -> [1921908] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292809.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1921908] on Video stream
+[0x7f8e4b7fe700][1755292810.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1947 current=1947 incoming=1912 min=1625 max=2199
+[0x7f8e4b7fe700][1755292811.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1911 current=1911 incoming=1921 min=1633 max=2209
+[0x7f8e4b7fe700][1755292812.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1973 current=1973 incoming=1912 min=1625 max=2199
+[0x7f8e4b7fe700][1755292813.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2053 current=2053 incoming=1874 min=1593 max=2155
+[0x7f8e4b7fe700][1755292813.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2053051] -> [2053051] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292813.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2053051] on Video stream
+[0x7f8e4b7fe700][1755292814.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2021 current=2021 incoming=1922 min=1634 max=2211
+[0x7f8e4b7fe700][1755292815.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1905 current=1905 incoming=1875 min=1594 max=2156
+[0x7f8e4b7fe700][1755292815.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1905629] -> [1905629] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292815.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1905629] on Video stream
+[0x7f8e4b7fe700][1755292816.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1943 current=1943 incoming=1886 min=1603 max=2169
+[0x7f8e4b7fe700][1755292817.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1964 current=1964 incoming=1925 min=1636 max=2214
+[0x7f8e4b7fe700][1755292817.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1964905] -> [1964905] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292817.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1964905] on Video stream
+[0x7f8e4b7fe700][1755292818.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1892 current=1892 incoming=1882 min=1600 max=2164
+[0x7f8e4b7fe700][1755292818.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1892585] -> [1892585] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292818.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1892585] on Video stream
+[0x7f8e4b7fe700][1755292819.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2023 current=2023 incoming=1879 min=1597 max=2161
+[0x7f8e4b7fe700][1755292819.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2023255] -> [2023255] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292819.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2023255] on Video stream
+[0x7f8e4b7fe700][1755292820.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1964 current=1964 incoming=1868 min=1588 max=2148
+[0x7f8e4b7fe700][1755292821.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1860 current=1860 incoming=1917 min=1630 max=2205
+[0x7f8e4b7fe700][1755292821.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1860615] -> [1860615] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292821.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1860615] on Video stream
+[0x7f8e4b7fe700][1755292822.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2028 current=2028 incoming=1902 min=1617 max=2187
+[0x7f8e4b7fe700][1755292822.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2028374] -> [2028374] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292822.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2028374] on Video stream
+[0x7f8e4b7fe700][1755292823.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1930 current=1930 incoming=1819 min=1547 max=2092
+[0x7f8e4b7fe700][1755292823.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1930704] -> [1930704] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292823.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1930704] on Video stream
+[0x7f8e4b7fe700][1755292824.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1900 current=1900 incoming=1896 min=1611 max=2180
+[0x7f8e4b7fe700][1755292825.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1946 current=1946 incoming=1920 min=1632 max=2208
+[0x7f8e4b7fe700][1755292826.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1999 current=1999 incoming=1841 min=1565 max=2118
+[0x7f8e4b7fe700][1755292826.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1999670] -> [1999670] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292826.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1999670] on Video stream
+[0x7f8e4b7fe700][1755292827.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2006 current=2006 incoming=1927 min=1638 max=2216
+[0x7f8e4b7fe700][1755292828.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1971 current=1971 incoming=1958 min=1664 max=2251
+[0x7f8e4b7fe700][1755292829.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1872 current=1872 incoming=1905 min=1619 max=2190
+[0x7f8e4b7fe700][1755292829.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1872049] -> [1872049] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292829.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1872049] on Video stream
+[0x7f8e4b7fe700][1755292829.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:Normal
+[0x7f8e4b7fe700][1755292830.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1913 current=1913 incoming=1925 min=1636 max=2213
+[0x7f8e4b7fe700][1755292831.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1874 current=1874 incoming=1882 min=1600 max=2164
+[0x7f8e4b7fe700][1755292832.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1918 current=1918 incoming=1861 min=1582 max=2140
+[0x7f8e4b7fe700][1755292833.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1828 current=1828 incoming=1952 min=1659 max=2244
+[0x7f8e4b7fe700][1755292834.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1964 current=1964 incoming=1842 min=1565 max=2118
+[0x7f8e4b7fe700][1755292834.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1964361] -> [1964361] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292834.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1964361] on Video stream
+[0x7f8e4b7fe700][1755292835.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1984 current=1984 incoming=1958 min=1664 max=2251
+[0x7f8e4b7fe700][1755292836.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1798 current=1798 incoming=1824 min=1550 max=2098
+[0x7f8e4b7fe700][1755292836.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1798905] -> [1798905] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292836.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1798905] on Video stream
+[0x7f8e4b7fe700][1755292837.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1905 current=1905 incoming=1914 min=1627 max=2201
+[0x7f8e4b7fe700][1755292837.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1905824] -> [1905824] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292837.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1905824] on Video stream
+[0x7f8e4b7fe700][1755292838.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2008 current=2008 incoming=1855 min=1577 max=2133
+[0x7f8e4b7fe700][1755292838.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2008642] -> [2008642] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292838.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2008642] on Video stream
+[0x7f8e4b7fe700][1755292839.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1959 current=1959 incoming=1944 min=1652 max=2236
+[0x7f8e4b7fe700][1755292840.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1976 current=1976 incoming=1910 min=1623 max=2196
+[0x7f8e4b7fe700][1755292841.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1987 current=1987 incoming=1964 min=1669 max=2258
+[0x7f8e4b7fe700][1755292842.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1982 current=1982 incoming=1921 min=1633 max=2209
+[0x7f8e4b7fe700][1755292843.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2026 current=2026 incoming=1837 min=1562 max=2113
+[0x7f8e4b7fe700][1755292844.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1981 current=1981 incoming=1938 min=1647 max=2229
+[0x7f8e4b7fe700][1755292845.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1911 current=1911 incoming=1821 min=1548 max=2094
+[0x7f8e4b7fe700][1755292845.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1911979] -> [1911979] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292845.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1911979] on Video stream
+[0x7f8e4b7fe700][1755292846.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1841 current=1841 incoming=1934 min=1644 max=2224
+[0x7f8e4b7fe700][1755292846.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1841327] -> [1841327] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292846.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1841327] on Video stream
+[0x7f8e4b7fe700][1755292847.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2011 current=2011 incoming=1893 min=1609 max=2177
+[0x7f8e4b7fe700][1755292847.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2011171] -> [2011171] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292847.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2011171] on Video stream
+[0x7f8e4b7fe700][1755292848.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2046 current=2046 incoming=1848 min=1570 max=2125
+[0x7f8e4b7fe700][1755292849.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1940 current=1940 incoming=1922 min=1634 max=2210
+[0x7f8e4b7fe700][1755292849.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1940991] -> [1940991] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292849.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1940991] on Video stream
+[0x7f8e4b7fe700][1755292850.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1988 current=1988 incoming=1913 min=1626 max=2200
+[0x7f8e4b7fe700][1755292851.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2018 current=2018 incoming=1905 min=1619 max=2191
+[0x7f8e4b7fe700][1755292851.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2018739] -> [2018739] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292851.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2018739] on Video stream
+[0x7f8e4b7fe700][1755292852.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1925 current=1925 incoming=1874 min=1593 max=2155
+[0x7f8e4b7fe700][1755292852.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1925115] -> [1925115] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292852.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1925115] on Video stream
+[0x7f8e4b7fe700][1755292853.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1951 current=1951 incoming=1942 min=1650 max=2233
+[0x7f8e4b7fe700][1755292854.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=2006 current=2006 incoming=1865 min=1585 max=2144
+[0x7f8e4b7fe700][1755292854.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2006787] -> [2006787] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292854.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2006787] on Video stream
+[0x7f8e4b7fe700][1755292855.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1923 current=1923 incoming=1959 min=1665 max=2252
+[0x7f8e4b7fe700][1755292855.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1923310] -> [1923310] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292855.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1923310] on Video stream
+[0x7f8e4b7fe700][1755292856.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1941 current=1941 incoming=1845 min=1568 max=2122
+[0x7f8e4b7fe700][1755292857.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1932 current=1932 incoming=1894 min=1610 max=2178
+[0x7f8e4b7fe700][1755292858.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1888 current=1888 incoming=1956 min=1663 max=2250
+[0x7f8e4b7fe700][1755292859.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1873 current=1873 incoming=1950 min=1658 max=2243
+[0x7f8e4b7fe700][1755292859.600][DBG]BWE: Overusing bitrate:1850000 max:1942500 min:1757500 T:14.322418,threshold:12.500000
+[0x7f8e4b7fe700][1755292859.700][DBG]BWE: ChangeState from:Increase to:Decrease
+[0x7f8e4b7fe700][1755292859.800][DBG]BWE: Change region to:NearMax
+[0x7f8e4b7fe700][1755292859.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:OverUsing
+[0x7f8e4b7fe700][1755292860.000][DBG]BWE: estimation stream=Alice Martin state=Decrease region=NearMax usage=OverUsing currentBitRate=1940 current=1940 incoming=1850 min=1572 max=2128
+[0x7f8e4b7fe700][1755292860.900][DBG]BWE: Decrease rate to current = 1200 kbps
+[0x7f8e4b7fe700][1755292860.940][DBG]BWE: UpdateLost lost:4 hipothesis:OverUsing,packets:312.0,lost:4.0
+[0x7f8e4b7fe700][1755292861.000][DBG]BWE: estimation stream=Alice Martin state=Decrease region=NearMax usage=OverUsing currentBitRate=1200 current=1200 incoming=900 min=765 max=1035
+[0x7f8e4b7fe700][1755292861.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1200000] -> [1200000] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292861.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1200000] on Video stream
+[0x7f8e4b7fe700][1755292861.800][DBG]BWE: ChangeState from:Decrease to:Hold
+[0x7f8e4b7fe700][1755292861.900][DBG]BWE: Decrease rate to current = 610 kbps
+[0x7f8e4b7fe700][1755292862.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=610 current=610 incoming=520 min=442 max=598
+[0x7f8e4b7fe700][1755292862.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [610000] -> [610000] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292862.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [610000] on Video stream
+[0x7f8e4b7fe700][1755292862.940][DBG]BWE: UpdateLost lost:4 hipothesis:Normal,packets:312.0,lost:4.0
+[0x7f8e4b7fe700][1755292863.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=514 current=514 incoming=471 min=400 max=541
+[0x7f8e4b7fe700][1755292863.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [514472] -> [514472] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292863.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [514472] on Video stream
+[0x7f8e4b7fe700][1755292864.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=517 current=517 incoming=494 min=420 max=568
+[0x7f8e4b7fe700][1755292865.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=507 current=507 incoming=484 min=412 max=557
+[0x7f8e4b7fe700][1755292866.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=513 current=513 incoming=482 min=410 max=554
+[0x7f8e4b7fe700][1755292867.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=509 current=509 incoming=478 min=406 max=550
+[0x7f8e4b7fe700][1755292868.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=505 current=505 incoming=487 min=414 max=560
+[0x7f8e4b7fe700][1755292869.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=513 current=513 incoming=489 min=416 max=563
+[0x7f8e4b7fe700][1755292870.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=509 current=509 incoming=504 min=429 max=580
+[0x7f8e4b7fe700][1755292871.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=499 current=499 incoming=475 min=404 max=546
+[0x7f8e4b7fe700][1755292872.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=518 current=518 incoming=480 min=408 max=552
+[0x7f8e4b7fe700][1755292873.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=510 current=510 incoming=476 min=405 max=547
+[0x7f8e4b7fe700][1755292874.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=466 current=466 incoming=502 min=427 max=577
+[0x7f8e4b7fe700][1755292874.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [466529] -> [466529] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292874.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [466529] on Video stream
+[0x7f8e4b7fe700][1755292875.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=508 current=508 incoming=467 min=397 max=536
+[0x7f8e4b7fe700][1755292875.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [508658] -> [508658] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292875.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [508658] on Video stream
+[0x7f8e4b7fe700][1755292876.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=508 current=508 incoming=485 min=412 max=557
+[0x7f8e4b7fe700][1755292877.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=514 current=514 incoming=475 min=404 max=546
+[0x7f8e4b7fe700][1755292878.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=497 current=497 incoming=483 min=411 max=556
+[0x7f8e4b7fe700][1755292879.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=510 current=510 incoming=509 min=433 max=586
+[0x7f8e4b7fe700][1755292880.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=503 current=503 incoming=473 min=402 max=544
+[0x7f8e4b7fe700][1755292881.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=504 current=504 incoming=477 min=406 max=549
+[0x7f8e4b7fe700][1755292882.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=497 current=497 incoming=447 min=380 max=514
+[0x7f8e4b7fe700][1755292883.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=487 current=487 incoming=492 min=418 max=566
+[0x7f8e4b7fe700][1755292883.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [487471] -> [487471] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292883.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [487471] on Video stream
+[0x7f8e4b7fe700][1755292884.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=519 current=519 incoming=479 min=407 max=551
+[0x7f8e4b7fe700][1755292884.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [519302] -> [519302] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292884.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [519302] on Video stream
+[0x7f8e4b7fe700][1755292885.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=527 current=527 incoming=490 min=417 max=564
+[0x7f8e4b7fe700][1755292886.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=499 current=499 incoming=460 min=391 max=529
+[0x7f8e4b7fe700][1755292886.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [499699] -> [499699] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292886.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [499699] on Video stream
+[0x7f8e4b7fe700][1755292887.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=514 current=514 incoming=476 min=405 max=547
+[0x7f8e4b7fe700][1755292888.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=464 current=464 incoming=493 min=419 max=567
+[0x7f8e4b7fe700][1755292888.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [464757] -> [464757] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292888.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [464757] on Video stream
+[0x7f8e4b7fe700][1755292889.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=483 current=483 incoming=493 min=419 max=567
+[0x7f8e4b7fe700][1755292889.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [483286] -> [483286] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292889.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [483286] on Video stream
+[0x7f8e4b7fe700][1755292889.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:Normal
+[0x7f8e4b7fe700][1755292889.940][DBG]BWE: UpdateLost lost:4 hipothesis:Normal,packets:312.0,lost:4.0
+[0x7f8e4b7fe700][1755292890.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=482 current=482 incoming=488 min=415 max=561
+[0x7f8e4b7fe700][1755292891.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=522 current=522 incoming=482 min=410 max=554
+[0x7f8e4b7fe700][1755292891.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [522919] -> [522919] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292891.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [522919] on Video stream
+[0x7f8e4b7fe700][1755292892.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=507 current=507 incoming=478 min=406 max=550
+[0x7f8e4b7fe700][1755292893.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=507 current=507 incoming=490 min=416 max=563
+[0x7f8e4b7fe700][1755292893.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [507120] -> [507120] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292893.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [507120] on Video stream
+[0x7f8e4b7fe700][1755292894.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=527 current=527 incoming=479 min=407 max=551
+[0x7f8e4b7fe700][1755292894.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [527998] -> [527998] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292894.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [527998] on Video stream
+[0x7f8e4b7fe700][1755292895.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=500 current=500 incoming=493 min=419 max=566
+[0x7f8e4b7fe700][1755292895.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [500592] -> [500592] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292895.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [500592] on Video stream
+[0x7f8e4b7fe700][1755292896.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=487 current=487 incoming=513 min=436 max=590
+[0x7f8e4b7fe700][1755292897.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=501 current=501 incoming=491 min=417 max=565
+[0x7f8e4b7fe700][1755292898.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=515 current=515 incoming=482 min=409 max=554
+[0x7f8e4b7fe700][1755292899.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=514 current=514 incoming=483 min=410 max=555
+[0x7f8e4b7fe700][1755292900.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=482 current=482 incoming=462 min=392 max=531
+[0x7f8e4b7fe700][1755292900.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [482357] -> [482357] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292900.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [482357] on Video stream
+[0x7f8e4b7fe700][1755292901.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=490 current=490 incoming=487 min=414 max=560
+[0x7f8e4b7fe700][1755292902.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=482 current=482 incoming=468 min=398 max=538
+[0x7f8e4b7fe700][1755292903.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=516 current=516 incoming=495 min=421 max=569
+[0x7f8e4b7fe700][1755292903.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [516198] -> [516198] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292903.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [516198] on Video stream
+[0x7f8e4b7fe700][1755292904.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=490 current=490 incoming=498 min=423 max=572
+[0x7f8e4b7fe700][1755292904.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [490933] -> [490933] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292904.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [490933] on Video stream
+[0x7f8e4b7fe700][1755292905.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=487 current=487 incoming=480 min=408 max=552
+[0x7f8e4b7fe700][1755292906.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=528 current=528 incoming=489 min=416 max=563
+[0x7f8e4b7fe700][1755292906.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [528841] -> [528841] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292906.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [528841] on Video stream
+[0x7f8e4b7fe700][1755292907.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=528 current=528 incoming=469 min=399 max=540
+[0x7f8e4b7fe700][1755292908.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=502 current=502 incoming=492 min=418 max=566
+[0x7f8e4b7fe700][1755292908.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [502332] -> [502332] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292908.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [502332] on Video stream
+[0x7f8e4b7fe700][1755292909.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=526 current=526 incoming=456 min=388 max=525
+[0x7f8e4b7fe700][1755292909.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [526099] -> [526099] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292909.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [526099] on Video stream
+[0x7f8e4b7fe700][1755292910.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=495 current=495 incoming=479 min=407 max=551
+[0x7f8e4b7fe700][1755292910.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [495957] -> [495957] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292910.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [495957] on Video stream
+[0x7f8e4b7fe700][1755292911.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=511 current=511 incoming=485 min=412 max=558
+[0x7f8e4b7fe700][1755292911.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [511149] -> [511149] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292911.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [511149] on Video stream
+[0x7f8e4b7fe700][1755292912.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=489 current=489 incoming=498 min=423 max=573
+[0x7f8e4b7fe700][1755292912.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [489697] -> [489697] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292912.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [489697] on Video stream
+[0x7f8e4b7fe700][1755292913.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=527 current=527 incoming=494 min=420 max=568
+[0x7f8e4b7fe700][1755292913.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [527310] -> [527310] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292913.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [527310] on Video stream
+[0x7f8e4b7fe700][1755292914.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=502 current=502 incoming=497 min=423 max=572
+[0x7f8e4b7fe700][1755292914.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [502290] -> [502290] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292914.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [502290] on Video stream
+[0x7f8e4b7fe700][1755292915.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=520 current=520 incoming=471 min=400 max=542
+[0x7f8e4b7fe700][1755292915.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [520278] -> [520278] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292915.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [520278] on Video stream
+[0x7f8e4b7fe700][1755292916.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=506 current=506 incoming=481 min=409 max=554
+[0x7f8e4b7fe700][1755292917.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=501 current=501 incoming=497 min=423 max=572
+[0x7f8e4b7fe700][1755292917.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [501048] -> [501048] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292917.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [501048] on Video stream
+[0x7f8e4b7fe700][1755292918.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=499 current=499 incoming=452 min=385 max=520
+[0x7f8e4b7fe700][1755292919.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=517 current=517 incoming=458 min=389 max=526
+[0x7f8e4b7fe700][1755292919.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [517281] -> [517281] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292919.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [517281] on Video stream
+[0x7f8e4b7fe700][1755292919.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:Normal
+[0x7f8e4b7fe700][1755292920.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=501 current=501 incoming=508 min=432 max=584
+[0x7f8e4b7fe700][1755292920.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [501663] -> [501663] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292920.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [501663] on Video stream
+[0x7f8e4b7fe700][1755292921.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=629 current=629 incoming=578 min=491 max=664
+[0x7f8e4b7fe700][1755292921.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [629096] -> [629096] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292921.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [629096] on Video stream
+[0x7f8e4b7fe700][1755292922.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=728 current=728 incoming=658 min=559 max=756
+[0x7f8e4b7fe700][1755292922.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [728030] -> [728030] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292922.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [728030] on Video stream
+[0x7f8e4b7fe700][1755292923.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=803 current=803 incoming=732 min=622 max=842
+[0x7f8e4b7fe700][1755292923.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [803562] -> [803562] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292923.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [803562] on Video stream
+[0x7f8e4b7fe700][1755292924.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=904 current=904 incoming=848 min=721 max=976
+[0x7f8e4b7fe700][1755292924.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [904767] -> [904767] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292924.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [904767] on Video stream
+[0x7f8e4b7fe700][1755292925.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=966 current=966 incoming=872 min=741 max=1003
+[0x7f8e4b7fe700][1755292925.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [966985] -> [966985] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292925.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [966985] on Video stream
+[0x7f8e4b7fe700][1755292926.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=992 current=992 incoming=920 min=782 max=1058
+[0x7f8e4b7fe700][1755292927.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1140 current=1140 incoming=995 min=846 max=1145
+[0x7f8e4b7fe700][1755292927.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1140893] -> [1140893] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292927.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1140893] on Video stream
+[0x7f8e4b7fe700][1755292928.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1192 current=1192 incoming=1091 min=928 max=1255
+[0x7f8e4b7fe700][1755292928.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1192558] -> [1192558] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292928.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1192558] on Video stream
+[0x7f8e4b7fe700][1755292929.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1276 current=1276 incoming=1195 min=1016 max=1374
+[0x7f8e4b7fe700][1755292929.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1276200] -> [1276200] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292929.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1276200] on Video stream
+[0x7f8e4b7fe700][1755292930.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1368 current=1368 incoming=1263 min=1074 max=1452
+[0x7f8e4b7fe700][1755292930.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1368186] -> [1368186] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292930.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1368186] on Video stream
+[0x7f8e4b7fe700][1755292931.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1446 current=1446 incoming=1400 min=1190 max=1610
+[0x7f8e4b7fe700][1755292931.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1446622] -> [1446622] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292931.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1446622] on Video stream
+[0x7f8e4b7fe700][1755292932.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1559 current=1559 incoming=1447 min=1230 max=1664
+[0x7f8e4b7fe700][1755292932.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1559427] -> [1559427] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292932.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1559427] on Video stream
+[0x7f8e4b7fe700][1755292933.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1575 current=1575 incoming=1506 min=1280 max=1732
+[0x7f8e4b7fe700][1755292934.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1729 current=1729 incoming=1575 min=1339 max=1811
+[0x7f8e4b7fe700][1755292934.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1729854] -> [1729854] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292934.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1729854] on Video stream
+[0x7f8e4b7fe700][1755292935.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1763 current=1763 incoming=1626 min=1382 max=1869
+[0x7f8e4b7fe700][1755292936.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1889 current=1889 incoming=1770 min=1504 max=2035
+[0x7f8e4b7fe700][1755292936.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1889664] -> [1889664] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292936.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1889664] on Video stream
+[0x7f8e4b7fe700][1755292937.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1974 current=1974 incoming=1822 min=1549 max=2096
+[0x7f8e4b7fe700][1755292937.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1974157] -> [1974157] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292937.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1974157] on Video stream
+[0x7f8e4b7fe700][1755292938.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1914 current=1914 incoming=1904 min=1619 max=2190
+[0x7f8e4b7fe700][1755292938.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1914632] -> [1914632] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292938.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1914632] on Video stream
+[0x7f8e4b7fe700][1755292939.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1930 current=1930 incoming=1861 min=1582 max=2140
+[0x7f8e4b7fe700][1755292940.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1933 current=1933 incoming=1923 min=1635 max=2212
+[0x7f8e4b7fe700][1755292941.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1926 current=1926 incoming=1877 min=1596 max=2159
+[0x7f8e4b7fe700][1755292942.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1946 current=1946 incoming=1862 min=1582 max=2141
+[0x7f8e4b7fe700][1755292943.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1960 current=1960 incoming=1871 min=1590 max=2151
+[0x7f8e4b7fe700][1755292944.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1959 current=1959 incoming=1841 min=1565 max=2117
+[0x7f8e4b7fe700][1755292945.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1891 current=1891 incoming=1884 min=1601 max=2167
+[0x7f8e4b7fe700][1755292946.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1941 current=1941 incoming=1918 min=1630 max=2206
+[0x7f8e4b7fe700][1755292947.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1923 current=1923 incoming=1844 min=1568 max=2121
+[0x7f8e4b7fe700][1755292948.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1936 current=1936 incoming=1907 min=1621 max=2193
+[0x7f8e4b7fe700][1755292949.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1972 current=1972 incoming=1919 min=1632 max=2207
+[0x7f8e4b7fe700][1755292949.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1972426] -> [1972426] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292949.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1972426] on Video stream
+[0x7f8e4b7fe700][1755292949.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:Normal
+[0x7f8e4b7fe700][1755292950.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1959 current=1959 incoming=1917 min=1629 max=2204
+[0x7f8e4b7fe700][1755292951.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1969 current=1969 incoming=1933 min=1643 max=2223
+[0x7f8e4b7fe700][1755292952.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1887 current=1887 incoming=1911 min=1625 max=2198
+[0x7f8e4b7fe700][1755292952.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1887480] -> [1887480] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292952.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1887480] on Video stream
+[0x7f8e4b7fe700][1755292953.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1989 current=1989 incoming=1922 min=1634 max=2211
+[0x7f8e4b7fe700][1755292953.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1989282] -> [1989282] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292953.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1989282] on Video stream
+[0x7f8e4b7fe700][1755292954.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1935 current=1935 incoming=1893 min=1609 max=2176
+[0x7f8e4b7fe700][1755292955.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1897 current=1897 incoming=1949 min=1656 max=2241
+[0x7f8e4b7fe700][1755292955.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1897256] -> [1897256] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292955.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1897256] on Video stream
+[0x7f8e4b7fe700][1755292956.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=2022 current=2022 incoming=1912 min=1625 max=2198
+[0x7f8e4b7fe700][1755292956.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [2022711] -> [2022711] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292956.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [2022711] on Video stream
+[0x7f8e4b7fe700][1755292957.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1970 current=1970 incoming=1877 min=1595 max=2158
+[0x7f8e4b7fe700][1755292958.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1946 current=1946 incoming=1947 min=1655 max=2239
+[0x7f8e4b7fe700][1755292958.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1946393] -> [1946393] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292958.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1946393] on Video stream
+[0x7f8e4b7fe700][1755292959.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1977 current=1977 incoming=1914 min=1627 max=2201
+[0x7f8e4b7fe700][1755292960.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1947 current=1947 incoming=1877 min=1596 max=2159
+[0x7f8e4b7fe700][1755292961.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1974 current=1974 incoming=1907 min=1621 max=2193
+[0x7f8e4b7fe700][1755292962.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1944 current=1944 incoming=1899 min=1614 max=2184
+[0x7f8e4b7fe700][1755292963.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1939 current=1939 incoming=1875 min=1593 max=2156
+[0x7f8e4b7fe700][1755292964.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1953 current=1953 incoming=1922 min=1634 max=2211
+[0x7f8e4b7fe700][1755292965.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1924 current=1924 incoming=1879 min=1597 max=2160
+[0x7f8e4b7fe700][1755292966.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1984 current=1984 incoming=1967 min=1672 max=2262
+[0x7f8e4b7fe700][1755292967.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1872 current=1872 incoming=1916 min=1629 max=2203
+[0x7f8e4b7fe700][1755292967.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1872212] -> [1872212] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292967.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1872212] on Video stream
+[0x7f8e4b7fe700][1755292968.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1964 current=1964 incoming=1916 min=1628 max=2203
+[0x7f8e4b7fe700][1755292968.010][DBG]-RTPSession::onTargetBitrateRequested() mode 1, bitrate [1964420] -> [1964420] send 1 for Video stream 0x55f2c1a30e40.
+[0x7f8e4b7fe700][1755292968.020][DBG]-RTPSession::SendReceiverEstimatedMaxBitrate [1964420] on Video stream
+[0x7f8e4b7fe700][1755292969.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1962 current=1962 incoming=1942 min=1651 max=2233
+[0x7f8e4b7fe700][1755292970.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1965 current=1965 incoming=1898 min=1614 max=2183
+[0x7f8e4b7fe700][1755292971.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1980 current=1980 incoming=1851 min=1574 max=2129
+[0x7f8e4b7fe700][1755292972.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1928 current=1928 incoming=1908 min=1622 max=2194
+[0x7f8e4b7fe700][1755292973.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=2004 current=2004 incoming=1933 min=1643 max=2223
+[0x7f8e4b7fe700][1755292974.000][DBG]BWE: estimation stream=Alice Martin state=Hold region=NearMax usage=Normal currentBitRate=1930 current=1930 incoming=1865 min=1585 max=2145
+[0x7f8e4b7fe700][1755292975.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1955 current=1955 incoming=1907 min=1621 max=2193
+[0x7f8e4b7fe700][1755292976.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1920 current=1920 incoming=1890 min=1607 max=2174
+[0x7f8e4b7fe700][1755292977.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1981 current=1981 incoming=1953 min=1660 max=2246
+[0x7f8e4b7fe700][1755292978.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1909 current=1909 incoming=1870 min=1590 max=2151
+[0x7f8e4b7fe700][1755292979.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1979 current=1979 incoming=1943 min=1651 max=2234
+[0x7f8e4b7fe700][1755292979.950][DBG]BWE: UpdateRTT rtt:28ms hipothesis:Normal
+[0x7f8e4b7fe700][1755292980.000][DBG]BWE: estimation stream=Alice Martin state=Increase region=NearMax usage=Normal currentBitRate=1974 current=1974 incoming=1946 min=1654 max=2237
+[0x7f8e4a1fd700][1755292800.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=311 min=280 max=342
+[0x7f8e4a1fd700][1755292802.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=323 min=290 max=355
+[0x7f8e4a1fd700][1755292804.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=298 min=269 max=328
+[0x7f8e4a1fd700][1755292806.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=313 min=281 max=344
+[0x7f8e4a1fd700][1755292808.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=319 min=287 max=351
+[0x7f8e4a1fd700][1755292810.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=325 min=293 max=358
+[0x7f8e4a1fd700][1755292812.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=313 min=281 max=344
+[0x7f8e4a1fd700][1755292814.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=319 min=287 max=351
+[0x7f8e4a1fd700][1755292816.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=325 min=292 max=357
+[0x7f8e4a1fd700][1755292818.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=324 min=291 max=356
+[0x7f8e4a1fd700][1755292820.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=326 min=294 max=359
+[0x7f8e4a1fd700][1755292822.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=322 min=290 max=354
+[0x7f8e4a1fd700][1755292824.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=317 min=285 max=348
+[0x7f8e4a1fd700][1755292826.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=328 min=295 max=361
+[0x7f8e4a1fd700][1755292828.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=353
+[0x7f8e4a1fd700][1755292830.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=312 min=281 max=343
+[0x7f8e4a1fd700][1755292832.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=314 min=282 max=345
+[0x7f8e4a1fd700][1755292834.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=352
+[0x7f8e4a1fd700][1755292836.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=319 min=287 max=351
+[0x7f8e4a1fd700][1755292838.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=322 min=289 max=354
+[0x7f8e4a1fd700][1755292840.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=352
+[0x7f8e4a1fd700][1755292842.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=322 min=290 max=354
+[0x7f8e4a1fd700][1755292844.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=319 min=287 max=351
+[0x7f8e4a1fd700][1755292846.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=307 min=277 max=338
+[0x7f8e4a1fd700][1755292848.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=324 min=292 max=357
+[0x7f8e4a1fd700][1755292850.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=331 min=297 max=364
+[0x7f8e4a1fd700][1755292852.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=324 min=292 max=357
+[0x7f8e4a1fd700][1755292854.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=318 min=286 max=350
+[0x7f8e4a1fd700][1755292856.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=324 min=292 max=357
+[0x7f8e4a1fd700][1755292858.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=310 min=279 max=341
+[0x7f8e4a1fd700][1755292860.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=301 min=271 max=331
+[0x7f8e4a1fd700][1755292862.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=321 min=289 max=353
+[0x7f8e4a1fd700][1755292864.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=311 min=280 max=342
+[0x7f8e4a1fd700][1755292866.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=327 min=295 max=360
+[0x7f8e4a1fd700][1755292868.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=309 min=278 max=340
+[0x7f8e4a1fd700][1755292870.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=294 min=264 max=323
+[0x7f8e4a1fd700][1755292872.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=310 min=279 max=341
+[0x7f8e4a1fd700][1755292874.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=336 min=302 max=369
+[0x7f8e4a1fd700][1755292876.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=316 min=285 max=348
+[0x7f8e4a1fd700][1755292878.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=306 min=276 max=337
+[0x7f8e4a1fd700][1755292880.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=312 min=281 max=344
+[0x7f8e4a1fd700][1755292882.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=325 min=293 max=358
+[0x7f8e4a1fd700][1755292884.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=325 min=292 max=357
+[0x7f8e4a1fd700][1755292886.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=322 min=290 max=354
+[0x7f8e4a1fd700][1755292888.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=335 min=301 max=368
+[0x7f8e4a1fd700][1755292890.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=327 min=294 max=360
+[0x7f8e4a1fd700][1755292892.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=352
+[0x7f8e4a1fd700][1755292894.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=326 min=293 max=359
+[0x7f8e4a1fd700][1755292896.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=337 min=303 max=370
+[0x7f8e4a1fd700][1755292898.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=330 min=297 max=363
+[0x7f8e4a1fd700][1755292900.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=330 min=297 max=363
+[0x7f8e4a1fd700][1755292902.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=309 min=278 max=340
+[0x7f8e4a1fd700][1755292904.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=319 min=287 max=350
+[0x7f8e4a1fd700][1755292906.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=327 min=295 max=360
+[0x7f8e4a1fd700][1755292908.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=317 min=285 max=349
+[0x7f8e4a1fd700][1755292910.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=331 min=298 max=364
+[0x7f8e4a1fd700][1755292912.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=326 min=293 max=359
+[0x7f8e4a1fd700][1755292914.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=329 min=296 max=362
+[0x7f8e4a1fd700][1755292916.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=318 min=286 max=350
+[0x7f8e4a1fd700][1755292918.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=345 min=311 max=380
+[0x7f8e4a1fd700][1755292920.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=332 min=299 max=366
+[0x7f8e4a1fd700][1755292922.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=318 min=286 max=350
+[0x7f8e4a1fd700][1755292924.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=321 min=289 max=353
+[0x7f8e4a1fd700][1755292926.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=346 min=311 max=381
+[0x7f8e4a1fd700][1755292928.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=317 min=285 max=348
+[0x7f8e4a1fd700][1755292930.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=329 min=296 max=362
+[0x7f8e4a1fd700][1755292932.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=330 min=297 max=363
+[0x7f8e4a1fd700][1755292934.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=352
+[0x7f8e4a1fd700][1755292936.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=308 min=277 max=339
+[0x7f8e4a1fd700][1755292938.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=322 min=290 max=354
+[0x7f8e4a1fd700][1755292940.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=324 min=291 max=356
+[0x7f8e4a1fd700][1755292942.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=331 min=298 max=364
+[0x7f8e4a1fd700][1755292944.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=328 min=295 max=361
+[0x7f8e4a1fd700][1755292946.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=352
+[0x7f8e4a1fd700][1755292948.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=329 min=296 max=361
+[0x7f8e4a1fd700][1755292950.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=325 min=293 max=358
+[0x7f8e4a1fd700][1755292952.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=322 min=290 max=354
+[0x7f8e4a1fd700][1755292954.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=321 min=288 max=353
+[0x7f8e4a1fd700][1755292956.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=318 min=286 max=349
+[0x7f8e4a1fd700][1755292958.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=327 min=294 max=360
+[0x7f8e4a1fd700][1755292960.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=309 min=279 max=340
+[0x7f8e4a1fd700][1755292962.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=314 min=282 max=345
+[0x7f8e4a1fd700][1755292964.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=320 min=288 max=352
+[0x7f8e4a1fd700][1755292966.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=305 min=275 max=336
+[0x7f8e4a1fd700][1755292968.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=316 min=284 max=347
+[0x7f8e4a1fd700][1755292970.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=300 min=270 max=330
+[0x7f8e4a1fd700][1755292972.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=313 min=282 max=344
+[0x7f8e4a1fd700][1755292974.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=326 min=293 max=358
+[0x7f8e4a1fd700][1755292976.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=326 min=293 max=358
+[0x7f8e4a1fd700][1755292978.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=319 min=288 max=351
+[0x7f8e4a1fd700][1755292980.400][DBG]BWE: estimation stream=sip:bob@ives.fr state=Hold region=NearMax usage=Normal currentBitRate=340 current=340 incoming=318 min=286 max=349

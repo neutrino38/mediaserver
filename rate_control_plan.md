@@ -330,6 +330,26 @@ Instrumentation : les traces `BWE:` réparées (lot 0) + le débit entrant réel
 regard par un petit script de dépouillement (gnuplot ou python, dans
 `mcu/tests/tools/`).
 
+> **Outillage FAIT (2026-08-17), séance non tenue.** `mcu/tests/tools/` :
+> `netem_scenario.sh` (les trois scénarios, marqueurs horodatés, restauration
+> des qdisc à la sortie même sur Ctrl-C, option `--ingress` par interface `ifb`
+> quand on n'a pas de machine en coupure — netem ne façonne que l'émission, or
+> c'est la **réception** qu'on mesure) ; `bwe_report.py` (bibliothèque standard
+> seule : la machine de mesure n'a ni gnuplot ni matplotlib — CSV, graphe SVG
+> écrit à la main, et **verdict prononcé critère par critère**, avec sortie
+> `--markdown` à coller en annexe D) ; `exemple/` porte un journal synthétique
+> pour vérifier la chaîne à froid ; `README.md` porte le protocole et le
+> montage. Annexe D créée en gabarit dans `rate-control.md`.
+>
+> Une trace de production a été complétée pour rendre le dépouillement
+> possible : `BWE: estimation` porte désormais `stream=<nom de la patte>` (tag
+> du participant / nom de l'endpoint). Sans elle, un appel à deux pattes mêle
+> deux séries dans le même journal — le regroupement se fait par identifiant de
+> thread, mais rien ne les nommait. Les seuils que le plan ne chiffre pas
+> (oscillation, gel d'hypothèse, écrêtage) sont **posés dans l'outil et
+> documentés** : ils se discutent en annexe D, ils ne se déplacent pas après
+> coup pour faire passer une mesure.
+
 **Critères d'acceptation du chemin réparé** (comme dernier barreau, pas comme
 solution) :
 - régime établi : estimation à ±25 % du débit effectif ;
@@ -511,7 +531,9 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
 - [x] Lot 0 — harnais + traces (2026-08-15 : 11 tests, 7 DISABLED_/4 gardes-fous, `make check-ratecontrol`, 386 verts au total)
 - [x] Lot 1 — boucle fermée (2026-08-15 : échanges, §3.4 a-g, constantes 16k/30M, verrou, listeners multiples ; 7 DISABLED_ levés, 393 verts, binaire lié)
 - [x] Lot 2 — feedback négocié + `RembThrottler` (2026-08-15 : mode `{None,REMB,TMMBR}`, throttler, `SendReceiverEstimatedMaxBitrate`, propriété `remb` posée par les deux contrôleurs elixip ; 2 défauts du paquet REMB corrigés ; 20/20 et 402 verts. **Reste la recette pcap sur appel Chrome réel**)
-- [ ] Lot 3 — mesures netem + annexe D + décision GO/NO-GO
+- [ ] Lot 3 — mesures netem + annexe D + décision GO/NO-GO (**outillage fait**
+      2026-08-17 : `mcu/tests/tools/` + gabarit d'annexe D ; reste la séance de
+      mesure, qui demande un appel réel et une machine en coupure)
 - [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live
 - [ ] Lot 6 — `sender_bwe_plan.md` puis implémentation v1

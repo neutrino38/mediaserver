@@ -62,4 +62,11 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_red_fec_hardening.cpp` | `RedPayload`, `FecData`, `FecDecoder` | — (suite ADVERSE RED/ULPFEC : blocs sans fin, longueurs de protection mensongères) |
 | `test_rtmp_hardening.cpp` | `RtmpMessage`, `RtmpMediaFrame`, `RtmpChunkInput` | — (suite ADVERSE RTMP : message de longueur nulle, trame vide, flux sans message ouvert) |
 | `test_websocket_http_hardening.cpp` | `WebSocketHandshake` | — (poignée de main envoyée octet par octet : URL et en-têtes doivent être réassemblés) |
-| `test_rate_control.cpp` | `RateControlEstimator`, `RateControlDetector` | — (contrôle de débit, chantier rate-control : les 7 caractérisations du lot 0 ont été levées par le lot 1, les 11 tests sont des garde-fous joués par `make check` ; `make check-ratecontrol` reste le raccourci de la suite) |
+| `test_rate_control.cpp` | `RateControlEstimator`, `RateControlDetector`, `RateControlThrottler`, `RateControlRemb` | — (contrôle de débit, chantier rate-control : les 7 caractérisations du lot 0 ont été levées par le lot 1, les 20 tests sont des garde-fous joués par `make check` ; `make check-ratecontrol` reste le raccourci de la suite) |
+
+## `tools/` — ce qui n'est pas un test
+
+`tools/` ne contient aucun test unitaire et n'est pas compilé (`$(TESTSRCS)` ne
+ramasse que `tests/*.cpp`) : c'est l'outillage de la **séance de mesure** du lot 3
+du contrôle de débit — injection `tc netem` et dépouillement des traces `BWE:`
+d'un appel réel. Voir [`tools/README.md`](tools/README.md).

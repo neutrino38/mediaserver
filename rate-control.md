@@ -852,3 +852,63 @@ y a un homologue ; elle sert d'ordre de grandeur, pas de cible à recopier.
 - [`CODEC-NEGOTIATION.md`](https://github.com/neutrino38/elixip/blob/master/CODEC-NEGOTIATION.md)
   (dépôt elixip) — pourquoi un chemin est relayé ou transcodé, ce qui décide du
   §6
+
+## Annexe D — mesures du lot 3 (portillon) — *à remplir*
+
+> **Statut : outillage prêt, séance non tenue.** Cette annexe est le livrable du
+> lot 3 de [`rate_control_plan.md`](rate_control_plan.md) : elle porte les
+> mesures et la **décision GO/NO-GO du lot 6**. Tant qu'elle n'est pas remplie,
+> le lot 6 ne se conçoit pas — c'est le sens du portillon.
+
+### D.0 Comment ces mesures se produisent
+
+Protocole, montage et seuils : [`mcu/tests/tools/README.md`](mcu/tests/tools/README.md).
+En deux commandes, une fois l'appel établi et le mediaserver lancé avec `-d` :
+
+```sh
+sudo mcu/tests/tools/netem_scenario.sh -i eth0 -s escalier -m escalier.tsv
+mcu/tests/tools/bwe_report.py /var/log/mcu.log --markers escalier.tsv \
+                              --stream '<patte>' --out escalier --markdown
+```
+
+Le bloc produit par `--markdown` se colle tel quel dans les sections ci-dessous.
+Tout seuil ajusté par rapport aux valeurs par défaut de l'outil **doit être dit
+ici**, avec sa raison.
+
+### D.1 Conditions de la séance
+
+| élément | valeur |
+|---|---|
+| date | *(à remplir)* |
+| version du mediaserver / commit | |
+| montage (coupure ou `--ingress`) | |
+| pair A (client, codec, résolution) | |
+| chemin (relayé ou transcodé) | |
+| dialecte de feedback négocié (`remb` / `tmmbr` / aucun) | |
+| durée cumulée de la capture | |
+
+### D.2 Marche d'escalier
+
+*(graphe `bwe.svg` + bloc `--markdown`)*
+
+### D.3 Pertes
+
+*(idem)*
+
+### D.4 Gigue
+
+*(idem)*
+
+### D.5 Stabilité sur la durée
+
+Dépouillement du journal entier, sans `--markers` : NaN, gel d'hypothèse,
+écrêtage au plafond, avertissements de covariance.
+
+### D.6 Décision
+
+| question | réponse |
+|---|---|
+| le chemin réparé tient-il ses critères ? | *(à remplir)* |
+| alignements « lot 1bis » réclamés par la mesure (arbitrage A3) | |
+| **GO / NO-GO du lot 6** | |
+| marge A6 (×1,25) confirmée ou corrigée | |

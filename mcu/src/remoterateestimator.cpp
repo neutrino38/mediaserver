@@ -358,7 +358,10 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 
 	//Formats : DWORD -> %u, long double -> cast double + %f ("%llf" n'existe pas,
 	//les valeurs affichees etaient fausses — rate-control.md §4, "traces").
-	Debug("BWE: estimation state=%s region=%s usage=%s currentBitRate=%u current=%u incoming=%.0f min=%.0f max=%.0f\n",GetName(state),RemoteRateControl::GetName(region),RemoteRateControl::GetName(usage),currentBitRate/1000,current/1000,(double)incomingBitRate/1000,(double)bitrateAcu.GetMinAvg()/1000,(double)bitrateAcu.GetMaxAvg()/1000);
+	//"stream=" nomme la patte (tag du participant / nom de l'endpoint) : sans lui
+	//un appel a deux pattes melange deux series dans le meme journal et le
+	//depouillement du lot 3 (mcu/tests/tools/) ne peut pas les separer.
+	Debug("BWE: estimation stream=%s state=%s region=%s usage=%s currentBitRate=%u current=%u incoming=%.0f min=%.0f max=%.0f\n",eventSource?eventSource->GetName():"",GetName(state),RemoteRateControl::GetName(region),RemoteRateControl::GetName(usage),currentBitRate/1000,current/1000,(double)incomingBitRate/1000,(double)bitrateAcu.GetMinAvg()/1000,(double)bitrateAcu.GetMaxAvg()/1000);
 
 	if (eventSource)
 		eventSource->SendEvent

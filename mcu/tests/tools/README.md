@@ -1,0 +1,168 @@
+# Outillage de mesure du contrôle de débit (lot 3)
+
+Ce répertoire porte de quoi **exécuter et dépouiller** la séance de mesure du
+lot 3 de [`rate_control_plan.md`](../../../rate_control_plan.md) — le *portillon*
+qui décide du GO/NO-GO du lot 6. Il ne contient aucun test unitaire : la suite
+gtest du chantier est `mcu/tests/test_rate_control.cpp`, jouée par
+`make check-ratecontrol`.
+
+| fichier | rôle |
+|---|---|
+| `netem_scenario.sh` | applique les trois scénarios de dégradation et **journalise** chaque changement avec son horodatage |
+| `bwe_report.py` | lit `mcu.log` + le journal de marqueurs, sort CSV, graphe SVG, et **prononce chaque critère d'acceptation** |
+| `exemple/` | un journal **synthétique** et ses marqueurs, pour vérifier l'outillage avant la séance |
+
+Aucune dépendance : bash + `iproute-tc` d'un côté, python 3.6+ de la
+bibliothèque standard de l'autre. Ni matplotlib ni gnuplot — le graphe est un
+SVG écrit à la main, lisible dans n'importe quel navigateur.
+
+## Vérifier l'outillage (à froid, sans appel)
+
+```sh
+cd mcu/tests/tools
+./bwe_report.py exemple/mcu-escalier.log --markers exemple/marqueurs-escalier.tsv \
+                --stream Alice --out /tmp/verif
+```
+
+Attendu : `0 critere(s) en echec`, et `/tmp/verif/bwe.svg` montre un palier à
+2000 kb/s, une chute à 500, une re-montée. **Ce journal est fabriqué**, il ne
+mesure rien — il ne sert qu'à prouver que la chaîne de dépouillement fonctionne.
+
+## Le montage
+
+```
+   ┌──────────┐        ┌───────────────────┐        ┌──────────────┐
+   │ pair A   │───────►│ machine en coupure│───────►│ mediaserver  │
+   │ (Chrome, │        │   tc netem ici    │        │  -d, mcu.log │
+   │  SIP…)   │◄───────│                   │◄───────│              │
+   └──────────┘        └───────────────────┘        └──────────────┘
+```
+
+**Le sens du trafic n'est pas un détail.** Ce que le lot 3 mesure est
+l'estimateur de **réception** : il faut donc dégrader ce qui **arrive** au
+mediaserver, et `netem` ne façonne que l'**émission** d'une interface. Deux
+montages valides :
+
+- **machine en coupure** (ou le poste client lui-même) : lancer
+  `netem_scenario.sh` dessus, sur l'interface qui émet **vers** le mediaserver.
+  C'est le montage de référence ;
+- **sur le mediaserver**, avec `--ingress` : le script détourne le trafic entrant
+  vers une interface `ifb` et lui applique `netem`. Plus simple à monter, mais le
+  façonnage frappe alors **tout** ce qui entre par l'interface — à réserver à une
+  machine dédiée à l'essai.
+
+### Préparer le mediaserver
+
+Les traces `BWE:` sont des `Debug()` : elles n'existent que si le binaire tourne
+avec `-d`.
+
+```sh
+# /etc/sysconfig/mediaserver
+OPTIONS="-d"
+```
+
+```sh
+systemctl restart mediaserver
+: > /var/log/mcu.log          # repartir d'un journal propre
+tail -f /var/log/mcu.log | grep BWE:      # doit défiler dès qu'un appel vidéo est établi
+```
+
+Si rien ne défile alors qu'un appel vidéo est en cours, l'estimateur n'est pas
+branché sur cette patte — inutile de lancer le scénario, régler cela d'abord.
+
+## Les trois scénarios
+
+Un appel réel établi via elixip (1:1 vidéo, le pair A émettant vers le
+mediaserver), puis :
+
+```sh
+# marche d'escalier : 2 Mb/s -> 500 kb/s -> 2 Mb/s, 60 s par palier
+sudo ./netem_scenario.sh -i eth0 -s escalier -m escalier.tsv
+
+# pertes : sain -> 2 % -> 10 % -> sain
+sudo ./netem_scenario.sh -i eth0 -s pertes -m pertes.tsv
+
+# gigue : sain -> 50 ms ± 30 ms (2 phases) -> sain
+sudo ./netem_scenario.sh -i eth0 -s gigue -m gigue.tsv
+```
+
+Options utiles : `-r` (débit du lien sain, kb/s, défaut 2000), `-d` (durée d'une
+phase, défaut 60 s), `--ingress` (cf. plus haut). Le script **restaure les qdisc
+à la sortie**, y compris sur Ctrl-C ou `kill`.
+
+Le critère « 10 minutes sans NaN, sans gel d'hypothèse, sans écrêtage » se juge
+sur la durée **cumulée** de la séance : enchaîner les trois scénarios sans couper
+l'appel et dépouiller le journal entier une fois de plus, sans `--markers`,
+donne cette lecture-là.
+
+## Dépouiller
+
+```sh
+./bwe_report.py /var/log/mcu.log --markers escalier.tsv --stream 'Alice' \
+                --out ./escalier --markdown
+```
+
+- `--stream` **n'est pas optionnel en pratique** : un appel a plusieurs pattes
+  (les deux participants, audio et vidéo), un seul lien est dégradé, et juger les
+  autres pattes contre les marqueurs produit des `KO` qui ne veulent rien dire.
+  Le nom est celui que `BWE: estimation stream=…` porte : le tag du participant
+  (MCU) ou le nom de l'endpoint (JSR-309). Lancer une première fois sans filtre
+  pour lire la liste des pattes.
+- `--markdown` ajoute le bloc de tableaux à coller tel quel dans l'annexe D.
+- Sorties dans `--out` : `bwe.csv` (la série d'estimation), `events.csv`
+  (détections, feedback émis, pertes, RTT, changements d'état), `bwe.svg`.
+- Code de retour : `0` si aucun critère n'échoue, `1` sinon, `2` si le journal ne
+  contient aucune trace BWE (traces de debug non activées, le cas le plus
+  fréquent).
+
+### Ce que le script prononce
+
+| critère | source | seuil |
+|---|---|---|
+| régime établi | médiane de l'estimation sur le palier, garde de 15 s | ±25 % du lien |
+| réaction à la baisse | 1er échantillon sous 1,25 × le nouveau lien | < 3 s |
+| re-montée | 1er échantillon ≥ 80 % du lien | < 30 s |
+| pas d'oscillation | bascules `Increase`↔`Decrease` et coef. de variation | ≤ 6/min, ≤ 0,20 |
+| pertes : pas d'effondrement | médiane rapportée à la phase saine précédente | ≥ 25 % |
+| gigue : faux positifs | part des échantillons hors `Normal` | ≤ 10 % |
+| pas de NaN | toute valeur imprimée `nan` | 0 |
+| hypothèse non gelée | plus longue plage continue hors `Normal` | ≤ 30 s |
+| pas d'écrêtage | temps cumulé à 30 000 kb/s (plafond du lot 1) | ≤ 5 s |
+| covariance | avertissements `no longer positive semi-definite` | 0 |
+
+Le plan chiffre les quatre premiers. Les autres seuils sont **posés ici** faute
+d'être chiffrés ailleurs : `--settle`, `--max-kbps` et `--min-kbps` s'ajustent en
+ligne de commande, les autres en tête de `bwe_report.py`. Toute valeur retenue
+autrement doit être **dite en annexe D** — un critère déplacé après coup pour
+faire passer une mesure ne mesure plus rien.
+
+## Traces lues
+
+Toutes viennent de `mcu/src/remoterateestimator.cpp`,
+`mcu/src/remoteratecontrol.cpp` et `mcu/src/rtpsession.cpp` :
+
+```
+BWE: estimation stream=… state=… region=… usage=… currentBitRate=… current=… incoming=… min=… max=…
+BWE: Overusing bitrate:… T:…,threshold:…      BWE: Overusing candidate n/3 …
+BWE:  Normal  bitrate:…                        BWE:  UnderUsing bitrate:…
+BWE: ChangeState from:… to:…                   BWE: Change region to:…
+BWE: Increase|Decrease rate to current = … kbps
+BWE: UpdateLost lost:… hipothesis:…,packets:…,lost:…      BWE: UpdateRTT rtt:…ms hipothesis:…
+BWE: covariance no longer positive semi-definite
+-RTPSession::onTargetBitrateRequested() mode … bitrate […] -> […] send … for … stream …
+-RTPSession::SendReceiverEstimatedMaxBitrate […] on … stream
+-RTPSession::SendTempMaxMediaStreamBitrateRequest […] on … stream
+-RemoteRateEstimator::SetTemporalMaxLimit() …
+```
+
+Le regroupement par patte se fait sur l'**identifiant de thread** du préfixe de
+trace (une `RTPSession` = un thread), et l'étiquette lisible vient du champ
+`stream=` de la ligne d'estimation. Un journal capturé **avant** l'ajout de ce
+champ reste lisible : les pattes s'appellent alors `tid 0x…`.
+
+## Livrable
+
+Les mesures et la décision GO/NO-GO vont en **annexe D de
+[`rate-control.md`](../../../rate-control.md)** : le graphe, le bloc `--markdown`
+de chaque scénario, et la liste des alignements « lot 1bis » que la mesure
+réclame le cas échéant (arbitrage A3 du plan).
