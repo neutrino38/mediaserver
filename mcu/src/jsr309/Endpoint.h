@@ -229,13 +229,23 @@ private:
 	
 private:
 	std::wstring name;
-	//RTP sessions
-	std::shared_ptr<Port> ports[4];
-	std::shared_ptr<Port> ports2[4];
-	
+
+	//DECLARES AVANT ports/ports2, ET C'EST LE CONTRAT : les RTPSession des ports
+	//pointent sur ces deux membres (Init -> SetRemoteRateEstimator, ctor ->
+	//SetEventSource), or les membres se detruisent dans l'ORDRE INVERSE de leur
+	//declaration. Declares apres, ils mouraient AVANT les ports, et
+	//~RTPSession appelait remoteRateEstimator->RemoveListener(this) sur un
+	//estimateur detruit : erase() dans un std::set libere, donc un tas corrompu a
+	//CHAQUE EndpointDelete, et un abort differe ailleurs (souvent le SSL_free du
+	//DTLS). Ne pas regrouper ces membres "proprement" en fin de classe.
 	RemoteRateEstimator estimator;
 	RemoteRateEstimator estimator2;
 	EvenSource eventSource;
+
+	//RTP sessions
+	std::shared_ptr<Port> ports[4];
+	std::shared_ptr<Port> ports2[4];
+
         Statistics stats;
 };
 

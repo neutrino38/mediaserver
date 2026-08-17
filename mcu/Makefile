@@ -119,6 +119,18 @@ ifeq ($(MOTELI),yes)
 	LDFLAGS += -Wl,-Bstatic -lamqpcpp -lrabbitmq -lprotobuf -Wl,-Bdynamic
 endif
 
+# ASAN=yes : AddressSanitizer. Pour la classe de defaut que ce depot rencontre le
+# plus — corruption de tas dont l'abort tombe tres loin de la cause (typiquement
+# dans un free() sans rapport) —, c'est le seul outil qui nomme le fichier et la
+# ligne de l'ecriture fautive. Le binaire est ~2x plus lent : utilisable en appel
+# reel, contrairement a valgrind.
+# Les objets vont dans le MEME repertoire que le build normal : rebatir sans
+# ASAN=yes apres, sinon on livre un binaire instrumente.
+ifeq ($(ASAN),yes)
+	OPTS    += -fsanitize=address -fno-omit-frame-pointer
+	LDFLAGS += -fsanitize=address
+endif
+
 OBJSMCU = $(OBJS) main.o
 OBJSRTMPTEST = $(OBJS) rtmptest.o
 OBJSWSTEST = $(OBJS) wstest.o
