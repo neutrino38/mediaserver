@@ -372,6 +372,37 @@ solution) :
 - re-montée : ≥ 80 % du lien en < 30 s ;
 - 10 minutes sans NaN, sans gel d'hypothèse, sans écrêtage permanent au max.
 
+> **La re-montée est un critère de BOUCLE OUVERTE.** Cinq séances d'escalier en
+> boucle fermée (2026-08-17/18) ont rendu 34,6 s, 29,8 s puis 50,0 s, et aucune
+> de ces valeurs ne mesure notre estimateur. Preuve, patte `cx-120` : treize
+> échantillons en état `Increase` avec l'estimation **gelée**, chaque fois à
+> `est ≈ 1,5 × entrant` — le garde-fou `current > 1.5 * incomingBitRate`
+> (`remoterateestimator.cpp:373`) — pendant que la source stagne à 850-990 kb/s
+> face à un lien à 2000. La pente, elle, est la même que sur la séance voisine
+> (1,0476 contre 1,0480 par seconde) : le facteur de montée n'y est pour rien.
+>
+> En boucle fermée, notre REMB borne la source et le garde-fou borne notre REMB
+> par ce que la source émet. La vitesse de reprise est celle du plus lent des
+> deux, et rien ne dit lequel. Le critère ne se prononce donc **que** sur une
+> série sans `remb` ni `tmmbr` négociés, où le débit entrant est une variable
+> indépendante de nous. Corollaire : l'arbitrage A3 (facteur de montée) ne peut
+> pas être tranché sur une mesure en boucle fermée, dans un sens ni dans l'autre.
+>
+> **Ce que les séances en boucle fermée ont établi**, et qui ne dépend pas de ce
+> biais : réaction à la baisse de 0,7 à 1,8 s, jamais démentie ; régime établi à
+> −27 %, −21 % et −9 % quand le lien mord vraiment — tolérance frôlée, pas
+> effondrée ; aucun NaN, aucun gel d'hypothèse, aucun écrêtage depuis le
+> lot 1bis ; et **6,5 à 11,3 bascules par minute contre 6 tolérées, sur les cinq
+> séances sans exception**, avec une amplitude faible (coefficient de variation
+> 0,08 à 0,15, une fois 0,35). L'oscillation est le seul critère jamais tenu.
+>
+> **Piège de montage tranché** : `-l 40` fabrique les pertes qu'il prétend ne pas
+> injecter — 44 rapports de perte contre 2 à `-l 100` — parce que 40 paquets ne
+> valent qu'une seule image clé. Une file doit absorber deux ou trois images clés
+> sans rejeter : `-l 100` (~480 ms à 2 Mb/s). Et vérifier en phase 0 que
+> `incoming=` dépasse franchement le palier haut : une séance dont la source
+> n'émet que 646 kb/s face à un lien de 2000 rend un `OK` qui ne vaut rien.
+
 **Livrable** : les mesures et la décision, consignées en annexe D de
 `rate-control.md`. La décision du portillon : GO/NO-GO du lot 6, et liste des
 éventuels alignements « lot 1bis » que la mesure réclame.
@@ -472,6 +503,26 @@ la conception de cette suite avait annoncé :
   n'avait jamais été vu comme un défaut. Le témoin n'a pas ce problème : son
   contrôle par perte vit dans `SendSideBandwidthEstimation`, séparé du détecteur
   de délai.
+
+**La séparation a créé son propre défaut, et la séance l'a trouvé.** Patte
+`cx-31`, 2026-08-18 : un unique rapport de perte à t+27 s fait basculer le chemin
+perte, `UpdateLost` n'est plus jamais appelée — **une fois en 4,9 minutes** — et
+l'hypothèse reste `OverUsing` à vie. L'estimateur, maintenu en `Decrease`,
+s'effondre de 2216 kb/s au plancher de 16 kb/s, où il reste 201 s. La porte de
+sortie était l'écrasement par le détecteur de délai : involontaire, mais
+indispensable. Correctif : les conclusions épisodiques (perte, RTT) **expirent**
+faute de confirmation — `EpisodicTtlMs`, deux périodes de rapport RTCP. Le
+détecteur de délai porte l'horloge de cette expiration sans jamais réécrire la
+conclusion d'un autre chemin ; laisser expirer et écraser ne sont pas la même
+chose. Test de non-régression : `UneCongestionQuePlusRienNeConfirmeExpire`.
+
+**Défaut distinct, à investiguer** : un seul appel à `UpdateLost` en 4,9 minutes
+n'est pas normal. RTCP prévoit un rapport de réception par seconde, il devrait y
+en avoir ~290. Avec un rapport toutes les cinq minutes, le détecteur par perte ne
+peut pas franchir sa garde des trois rapports consécutifs : il est inopérant en
+production, quelle que soit la qualité du lien. Le défaut est dans le chemin RTCP
+amont, pas dans le détecteur, et **aucun test unitaire ne peut le voir** puisque
+les tests fournissent eux-mêmes les rapports.
 
 Ces deux tests montrent au passage un piège de méthode : la première version de
 `UnePerteMassiveEstUneCongestion` **passait**, parce que son dernier rapport de
@@ -662,7 +713,10 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
 - [x] Lot 0 — harnais + traces (2026-08-15 : 11 tests, 7 DISABLED_/4 gardes-fous, `make check-ratecontrol`, 386 verts au total)
 - [x] Lot 1 — boucle fermée (2026-08-15 : échanges, §3.4 a-g, constantes 16k/30M, verrou, listeners multiples ; 7 DISABLED_ levés, 393 verts, binaire lié)
 - [x] Lot 2 — feedback négocié + `RembThrottler` (2026-08-15 : mode `{None,REMB,TMMBR}`, throttler, `SendReceiverEstimatedMaxBitrate`, propriété `remb` posée par les deux contrôleurs elixip ; 2 défauts du paquet REMB corrigés ; 20/20 et 402 verts. **Reste la recette pcap sur appel Chrome réel**)
-- [ ] Lot 3 — mesures netem + annexe D + décision GO/NO-GO (**outillage fait**
+- [ ] Lot 3 — mesures netem + annexe D + décision GO/NO-GO (5 séances en boucle
+      FERMÉE tenues 2026-08-17/18 : descente, régime établi et stabilité acquis,
+      oscillation jamais tenue, re-montée **non mesurable** dans ce montage ;
+      reste la série en boucle OUVERTE, seule à pouvoir trancher A3) (**outillage fait**
       2026-08-17 : `mcu/tests/tools/` + gabarit d'annexe D ; reste la séance de
       mesure, qui demande un appel réel et une machine en coupure)
 - [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB

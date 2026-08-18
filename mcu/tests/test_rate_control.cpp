@@ -1061,4 +1061,35 @@ TEST(RateControlLoss, UnRapportDePerteNeSurvitPasAuRetourAuCalme)
 	}
 }
 
+// LA regression de la seance du 2026-08-18 (patte cx-31) : un unique rapport de
+// perte a t+27 s a fait basculer le chemin perte, UpdateLost n'a plus jamais ete
+// appelee — une fois en 4,9 minutes — et l'hypothese est restee OverUsing a vie.
+// L'estimateur, maintenu en Decrease, s'est effondre de 2216 kb/s au plancher de
+// 16 kb/s, ou il est reste 201 s. Avant la separation des hypotheses, la sortie
+// etait fortuite : le detecteur de delai reecrivait l'hypothese a chaque image.
+// Contrat : une congestion que plus rien ne confirme EXPIRE. Le detecteur de
+// delai ne la reecrit pas — il porte l'horloge qui la fait expirer.
+TEST(RateControlLoss, UneCongestionQuePlusRienNeConfirmeExpire)
+{
+	RemoteRateControl ctrl;
+	QWORD time = 100000, ts = 100000;
+
+	// Assez de rapports pour franchir la garde des trois, puis plus AUCUN.
+	FeedLossPhase(ctrl, time, ts, /*seconds=*/8, /*lostPerReport=*/60);
+	ASSERT_EQ(RemoteRateControl::OverUsing, ctrl.GetUsage()) << "prérequis : congestion vue";
+
+	// 10 s de trafic parfaitement sain, sans le moindre rapport de perte.
+	for (int i = 0; i < 300; ++i)
+	{
+		time += kFrameMs;
+		ts   += kFrameMs;
+		for (int p = 0; p < 10; ++p)
+			ctrl.Update(time, ts, 100, /*mark=*/p == 9);
+	}
+
+	EXPECT_NE(RemoteRateControl::OverUsing, ctrl.GetUsage())
+		<< "hypothèse de perte gelée : sans nouveau rapport RTCP elle ne retombe jamais, "
+		   "et l'estimation s'effondre au plancher";
+}
+
 } // namespace

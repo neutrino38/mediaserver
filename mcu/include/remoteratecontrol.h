@@ -61,6 +61,10 @@ public:
 		return "Unknown";
 	}
 public:
+	//Duree de validite d'une conclusion episodique (perte, RTT) sans nouvelle
+	//confirmation : deux periodes de rapport RTCP.
+	static const QWORD EpisodicTtlMs = 2000;
+
 	RemoteRateControl();
 	void Update(QWORD time,QWORD ts,DWORD size, bool mark);
 	bool UpdateRTT(DWORD rtt);
@@ -124,6 +128,14 @@ private:
 	BandwidthUsage hypothesis;
 	BandwidthUsage lostHypothesis;
 	BandwidthUsage rttHypothesis;
+	//Instant (ms) de la derniere confirmation de chacun des deux chemins
+	//episodiques. Leur conclusion EXPIRE sans confirmation : un rapport RTCP peut
+	//ne jamais revenir — mesure du 2026-08-18, un seul rapport de perte en
+	//4,9 minutes — et une hypothese qui ne retombe pas cloue l'estimation au
+	//plancher. Avant que chaque chemin ne porte la sienne, la sortie etait
+	//fortuite : le detecteur de delai les reecrivait a chaque image.
+	QWORD lostOverAt;
+	QWORD rttOverAt;
 	//Un compteur PAR chemin de detection : le delai est juge a chaque image
 	//(~30 Hz), les pertes a chaque rapport RTCP (~1 Hz). Partages, le premier
 	//efface l'accumulation du second trente fois par seconde.

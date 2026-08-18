@@ -45,6 +45,8 @@ RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packet
 	hypothesis = Normal;
 	lostHypothesis = Normal;
 	rttHypothesis = Normal;
+	lostOverAt = 0;
+	rttOverAt = 0;
 	overUseCount = 0;
 	lostOverCount = 0;
 	absSendTimeCycles = 0;
@@ -52,6 +54,14 @@ RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packet
 
 void RemoteRateControl::Update(QWORD time,QWORD ts,DWORD size, bool mark)
 {
+	//Les deux chemins episodiques expirent faute de confirmation. C'est le seul
+	//endroit appele en continu, donc le seul qui puisse porter cette horloge — et
+	//il ne REECRIT rien, il laisse expirer, ce qui n'est pas la meme chose.
+	if (lostHypothesis==OverUsing && time > lostOverAt + EpisodicTtlMs)
+		lostHypothesis = Normal;
+	if (rttHypothesis==OverUsing && time > rttOverAt + EpisodicTtlMs)
+		rttHypothesis = Normal;
+
 	//Update bitrate calculator
 	bitrateCalc.Update(time, size*8);
 	//Update packet count
@@ -277,7 +287,13 @@ bool RemoteRateControl::UpdateRTT(DWORD rtt)
 {
 	//Ce chemin porte sa propre hypothese, et doit donc revenir au calme de
 	//lui-meme : c'est l'ecrasement par le detecteur de delai qui l'y ramenait.
-	rttHypothesis = (this->rtt>40 && rtt>this->rtt*1.50) ? OverUsing : Normal;
+	if (this->rtt>40 && rtt>this->rtt*1.50)
+	{
+		rttHypothesis = OverUsing;
+		rttOverAt = getTimeMS();
+	} else {
+		rttHypothesis = Normal;
+	}
 
 	//Update RTT
 	this->rtt = rtt;
@@ -318,6 +334,7 @@ bool RemoteRateControl::UpdateLost(DWORD num, QWORD now)
 			{
 				//Overusing
 				lostHypothesis = OverUsing;
+				lostOverAt = now;
 				//Reset counter
 				lostOverCount=0;
 				//Reset lost counter

@@ -342,8 +342,10 @@ def fenetre_etablie(leg, start, end, settle):
 # seuil ne suffit pas a la reconnaitre — avec une file courte, l'entrant part de
 # plus bas et remonte franchement, et prendre son premier depassement pour une
 # vidange retranche du chrono la rampe de la source, qui est du signal.
-PLATEAU_BAS = 0.80       # bande autour de l'ancien plafond ...
-PLATEAU_HAUT = 1.15      # ... dont la sortie par le haut signe la vidange
+PLATEAU_BAS = 0.80       # bande autour de l'ancien plafond, ou l'entrant est plaque
+PLATEAU_HAUT = 1.15      # ... et qu'il ne quitte pas tant que la file se vide
+PLATEAU_BURST = 2.00     # une file vidée rend BEAUCOUP plus que le plafond ; en
+                         # deca, l'entrant ne fait que monter, et c'est du signal
 PLATEAU_MIN_S = 2.0      # duree minimale du plateau pour parler de vidange
 
 
@@ -359,6 +361,7 @@ def debut_libere(leg, marker_t, end, previous_cap):
         return None
     bas = previous_cap * PLATEAU_BAS
     haut = previous_cap * PLATEAU_HAUT
+    burst = previous_cap * PLATEAU_BURST
     debut = None
     for sample in leg.estim:
         if sample['t'] < marker_t or sample['t'] >= end:
@@ -367,6 +370,13 @@ def debut_libere(leg, marker_t, end, previous_cap):
         if math.isnan(inc) or inc < bas:
             return None
         if inc > haut:
+            # Sortie par le haut : rattrapage de file seulement si l'entrant
+            # SAUTE loin au-dessus du plafond. Une sortie modeste est une source
+            # qui remonte et traverse la bande — mesure du 2026-08-18 : 435 ->
+            # 683 kb/s en 8 s pour un plafond de 500, pris a tort pour 8,6 s de
+            # vidange, ce qui retranchait de la rampe legitime au chrono.
+            if inc <= burst:
+                return None
             if debut is None or sample['t'] - marker_t < PLATEAU_MIN_S:
                 return None
             return sample['t']
