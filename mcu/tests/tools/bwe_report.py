@@ -41,6 +41,7 @@ REACTION_MAX_S = 3.0     # reaction a une marche descendante
 RECOVERY_RATIO = 0.80    # part du lien a retrouver apres une marche montante
 RECOVERY_MAX_S = 30.0    # ... et en combien de temps
 FLIPS_PER_MIN_MAX = 6.0  # bascules Increase<->Decrease tolerees en regime etabli
+FLIPS_MIN_WINDOW_S = 30.0  # en deca, un taux par minute n'est qu'une extrapolation
 COV_MAX = 0.20           # coefficient de variation tolere en regime etabli
 CLIP_MAX_S = 5.0         # temps cumule tolere en ecretage au plafond
 STUCK_MAX_S = 30.0       # duree au-dela de laquelle une hypothese est dite gelee
@@ -289,6 +290,90 @@ def samples_between(leg, start, end):
     return [s for s in leg.estim if start <= s['t'] < end]
 
 
+def fin_transitoire(samples):
+    """Instant ou l'estimation cesse sa rampe monotone d'entree de phase.
+
+    Une marche laisse l'estimation grimper (ou chuter) strictement de facon
+    monotone pendant tout le transitoire : y calculer une dispersion mesure la
+    pente, pas une oscillation. On coupe donc au premier renversement de pente.
+    Rend None si la phase est monotone de bout en bout — il n'y a alors aucun
+    regime etabli a juger.
+    """
+    sens = 0
+    for prev, cur in zip(samples, samples[1:]):
+        if math.isnan(prev['kbps']) or math.isnan(cur['kbps']):
+            continue
+        delta = cur['kbps'] - prev['kbps']
+        if delta == 0:
+            continue
+        signe = 1 if delta > 0 else -1
+        if sens == 0:
+            sens = signe
+        elif signe != sens:
+            return cur['t']
+    return None
+
+
+def fenetre_etablie(leg, start, end, settle):
+    """Fenetre sur laquelle un regime etabli se juge, et le motif de son choix.
+
+    La garde reste le plancher ; le transitoire ne fait que le repousser. Le
+    motif est rendu pour etre affiche : une fenetre choisie en silence rend le
+    verdict illisible en annexe D.
+    """
+    garde = start + settle
+    phase = samples_between(leg, start, end)
+    if len(phase) < 3:
+        return [], 'aucun echantillon dans la phase (mauvaise patte, ou journal decale ?)'
+    stable = fin_transitoire(phase)
+    if stable is None:
+        return [], 'estimation monotone sur toute la phase'
+    depart = max(garde, stable)
+    window = samples_between(leg, depart, end)
+    if len(window) < 3:
+        window = samples_between(leg, garde, end)
+        return window, 'garde %gs (transitoire trop long pour en ecarter plus)' % settle
+    motif = 'garde %gs' % settle if depart == garde else 'transitoire ecarte jusqu a %+.1f s' % (depart - start)
+    return window, motif
+
+
+# Une file profonde se reconnait a son PLATEAU : le debit entrant reste plaque a
+# l'ancien plafond apres le tc, le temps de la vidange. Un simple depassement de
+# seuil ne suffit pas a la reconnaitre — avec une file courte, l'entrant part de
+# plus bas et remonte franchement, et prendre son premier depassement pour une
+# vidange retranche du chrono la rampe de la source, qui est du signal.
+PLATEAU_BAS = 0.80       # bande autour de l'ancien plafond ...
+PLATEAU_HAUT = 1.15      # ... dont la sortie par le haut signe la vidange
+PLATEAU_MIN_S = 2.0      # duree minimale du plateau pour parler de vidange
+
+
+def debut_libere(leg, marker_t, end, previous_cap):
+    """Instant ou le lien relache devient observable, si une file l'a retarde.
+
+    Le plateau est une BANDE autour de l'ancien plafond : on n'en sort par le
+    haut qu'au burst de rattrapage, et le burst lui-meme ne doit pas compter
+    comme du plateau. Rend None si l'entrant quitte la bande par le bas, ou tout
+    de suite : il n'y a alors rien a retrancher et le chrono part du marqueur.
+    """
+    if not previous_cap:
+        return None
+    bas = previous_cap * PLATEAU_BAS
+    haut = previous_cap * PLATEAU_HAUT
+    debut = None
+    for sample in leg.estim:
+        if sample['t'] < marker_t or sample['t'] >= end:
+            continue
+        inc = sample['incoming']
+        if math.isnan(inc) or inc < bas:
+            return None
+        if inc > haut:
+            if debut is None or sample['t'] - marker_t < PLATEAU_MIN_S:
+                return None
+            return sample['t']
+        debut = sample['t'] if debut is None else debut
+    return None
+
+
 class Verdict(object):
     def __init__(self, status, title, detail):
         self.status = status  # 'OK', 'KO' ou '--' (non evaluable)
@@ -314,10 +399,10 @@ def judge_segments(leg, markers, args):
         caps.append((marker, end))
     for index, (marker, end) in enumerate(caps):
         cap = marker.cap_kbps
-        window = samples_between(leg, marker.t + args.settle, end)
+        window, motif = fenetre_etablie(leg, marker.t, end, args.settle)
         title = 'palier %g kb/s : regime etabli' % cap
         if len(window) < 3:
-            verdicts.append(Verdict('--', title, 'moins de 3 echantillons apres %gs de garde' % args.settle))
+            verdicts.append(Verdict('--', title, '%s : pas de regime etabli a juger' % motif))
         else:
             est = median([s['kbps'] for s in window])
             inc = median([s['incoming'] for s in window])
@@ -325,7 +410,8 @@ def judge_segments(leg, markers, args):
             status = 'OK' if ecart <= TOLERANCE else 'KO'
             verdicts.append(Verdict(status, title,
                                     'estimation mediane %.0f kb/s (entrant %.0f) soit %+.0f %% du lien'
-                                    % (est, inc, 100.0 * (est - cap) / cap if cap else float('nan'))))
+                                    ' [%s]'
+                                    % (est, inc, 100.0 * (est - cap) / cap if cap else float('nan'), motif)))
             # Oscillation : bascules d'etat et dispersion sur la meme fenetre.
             flips = 0
             previous = None
@@ -340,10 +426,18 @@ def judge_segments(leg, markers, args):
             moyenne = sum(valeurs) / len(valeurs) if valeurs else float('nan')
             ecart_type = math.sqrt(sum((v - moyenne) ** 2 for v in valeurs) / len(valeurs)) if valeurs else float('nan')
             cov = ecart_type / moyenne if moyenne else float('nan')
-            status = 'OK' if (taux <= FLIPS_PER_MIN_MAX and cov <= COV_MAX) else 'KO'
-            verdicts.append(Verdict(status, 'palier %g kb/s : pas d oscillation' % cap,
-                                    '%.1f bascule/min (max %.0f), coef. variation %.2f (max %.2f)'
-                                    % (taux, FLIPS_PER_MIN_MAX, cov, COV_MAX)))
+            duree = window[-1]['t'] - window[0]['t']
+            if duree < FLIPS_MIN_WINDOW_S:
+                status = 'OK' if cov <= COV_MAX else 'KO'
+                mesure = ('coef. variation %.2f (max %.2f) sur %.0f s seulement :'
+                          ' %d bascule(s) non extrapolee(s) [%s]'
+                          % (cov, COV_MAX, duree, flips, motif))
+            else:
+                status = 'OK' if (taux <= FLIPS_PER_MIN_MAX and cov <= COV_MAX) else 'KO'
+                mesure = ('%.1f bascule/min (max %.0f), coef. variation %.2f (max %.2f)'
+                          ' sur %.0f s [%s]'
+                          % (taux, FLIPS_PER_MIN_MAX, cov, COV_MAX, duree, motif))
+            verdicts.append(Verdict(status, 'palier %g kb/s : pas d oscillation' % cap, mesure))
 
         if index == 0:
             continue
@@ -369,10 +463,19 @@ def judge_segments(leg, markers, args):
             if atteint is None:
                 verdicts.append(Verdict('KO', title, 'jamais remontee a %.0f kb/s' % cible))
             else:
-                delai = atteint['t'] - marker.t
-                verdicts.append(Verdict('OK' if delai <= RECOVERY_MAX_S else 'KO', title,
-                                        '%.1f s pour atteindre %.0f %% du lien (max %.0f s)'
-                                        % (delai, 100 * RECOVERY_RATIO, RECOVERY_MAX_S)))
+                libere = debut_libere(leg, marker.t, end, previous_cap)
+                origine = libere if libere is not None else marker.t
+                delai = atteint['t'] - origine
+                if libere is None:
+                    detail = ('%.1f s pour atteindre %.0f %% du lien (max %.0f s)'
+                              ' [depuis le marqueur : vidange de file non observee]'
+                              % (delai, 100 * RECOVERY_RATIO, RECOVERY_MAX_S))
+                else:
+                    detail = ('%.1f s pour atteindre %.0f %% du lien (max %.0f s)'
+                              ' [lien libere a +%.1f s du marqueur, %.1f s bruts]'
+                              % (delai, 100 * RECOVERY_RATIO, RECOVERY_MAX_S,
+                                 libere - marker.t, atteint['t'] - marker.t))
+                verdicts.append(Verdict('OK' if delai <= RECOVERY_MAX_S else 'KO', title, detail))
     return verdicts
 
 
@@ -383,21 +486,26 @@ def judge_impairments(leg, markers, args):
     for index, marker in enumerate(markers):
         end = markers[index + 1].t if index + 1 < len(markers) else float('inf')
         window = samples_between(leg, marker.t + args.settle, end)
-        est = median([s['kbps'] for s in window]) if window else float('nan')
-        if marker.label == 'clean' or (marker.cap_kbps is not None and not marker.params.get('pct')):
+        etabli, motif = fenetre_etablie(leg, marker.t, end, args.settle)
+        est = median([s['kbps'] for s in etabli]) if etabli else float('nan')
+        # Le label commande : un marqueur "jitter" porte lui aussi rate_kbps et
+        # aucun pct, donc un test de reference place avant lui l'absorbait et son
+        # critere n'etait jamais prononce (silencieusement).
+        if marker.label not in ('loss', 'jitter'):
             if not math.isnan(est):
                 reference = est
             continue
         if marker.label == 'loss':
             pct = marker.params.get('pct', '?')
             if math.isnan(est) or reference is None:
-                verdicts.append(Verdict('--', 'pertes %s %% : estimation' % pct, 'pas de reference ou pas d echantillon'))
+                verdicts.append(Verdict('--', 'pertes %s %% : estimation' % pct,
+                                        'pas de reference exploitable (%s)' % motif))
                 continue
             part = est / reference if reference else float('nan')
             status = 'KO' if part < 0.25 else 'OK'
             verdicts.append(Verdict(status, 'pertes %s %% : pas d effondrement' % pct,
-                                    'estimation %.0f kb/s = %.0f %% de la reference %.0f kb/s'
-                                    % (est, 100 * part, reference)))
+                                    'estimation %.0f kb/s = %.0f %% de la reference %.0f kb/s [%s]'
+                                    % (est, 100 * part, reference, motif)))
         elif marker.label == 'jitter':
             gigue = '%s+/-%s ms' % (marker.params.get('delay_ms', '?'), marker.params.get('jitter_ms', '?'))
             if not window:
@@ -408,7 +516,7 @@ def judge_impairments(leg, markers, args):
             status = 'OK' if part <= 0.10 else 'KO'
             verdicts.append(Verdict(status, 'gigue %s : faux positifs' % gigue,
                                     '%.0f %% des echantillons hors Normal (max 10 %%), estimation mediane %.0f kb/s'
-                                    % (100 * part, est)))
+                                    % (100 * part, median([s['kbps'] for s in window]))))
     return verdicts
 
 

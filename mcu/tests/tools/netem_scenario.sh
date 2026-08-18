@@ -17,6 +17,13 @@
 #     entrant vers une interface ifb et lui applique netem. Pratique, mais le
 #     faconnage s'applique alors a TOUT ce qui entre par l'interface.
 #
+# PROFONDEUR DE FILE. netem garde par defaut 1000 paquets, soit 19 s de backlog
+# a 500 kb/s : le lien injecte se comporte alors en entrepot, pas en lien. Mesure
+# du 2026-08-18 : au relachement de la marche basse, l'entrant est reste 8 s a
+# l'ancien plafond puis a burste 4 s a 1789 kb/s le temps que la file se vide,
+# ce qui faussait le chrono de re-montee et la dispersion. Un lien d'acces reel
+# tient 100 a 300 ms ; -l fixe cette profondeur (40 paquets = ~200 ms a 2 Mb/s).
+#
 # Toute sortie (fin normale, Ctrl-C, kill) restaure les qdisc d'origine.
 
 set -u
@@ -26,6 +33,7 @@ SCENARIO=""
 MARKERS=""
 RATE_KBPS=2000
 PHASE=60
+LIMIT_PKTS=40
 INGRESS=0
 IFB="ifb-mcu"
 IFB_CREATED=0
@@ -40,6 +48,8 @@ Usage: netem_scenario.sh -i IFACE -s SCENARIO [options]
   -m, --markers FICHIER journal des marqueurs (defaut : marqueurs-SCENARIO.tsv)
   -r, --rate KBPS       debit du lien sain, en kb/s (defaut : 2000)
   -d, --phase SECONDES  duree de chaque phase (defaut : 60)
+  -l, --limit PAQUETS   profondeur de la file netem (defaut : 40, ~200 ms a
+                        2 Mb/s ; le defaut netem de 1000 vaut 19 s a 500 kb/s)
       --ingress         faconner le trafic ENTRANT via une interface ifb
   -h, --help            cette aide
 
@@ -57,6 +67,7 @@ while [ $# -gt 0 ]; do
 		-m|--markers)  MARKERS="$2"; shift 2;;
 		-r|--rate)     RATE_KBPS="$2"; shift 2;;
 		-d|--phase)    PHASE="$2"; shift 2;;
+		-l|--limit)    LIMIT_PKTS="$2"; shift 2;;
 		--ingress)     INGRESS=1; shift;;
 		-h|--help)     usage; exit 0;;
 		*) echo "option inconnue : $1" >&2; usage; exit 2;;
@@ -110,7 +121,7 @@ preparer() {
 
 appliquer() {
 	# $1 : arguments netem, $2 : label du marqueur, $3 : parametres du marqueur
-	tc qdisc replace dev "$TARGET" root netem $1 || exit 4
+	tc qdisc replace dev "$TARGET" root netem limit "$LIMIT_PKTS" $1 || exit 4
 	marque "$2" "$3"
 }
 
@@ -119,7 +130,7 @@ trap 'nettoyer' EXIT
 
 : > "$MARKERS"
 preparer
-marque start "scenario=$SCENARIO iface=$IFACE target=$TARGET phase_s=$PHASE"
+marque start "scenario=$SCENARIO iface=$IFACE target=$TARGET phase_s=$PHASE limit_pkts=$LIMIT_PKTS"
 
 case "$SCENARIO" in
 	escalier)

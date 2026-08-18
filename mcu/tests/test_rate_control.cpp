@@ -24,6 +24,11 @@
  * LOT 1 (2026-08-15) : les 7 défauts corrigés (alignement sur le témoin
  * ../webrtc), tous les préfixes DISABLED_ levés — la suite entière est jouée
  * par `make check` et fait garde-fou.
+ *
+ * SUITE RateControlThreshold (2026-08-18) : deux défauts de la GARDE du
+ * détecteur, rapportés par la séance de mesure du lot 3 — la re-montée
+ * n'aboutit pas parce que des OverUsing interrompent la montée. 2 DISABLED_
+ * (rouges), 2 garde-fous verts.
  */
 #include <gtest/gtest.h>
 #include <atomic>
@@ -655,5 +660,136 @@ TEST(RateControlEstimator, RemoveListenerAttendLaNotificationEnVol)
 
 	feeder.join();
 }
+
+// ---------------------------------------------------------------------------
+// Suite RateControlThreshold — la garde du détecteur de délai : ce qui décide
+// qu'un dépassement de seuil est une congestion. Séance de mesure du
+// 2026-08-18 (annexe D) : la re-montée n'aboutit jamais parce que la montée est
+// INTERROMPUE par des OverUsing à mi-course, qui clouent l'estimation à son
+// maximum connu — 1210 kb/s annoncés pour 1804 kb/s réellement reçus.
+//
+// Le verdict ne s'observe PAS sur l'état final : un épisode dure quelques
+// images et l'hypothèse revient à Normal juste après. C'est le nombre
+// d'épisodes qui compte, relevé après chaque image.
+// ---------------------------------------------------------------------------
+
+// Compte les entrées en OverUsing d'un détecteur nourri image par image.
+class OveruseCounter
+{
+public:
+	explicit OveruseCounter(RemoteRateControl& ctrl) : ctrl(ctrl) {}
+
+	// Une image à la cadence nominale, retardée de extraMs : le retard est
+	// permanent, les images suivantes repartent de là. Un à-coup, pas une file
+	// qui se remplit.
+	void Feed(int frames, DWORD extraMs = 0)
+	{
+		for (int i = 0; i < frames; ++i)
+		{
+			time += kFrameMs + extraMs;
+			ts   += kFrameMs;
+			ctrl.Update(time, ts, 1000, /*mark=*/true);
+			const bool over = ctrl.GetUsage() == RemoteRateControl::OverUsing;
+			if (over && !wasOver) ++episodes;
+			wasOver = over;
+		}
+	}
+
+	int episodes = 0;
+
+private:
+	RemoteRateControl& ctrl;
+	QWORD time = 100000;
+	QWORD ts   = 100000;
+	bool wasOver = false;
+};
+
+// GARDE-FOU : un à-coup unique — une file qui prend 40 ms de plus et les garde,
+// le plus banal des événements réseau — ne caractérise pas une congestion. Vrai
+// aujourd'hui, à ne pas perdre en durcissant la garde.
+TEST(RateControlThreshold, UnAcoupIsoleNeDeclarePasDeCongestion)
+{
+	RemoteRateControl ctrl;
+	OveruseCounter flux(ctrl);
+
+	flux.Feed(300);
+	ASSERT_EQ(0, flux.episodes) << "prérequis : un flux régulier ne déclare rien";
+
+	flux.Feed(1, /*extraMs=*/40);
+	flux.Feed(150);
+	EXPECT_EQ(0, flux.episodes) << "congestion déclarée sur un à-coup isolé de 40 ms";
+}
+
+// Le compteur de candidats n'est remis à zéro, dans la branche « sous le seuil »,
+// que si l'hypothèse CHANGEAIT — donc jamais sur un flux déjà Normal
+// (remoteratecontrol.cpp:241-252). Il compte « 3 dépassements depuis toujours »
+// et non « 3 consécutifs » : les candidats survivent à des secondes de trafic
+// sain et s'additionnent. Mesuré : un à-coup de 32 ms ne déclare rien, trois
+// à-coups de 32 ms séparés de 2 s de calme chacun déclarent une congestion.
+// Contrat : ce qui caractérise une congestion est une DURÉE de surutilisation
+// continue, remise à zéro dès le retour sous le seuil — ce que mesure le témoin.
+TEST(RateControlThreshold, DISABLED_LesCandidatsNeSurviventPasAuRetourAuCalme)
+{
+	RemoteRateControl ctrl;
+	OveruseCounter flux(ctrl);
+
+	flux.Feed(300);
+	flux.Feed(1, /*extraMs=*/32);
+	flux.Feed(60);
+	ASSERT_EQ(0, flux.episodes) << "prérequis : un à-coup de 32 ms seul ne suffit pas";
+
+	flux.Feed(1, /*extraMs=*/32);
+	flux.Feed(60);
+	flux.Feed(1, /*extraMs=*/32);
+	flux.Feed(60);
+	EXPECT_EQ(0, flux.episodes)
+		<< "congestion déclarée par cumul de trois à-coups que 2 s de trafic sain séparent";
+}
+
+// Le seuil est fixe par région : 35 ms en BelowMax, 25 en MaxUnknown, 12 en
+// NearMax et AboveMax (remoteratecontrol.cpp:327). Dès que l'estimation
+// approche son maximum connu, le seuil tombe à 12 ms — or le T comparé vaut
+// min(fps,30)·offset, donc un offset instantané de 1,3 ms y devient 39 ms. Le
+// cercle est fermé : OverUsing -> Decrease -> NearMax -> seuil 12 -> OverUsing
+// plus facile encore, et l'estimation ne franchit jamais son propre maximum.
+// L'à-coup de 20 ms est choisi entre les deux seuils : il isole l'effet de la
+// région, à signal d'arrivée rigoureusement identique.
+// Contrat : la région ne décide pas seule du verdict.
+TEST(RateControlThreshold, DISABLED_LeVerdictNeDependPasDeLaRegion)
+{
+	RemoteRateControl below, nearMax;
+	below.SetRateControlRegion(RemoteRateControl::BelowMax);
+	nearMax.SetRateControlRegion(RemoteRateControl::NearMax);
+	OveruseCounter fluxBelow(below), fluxNear(nearMax);
+
+	for (OveruseCounter* flux : { &fluxBelow, &fluxNear })
+	{
+		flux->Feed(300);
+		for (int acoup = 0; acoup < 3; ++acoup)
+		{
+			flux->Feed(1, /*extraMs=*/20);
+			flux->Feed(60);
+		}
+	}
+
+	EXPECT_EQ(fluxBelow.episodes, fluxNear.episodes)
+		<< "même signal, verdicts différents : " << fluxBelow.episodes
+		<< " episode(s) en BelowMax (seuil 35 ms) contre " << fluxNear.episodes
+		<< " en NearMax (seuil 12 ms)";
+}
+
+// GARDE-FOU de la correction à venir : durcir la garde ou relever le seuil ne
+// doit pas rendre le détecteur sourd. Une file qui se remplit vraiment reste
+// vue, y compris dans la région où le seuil est le plus bas.
+TEST(RateControlThreshold, UneVraieCongestionResteVueEnRegionNearMax)
+{
+	RemoteRateControl ctrl;
+	ctrl.SetRateControlRegion(RemoteRateControl::NearMax);
+	OveruseCounter flux(ctrl);
+	flux.Feed(400, /*extraMs=*/2);	// la file se remplit de 2 ms par image
+	EXPECT_EQ(RemoteRateControl::OverUsing, ctrl.GetUsage());
+	EXPECT_GT(flux.episodes, 0);
+}
+
 
 } // namespace

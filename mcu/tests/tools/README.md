@@ -138,8 +138,24 @@ sudo ./netem_scenario.sh -i eth0 -s gigue -m gigue.tsv
 ```
 
 Options utiles : `-r` (débit du lien sain, kb/s, défaut 2000), `-d` (durée d'une
-phase, défaut 60 s), `--ingress` (cf. plus haut). Le script **restaure les qdisc
-à la sortie**, y compris sur Ctrl-C ou `kill`.
+phase, défaut 60 s), `-l` (profondeur de la file netem, défaut 40 paquets),
+`--ingress` (cf. plus haut). Le script **restaure les qdisc à la sortie**, y
+compris sur Ctrl-C ou `kill`.
+
+### La profondeur de file n'est pas un détail
+
+`netem` garde par défaut **1000 paquets**, soit **19 s de backlog à 500 kb/s** : le
+lien injecté se comporte alors en entrepôt, pas en lien. Ce que ça produit, mesuré
+le 2026-08-18 : au relâchement de la marche basse, le débit entrant est resté 8 s
+à l'ancien plafond, puis a bursté 4 s à 1789 kb/s le temps que la file se vide —
+donc 8 s de faux retard sur le chrono de re-montée, et une dispersion qui mesurait
+la vidange.
+
+Un lien d'accès réel tient 100 à 300 ms. Le défaut `-l 40` donne ~200 ms à
+2 Mb/s et ~800 ms à 500 kb/s. Le baisser davantage transforme la contrainte de
+capacité en pertes : c'est alors le scénario `pertes` qu'on joue, pas
+`escalier`. **Dire la valeur retenue en annexe D** : elle change ce que le
+détecteur de délai voit.
 
 Le critère « 10 minutes sans NaN, sans gel d'hypothèse, sans écrêtage » se juge
 sur la durée **cumulée** de la séance : enchaîner les trois scénarios sans couper
@@ -170,16 +186,42 @@ donne cette lecture-là.
 
 | critère | source | seuil |
 |---|---|---|
-| régime établi | médiane de l'estimation sur le palier, garde de 15 s | ±25 % du lien |
+| régime établi | médiane de l'estimation sur le palier, hors transitoire | ±25 % du lien |
 | réaction à la baisse | 1er échantillon sous 1,25 × le nouveau lien | < 3 s |
-| re-montée | 1er échantillon ≥ 80 % du lien | < 30 s |
-| pas d'oscillation | bascules `Increase`↔`Decrease` et coef. de variation | ≤ 6/min, ≤ 0,20 |
+| re-montée | 1er échantillon ≥ 80 % du lien, **compté depuis la libération observée** | < 30 s |
+| pas d'oscillation | bascules `Increase`↔`Decrease` et coef. de variation, hors transitoire | ≤ 6/min, ≤ 0,20 |
 | pertes : pas d'effondrement | médiane rapportée à la phase saine précédente | ≥ 25 % |
 | gigue : faux positifs | part des échantillons hors `Normal` | ≤ 10 % |
 | pas de NaN | toute valeur imprimée `nan` | 0 |
 | hypothèse non gelée | plus longue plage continue hors `Normal` | ≤ 30 s |
 | pas d'écrêtage | temps cumulé à 30 000 kb/s (plafond du lot 1) | ≤ 5 s |
 | covariance | avertissements `no longer positive semi-definite` | 0 |
+
+**Où commence un régime établi.** Une marche laisse l'estimation grimper ou
+chuter de façon strictement monotone pendant tout le transitoire : y calculer une
+dispersion mesure la pente, pas une oscillation. La fenêtre de jugement démarre
+donc au premier renversement de pente, sans jamais commencer avant la garde
+`--settle` — celle-ci reste le plancher. Le motif retenu est imprimé entre
+crochets à côté de chaque verdict (`garde 15s`, `transitoire ecarte jusqu a
++49.4 s`) : une fenêtre choisie en silence rend le verdict illisible. Si
+l'estimation est monotone sur toute la phase, le verdict est `--` — il n'y a pas
+de régime établi à juger.
+
+**D'où part le chrono de re-montée.** Du marqueur `tc`, **sauf** si une file
+profonde a retardé la libération. Ce retard se reconnaît à son *plateau* : le débit
+entrant reste dans une bande autour de l'ancien plafond (80 % à 115 %) pendant au
+moins 2 s, puis en sort par le haut au burst de rattrapage. Sans plateau, il n'y a
+rien à retrancher — la rampe de la source est du signal, pas de la vidange, et la
+retrancher flatterait notre boucle. Le verdict affiche **les deux** chiffres, le
+délai retenu et le délai brut. Un plateau détecté est le signe qu'il faut baisser
+`-l`.
+
+**Un taux par minute ne se prononce pas sur 4 secondes.** Sous 30 s de fenêtre, le
+verdict d'oscillation ne juge que le coefficient de variation et **affiche le
+nombre brut de bascules sans l'extrapoler** : une seule bascule vue sur 4 s donne
+« 15/min », ce qui ne veut rien dire. Une fenêtre courte est elle-même le
+renseignement — elle dit que le transitoire a mangé la phase, et qu'il faut
+allonger `-d`.
 
 Le plan chiffre les quatre premiers. Les autres seuils sont **posés ici** faute
 d'être chiffrés ailleurs : `--settle`, `--max-kbps` et `--min-kbps` s'ajustent en
