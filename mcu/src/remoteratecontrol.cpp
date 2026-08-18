@@ -36,11 +36,15 @@ RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packet
 	processNoise[1] = 1e-3;
 	avgNoise = 0;
 	varNoise = 50;
+	//Seuil unique : c'etait la valeur de la region MaxUnknown, la seule que le
+	//detecteur voyait au demarrage. Il n'est plus fixe par region, cf.
+	//SetRateControlRegion.
 	threshold = 25;
 	prevOffset = 0;
 	offset = 0;
 	hypothesis = Normal;
 	overUseCount = 0;
+	lostOverCount = 0;
 	absSendTimeCycles = 0;
 }
 
@@ -206,7 +210,14 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 			if (hypothesis!=OverUsing )
 			{
 				//Check 
-				if (overUseCount>2)
+				//La bascule exige que le delai CONTINUE de croitre (temoin :
+				//overuse_detector.cc, "if (offset >= prev_offset_)"). Sans elle, un
+				//a-coup dont l'effet retombe declarait une congestion : mesure du
+				//2026-08-18, un retard de 32 ms produit quatre depassements de
+				//suite dont le T DECROIT (27,6 -> 27,0 -> 26,4 -> 25,9). Le
+				//compteur n'est pas remis a zero ici : si le delai recroit a
+				//l'image suivante, la bascule a lieu.
+				if (overUseCount>2 && offset>=prevOffset)
 				{
 					//Formats : long double -> cast double + %f ("%llf" n'existe pas,
 					//les valeurs affichees etaient fausses).
@@ -215,7 +226,7 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 					hypothesis = OverUsing;
 					//Reset counter
 					overUseCount=0;
-				} else {
+				} else if (overUseCount<=2) {
 					//Le compteur etait passe en 1er argument SANS % correspondant :
 					//tous les champs affiches etaient decales d'un cran.
 					Debug("BWE: Overusing candidate %u/3 bitrate:%.0f max:%.0f min:%.0f T:%f,threshold:%f\n",overUseCount,(double)bitrateCalc.GetInstantAvg(),(double)bitrateCalc.GetMaxAvg(),(double)bitrateCalc.GetMinAvg(),std::fabs(T),threshold);
@@ -224,6 +235,14 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 				}
 			}
 		} else {
+			//Le compteur se remet a zero DEHORS de la garde "si l'hypothese
+			//change" : conditionne a elle, il n'etait jamais remis a zero sur un
+			//flux deja Normal, et comptait "3 depassements depuis toujours" au
+			//lieu de "3 consecutifs" — trois a-coups que des secondes de trafic
+			//sain separent declaraient une congestion (temoin : overuse_detector.cc
+			//remet time_over_using_ et overuse_counter_ a zero des le retour sous
+			//le seuil).
+			overUseCount=0;
 			//If we change state
 			if (hypothesis!=UnderUsing)
 			{
@@ -232,12 +251,11 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 				bitrateCalc.ResetMinMax();
 				//Under using, do nothing until going back to normal
 				hypothesis = UnderUsing;
-				//Reset counter
-				overUseCount=0;
 			}
 		}
 	} else {
 
+		overUseCount=0;
 		//If we change state
 		if (hypothesis!=Normal)
 		{
@@ -247,12 +265,11 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 			bitrateCalc.ResetMinMax();
 			//Normal
 			hypothesis = Normal;
-			//Reset counter
-			overUseCount=0;
 		}
 	}
 	if (eventSource) eventSource->SendEvent("rrc.update","[%llu,\"%s\"]",getTimeMS(),GetName(hypothesis));
 }
+
 
 bool RemoteRateControl::UpdateRTT(DWORD rtt)
 {
@@ -300,19 +317,19 @@ bool RemoteRateControl::UpdateLost(DWORD num, QWORD now)
 		if (lost*1000/(packets+lost)>25)
 		{
 			//Check
-			if (overUseCount>2)
+			if (lostOverCount>2)
 			{
 				//Overusing
 				hypothesis = OverUsing;
 				//Reset counter
-				overUseCount=0;
+				lostOverCount=0;
 				//Reset lost counter
 				lostCalc.Reset(now);
 				//Debug
 				Debug("BWE: UpdateLost lost:%u hipothesis:%s,packets:%.1f,lost:%.1f\n",num,GetName(hypothesis),(double)packets,(double)lost);
 			} else {
 				//increase counter
-				overUseCount++;
+				lostOverCount++;
 			}
 		}
 	}
@@ -329,17 +346,10 @@ void RemoteRateControl::SetRateControlRegion(Region region)
 	//Debug
 	Debug("BWE: SetRateControlRegion %s\n",GetName(region));
 
-	switch (region)
-	{
-		case BelowMax:
-			threshold = 35;
-			break;
-		case MaxUnknown:
-			threshold = 25;
-			break;
-		case AboveMax:
-		case NearMax:
-			threshold = 12;
-			break;
-	}
+	//La region ne fixe PLUS le seuil. Elle le faisait tomber a 12 ms des que
+	//l'estimation approchait son maximum connu, ce qui fermait un cercle :
+	//OverUsing -> Decrease -> NearMax -> seuil 12 -> OverUsing plus facile
+	//encore, et l'estimation ne franchissait jamais son propre maximum (mesure
+	//du 2026-08-18 : 1210 kb/s annonces pour 1804 kb/s recus). La region reste
+	//le pilote du facteur de montee, cote RemoteRateEstimator.
 }

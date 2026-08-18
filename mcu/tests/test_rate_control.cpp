@@ -27,8 +27,10 @@
  *
  * SUITE RateControlThreshold (2026-08-18) : deux défauts de la GARDE du
  * détecteur, rapportés par la séance de mesure du lot 3 — la re-montée
- * n'aboutit pas parce que des OverUsing interrompent la montée. 2 DISABLED_
- * (rouges), 2 garde-fous verts.
+ * n'aboutit pas parce que des OverUsing interrompent la montée. LOT 1bis : les
+ * deux corrigés, préfixes DISABLED_ levés ; la suite entière fait garde-fou.
+ * La correction a demandé un TROISIÈME point que les mesures ont révélé : la
+ * bascule exige que le délai continue de croître (offset >= prevOffset).
  */
 #include <gtest/gtest.h>
 #include <atomic>
@@ -728,7 +730,7 @@ TEST(RateControlThreshold, UnAcoupIsoleNeDeclarePasDeCongestion)
 // à-coups de 32 ms séparés de 2 s de calme chacun déclarent une congestion.
 // Contrat : ce qui caractérise une congestion est une DURÉE de surutilisation
 // continue, remise à zéro dès le retour sous le seuil — ce que mesure le témoin.
-TEST(RateControlThreshold, DISABLED_LesCandidatsNeSurviventPasAuRetourAuCalme)
+TEST(RateControlThreshold, LesCandidatsNeSurviventPasAuRetourAuCalme)
 {
 	RemoteRateControl ctrl;
 	OveruseCounter flux(ctrl);
@@ -755,7 +757,7 @@ TEST(RateControlThreshold, DISABLED_LesCandidatsNeSurviventPasAuRetourAuCalme)
 // L'à-coup de 20 ms est choisi entre les deux seuils : il isole l'effet de la
 // région, à signal d'arrivée rigoureusement identique.
 // Contrat : la région ne décide pas seule du verdict.
-TEST(RateControlThreshold, DISABLED_LeVerdictNeDependPasDeLaRegion)
+TEST(RateControlThreshold, LeVerdictNeDependPasDeLaRegion)
 {
 	RemoteRateControl below, nearMax;
 	below.SetRateControlRegion(RemoteRateControl::BelowMax);
@@ -791,5 +793,54 @@ TEST(RateControlThreshold, UneVraieCongestionResteVueEnRegionNearMax)
 	EXPECT_GT(flux.episodes, 0);
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Suite RateControlLoss — le chemin de perte (UpdateLost), que ni l'escalier ni
+// la gigue n'exercent. Conception : lot 3bis de rate_control_plan.md.
+// ---------------------------------------------------------------------------
+
+// Un seul test couvrait ce chemin, et il vérifiait une ABSENCE de détection : le
+// sens utile du seuil de 2,5 % n'était pas couvert.
+TEST(RateControlLoss, UnePerteMassiveEstUneCongestion)
+{
+	RemoteRateControl ctrl;
+	QWORD time = 100000, ts = 100000;
+	for (int i = 0; i < 300; ++i)
+	{
+		time += kFrameMs;
+		ts   += kFrameMs;
+		for (int p = 0; p < 10; ++p)
+			ctrl.Update(time, ts, 100, /*mark=*/p == 9);
+		// 20 % de pertes, rapportées une fois par seconde comme le fait RTCP.
+		if (i % 30 == 29)
+			ctrl.UpdateLost(60, time);
+	}
+	EXPECT_EQ(RemoteRateControl::OverUsing, ctrl.GetUsage())
+		<< "20 % de pertes soutenues pendant 10 s ne sont pas vues";
+}
+
+// Les deux détecteurs partageaient overUseCount. Le délai est jugé à chaque
+// image (~30 Hz), les pertes à chaque rapport RTCP (~1 Hz) : la remise à zéro du
+// premier — ajoutée au lot 1bis — effaçait l'accumulation du second trente fois
+// par seconde, et le chemin de perte ne pouvait plus rien déclarer. Ici le délai
+// est PARFAITEMENT sain : lui seul remettait le compteur à zéro.
+// Contrat : un compteur par chemin.
+TEST(RateControlLoss, UnDelaiSainNEffacePasLAccumulationDesPertes)
+{
+	RemoteRateControl ctrl;
+	QWORD time = 100000, ts = 100000;
+	for (int i = 0; i < 200; ++i)
+	{
+		time += kFrameMs;	// arrivée exactement à l'heure : rien à détecter
+		ts   += kFrameMs;
+		for (int p = 0; p < 10; ++p)
+			ctrl.Update(time, ts, 100, /*mark=*/p == 9);
+		if (i % 30 == 29)
+			ctrl.UpdateLost(60, time);
+	}
+	EXPECT_EQ(RemoteRateControl::OverUsing, ctrl.GetUsage())
+		<< "le détecteur par délai a pillé le compteur du détecteur par perte";
+}
 
 } // namespace

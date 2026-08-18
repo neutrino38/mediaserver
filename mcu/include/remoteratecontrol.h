@@ -109,7 +109,11 @@ private:
 	double threshold;
 	double prevOffset;
 	BandwidthUsage hypothesis;
+	//Un compteur PAR chemin de detection : le delai est juge a chaque image
+	//(~30 Hz), les pertes a chaque rapport RTCP (~1 Hz). Partages, le premier
+	//efface l'accumulation du second trente fois par seconde.
 	int overUseCount;
+	int lostOverCount;
 };
 
 #endif	/* REMOTERATECONTROL_H */
