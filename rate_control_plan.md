@@ -82,6 +82,7 @@ flowchart LR
 | 1 | échanges d'arguments, §3.4, constantes, verrou, listeners | M | 0 |
 | 2 | REMB/TMMBR émis selon la négociation + throttler | M | 1 (+ elixip) |
 | 3 | protocole de mesure netem, critères, décision | S | 2 |
+| 3bis | suites `RateControlJitter` et `RateControlLoss` (gigue, pertes) | S | 3 |
 | 4 | génération transport-cc, puis CCFB RFC 8888 | L | 2 (+ elixip) |
 | 5 | propagation inter-pattes via le throttler | S–M | 1, 2 |
 | 6 | estimateur côté émetteur + pacing (conception dédiée) | L | 3 GO, 4 |
@@ -374,6 +375,122 @@ solution) :
 **Livrable** : les mesures et la décision, consignées en annexe D de
 `rate-control.md`. La décision du portillon : GO/NO-GO du lot 6, et liste des
 éventuels alignements « lot 1bis » que la mesure réclame.
+
+---
+
+## Lot 3bis — Éprouver la gigue et les pertes en test, avant la séance
+
+Les trois séances d'escalier ont coûté trois appels réels pour aboutir à deux
+défauts qu'un test unitaire prouve en une milliseconde (suite
+`RateControlThreshold`, lot 1bis). La leçon vaut d'être tirée avant de dépenser
+une séance pour les deux scénarios restants : **le portillon mesure un système,
+il ne débogue pas un algorithme.** Ce que l'on peut fausser en test, on le
+fausse en test.
+
+### Ce que chaque scénario exerce, et pourquoi ce n'est pas le même code
+
+| scénario netem | chemin exercé | fonction |
+|---|---|---|
+| marche d'escalier | détecteur par délai + AIMD | `UpdateKalman`, `RemoteRateEstimator::UpdateEstimate` |
+| gigue | détecteur par délai **seul**, signal symétrique et sans dérive | `UpdateKalman` |
+| pertes | **chemin distinct**, jamais exercé par les deux autres | `UpdateLost` |
+
+La gigue et l'escalier partagent le détecteur par délai ; les pertes non. Et les
+trois partagent **un même compteur**, `overUseCount`, écrit par `UpdateKalman`,
+`UpdateLost` et `UpdateRTT`. C'est ce couplage qui fait la valeur de la suite :
+il n'est visible ni en lisant un seul chemin, ni en regardant une seule courbe.
+
+### Suite `RateControlJitter` — la gigue ne doit pas mentir
+
+Le critère de la séance est « faux positifs ≤ 10 % des échantillons ». Un test le
+prononce plus durement : **zéro** bascule sur une gigue sans dérive.
+
+| test | signal | contrat |
+|---|---|---|
+| `UneGigueSymetriqueNEstPasUneCongestion` | arrivées à ±30 ms autour de la cadence, délai moyen constant | jamais `OverUsing` |
+| `UneGigueNAffaissePasLEstimation` | même signal, au niveau `RemoteRateEstimator` | estimation à ±25 % du débit injecté |
+| `UneGigueQuiCacheUneDeriveLaLaissePasser` | ±30 ms de gigue **plus** 2 ms/image de dérive | `OverUsing` malgré le bruit |
+| `UneRafaleDeTramesNEstPasUneCongestion` | une trame I fragmentée arrivant en rafale, cadence moyenne tenue | jamais `OverUsing` |
+
+Les quatre sont **écrits et verts**. Le troisième est le garde-fou qui interdit
+de corriger un faux positif en rendant le détecteur sourd — c'est le piège de
+tout durcissement de seuil. Le quatrième reproduit le cas réel qui a produit
+`inc=47` puis un burst dans la séance du 2026-08-18.
+
+**Acquis mesuré** : le filtre absorbe une gigue non biaisée jusqu'à ±100 ms, et
+aussi par bouffées corrélées de cinq images — zéro *candidat*, pas seulement zéro
+bascule. Le critère de la séance, « faux positifs ≤ 10 % des échantillons », est
+donc très large pour ce détecteur : s'il est dépassé en séance, c'est que la
+gigue injectée est **biaisée** (une file qui se remplit), pas que le détecteur
+est nerveux.
+
+**Un test de faux positif ne vaut que par son pendant.** Vert, il peut aussi bien
+signifier « le détecteur est robuste » que « le générateur ne produit rien ».
+`UneGigueSymetriqueNEstPasUneCongestion` et `UneGigueQuiCacheUneDeriveLaLaissePasser`
+partagent le générateur et l'amplitude ; seule la dérive change, et le second
+produit 15 candidats et 2 épisodes. C'est cette paire qui fait la preuve, pas le
+vert isolé.
+
+**Le signal doit porter du bruit.** Un flux d'une régularité parfaite n'existe
+pas, et un détecteur qui s'adapte au signal en tire des conclusions fausses : la
+mesure du lot 1bis a montré un seuil adaptatif descendant à son plancher après
+10 s de flux sans le moindre jitter. Les générateurs de la suite ajoutent donc
+une gigue de base de ±2 ms, déterministe — pas de `rand()`, un test doit être
+reproductible.
+
+### Suite `RateControlLoss` — les pertes, chemin jamais couvert
+
+Un seul test existe aujourd'hui, `QuelquesPertesRaresNeSontPasUneCongestion`, et
+il vérifie une **absence** de détection. Rien ne vérifie qu'une perte massive
+est vue : le sens utile du seuil de 2,5 % n'est pas couvert.
+
+| test | signal | contrat |
+|---|---|---|
+| `UnePerteMassiveEstUneCongestion` | 20 % de pertes soutenues, rapportées chaque seconde | `OverUsing` |
+| `LeSeuilDePerteEstFranchiDansLesDeuxSens` | 1 % puis 10 % puis 1 % | `Normal`, puis `OverUsing`, puis retour au calme |
+| `UnRapportDePerteNeSurvitPasAuRetourAuCalme` | trois rafales de pertes séparées de 10 s de trafic propre | jamais `OverUsing` |
+| `UnDelaiSainNEffacePasLAccumulationDesPertes` | pertes soutenues **pendant** un délai parfaitement sain | `OverUsing` : le délai sain ne doit pas effacer la congestion vue par les pertes |
+
+Les quatre sont **écrits et verts**. Ils ont trouvé deux défauts, dont l'un que
+la conception de cette suite avait annoncé :
+
+- **le compteur partagé** — `overUseCount` était écrit par les deux chemins ;
+  la remise à zéro du chemin délai, ajoutée au lot 1bis, tombait ~30 fois par
+  seconde alors qu'`UpdateLost` attend trois rapports espacés d'une seconde.
+  **Corrigé au lot 1bis** par un compteur par chemin ;
+- **l'hypothèse partagée** — `hypothesis` est unique et le chemin du délai la
+  réécrit à chaque image. Mesuré : `OverUsing` déclaré par les pertes, puis
+  `Normal` **dès la première image au délai sain**. Sur un lien à pertes sans
+  bufferbloat — Wi-Fi, radio — le détecteur de pertes ne peut donc rien déclarer
+  de durable. Défaut **préexistant**, corrigé au lot 3bis : **une hypothèse par
+  chemin**, composées dans `GetUsage()` — une seule surutilisation suffit à
+  contraindre, sinon c'est le détecteur de délai qui parle, seul à distinguer
+  `Normal` d'`UnderUsing`. Chaque chemin devient responsable de son retour au
+  calme : le chemin perte remet `Normal` dès que le ratio repasse sous 2,5 %, le
+  chemin RTT dès que le RTT ne bondit plus — jusque-là, c'était l'écrasement par
+  le détecteur de délai qui les y ramenait, et c'est pour cette raison qu'il
+  n'avait jamais été vu comme un défaut. Le témoin n'a pas ce problème : son
+  contrôle par perte vit dans `SendSideBandwidthEstimation`, séparé du détecteur
+  de délai.
+
+Ces deux tests montrent au passage un piège de méthode : la première version de
+`UnePerteMassiveEstUneCongestion` **passait**, parce que son dernier rapport de
+perte tombait à la toute dernière itération de la boucle. Un test de détection
+doit se terminer sur du signal calme, sinon il relève l'hypothèse à l'instant
+précis où elle vaut ce qu'on espère.
+
+### Ce que la suite ne remplace pas
+
+Elle éprouve l'algorithme, pas le système. Restent à la séance réelle : le
+dialecte négocié, la latence d'application du REMB par le pair, l'interaction
+avec le contrôle de congestion du navigateur, et la profondeur de file du lien.
+Un test vert ne vaut pas un GO ; il évite d'aller chercher en appel réel ce qui
+se voit sur un banc.
+
+**Livrable** : les deux suites dans `mcu/tests/test_rate_control.cpp`, jouées par
+`make check-ratecontrol`, préfixes `DISABLED_` levés au fur et à mesure des
+correctifs — la même convention que le lot 0. Puis, et seulement puis, la séance
+`pertes` et `gigue`.
 
 ---
 

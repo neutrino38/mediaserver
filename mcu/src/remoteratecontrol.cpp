@@ -43,6 +43,8 @@ RemoteRateControl::RemoteRateControl() : bitrateCalc(100), fpsCalc(1000), packet
 	prevOffset = 0;
 	offset = 0;
 	hypothesis = Normal;
+	lostHypothesis = Normal;
+	rttHypothesis = Normal;
 	overUseCount = 0;
 	lostOverCount = 0;
 	absSendTimeCycles = 0;
@@ -273,29 +275,24 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 
 bool RemoteRateControl::UpdateRTT(DWORD rtt)
 {
-	//Check difference
-	if (this->rtt>40 && rtt>this->rtt*1.50)
-	{	
-		//Overusing
-		hypothesis = OverUsing;
-		//Reset counter
-		overUseCount=0;
-	}
-	
+	//Ce chemin porte sa propre hypothese, et doit donc revenir au calme de
+	//lui-meme : c'est l'ecrasement par le detecteur de delai qui l'y ramenait.
+	rttHypothesis = (this->rtt>40 && rtt>this->rtt*1.50) ? OverUsing : Normal;
+
 	//Update RTT
 	this->rtt = rtt;
 
 	//Debug
-	Debug("BWE: UpdateRTT rtt:%dms hipothesis:%s\n",rtt,GetName(hypothesis));
+	Debug("BWE: UpdateRTT rtt:%dms hipothesis:%s\n",rtt,GetName(GetUsage()));
 
 	if (eventSource) 
 	{
-		eventSource->SendEvent("rrc.rtt","[%llu,\"%s\",\"%d\"]",getTimeMS(),GetName(hypothesis),rtt);
+		eventSource->SendEvent("rrc.rtt","[%llu,\"%s\",\"%d\"]",getTimeMS(),GetName(GetUsage()),rtt);
 		Debug("BWE: for stream %s\n", eventSource->GetName() );
 	}
 
 	//Return if we are overusing now
-	return hypothesis==OverUsing;
+	return GetUsage()==OverUsing;
 }
 
 bool RemoteRateControl::UpdateLost(DWORD num, QWORD now)
@@ -320,25 +317,31 @@ bool RemoteRateControl::UpdateLost(DWORD num, QWORD now)
 			if (lostOverCount>2)
 			{
 				//Overusing
-				hypothesis = OverUsing;
+				lostHypothesis = OverUsing;
 				//Reset counter
 				lostOverCount=0;
 				//Reset lost counter
 				lostCalc.Reset(now);
 				//Debug
-				Debug("BWE: UpdateLost lost:%u hipothesis:%s,packets:%.1f,lost:%.1f\n",num,GetName(hypothesis),(double)packets,(double)lost);
+				Debug("BWE: UpdateLost lost:%u hipothesis:%s,packets:%.1f,lost:%.1f\n",num,GetName(GetUsage()),(double)packets,(double)lost);
 			} else {
 				//increase counter
 				lostOverCount++;
 			}
+		} else {
+			//Sous le seuil : ce chemin revient au calme et n'accumule plus. Sans
+			//cela son hypothese ne retomberait jamais, et ses candidats
+			//survivraient a des minutes de trafic propre.
+			lostHypothesis = Normal;
+			lostOverCount = 0;
 		}
 	}
 
 	//L'evenement envoyait le RTT a la place du nombre de pertes.
-	if (eventSource) eventSource->SendEvent("rrc.lost","[%llu,\"%s\",\"%u\"]",getTimeMS(),GetName(hypothesis),num);
+	if (eventSource) eventSource->SendEvent("rrc.lost","[%llu,\"%s\",\"%u\"]",getTimeMS(),GetName(GetUsage()),num);
 
 	//true if overusing
-	return hypothesis==OverUsing;
+	return GetUsage()==OverUsing;
 }
 
 void RemoteRateControl::SetRateControlRegion(Region region)

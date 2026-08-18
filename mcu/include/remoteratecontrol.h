@@ -67,7 +67,17 @@ public:
 	//now : la MEME horloge (ms) que Update — plus de getTime() µs interne (§3.3)
 	bool UpdateLost(DWORD num, QWORD now);
 	void SetRateControlRegion(Region region);
-	BandwidthUsage GetUsage()	{ return hypothesis; }
+	//Une hypothese par chemin de detection, composee ici : chacun repond a un
+	//signal independant, a sa propre cadence, et aucun n'a autorite pour effacer
+	//la conclusion d'un autre. Une seule surutilisation suffit a contraindre ;
+	//sinon c'est le detecteur de delai qui parle, seul a distinguer Normal
+	//d'UnderUsing.
+	BandwidthUsage GetUsage()
+	{
+		if (hypothesis==OverUsing || lostHypothesis==OverUsing || rttHypothesis==OverUsing)
+			return OverUsing;
+		return hypothesis;
+	}
 	double GetNoise()		{ return varNoise;   }
 	//Observabilite pour les tests (lot 0 du chantier rate-control) :
 	//l'invariant que l'amont verifie par RTC_DCHECK (overuse_estimator.cc:90-93).
@@ -108,7 +118,12 @@ private:
 	double varNoise;
 	double threshold;
 	double prevOffset;
+	//Hypothese du detecteur par delai. Celles des deux autres chemins vivent a
+	//part : partagee, elle etait reecrite a chaque image (~30 Hz) et effacait la
+	//congestion vue par les pertes des la premiere image au delai sain.
 	BandwidthUsage hypothesis;
+	BandwidthUsage lostHypothesis;
+	BandwidthUsage rttHypothesis;
 	//Un compteur PAR chemin de detection : le delai est juge a chaque image
 	//(~30 Hz), les pertes a chaque rapport RTCP (~1 Hz). Partages, le premier
 	//efface l'accumulation du second trente fois par seconde.

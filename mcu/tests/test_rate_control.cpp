@@ -947,6 +947,25 @@ TEST(RateControlJitter, UneRafaleDeTramesNEstPasUneCongestion)
 		<< "congestion déclarée sur un GOP régulier, sans file qui se remplisse";
 }
 
+// Nourrit un flux video sain d'un rapport de perte par seconde, comme le fait
+// RTCP — y compris quand il n'y a rien a perdre : c'est ce rapport a zero qui
+// ramene le chemin au calme.
+void FeedLossPhase(RemoteRateControl& ctrl, QWORD& time, QWORD& ts,
+                   int seconds, DWORD lostPerReport)
+{
+	for (int s = 0; s < seconds; ++s)
+	{
+		for (int i = 0; i < 30; ++i)
+		{
+			time += kFrameMs;
+			ts   += kFrameMs;
+			for (int p = 0; p < 10; ++p)
+				ctrl.Update(time, ts, 100, /*mark=*/p == 9);
+		}
+		ctrl.UpdateLost(lostPerReport, time);
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Suite RateControlLoss — le chemin de perte (UpdateLost), que ni l'escalier ni
 // la gigue n'exercent. Conception : lot 3bis de rate_control_plan.md.
@@ -954,7 +973,7 @@ TEST(RateControlJitter, UneRafaleDeTramesNEstPasUneCongestion)
 
 // Un seul test couvrait ce chemin, et il vérifiait une ABSENCE de détection : le
 // sens utile du seuil de 2,5 % n'était pas couvert.
-TEST(RateControlLoss, DISABLED_UnePerteMassiveEstUneCongestion)
+TEST(RateControlLoss, UnePerteMassiveEstUneCongestion)
 {
 	RemoteRateControl ctrl;
 	QWORD time = 100000, ts = 100000;
@@ -975,15 +994,14 @@ TEST(RateControlLoss, DISABLED_UnePerteMassiveEstUneCongestion)
 		<< "20 % de pertes soutenues pendant 10 s ne sont pas vues";
 }
 
-// Les deux détecteurs partagent `hypothesis`, et le chemin du délai la réécrit à
-// CHAQUE image : une seule image au délai sain remet Normal et efface la
-// congestion que les pertes venaient de déclarer (mesuré : OverUsing à 0 image
-// saine, Normal dès la 1re). Sur un lien à pertes sans bufferbloat — Wi-Fi,
-// radio — le détecteur de pertes ne peut donc rien déclarer de durable.
-// Le compteur, lui, est bien séparé par chemin depuis le lot 1bis ; c'est
-// l'hypothèse qui reste partagée, et le dernier écrivain gagne.
+// Les deux détecteurs partageaient `hypothesis`, et le chemin du délai la
+// réécrivait à CHAQUE image : une seule image au délai sain remettait Normal et
+// effaçait la congestion que les pertes venaient de déclarer (mesuré :
+// `OverUsing` à 0 image saine, `Normal` dès la 1re). Sur un lien à pertes sans
+// bufferbloat — Wi-Fi, radio — le détecteur de pertes ne pouvait rien déclarer de
+// durable. Chaque chemin porte désormais son hypothèse, composées par GetUsage().
 // Contrat : une congestion vue par les pertes survit à un délai sain.
-TEST(RateControlLoss, DISABLED_UnDelaiSainNEffacePasLAccumulationDesPertes)
+TEST(RateControlLoss, UnDelaiSainNEffacePasLAccumulationDesPertes)
 {
 	RemoteRateControl ctrl;
 	QWORD time = 100000, ts = 100000;
@@ -1001,5 +1019,46 @@ TEST(RateControlLoss, DISABLED_UnDelaiSainNEffacePasLAccumulationDesPertes)
 }
 
 
+
+// Le seuil de 2,5 % doit se franchir dans les DEUX sens : un détecteur qui monte
+// sans redescendre condamne la source à ramper jusqu'à la fin de l'appel.
+// Les rapports tombent chaque seconde, comme le fait RTCP même sans perte.
+TEST(RateControlLoss, LeSeuilDePerteEstFranchiDansLesDeuxSens)
+{
+	RemoteRateControl ctrl;
+	QWORD time = 100000, ts = 100000;
+	// 1 % de pertes : sous le seuil, rien à signaler.
+	FeedLossPhase(ctrl, time, ts, /*seconds=*/8, /*lostPerReport=*/3);
+	EXPECT_NE(RemoteRateControl::OverUsing, ctrl.GetUsage()) << "1 % de pertes pris pour une congestion";
+
+	// 10 % : franchement au-dessus.
+	FeedLossPhase(ctrl, time, ts, /*seconds=*/8, /*lostPerReport=*/30);
+	EXPECT_EQ(RemoteRateControl::OverUsing, ctrl.GetUsage()) << "10 % de pertes non vues";
+
+	// Retour à 1 % : le calme doit revenir.
+	FeedLossPhase(ctrl, time, ts, /*seconds=*/8, /*lostPerReport=*/3);
+	EXPECT_NE(RemoteRateControl::OverUsing, ctrl.GetUsage())
+		<< "congestion maintenue alors que les pertes sont retombées à 1 %";
+}
+
+// Symétrique de LesCandidatsNeSurviventPasAuRetourAuCalme, pour l'autre chemin :
+// trois rafales de pertes que dix secondes de trafic propre séparent ne sont pas
+// une congestion. Une rafale seule ne franchit pas la garde des trois rapports ;
+// leur cumul ne doit pas la franchir non plus.
+TEST(RateControlLoss, UnRapportDePerteNeSurvitPasAuRetourAuCalme)
+{
+	RemoteRateControl ctrl;
+	QWORD time = 100000, ts = 100000;
+	FeedLossPhase(ctrl, time, ts, /*seconds=*/5, /*lostPerReport=*/0);
+
+	for (int rafale = 0; rafale < 3; ++rafale)
+	{
+		FeedLossPhase(ctrl, time, ts, /*seconds=*/1, /*lostPerReport=*/60);
+		FeedLossPhase(ctrl, time, ts, /*seconds=*/10, /*lostPerReport=*/0);
+		EXPECT_NE(RemoteRateControl::OverUsing, ctrl.GetUsage())
+			<< "congestion déclarée après " << (rafale + 1)
+			<< " rafale(s) de pertes, séparées par 10 s de trafic propre";
+	}
+}
 
 } // namespace
