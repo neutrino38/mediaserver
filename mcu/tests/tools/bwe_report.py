@@ -204,12 +204,20 @@ def parse_log(path, stream_filter=None):
             parsed += 1
 
     ordered = sorted(legs.values(), key=lambda leg: (leg.stream, leg.tid))
+    # Releve AVANT le filtre : quand les marqueurs ne rencontrent aucun
+    # echantillon, c'est presque toujours qu'une autre patte du meme journal
+    # porte la seance, et le dire epargne de conclure sur une mesure vide.
+    plages = {}
+    for leg in ordered:
+        instants = [s['t'] for s in leg.estim]
+        if instants:
+            plages[leg.label] = (min(instants), max(instants))
     if stream_filter:
         ordered = [leg for leg in ordered if stream_filter in leg.label]
     # Une patte sans aucune estimation n'a rien a montrer (thread voisin qui a
     # seulement emis un feedback relaye, par exemple).
     ordered = [leg for leg in ordered if leg.estim or leg.events]
-    return ordered, nan_lines, parsed
+    return ordered, nan_lines, parsed, plages
 
 
 # ---------------------------------------------------------------------------
@@ -290,28 +298,49 @@ def samples_between(leg, start, end):
     return [s for s in leg.estim if start <= s['t'] < end]
 
 
+# Duree a plat au-dela de laquelle l'estimation ne rampe plus : elle s'est
+# etablie. Sous ce seuil, un palier d'un ou deux echantillons n'est qu'un temps
+# mort de la rampe.
+PLATEAU_ETABLI_S = 3.0
+
+
 def fin_transitoire(samples):
     """Instant ou l'estimation cesse sa rampe monotone d'entree de phase.
 
     Une marche laisse l'estimation grimper (ou chuter) strictement de facon
     monotone pendant tout le transitoire : y calculer une dispersion mesure la
-    pente, pas une oscillation. On coupe donc au premier renversement de pente.
-    Rend None si la phase est monotone de bout en bout — il n'y a alors aucun
-    regime etabli a juger.
+    pente, pas une oscillation. Le transitoire se termine au premier
+    renversement de pente, OU a l'entree d'un plateau : une estimation figee est
+    le regime le plus etabli qui soit, et l'ecarter du jugement laisse passer
+    exactement ce qu'on cherche a mesurer — mesure du 2026-08-19, estimation
+    plaquee 84 s a 198 kb/s pour un lien a 750, rendue « pas de regime etabli a
+    juger ». Rend None si la phase rampe sans jamais s'etablir.
     """
     sens = 0
+    plat_depuis = None
+    candidat = None
     for prev, cur in zip(samples, samples[1:]):
         if math.isnan(prev['kbps']) or math.isnan(cur['kbps']):
             continue
         delta = cur['kbps'] - prev['kbps']
         if delta == 0:
+            if plat_depuis is None:
+                plat_depuis = prev['t']
+            elif candidat is None and cur['t'] - plat_depuis >= PLATEAU_ETABLI_S:
+                candidat = plat_depuis
             continue
+        plat_depuis = None
         signe = 1 if delta > 0 else -1
         if sens == 0:
             sens = signe
+            candidat = None
         elif signe != sens:
-            return cur['t']
-    return None
+            return candidat if candidat is not None else cur['t']
+        else:
+            # La rampe reprend dans son sens : le plateau n'etait qu'un palier
+            # de la montee. Seule une rampe qui ne repart PAS s'est etablie.
+            candidat = None
+    return candidat
 
 
 def fenetre_etablie(leg, start, end, settle):
@@ -389,6 +418,11 @@ class Verdict(object):
         self.status = status  # 'OK', 'KO' ou '--' (non evaluable)
         self.title = title
         self.detail = detail
+        # Un critere de FOND se juge contre les marqueurs : lui seul atteste que
+        # le scenario a ete mesure. Les criteres de stabilite (NaN, ecretage,
+        # covariance) sont vrais de n'importe quel journal et ne prouvent
+        # aucune mesure. Pose par main() sur les familles concernees.
+        self.fond = False
 
     def line(self):
         return '[%2s] %-46s %s' % (self.status, self.title, self.detail)
@@ -800,7 +834,7 @@ def main(argv=None):
     parser.add_argument('--markdown', action='store_true', help='emettre le bloc a coller en annexe D')
     args = parser.parse_args(argv)
 
-    legs, nan_lines, parsed = parse_log(args.log, args.stream)
+    legs, nan_lines, parsed, plages = parse_log(args.log, args.stream)
     markers = parse_markers(args.markers)
     if not legs:
         print('Aucune trace BWE trouvee dans %s.' % args.log, file=sys.stderr)
@@ -831,9 +865,9 @@ def main(argv=None):
 
     verdicts_par_patte = {}
     for leg in legs:
-        verdicts = []
-        verdicts += judge_segments(leg, markers, args)
-        verdicts += judge_impairments(leg, markers, args)
+        verdicts = judge_segments(leg, markers, args) + judge_impairments(leg, markers, args)
+        for verdict in verdicts:
+            verdict.fond = True
         verdicts += judge_stability(leg, args, nan_lines)
         verdicts_par_patte[leg.label] = verdicts
         print('')
@@ -844,9 +878,34 @@ def main(argv=None):
     if args.markdown:
         print_markdown(legs, verdicts_par_patte, markers, t0)
 
-    echecs = sum(1 for verdicts in verdicts_par_patte.values() for v in verdicts if v.status == 'KO')
+    tous_verdicts = [v for verdicts in verdicts_par_patte.values() for v in verdicts]
+    echecs = sum(1 for v in tous_verdicts if v.status == 'KO')
+    fond = [v for v in tous_verdicts if v.fond]
+    non_juges = [v for v in fond if v.status == '--']
     print('')
-    print('%d critere(s) en echec.' % echecs)
+    print('%d critere(s) en echec, %d critere(s) de fond non juge(s) sur %d.'
+          % (echecs, len(non_juges), len(fond)))
+
+    # Un scenario dont AUCUN critere de fond n'a pu etre juge n'est pas un
+    # succes, c'est une mesure a refaire : les criteres de stabilite qui restent
+    # sont vrais de n'importe quel journal. Sans ce garde-fou, depouiller la
+    # mauvaise patte affiche « 0 critere en echec » (constate le 2026-08-19).
+    if fond and not [v for v in fond if v.status != '--']:
+        print('')
+        print('MESURE INEXPLOITABLE : aucun critere de fond juge.')
+        print('Les marqueurs et les echantillons ne se rencontrent pas — ne rien conclure de cette serie.')
+        debut, fin = markers[0].t, markers[-1].t
+        candidates = [label for label, (tmin, tmax) in sorted(plages.items())
+                      if tmin <= fin and tmax >= debut and label not in verdicts_par_patte]
+        if candidates:
+            for label in candidates:
+                print('  la patte %s couvre la fenetre des marqueurs : rejouer avec --stream %s'
+                      % (label, label))
+        else:
+            print('  aucune patte de %s ne couvre cette fenetre : le journal et les marqueurs'
+                  % args.log)
+            print('  ne viennent pas de la meme seance (journal non tourne, marqueurs ecrases ?).')
+        return 1
     return 1 if echecs else 0
 
 

@@ -178,9 +178,19 @@ donne cette lecture-là.
 - `--markdown` ajoute le bloc de tableaux à coller tel quel dans l'annexe D.
 - Sorties dans `--out` : `bwe.csv` (la série d'estimation), `events.csv`
   (détections, feedback émis, pertes, RTT, changements d'état), `bwe.svg`.
-- Code de retour : `0` si aucun critère n'échoue, `1` sinon, `2` si le journal ne
-  contient aucune trace BWE (traces de debug non activées, le cas le plus
-  fréquent).
+- Code de retour : `0` si aucun critère n'échoue, `1` si un critère échoue ou si
+  la mesure est inexploitable, `2` si le journal ne contient aucune trace BWE
+  (traces de debug non activées, le cas le plus fréquent).
+
+**Une mesure vide n'est pas un succès.** Les critères se partagent en deux
+familles. Les critères de **fond** se jugent contre les marqueurs : eux seuls
+attestent que le scénario a été mesuré. Les critères de **stabilité** (NaN,
+écrêtage, covariance) sont vrais de n'importe quel journal. Quand aucun critère
+de fond n'a pu être jugé, le script écrit `MESURE INEXPLOITABLE` et sort en `1`,
+même si tous les critères de stabilité passent. Il nomme alors la patte dont les
+échantillons couvrent la fenêtre des marqueurs : c'est presque toujours celle
+qu'il fallait donner à `--stream`. Si aucune ne la couvre, le journal et les
+marqueurs ne viennent pas de la même séance.
 
 ### Ce que le script prononce
 
@@ -203,9 +213,14 @@ dispersion mesure la pente, pas une oscillation. La fenêtre de jugement démarr
 donc au premier renversement de pente, sans jamais commencer avant la garde
 `--settle` — celle-ci reste le plancher. Le motif retenu est imprimé entre
 crochets à côté de chaque verdict (`garde 15s`, `transitoire ecarte jusqu a
-+49.4 s`) : une fenêtre choisie en silence rend le verdict illisible. Si
-l'estimation est monotone sur toute la phase, le verdict est `--` — il n'y a pas
-de régime établi à juger.
++49.4 s`) : une fenêtre choisie en silence rend le verdict illisible.
+
+Le transitoire finit aussi quand l'estimation cesse de bouger : une valeur figée
+plus de 3 s est le régime le plus établi qui soit, et l'écarter du jugement
+laisse passer exactement ce qu'on cherche à mesurer. Un palier au milieu d'une
+rampe ne compte pas : si la rampe repart dans le même sens, ce n'était pas un
+régime établi. Le verdict reste `--` seulement si l'estimation rampe sans jamais
+s'établir.
 
 **D'où part le chrono de re-montée.** Du marqueur `tc`, **sauf** si une file
 profonde a retardé la libération. Ce retard se reconnaît à son *plateau* : le débit
