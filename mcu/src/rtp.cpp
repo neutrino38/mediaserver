@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include "log.h"
 #include "rtp.h"
+#include "transportfeedback.h"
 #include "audio.h"
 #include <h264/h264depacketizer.h>
 #include <vp8/vp8depacketizer.h>
@@ -82,6 +83,15 @@ void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 					// Set extension
 					extension.hasAbsSentTime = true;
 					extension.absSentTime = ((QWORD)get3(ext,0))*1000 >> 18;
+					break;
+				case RTPPacket::HeaderExtension::TransportWideCC:
+					//  0                   1                   2
+					//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3
+					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+					// |  ID   | len=1 |transport-wide sequence number |
+					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+					extension.hasTransportSeqNum = true;
+					extension.transportSeqNum = get2(ext,0);
 					break;
 				default:
 					Debug("-Unknown or unmapped extension [%d]\n",id);
@@ -942,6 +952,9 @@ DWORD RTCPRTPFeedback::Parse(BYTE* data,DWORD size)
 			case TempMaxMediaStreamBitrateRequest:
 			case TempMaxMediaStreamBitrateNotification:
 				field = new TempMaxMediaStreamBitrateField();
+				break;
+			case TransportWideFeedbackMessage:
+				field = new TransportWideFeedbackField();
 				break;
 			default:
 				return Error("Unknown RTCPRTPFeedback type [%d]\n",header->count);

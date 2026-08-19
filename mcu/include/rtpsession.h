@@ -677,6 +677,10 @@ private:
 	BitrateFeedbackMode	bitrateFeedbackMode;
 	RembThrottler		bitrateFeedbackThrottler;
 	bool			useAbsTime;
+	//Extension transport-wide-cc : compteur ecrit sur nos paquets sortants
+	//(sender_bwe_plan.md 6.1) ; le pair le renvoie dans ses rapports fmt 15.
+	bool			useTransportCC;
+	DWORD			transportSeqNum;
 	bool 			useOriSeqNum;
 	bool 			useOriTS;
 	bool 			useExtFIR;

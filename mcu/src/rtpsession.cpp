@@ -334,6 +334,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	useFEC = false;
 	useNACK = false;
 	useAbsTime = false;
+	useTransportCC = false;
+	transportSeqNum = 0;
 	isNACKEnabled = false;
 	//Fill with 0
 	memset(sendPacket,0,MTU+SRTP_MAX_TRAILER_LEN);
@@ -624,6 +626,10 @@ int RTPSession::SetProperties(const Properties& properties)
 			extMap[RTPPacket::HeaderExtension::AbsoluteSendTime] =  atoi(it->second.c_str());
 			//Use timestamsp
 			useAbsTime = true;
+		} else if (it->first.compare("http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01")==0) {
+			//Set extension
+			extMap[RTPPacket::HeaderExtension::TransportWideCC] = atoi(it->second.c_str());
+			useTransportCC = true;
 		} else {
 			Error("Unknown RTP property [%s]\n",it->first.c_str());
 		}
@@ -2048,7 +2054,7 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	int ini = sizeof(rtp_hdr_t);
 	
 	//If we have are using any sending extensions
-	if (useAbsTime)
+	if (useAbsTime || useTransportCC)
 	{
 		//Get header
 		rtp_hdr_ext_t* ext = (rtp_hdr_ext_t*)(sendPacket + ini);
@@ -2056,19 +2062,36 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 		headers->x = 1;
 		//Set magic cookie
 		ext->ext_type = htons(0xBEDE);
-		//Set total length in 32bits words
-		ext->len = htons(1);
 		//Increase ini
 		ini += sizeof(rtp_hdr_ext_t);
-		//Calculate absolute send time field (convert ms to 24-bit unsigned with 18 bit fractional part.
-		// Encoding: Timestamp is in seconds, 24 bit 6.18 fixed point, yielding 64s wraparound and 3.8us resolution (one increment for each 477 bytes going out on a 1Gbps interface).
-		DWORD abs = ((getTimeMS() << 18) / 1000) & 0x00ffffff;
-		//Set header
-		sendPacket[ini] = extMap.GetCodecForType(RTPPacket::HeaderExtension::AbsoluteSendTime) << 4 | 0x02;
-		//Set data
-		set3(sendPacket,ini+1,abs);
-		//Increase ini
-		ini+=4;
+		DWORD extIni = ini;
+		if (useAbsTime)
+		{
+			//Calculate absolute send time field (convert ms to 24-bit unsigned with 18 bit fractional part.
+			// Encoding: Timestamp is in seconds, 24 bit 6.18 fixed point, yielding 64s wraparound and 3.8us resolution (one increment for each 477 bytes going out on a 1Gbps interface).
+			DWORD abs = ((getTimeMS() << 18) / 1000) & 0x00ffffff;
+			//Set header
+			sendPacket[ini] = extMap.GetCodecForType(RTPPacket::HeaderExtension::AbsoluteSendTime) << 4 | 0x02;
+			//Set data
+			set3(sendPacket,ini+1,abs);
+			//Increase ini
+			ini+=4;
+		}
+		if (useTransportCC)
+		{
+			//Un numero par TRANSMISSION en principe ; la retransmission RTX
+			//repart pourtant avec le numero d'origine, comme l'abs-send-time
+			//(le paquet stocke est deja chiffre, cf. ReSendPacket) : le
+			//doublon se resout a l'appariement, premiere arrivee gagnante.
+			sendPacket[ini] = extMap.GetCodecForType(RTPPacket::HeaderExtension::TransportWideCC) << 4 | 0x01;
+			set2(sendPacket,ini+1,(WORD)(++transportSeqNum));
+			ini+=3;
+		}
+		//Pad to 32 bit boundary
+		while ((ini-extIni) & 0x03)
+			sendPacket[ini++] = 0;
+		//Set total length in 32bits words
+		ext->len = htons((ini-extIni)/4);
 	}
 
 	//Comprobamos que quepan

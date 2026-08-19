@@ -79,7 +79,8 @@ public:
         {
             SSRCAudioLevel = 1,
             TimeOffset = 2,
-            AbsoluteSendTime = 3
+            AbsoluteSendTime = 3,
+            TransportWideCC = 4
         };
     public:
         HeaderExtension()
@@ -88,18 +89,22 @@ public:
             timeOffset = 0;
             vad = 0;
             level = 0;
+            transportSeqNum = 0;
             hasAbsSentTime = 0;
             hasTimeOffset = 0;
             hasAudioLevel = 0;
+            hasTransportSeqNum = 0;
         }
     protected:
         QWORD absSentTime;
         int timeOffset;
         bool vad;
         BYTE level;
+        WORD transportSeqNum;
         bool hasAbsSentTime;
         bool hasTimeOffset;
         bool hasAudioLevel;
+        bool hasTransportSeqNum;
     };
 
     RTPPacket( MediaFrame::Type media, DWORD codec )
@@ -267,6 +272,8 @@ public:
     BYTE GetLevel() const { return extension.level; }
     bool  HasAudioLevel() const { return extension.hasAudioLevel; }
     bool  HasAbsSentTime() const { return extension.hasAbsSentTime; }
+    bool  HasTransportSeqNum() const { return extension.hasTransportSeqNum; }
+    WORD  GetTransportSeqNum() const { return extension.transportSeqNum; }
     bool  HasTimeOffeset() const { return extension.hasTimeOffset; }
 
     bool SetPayload( BYTE *data, DWORD size )
@@ -917,7 +924,8 @@ public:
     {
         NACK = 1,
         TempMaxMediaStreamBitrateRequest = 3,
-        TempMaxMediaStreamBitrateNotification = 4
+        TempMaxMediaStreamBitrateNotification = 4,
+        TransportWideFeedbackMessage = 15
     };
 
     static const char *TypeToString( FeedbackType type )
@@ -930,6 +938,8 @@ public:
                 return "TempMaxMediaStreamBitrateRequest";
             case TempMaxMediaStreamBitrateNotification:
                 return "TempMaxMediaStreamBitrateNotification";
+            case TransportWideFeedbackMessage:
+                return "TransportWideFeedbackMessage";
         }
         return "Unknown";
     }

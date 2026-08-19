@@ -85,7 +85,7 @@ OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o m
 # libmedkit tirent la classe Logo de l'archive).
 OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o mediagateway.o mediabridgesession.o 
 OBJS+=xmlrpcmediagateway.o textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o audiodecoder.o textencoder.o mp4recorder.o rtmpmp4stream.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
-      vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o
+      vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o transportfeedback.o sentpackethistory.o
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
