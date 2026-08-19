@@ -1,0 +1,274 @@
+# Estimateur de bande passante côté émetteur (lot 6) — conception v1
+
+> Document de conception du lot 6 de [`rate_control_plan.md`](rate_control_plan.md),
+> écrit au GO du portillon (annexe D de [`rate-control.md`](rate-control.md),
+> séance du 2026-08-19). Le périmètre v1 et les interfaces y étaient figés ;
+> ce document les décline en architecture, décisions et sous-lots.
+
+## 1. Objet, et ce que la v1 n'est pas
+
+Le mcu ne sait pas mesurer le sort de ses propres paquets. Quand il émet vers un
+pair, il subit deux signaux pauvres : le REMB/TMMBR que le pair veut bien
+renvoyer (une opinion, par flux), et rien d'autre. Le lot 6 construit ce qui
+manque : un estimateur **côté émetteur**, nourri par les temps d'arrivée que le
+pair rapporte (transport-cc, puis CCFB RFC 8888), qui produit un débit cible
+**par patte sortante** et l'applique à l'encodeur par le levier existant.
+
+La v1 se limite volontairement (fiche du lot 6, actée) :
+
+- **cœur** : trendline + AIMD avec `LinkCapacityEstimator`, étage de perte =
+  logique historique 2 %/10 % ;
+- **hors v1** : sondage actif, détection ALR, `LossBasedBweV2`, fenêtre de
+  congestion, unification audio+vidéo (pas de bundle dans le mcu), abandon de
+  couche. La montée en découverte est multiplicative ×1,08/s, point.
+
+Doctrine inchangée : le chemin REMB côté réception se **répare** (fait, lots
+0-3) mais ne se raffine pas. L'estimateur émetteur est du code **neuf** : lui se
+construit aligné sur le témoin actuel, pas sur l'ancêtre.
+
+## 2. Témoin et licence
+
+Témoin : `../webrtc`, commit `e12c39e03c` (le même que
+[`docs/reference/kalman-vs-webrtc.md`](docs/reference/kalman-vs-webrtc.md)).
+Les modules dont la v1 dérive, avec leur taille réelle :
+
+| module témoin | rôle | lignes |
+|---|---|---|
+| `congestion_controller/rtp/transport_feedback_adapter.cc` | historique d'émission, appariement feedback | 480 |
+| `goog_cc/inter_arrival_delta.cc` | groupes d'envoi, deltas | 141 |
+| `goog_cc/trendline_estimator.cc` | pente + seuil adaptatif | 326 |
+| `remote_bitrate_estimator/aimd_rate_control.cc` + `goog_cc/link_capacity_estimator.cc` | AIMD, mémoire de capacité | ~450 |
+| `goog_cc/bitrate_estimator.cc` (+ `acknowledged_bitrate_estimator`) | débit acquitté | 242 |
+| `goog_cc/send_side_bandwidth_estimation.cc` (étage de perte seul) | perte 2 %/10 %, plafond délai | ~150 utiles |
+
+Licence (arbitrage A5 du plan, confirmé ici) : BSD-3 → GPL est compatible, mais
+la v1 est **réécrite en style maison**, comme le lot 1 l'a fait — mêmes
+constantes, même comportement, chaque divergence tracée contre le fichier:ligne
+du témoin. Aucune recopie de fichier sans instruction formelle du mainteneur.
+
+## 3. Ce que le dépôt offre déjà (inventaire du 2026-08-19)
+
+Ce qui existe et se réutilise :
+
+- **Le RTT est déjà calculé** depuis le DLSR des SR/RR
+  (`rtpsession.cpp:3092-3125`, filtré par `sendSSRC`/`sendSR`) et remonte par
+  `RTPSession::SetRTT`.
+- **Les pertes rapportées par le pair sont déjà décodées… puis jetées** : dans
+  les blocs RR reçus, seul `GetDelaySinceLastSRMilis` est lu ; `GetFactionLost`
+  et `GetLostCount` (`rtp.h:526-531`) ne sont appelés nulle part. L'étage de
+  perte de la v1 a sa donnée, il suffit de la brancher.
+- **Le levier d'application existe et il est unique** : REMB reçu et TMMBR reçu
+  convergent tous deux vers `VideoStream::SetTemporalBitrateLimit`
+  (`videostream.cpp:116`, plafond persistant en kb/s, consommé par la boucle
+  d'encodage `videostream.cpp:546-580`) ; côté JSR-309, l'homologue est
+  `Joinable::SetREMB` → `VideoEncoderMultiplexerWorker::SetREMB`
+  (`VideoEncoderWorker.cpp:272-280`). La consigne ne pilote **que l'encodeur**
+  — c'est le bon endroit, et la v1 ne crée pas de second levier.
+- **Un embryon d'historique d'émission** : la map `rtxs` de `RTPSession`
+  (`rtpsession.h:433`, remplie dans `SendPacket` `rtpsession.cpp:2106-2130`).
+  Inutilisable en l'état : conditionnée à `useNACK`, indexée par seq RTP,
+  stockant le paquet chiffré complet, purgée au compte (200) et non à la durée.
+- **L'extension abs-send-time est écrite à l'émission**
+  (`rtpsession.cpp:2051-2074`) : la mécanique d'écriture d'une extension
+  one-byte `0xBEDE` existe, il n'y a qu'à la généraliser. La branche est morte
+  en pratique (aucun appelant ne pose la propriété) — la plomberie est saine,
+  c'est la négociation qui manque.
+
+Ce qui manque entièrement :
+
+- **Aucun transport-wide sequence number** nulle part (émission ou réception).
+- **Aucune classe RTCP pour RTPFB fmt 15 ni fmt 11** : l'enum
+  (`rtp.h:916-921`) s'arrête à NACK/TMMBR/TMMBN, et un fmt inconnu produit une
+  ligne `Error` **par paquet reçu** (`rtp.cpp:946`) — dès que le pair négociera
+  transport-cc, le journal sera pollué : la classe de parsing est aussi un
+  correctif de bruit. Attention : la boucle de parsing actuelle suppose des
+  champs de taille fixe ; transport-cc et CCFB sont à taille variable et
+  demandent leur propre chemin de décodage.
+- **Aucun pacing au sens du témoin** (cf. §6).
+
+## 4. Architecture v1
+
+```
+                     RTP sortant (+ extension transport-wide seq n° 6.1)
+   VideoEncoderWorker ──► smoother ──► RTPSession::SendPacket ──► réseau
+                                            │
+                                            ▼ (à l'envoi)
+                                    SentPacketHistory          (6.1)
+                                    seq TW → (taille, t_envoi)
+                                            │
+   RTCP entrant                             ▼ (à l'appariement)
+   RTPFB fmt 15 / fmt 11 ──parse──► SenderBWE                  (6.2/6.3)
+   RR (fraction lost, DLSR)  ────►    ├─ deltas par groupe d'envoi (5 ms)
+                                      ├─ trendline (20 paquets) + seuil adaptatif
+                                      ├─ débit acquitté (fenêtres 500/150 ms)
+                                      ├─ AIMD + LinkCapacityEstimator (±3σ)
+                                      └─ étage de perte 2 %/10 %
+                                            │  cible = min(perte, plafond délai)
+                                            ▼
+                        listener → min(cible BWE, REMB/TMMBR du pair)
+                                 → SetTemporalBitrateLimit / SetREMB   (encodeur)
+```
+
+### Décisions de conception (avec justification)
+
+**D1 — Un estimateur par patte sortante, membre de `RTPSession`.** Le mcu n'a
+pas de bundle : chaque média a sa session, donc son transport — un compteur
+transport-wide **par session** est conforme au draft (le « transport », c'est
+la session). Le budget par patte du §5.4 tombe naturellement. L'unification
+audio+vidéo n'aura de sens qu'avec le bundle, hors v1. Contrairement au
+`remoteRateEstimator` (membre de l'Endpoint, partagé entre jambes — et source
+des crashs du 2026-08-17), le `SenderBWE` appartient à **sa** session : pas de
+notification croisée entre jambes, pas d'ordre de destruction piégeux.
+
+**D2 — Trois modules neufs, style du dépôt (une classe, un fichier).**
+
+| fichier | contenu | homologue témoin |
+|---|---|---|
+| `mcu/{include,src}/sentpackethistory.{h,cpp}` | historique borné par la durée (60 s), `seq TW → {taille, t_envoi}` ; appariement d'un rapport → liste `(t_envoi, t_arrivée, taille)` triée par arrivée ; compteur de seq TW | `transport_feedback_adapter` |
+| `mcu/{include,src}/trendlinedetector.{h,cpp}` | groupes d'envoi (5 ms, rafale ≤ 100 ms, reset après 3 groupes réordonnés), régression sur 20 paquets (lissage 0,9), seuil adaptatif `k_up 0,0087 / k_down 0,039`, bornes [6 ; 600] ms, départ 12,5 ms, excursions > seuil+15 ms ignorées, hypothèse = durée > 10 ms ET 2 échantillons ET pente non décroissante | `inter_arrival_delta` + `trendline_estimator` |
+| `mcu/{include,src}/senderbwe.{h,cpp}` | débit acquitté (fenêtre 150 ms, 500 ms au départ), AIMD (`beta` unique 0,85, **descente sur le débit acquitté**), `LinkCapacityEstimator` (α 0,05, bornes ±3σ ; capacité connue → montée additive, sinon ×1,08/s), étage de perte (< 2 % → +8 % du min sur 1 s + 1 kb/s ; 2-10 % → rien ; > 10 % → ×(512−perte)/512 au plus une fois par 300 ms + RTT), plafond délai par `min()`, phase de départ 2 s, orchestration et traces | `bitrate_estimator`, `aimd_rate_control`, `link_capacity_estimator`, `send_side_bandwidth_estimation` |
+
+Les régions (`MaxUnknown`/`NearMax`/…) **n'existent pas** dans ce code neuf :
+le témoin les a remplacées par la mémoire de capacité, on ne les réintroduit
+pas. Pas non plus de Kalman : la trendline n'a pas d'état à mal initialiser.
+
+**D3 — Le format de fil est un module partagé avec le lot 4.**
+`mcu/{include,src}/transportfeedback.{h,cpp}` porte la **construction** (lot 4,
+nous rapportons) et le **parsing** (lot 6, nous consommons) du RTPFB fmt 15,
+puis du CCFB fmt 11 derrière la même interface (ordre = arbitrage A4). Celui
+des deux lots qui s'implémente le premier crée le module ; l'autre le complète.
+Le dispatch se branche dans `RTCPRTPFeedback::Parse` (`rtp.cpp:904`) avec un
+chemin de décodage à taille variable propre — et fait taire l'`Error` par
+paquet au passage.
+
+**D4 — La consigne s'applique par le levier existant, en `min()` avec le pair.**
+`SenderBWE` notifie `RTPSession::Listener` (nouveau rappel
+`onSenderEstimatedBitrate`). `RTPParticipant` et `RTPEndpoint` le traduisent
+vers le même point que le REMB reçu aujourd'hui. `videoBitrateLimit` (et son
+homologue JSR-309) est mono-valeur, dernier écrivain gagnant : la composition
+devient **deux champs** (limite du pair, limite BWE locale) dont la boucle
+d'encodage prend le `min()`. Le lot 5 (propagation amont par le throttler)
+consommera la même cible ; rien à prévoir de plus ici.
+
+**D5 — Verrouillage : les leçons du 2026-08-17 s'appliquent d'emblée.** Le
+feedback arrive sur le thread RTCP de la session (celui de
+`ProcessRTCPPacket`), l'estimation se met à jour là. La notification du
+listener se fait **hors** du verrou écrivain de l'estimateur (le motif
+lecteur/`IncUse` du lot 1 n'est même pas nécessaire : pas de partage entre
+jambes, cf. D1). Déclaration des membres : l'estimateur avant tout membre qui
+le référence.
+
+**D6 — Négociation : deux propriétés, posées par elixip.** Symétrique de
+l'existant `abs-send-time` (`rtpsession.cpp:622-626`) : la propriété extmap
+`http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01`
+arme l'écriture de l'extension sur nos paquets sortants (id pris dans
+`extMap`), et `a=rtcp-fb:* transport-cc` accepté par le pair autorise à
+espérer du feedback. Sans négociation : extension non écrite, estimateur muet,
+comportement actuel inchangé — même doctrine que le lot 2 (A2 : rien de
+spontané). La moitié elixip est la même que celle du lot 4 (offrir/accepter
+extmap + rtcp-fb) : **un seul chantier SDP côté contrôleur pour les deux lots.**
+
+## 5. Ce que le témoin fait et que la v1 ne fait pas — dit explicitement
+
+| capacité témoin | sort en v1 | conséquence assumée |
+|---|---|---|
+| sondage 3×/6× au départ | absent | montée initiale au rythme ×1,08/s : ~15 s pour ×3 — la phase de départ 2 s + consigne négociée en atténuent le coût |
+| ALR (seau à jetons 65 %/80 %) | absent | une source qui n'a rien à dire pourra faire baisser l'estimation ; acceptable en visio permanente, à revoir avec le partage de document |
+| `LossBasedBweV2` | absent | pertes gérées par l'étage 2 %/10 % — celui que le témoin garde en repli |
+| fenêtre de congestion (pushback) | absente | pas de contre-pression sur la file d'émission ; le pacing v1 (§6) reste ouvert |
+| BWE audio | absente | seules les pattes **vidéo** portent un estimateur ; l'audio est à débit quasi constant |
+
+## 6. Pacing — évaluation de `RTPSmoother` (prérequis exigé par la fiche)
+
+Verdict : **base utilisable, insuffisante telle quelle, suffisante pour la v1
+après un réglage.** Constat (inventaire 2026-08-19) :
+
+- `RTPSmoother` (chemin legacy `videostream.cpp:667`) et
+  `RTPMultiplexerSmoother` (chemin JSR-309 transcodé,
+  `VideoEncoderWorker.cpp:595`) font la même chose : répartir les paquets
+  d'**une** image proportionnellement aux octets sur une fenêtre `duration`
+  fournie par l'appelant (`SetSendingTime(current*duration/frameLength)`).
+  Aucun débit cible, aucun budget inter-images, aucune dette.
+- La fenêtre vaut déjà `bits de l'image / débit cible`, plafonnée à la période
+  d'image (`videostream.cpp:660-666`, `VideoEncoderWorker.cpp:586-593`) : c'est
+  un pacing par image au débit cible, sans mémoire.
+- Le chemin **relayé** (mode pont) court-circuite tout :
+  `VideoTranscoder.cpp:214` fait `Multiplex(packet)` direct, et
+  `RTPEndpoint::onRTPPacket` émet dans le thread appelant. L'audio et le texte
+  ne sont jamais lissés.
+
+Décision v1 : sur les chemins **encodés**, la fenêtre de lissage se calcule au
+**débit de pacing = 1,1 × la cible** (le facteur du témoin dès que l'estimation
+dépend des temps d'arrivée), au lieu du débit cible nu — un changement de
+formule, pas d'architecture. Sur le chemin **relayé**, pas de pacing v1 : les
+paquets relayés arrivent déjà espacés par l'émetteur d'origine, les re-lisser
+n'apporterait rien et le fil direct préserve la latence. Un pacer à budget
+(dette inter-images, priorités, audio compris) reste le chantier de suite si la
+mesure du 6.5 montre que les rafales résiduelles polluent la trendline.
+
+## 7. Sous-lots
+
+### 6.1 — Plomberie (extension + format de fil + historique)
+
+1. Extension transport-wide seq à l'émission (`SendPacket`, à côté de
+   l'abs-send-time ; compteur par session ; reprise à l'identique dans le
+   chemin RTX `rtpsession.cpp:3565`) + lecture à la réception (servira au
+   lot 4).
+2. `transportfeedback.{h,cpp}` : construction + parsing fmt 15 (base time,
+   deltas, chunks run-length/status-vector, wrap 16 bits) ; CCFB fmt 11 ensuite.
+3. `sentpackethistory.{h,cpp}` : fenêtre 60 s, appariement rapport → résultats.
+4. Tests : aller-retour construction/parsing (trous, wrap, deltas négatifs,
+   rapport plein), hardening du parseur (modèle `test_rtcp_hardening.cpp`,
+   page de garde `PROT_NONE`), historique (purge, appariement partiel,
+   doublons de feedback).
+
+### 6.2 — Cœur (sans réseau, sous fake clock)
+
+`trendlinedetector` + `senderbwe`, portés par une suite
+`mcu/tests/test_sender_bwe.cpp` sur le modèle de `test_rate_control.cpp`
+(cible `make check-senderbwe`) : nominal (convergence sur lien stable),
+adverses (rafales, réordonnancement, feedback perdu/dupliqué, pertes 2/10 %,
+excursion > seuil+15 ignorée pour l'adaptation), et les gardes-fous que le
+lot 3 a payés (un seul retour au calme relance la montée ; la descente porte
+sur le débit **acquitté** ; pas de gel au plafond). Les constantes se vérifient
+contre le témoin fichier:ligne, comme au lot 1.
+
+### 6.3 — Intégration
+
+Membre `RTPSession`, dispatch RTCP branché, RR (fraction lost + RTT) branchés,
+notification listener, composition `min()` dans `videostream` et
+`VideoEncoderWorker`, traces `BWE-TX: estimation stream=… state=… target=…
+acked=…` (mêmes conventions que `BWE:` pour que l'outillage du lot 3 se
+généralise).
+
+### 6.4 — Pacing v1
+
+La formule 1,1× sur les deux smoothers (§6), et rien d'autre.
+
+### 6.5 — Négociation, recette et mesure (portillon interne)
+
+- elixip : extmap + `a=rtcp-fb:* transport-cc` (chantier SDP commun avec le
+  lot 4).
+- Recette : face à un Chrome **récepteur**, `webrtc-internals` montre nos
+  rapports consommés ; pcap de nos paquets portant l'extension.
+- Mesure : mêmes scénarios netem que le lot 3 mais sur notre lien **sortant**
+  (egress natif — plus simple que `--ingress`), `bwe_report.py` étendu aux
+  traces `BWE-TX:`, mêmes critères que l'annexe D. C'est la séance qui décide
+  si le pacer à budget (§6) est nécessaire.
+
+## 8. Ordre et dépendances
+
+6.1 → 6.2 → 6.3 → 6.4 sont séquentiels côté mcu et ne dépendent **pas**
+d'elixip : tout se teste sous fake clock et en pcap rejoué. 6.5 exige la moitié
+elixip (commune au lot 4 — la planifier une fois pour les deux). Le lot 4
+(générateur côté réception) reste indépendant : il partage `transportfeedback`
+et l'extension, c'est tout.
+
+## Suivi
+
+- [x] 6.0 — ce document
+- [ ] 6.1 — extension + `transportfeedback` + `sentpackethistory` + tests
+- [ ] 6.2 — `trendlinedetector` + `senderbwe` + `test_sender_bwe.cpp`
+- [ ] 6.3 — intégration `RTPSession` + composition `min()` + traces `BWE-TX:`
+- [ ] 6.4 — pacing 1,1× sur les deux smoothers
+- [ ] 6.5 — elixip SDP + recette Chrome + séance netem sortante

@@ -713,12 +713,14 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
 - [x] Lot 0 — harnais + traces (2026-08-15 : 11 tests, 7 DISABLED_/4 gardes-fous, `make check-ratecontrol`, 386 verts au total)
 - [x] Lot 1 — boucle fermée (2026-08-15 : échanges, §3.4 a-g, constantes 16k/30M, verrou, listeners multiples ; 7 DISABLED_ levés, 393 verts, binaire lié)
 - [x] Lot 2 — feedback négocié + `RembThrottler` (2026-08-15 : mode `{None,REMB,TMMBR}`, throttler, `SendReceiverEstimatedMaxBitrate`, propriété `remb` posée par les deux contrôleurs elixip ; 2 défauts du paquet REMB corrigés ; 20/20 et 402 verts. **Reste la recette pcap sur appel Chrome réel**)
-- [ ] Lot 3 — mesures netem + annexe D + décision GO/NO-GO (5 séances en boucle
-      FERMÉE tenues 2026-08-17/18 : descente, régime établi et stabilité acquis,
-      oscillation jamais tenue, re-montée **non mesurable** dans ce montage ;
-      reste la série en boucle OUVERTE, seule à pouvoir trancher A3) (**outillage fait**
-      2026-08-17 : `mcu/tests/tools/` + gabarit d'annexe D ; reste la séance de
-      mesure, qui demande un appel réel et une machine en coupure)
-- [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB
+- [x] Lot 3 — mesures netem + annexe D + décision (séance boucle OUVERTE
+      post-verrou du 2026-08-19 : re-montée 29,8 s OK, régime établi −9 à −22 %
+      de l'entrant, pertes et gigue tenues ; annexe D remplie, **GO du lot 6
+      recommandé** ; A3 refermé sans changement ; reste l'arbitrage du seuil
+      d'oscillation 6/min, cf. D.6)
+- [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB — le format
+      de fil et l'extension sont partagés avec le lot 6 (module
+      `transportfeedback`, cf. `sender_bwe_plan.md` D3)
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live
-- [ ] Lot 6 — `sender_bwe_plan.md` puis implémentation v1
+- [ ] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
+      implémentation v1 en sous-lots 6.1-6.5 (suivi dans ce document)
