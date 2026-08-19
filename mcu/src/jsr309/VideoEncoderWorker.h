@@ -33,6 +33,7 @@ public:
 	virtual void AddListener(Listener *listener);
 	virtual void Update();
 	virtual void SetREMB(int bitrate);
+	virtual void SetSenderEstimate(DWORD bitrate);
 	virtual void RemoveListener(Listener *listener);
 	//Phase 5 (nego_fmtp §6.3) : bornes négociées par code codec, fusionnées
 	//par-dessus `params` à l'ouverture de l'encodeur.
@@ -83,6 +84,7 @@ private:
 	//débit cible, persistant jusqu'à remplacement par une nouvelle valeur
 	//(RFC 5104) — écrit par le plan de contrôle, lu par la boucle d'encodage.
 	int videoBitrateLimit;
+	int senderBweLimit;
 	Properties params;
 	//Bornes négociées par code codec (phase 5) : ce que le pair de la patte
 	//émettrice a déclaré savoir décoder. Fusionnées par-dessus `params` à

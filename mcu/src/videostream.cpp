@@ -47,6 +47,7 @@ VideoStream::VideoStream(Listener* listener, PictPtr & muteLogo, MediaFrame::Med
 	videoBitrate=0;
 	videoIntraPeriod=0;
 	videoBitrateLimit=0;
+	senderBweLimit=0;
 	sendFPU = false;
 	this->listener = listener;
 	mediaListener = NULL;
@@ -126,6 +127,14 @@ int VideoStream::SetTemporalBitrateLimit(int estimation)
 	//précisément quand on lui répond TMMBN, ce que la session fait désormais.
 	videoBitrateLimit = estimation/1000;
 	//Exit
+	return 1;
+}
+
+int VideoStream::SetSenderEstimatedBitrate(int estimation)
+{
+	//Cible du BWE émetteur local (lot 6.3), deuxième champ à côté de la
+	//limite du pair : la boucle d'encodage prend le min des deux.
+	senderBweLimit = estimation/1000;
 	return 1;
 }
 
@@ -569,6 +578,10 @@ int VideoStream::SendVideo()
 		//une nouvelle valeur, jamais par le temps — cf. SetTemporalBitrateLimit).
 		if (videoBitrateLimit>0 && target>videoBitrateLimit)
 			target = videoBitrateLimit;
+
+		//Cible du BWE émetteur local (lot 6.3) : min() avec la limite du pair
+		if (senderBweLimit>0 && target>senderBweLimit)
+			target = senderBweLimit;
 
 		//Check if we have a new bitrate
 		if (target && target!=current)

@@ -14,6 +14,7 @@
 #include "config.h"
 #include "use.h"
 #include "rtp.h"
+#include "senderbwe.h"
 #include "rtpbuffer.h"
 #include "remoteratecontrol.h"
 #include "fecdecoder.h"
@@ -51,6 +52,10 @@ public:
 		//reçu et validé (déchiffrement OK => DTLS terminé, ou pas de crypto). Ré-armé
 		//via ArmRTPReceivedNotification(). Non pur (Listener existants inchangés).
 		virtual void onRTPPacketReceived( RTPSession *session ) {}
+		//Lot 6.3 : l'estimateur émetteur LOCAL a une nouvelle cible pour ce
+		//flux sortant (bps). À composer par min() avec la limite du pair
+		//(REMB/TMMBR reçu), jamais à écraser. Non pur (Listener inchangés).
+		virtual void onSenderEstimatedBitrate( RTPSession *session, DWORD bitrate ) {}
 	};
 
 	//Ce que la session émet comme feedback de débit vers le pair, posé par la
@@ -681,6 +686,13 @@ private:
 	//(sender_bwe_plan.md 6.1) ; le pair le renvoie dans ses rapports fmt 15.
 	bool			useTransportCC;
 	DWORD			transportSeqNum;
+	//Estimateur émetteur (lot 6.3) : historique alimenté par le thread
+	//d'émission, consommé par le thread RTCP — le mutex couvre les deux.
+	void ProcessTransportWideFeedback(RTCPRTPFeedback* fb);
+	void OnReportedLoss(BYTE fractionLost);
+	SentPacketHistory	sentHistory;
+	SenderBWE		senderBWE;
+	std::mutex		senderBweMutex;
 	bool 			useOriSeqNum;
 	bool 			useOriTS;
 	bool 			useExtFIR;

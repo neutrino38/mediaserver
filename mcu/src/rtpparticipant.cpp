@@ -490,6 +490,12 @@ void RTPParticipant::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWOR
 		video[session->GetMediaRole()]->SetTemporalBitrateLimit(estimation);
 }
 
+void RTPParticipant::onSenderEstimatedBitrate(RTPSession *session,DWORD estimation)
+{
+	if (session->GetMediaType()==MediaFrame::Video)
+		video[session->GetMediaRole()]->SetSenderEstimatedBitrate(estimation);
+}
+
 void RTPParticipant::onRequestFPU()
 {
 	//Check

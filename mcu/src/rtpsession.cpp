@@ -2179,7 +2179,11 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 		//Inc stats
 		numSendPackets++;
 		totalSendBytes += packet.GetMediaLength();
-		
+		if (useTransportCC)
+		{
+			std::lock_guard<std::mutex> guard(senderBweMutex);
+			sentHistory.OnPacketSent((WORD)transportSeqNum, getTime(), len);
+		}
 	}
 
 	//Exit
@@ -3121,6 +3125,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							//Set it
 							SetRTT(rtt);
 						}
+						//Le pair rapporte les pertes de NOTRE flux : elles
+						//etaient decodees puis jetees (lot 6.3)
+						OnReportedLoss(report->GetFactionLost());
 					}
 				}
 				break;
@@ -3144,6 +3151,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							//Set it
 							SetRTT(rtt);
 						}
+						//Le pair rapporte les pertes de NOTRE flux : elles
+						//etaient decodees puis jetees (lot 6.3)
+						OnReportedLoss(report->GetFactionLost());
 					}
 				}
 				break;
@@ -3217,6 +3227,10 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 
 						}
 		
+						break;
+					case RTCPRTPFeedback::TransportWideFeedbackMessage:
+						//Rapport du pair sur NOS paquets sortants (lot 6.3)
+						ProcessTransportWideFeedback(fb);
 						break;
 				}
 				break;
@@ -3391,6 +3405,10 @@ void RTPSession::SetRTT(DWORD rtt)
 	{
 		//Update estimator
 		remoteRateEstimator->UpdateRTT(recSSRC,rtt,getTimeMS());
+	}
+	{
+		std::lock_guard<std::mutex> guard(senderBweMutex);
+		senderBWE.UpdateRTT(rtt);
 	}
 
 	//Check RTT to enable NACK
@@ -4267,3 +4285,37 @@ bool RTPSession::GetStatistics( DWORD ssrc, MediaStatistics & stats)
 
 }
 
+void RTPSession::ProcessTransportWideFeedback(RTCPRTPFeedback* fb)
+{
+	bool changed = false;
+	DWORD estimate = 0;
+	{
+		std::lock_guard<std::mutex> guard(senderBweMutex);
+		for (BYTE i=0;i<fb->GetFieldCount();i++)
+		{
+			TransportWideFeedbackField* field = (TransportWideFeedbackField*)fb->GetField(i);
+			DWORD lost = 0, unknown = 0;
+			std::vector<SentPacketHistory::Result> results = sentHistory.ProcessFeedback(*field, lost, unknown);
+			changed |= senderBWE.ProcessFeedback(results, lost, getTime());
+		}
+		estimate = senderBWE.GetEstimatedBitrate();
+	}
+	//Notification HORS du verrou : le listener peut rappeler la session
+	if (changed && estimate)
+		if (auto l = LockListener())
+			l->onSenderEstimatedBitrate(this, estimate);
+}
+
+void RTPSession::OnReportedLoss(BYTE fractionLost)
+{
+	bool changed;
+	DWORD estimate;
+	{
+		std::lock_guard<std::mutex> guard(senderBweMutex);
+		changed = senderBWE.UpdateFractionLost(fractionLost, getTime());
+		estimate = senderBWE.GetEstimatedBitrate();
+	}
+	if (changed && estimate)
+		if (auto l = LockListener())
+			l->onSenderEstimatedBitrate(this, estimate);
+}

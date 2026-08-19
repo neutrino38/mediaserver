@@ -218,6 +218,40 @@ TEST(TransportFeedbackWire, AucuneTroncatureNeFaitDeborderLeParseur)
 	}
 }
 
+TEST(TransportFeedbackWire, LEnveloppeTraverseLeParseurCompose)
+{
+	// Le chemin d'arrivée réel : un compound RTCP portant le RTPFB fmt 15
+	// doit traverser RTCPCompoundPacket::Parse — c'est lui qui alimente
+	// ProcessRTCPPacket. Avant le lot 6.1, ce paquet produisait une ligne
+	// d'erreur et le sous-paquet était jeté.
+	TransportWideFeedbackField* in = new TransportWideFeedbackField();
+	in->SetBase(300, 8000000);
+	ASSERT_TRUE(in->AddReceived(300, 8000000));
+	ASSERT_TRUE(in->AddReceived(302, 8001000));
+
+	RTCPRTPFeedback* packet = RTCPRTPFeedback::Create(
+		RTCPRTPFeedback::TransportWideFeedbackMessage, 0xAAAA, 0xBBBB);
+	packet->AddField(in);
+	BYTE buffer[256];
+	DWORD len = packet->Serialize(buffer, sizeof(buffer));
+	delete packet;
+	ASSERT_GT(len, 0u);
+
+	ASSERT_TRUE(RTCPCompoundPacket::IsRTCP(buffer, len));
+	RTCPCompoundPacket* compound = RTCPCompoundPacket::Parse(buffer, len);
+	ASSERT_TRUE(compound != NULL);
+	ASSERT_EQ(1u, compound->GetPacketCount());
+	RTCPPacket* sub = compound->GetPacket(0);
+	ASSERT_EQ(RTCPPacket::RTPFeedback, sub->GetType());
+	RTCPRTPFeedback* fb = (RTCPRTPFeedback*)sub;
+	EXPECT_EQ(RTCPRTPFeedback::TransportWideFeedbackMessage, fb->GetFeedbackType());
+	ASSERT_EQ(1u, fb->GetFieldCount());
+	TransportWideFeedbackField* out = (TransportWideFeedbackField*)fb->GetField(0);
+	EXPECT_EQ(300, out->baseSeq);
+	EXPECT_EQ(3u, out->packets.size());
+	delete compound;
+}
+
 // ---------------------------------------------------------------------------
 // Suite SentPacketHistoryTest — l'historique d'émission et l'appariement.
 // ---------------------------------------------------------------------------

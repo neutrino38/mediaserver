@@ -24,6 +24,7 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	bitrate = 0;
 	//Aucune limite TMMBR/REMB en vigueur
 	videoBitrateLimit = 0;
+	senderBweLimit = 0;
         useInputSize = false;
 	negotiatedDirty = false;
 }
@@ -279,6 +280,13 @@ void VideoEncoderMultiplexerWorker::SetREMB(int estimation)
 	videoBitrateLimit = estimation/1000;
 }
 
+void VideoEncoderMultiplexerWorker::SetSenderEstimate(DWORD estimation)
+{
+	//Cible du BWE émetteur local (lot 6.3), deuxième champ à côté de la
+	//limite du pair : la boucle d'encodage prend le min des deux.
+	senderBweLimit = estimation/1000;
+}
+
 int VideoEncoderMultiplexerWorker::Encode()
 {
 	timeval first;
@@ -512,6 +520,10 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//une nouvelle valeur, jamais par le temps — cf. SetREMB).
 		if (videoBitrateLimit>0 && target>videoBitrateLimit)
 			target = videoBitrateLimit;
+
+		//Cible du BWE émetteur local (lot 6.3) : min() avec la limite du pair
+		if (senderBweLimit>0 && target>senderBweLimit)
+			target = senderBweLimit;
 
 		//Check if we have a new bitrate
 		if (target && target!=current)

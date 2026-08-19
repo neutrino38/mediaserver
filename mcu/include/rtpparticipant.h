@@ -97,6 +97,7 @@ public:
 	virtual void onFPURequested(RTPSession *session);
 	virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate);
 	virtual void onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD bitrate,DWORD overhead);
+	virtual void onSenderEstimatedBitrate(RTPSession *session,DWORD bitrate);
 	virtual void onRequestFPU();
 	virtual void onNewStream( RTPSession *session, DWORD newSsrc, bool receiving );
 	virtual void onDTMF(DTMFMessage* dtmf);

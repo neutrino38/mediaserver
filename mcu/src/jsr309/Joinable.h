@@ -46,6 +46,12 @@ public:
 	virtual void SetREMB(DWORD estimation) = 0;
 	virtual void RemoveListener(Listener *listener) = 0;
 
+	//Cible du BWE émetteur LOCAL de la patte sortante (lot 6.3, bps) : à
+	//composer par min() avec la limite du pair (SetREMB), jamais à écraser.
+	//No-op par défaut : seul le producteur qui ENCODE la consomme ; en mode
+	//relais, la propagation amont est l'affaire du lot 5, pas de ce canal.
+	virtual void SetSenderEstimate(DWORD estimation) {}
+
 	//Média effectivement négocié côté source (StartReceiving reçu) — override
 	//dans Endpoint::Port. Les sources toujours actives (mixers, transcoders,
 	//players) gardent le défaut.

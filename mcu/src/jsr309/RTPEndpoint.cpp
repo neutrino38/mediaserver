@@ -465,6 +465,12 @@ void RTPEndpoint::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD e
                j->SetREMB(estimation);
 }
 
+void RTPEndpoint::onSenderEstimatedBitrate(RTPSession *session,DWORD estimation)
+{
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->SetSenderEstimate(estimation);
+}
+
 void RTPEndpoint::onRTPTimeout(RTPSession *session)
 {
 	//Inactivité RTP prolongée détectée par le watchdog de RTPSession (appelé une
