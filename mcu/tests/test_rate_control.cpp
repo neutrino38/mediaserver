@@ -1186,4 +1186,46 @@ TEST(RateControlBrake, LEstimationSuitLePlafondAuLieuDeGeler)
 }
 
 
+// E2. Sous surutilisation continue, l'etat restait Decrease : aucune transition
+// ne l'en sortait. Le retour au calme le faisait passer a Hold, et il fallait un
+// SECOND tick Normal pour relancer la montee — sur un lien qui alterne, deux
+// ticks Normal consecutifs n'arrivent jamais. Mesure du 2026-08-19, boucle
+// ouverte : estimation figee 17 s a 871 kb/s pendant que 1500 a 1860 kb/s
+// passaient reellement. Contrat du temoin (aimd_rate_control.cc:310-311,
+// « Stay on hold until the pipes are cleared ») : la descente laisse l'etat en
+// Hold, donc UN SEUL retour au calme suffit a relancer la montee.
+TEST(RateControlBrake, UnSeulRetourAuCalmeRelanceLaMontee)
+{
+	RemoteRateEstimator estimator;
+	BitrateCapture capture;
+	estimator.AddListener(&capture);
+	const DWORD ssrc = 0x1234;
+
+	QWORD now = FeedRegular(estimator, ssrc, /*from=*/100000, /*durationMs=*/70000);
+	ForceOveruseViaRtt(estimator, ssrc, now);
+	const size_t debut = capture.targets.size();
+
+	// L'hypothese RTT vit EpisodicTtlMs puis expire faute de confirmation : un
+	// tick AIMD descend pendant qu'elle vit, les suivants voient le calme.
+	FeedRegular(estimator, ssrc, now, RemoteRateControl::EpisodicTtlMs + 3000);
+
+	// Le creux est la premiere consigne minimale publiee apres la
+	// surutilisation. Le tick SUIVANT est le premier au calme : il doit deja
+	// remonter. Sans la correction, la machine passe ce tick a sortir de
+	// Decrease (Decrease -> Hold) et republie le creux a l'identique — c'est le
+	// second tick Normal qui montait, et un lien qui alterne n'en offre jamais
+	// deux de suite.
+	ASSERT_GT(capture.targets.size(), debut) << "prérequis : des ticks ont eu lieu";
+	auto premier = capture.targets.begin() + debut;
+	auto creux = std::min_element(premier, capture.targets.end());
+	ASSERT_LT(*creux, *std::max_element(premier, capture.targets.end()))
+		<< "prérequis : la surutilisation a fait descendre";
+	ASSERT_NE(creux + 1, capture.targets.end())
+		<< "prérequis : au moins un tick apres le creux";
+	EXPECT_GT(*(creux + 1), *creux)
+		<< "consigne restée à " << *creux
+		<< " b/s au tick suivant le creux : la montée attend un second tick";
+}
+
+
 } // namespace

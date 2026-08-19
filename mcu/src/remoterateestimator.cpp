@@ -396,6 +396,14 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 			Debug("BWE: Decrease rate to current = %u kbps\n", current / 1000);
 		
 			lastBitRateChange = now;
+			//« Stay on hold until the pipes are cleared » (aimd_rate_control.cc:310-311).
+			//Sans cette ligne, l'etat restait Decrease : aucune transition ne l'en
+			//sortait, le retour au calme le menait a Hold et il fallait un SECOND
+			//tick Normal pour relancer la montee. Un lien qui alterne n'en offre
+			//jamais deux de suite — mesure du 2026-08-19 en boucle ouverte,
+			//estimation figee 17 s a 871 kb/s pour 1500 a 1860 kb/s recus, puis
+			//descendant encore a chaque tick sur un accumulateur qui baisse.
+			ChangeState(Hold);
 			break;
 	}
 	
