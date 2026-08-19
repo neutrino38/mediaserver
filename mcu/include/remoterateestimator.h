@@ -65,6 +65,7 @@ public:
 	void SetTemporalMaxLimit(DWORD limit);
 	void SetTemporalMinLimit(DWORD limit);
 	void SetEventSource(EvenSource *eventSource) {	this->eventSource = eventSource; }
+	EvenSource* GetEventSource() {	return eventSource; }
 private:
 	DWORD GetEstimatedBitrateUnlocked() const;
 	double RateIncreaseFactor(QWORD now, QWORD last, DWORD reactionTime) const;

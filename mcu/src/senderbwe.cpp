@@ -2,6 +2,7 @@
 #include <cmath>
 #include "senderbwe.h"
 #include "log.h"
+#include "eventstreaminghandler.h"
 
 //Constantes du temoin, fichier:valeur verifies sur ../webrtc e12c39e03c
 static const double Beta                  = 0.85;	//aimd_rate_control.cc:35
@@ -69,10 +70,25 @@ SenderBWE::SenderBWE()
 	hasDecreasedSinceLastLoss = false;
 	firstReportUs = 0;
 
+	lastTraceUs = 0;
+	eventSource = NULL;
+
 	rtt = 200;
 	//Bornes du lot 1 (arbitrage A1) : en dessous de 16 kb/s mieux vaut geler
 	minConfiguredBitrate = 16000;
 	maxConfiguredBitrate = 30000000;
+}
+
+void SenderBWE::TraceEstimate(QWORD nowUs, bool changed)
+{
+	if (!changed && lastTraceUs && nowUs - lastTraceUs < 1000000)
+		return;
+	lastTraceUs = nowUs;
+	Debug("BWE-TX: estimation stream=%s state=%s usage=%s target=%u delay=%u acked=%u lost=%u trend=%.3f threshold=%.1f\n",
+	      eventSource ? eventSource->GetName() : "",
+	      GetStateName(), TrendlineDetector::GetName(detector.GetUsage()),
+	      GetEstimatedBitrate() / 1000, delayCurrentBitrate / 1000, GetAckedBitrate() / 1000,
+	      lastFractionLost, detector.GetTrend(), detector.GetThreshold());
 }
 
 void SenderBWE::SetMinMaxBitrate(DWORD min, DWORD max)
@@ -277,6 +293,7 @@ void SenderBWE::UpdateDelayEstimate(QWORD nowUs)
 				}
 				current = std::min(increased, increaseLimit);
 			}
+			Debug("BWE-TX: Increase rate to current = %u kbps\n", current / 1000);
 			lastChangeUs = nowUs;
 			break;
 		}
@@ -294,6 +311,7 @@ void SenderBWE::UpdateDelayEstimate(QWORD nowUs)
 			if (ackedBps / 1000 < linkCapacity.LowerBoundKbps())
 				linkCapacity.Reset();
 			linkCapacity.OnOveruse(ackedBps / 1000);
+			Debug("BWE-TX: Decrease rate to current = %u kbps\n", current / 1000);
 			//La descente laisse l'etat en Hold : un seul retour au calme
 			//relance la montee (meme contrat que le lot 3bis cote reception)
 			state = Hold;
@@ -410,11 +428,7 @@ bool SenderBWE::ProcessFeedback(const std::vector<SentPacketHistory::Result>& re
 	UpdateLossEstimate(nowUs);
 
 	DWORD after = GetEstimatedBitrate();
-	if (after != before)
-		Debug("BWE-TX: estimation state=%s usage=%s target=%u delay=%u acked=%u trend=%.3f threshold=%.1f\n",
-		      GetStateName(), TrendlineDetector::GetName(detector.GetUsage()),
-		      after / 1000, delayCurrentBitrate / 1000, GetAckedBitrate() / 1000,
-		      detector.GetTrend(), detector.GetThreshold());
+	TraceEstimate(nowUs, after != before);
 	return after != before;
 }
 
@@ -430,10 +444,6 @@ bool SenderBWE::UpdateFractionLost(BYTE fractionLost, QWORD nowUs)
 		lossBasedTarget = delayCurrentBitrate;
 	UpdateLossEstimate(nowUs);
 	DWORD after = GetEstimatedBitrate();
-	if (after != before)
-		Debug("BWE-TX: estimation state=%s usage=%s target=%u delay=%u acked=%u lost=%u/256\n",
-		      GetStateName(), TrendlineDetector::GetName(detector.GetUsage()),
-		      after / 1000, delayCurrentBitrate / 1000, GetAckedBitrate() / 1000,
-		      fractionLost);
+	TraceEstimate(nowUs, after != before);
 	return after != before;
 }

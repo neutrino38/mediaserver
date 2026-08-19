@@ -1553,6 +1553,13 @@ void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
 
 	//Add as listener
 	remoteRateEstimator->AddListener(this);
+
+	//Le BWE emetteur trace sous le meme nom de patte que l'estimateur RX
+	if (estimator)
+	{
+		std::lock_guard<std::mutex> guard(senderBweMutex);
+		senderBWE.SetEventSource(estimator->GetEventSource());
+	}
 }
 
 /********************************

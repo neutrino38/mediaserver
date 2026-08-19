@@ -271,6 +271,22 @@ BWE: covariance no longer positive semi-definite
 -RemoteRateEstimator::SetTemporalMaxLimit() …
 ```
 
+L'estimateur **émetteur** (lot 6, `mcu/src/senderbwe.cpp`) trace sous le
+préfixe `BWE-TX:` et se dépouille avec les mêmes critères :
+
+```
+BWE-TX: estimation stream=… state=… usage=… target=… delay=… acked=… lost=… trend=… threshold=…
+BWE-TX: Increase|Decrease rate to current = … kbps
+```
+
+Ses échantillons forment une patte **à part**, étiquetée `tx:<stream>` : le même
+appel porte les deux estimateurs et leurs séries ne doivent pas se mélanger.
+`--stream 'tx:cx-…'` sélectionne le côté émetteur seul ; `--stream 'cx-…'`
+attrape les deux pattes (le filtre est une sous-chaîne), le rapport rend alors
+deux sections. `target` est la cible publiée, `acked` le débit acquitté — c'est
+lui l'homologue de `incoming` : la seule référence que cet estimateur peut voir.
+La trace tombe à chaque changement de cible et au moins une fois par seconde.
+
 Le regroupement par patte se fait sur l'**identifiant de thread** du préfixe de
 trace (une `RTPSession` = un thread), et l'étiquette lisible vient du champ
 `stream=` de la ligne d'estimation. Un journal capturé **avant** l'ajout de ce

@@ -7,6 +7,8 @@
 #include "sentpackethistory.h"
 #include "trendlinedetector.h"
 
+class EvenSource;
+
 //Estimateur de bande passante cote emetteur, v1 (sender_bwe_plan.md, 6.2).
 //Entree : les paquets acquittes d'un rapport transport-cc (apparies par
 //SentPacketHistory), la fraction perdue et le RTT des RR. Sortie : un debit
@@ -31,6 +33,8 @@ public:
 
 	void SetStartBitrate(DWORD bitrate, QWORD nowUs);
 	void SetMinMaxBitrate(DWORD min, DWORD max);
+	//Nomme la patte dans les traces BWE-TX (meme source que l'estimateur RX)
+	void SetEventSource(EvenSource* eventSource)	{ this->eventSource = eventSource; }
 
 	bool  HasEstimate() const	{ return lossBasedTarget > 0; }
 	DWORD GetEstimatedBitrate() const;
@@ -94,6 +98,13 @@ private:
 	bool  hasDecreasedSinceLastLoss;
 	QWORD firstReportUs;		//phase de depart : 2 s de confiance au delai
 	std::deque<std::pair<QWORD, DWORD>> minHistory;
+
+	//Trace : au changement de cible, et au moins une fois par seconde —
+	//une serie echantillonnee aux seuls changements biaise le depouillement
+	//(dispersion, oscillation) du lot 3 etendu aux traces BWE-TX.
+	void TraceEstimate(QWORD nowUs, bool changed);
+	QWORD lastTraceUs;
+	EvenSource* eventSource;
 
 	DWORD rtt;			//ms
 	DWORD minConfiguredBitrate;

@@ -68,6 +68,14 @@ RE_USAGE = re.compile(r'^BWE:\s+(?P<usage>Normal|UnderUsing)\s+bitrate:(?P<bitra
 RE_STATE = re.compile(r'^BWE: ChangeState from:(?P<src>\S+) to:(?P<dst>\S+)')
 RE_REGION = re.compile(r'^BWE: Change region to:(?P<region>\S+)')
 RE_RATE = re.compile(r'^BWE: (?P<dir>Increase|Decrease) rate to current = (?P<kbps>\d+) kbps')
+# Estimateur EMETTEUR (lot 6) : memes conventions, prefixe BWE-TX, patte 'tx:<stream>'.
+# target/delay/acked sont en kb/s ; acked (debit acquitte) est l'homologue de
+# l'entrant cote reception : c'est ce que cet estimateur-la peut voir.
+RE_TX_ESTIM = re.compile(
+    r'^BWE-TX: estimation (?:stream=(?P<stream>.*?) )?state=(?P<state>\S+) usage=(?P<usage>\S+) '
+    r'target=(?P<cur>\S+) delay=(?P<delay>\S+) acked=(?P<inc>\S+) lost=(?P<lost>\S+) '
+    r'trend=(?P<trend>\S+) threshold=(?P<th>\S+)')
+RE_TX_RATE = re.compile(r'^BWE-TX: (?P<dir>Increase|Decrease) rate to current = (?P<kbps>\d+) kbps')
 RE_LOST = re.compile(
     r'^BWE: UpdateLost lost:(?P<lost>\d+) hi?pothesis:(?P<hyp>[^,]+),packets:(?P<packets>\S+),lost:(?P<lostf>\S+)')
 RE_RTT = re.compile(r'^BWE: UpdateRTT rtt:(?P<rtt>\d+)ms hi?pothesis:(?P<hyp>\S+)')
@@ -141,7 +149,42 @@ def parse_log(path, stream_filter=None):
                     continue
             tid = match.group('tid')
             body = match.group('body')
-            if 'BWE:' not in body and 'RTPSession::' not in body and 'RemoteRateEstimator::' not in body:
+            if 'BWE:' not in body and 'BWE-TX:' not in body and 'RTPSession::' not in body and 'RemoteRateEstimator::' not in body:
+                continue
+
+            # Les traces BWE-TX vivent dans leur propre patte 'tx:<stream>' :
+            # le meme appel porte les deux estimateurs, les series ne doivent
+            # pas se melanger (--stream 'tx:...' selectionne le cote emetteur).
+            hit = RE_TX_ESTIM.match(body)
+            if hit:
+                leg = leg_of(tid + ':tx')
+                name = hit.group('stream')
+                if not leg.stream:
+                    leg.stream = 'tx:' + (name if name else tid)
+                values = dict(
+                    t=epoch,
+                    state=hit.group('state'),
+                    region='',
+                    usage=hit.group('usage'),
+                    kbps=to_float(hit.group('cur')),
+                    raw=to_float(hit.group('delay')),
+                    incoming=to_float(hit.group('inc')),
+                    min=float('nan'),
+                    max=float('nan'),
+                )
+                if any(math.isnan(values[k]) for k in ('kbps', 'raw', 'incoming')):
+                    nan_lines += 1
+                leg.estim.append(values)
+                parsed += 1
+                continue
+
+            hit = RE_TX_RATE.match(body)
+            if hit:
+                leg_of(tid + ':tx').events.append(dict(
+                    t=epoch, kind='rate',
+                    detail='dir=%s kbps=%s' % (hit.group('dir'), hit.group('kbps')),
+                    value=to_float(hit.group('kbps'))))
+                parsed += 1
                 continue
 
             hit = RE_ESTIM.match(body)
