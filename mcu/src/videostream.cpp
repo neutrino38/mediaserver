@@ -668,8 +668,12 @@ int VideoStream::SendVideo()
 		//Set sending time of previous frame
 		getUpdDifTime(&prev);
 
-		//Calculate sending times based on bitrate
-		DWORD sendingTime = videoFrame->GetLength()*8/current;
+		//Calculate sending times based on bitrate.
+		//Debit de pacing = 1,1 x la cible (temoin, pacing factor des que
+		//l'estimation depend des temps d'arrivee) : lisser tout juste A la
+		//cible transforme chaque image en sa propre file d'attente, et le
+		//BWE emetteur (lot 6) mesurerait nos rafales au lieu du reseau.
+		DWORD sendingTime = videoFrame->GetLength()*8/(current+current/10);
 
 		//Adjust to maximum time
 		if (sendingTime>frameTime/1000)
