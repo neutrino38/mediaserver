@@ -353,8 +353,10 @@ check-ipv6: tests/runtests
 check-ratecontrol: tests/runtests
 	./tests/runtests --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
 
+# Suite transport-cc : le format de fil, l'historique d'emission, l'estimateur
+# emetteur (lot 6) et le generateur de rapports d'arrivee (lot 4).
 check-senderbwe: tests/runtests
-	./tests/runtests --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
+	./tests/runtests --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:TransportFeedbackGenerator*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
 
 .PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe
 

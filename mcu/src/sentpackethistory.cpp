@@ -10,23 +10,7 @@ SentPacketHistory::SentPacketHistory()
 
 QWORD SentPacketHistory::Unwrap(WORD seq)
 {
-	if (!hasLastSeq)
-		return seq;
-	//Candidat dans le meme cycle que le dernier vu, puis correction au plus
-	//proche : une avance de moins de 32768 est une avance, sinon un retour
-	QWORD cycles = lastSeq & ~0xFFFFULL;
-	QWORD candidate = cycles | seq;
-	WORD last = (WORD)(lastSeq & 0xFFFF);
-	WORD forward = (WORD)(seq - last);
-	if (forward < 0x8000)
-	{
-		if (candidate < lastSeq)
-			candidate += 0x10000;
-	} else {
-		if (candidate >= lastSeq && candidate >= 0x10000)
-			candidate -= 0x10000;
-	}
-	return candidate;
+	return UnwrapSeq16(seq, lastSeq, hasLastSeq);
 }
 
 void SentPacketHistory::OnPacketSent(WORD seq, QWORD nowUs, DWORD size)

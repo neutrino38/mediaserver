@@ -693,6 +693,12 @@ private:
 	SentPacketHistory	sentHistory;
 	SenderBWE		senderBWE;
 	std::mutex		senderBweMutex;
+	//Rapports d'arrivee que NOUS devons au pair (lot 4). Ecrit et lu par le
+	//seul thread Run (reception RTP puis emission du rapport), donc sans
+	//verrou : le sortir de ce thread demanderait d'en poser un.
+	int SendTransportWideFeedback(QWORD nowUs);
+	TransportWideFeedbackGenerator	transportFeedback;
+	bool			transportFeedbackStarted;
 	bool 			useOriSeqNum;
 	bool 			useOriTS;
 	bool 			useExtFIR;

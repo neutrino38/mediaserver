@@ -336,6 +336,7 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	useAbsTime = false;
 	useTransportCC = false;
 	transportSeqNum = 0;
+	transportFeedbackStarted = false;
 	isNACKEnabled = false;
 	//Fill with 0
 	memset(sendPacket,0,MTU+SRTP_MAX_TRAILER_LEN);
@@ -2800,6 +2801,16 @@ int RTPSession::ReadRTP()
 	//Get ssrc
 	DWORD ssrc = packet->GetSSRC();
 
+	//Lot 4 : le pair attend nos rapports d'arrivee sur SES paquets. L'extension
+	//n'est lue que si elle est negociee — sans cela, aucun appelant ne consomme
+	//les extensions entrantes et le paquet n'a pas a etre relu pour rien.
+	if (useTransportCC)
+	{
+		packet->ProcessExtensions(extMap);
+		if (packet->HasTransportSeqNum())
+			transportFeedback.OnPacketReceived(ssrc,packet->GetTransportSeqNum(),getTime());
+	}
+
         streamUse.IncUse();
 
         //if ( defaultSSRC == 0 && defaultStream != NULL) defaultStream->Cancel();
@@ -2934,6 +2945,9 @@ int RTPSession::Run()
 	//P2 : lorsqu'on pilote un handshake DTLS client, on borne l'attente plus court
 	//pour cadencer les retransmissions (le backoff réel est décidé par OpenSSL).
 	const int dtlsPollTimeout = 250; //ms
+	//Lot 4 : borne d'attente quand un rapport transport-cc est en attente. Plus
+	//court que MinIntervalUs pour que la cadence du generateur reste la sienne.
+	const int TRANSPORT_FEEDBACK_POLL_MS = 25;
 
 	//Run until ended
 	while(running)
@@ -2964,6 +2978,13 @@ int RTPSession::Run()
 		if (natPriming)
 			waitMs = (waitMs < 0) ? NAT_PRIMING_INTERVAL_MS
 					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
+
+		//Lot 4 : des arrivees restent a rapporter au pair. Sans cette borne, le
+		//dernier rapport d'une rafale attendrait le paquet entrant suivant — et
+		//il n'y en a pas toujours un (fin de parole, freeze video).
+		if (useTransportCC && transportFeedback.HasPending())
+			waitMs = (waitMs < 0) ? TRANSPORT_FEEDBACK_POLL_MS
+					      : (waitMs < TRANSPORT_FEEDBACK_POLL_MS ? waitMs : TRANSPORT_FEEDBACK_POLL_MS);
 
 		//Wait for events
 		int nready = poll(ufds,3,waitMs);
@@ -3004,6 +3025,12 @@ int RTPSession::Run()
 		if (ufds[1].revents & POLLIN)
 			//Read rtcp data
 			ReadRTCP();
+
+		//Lot 4 : rapporter au pair ce qui nous est arrive, a la cadence du
+		//generateur. Place APRES les lectures : le rapport porte alors les
+		//paquets de ce tour de boucle.
+		if (useTransportCC)
+			SendTransportWideFeedback(getTime());
 
 		//P6 : cadence la rafale d'amorçage NAT (~20 ms entre paquets) tant qu'il en
 		//reste. Placé APRÈS ReadRTP : si le pair a déjà latché et répondu, la rafale
@@ -3567,6 +3594,42 @@ int RTPSession::SendReceiverEstimatedMaxBitrate(DWORD bitrate)
 	delete(rtcp);
 
 	return ret;
+}
+
+int RTPSession::SendTransportWideFeedback(QWORD nowUs)
+{
+	if (!transportFeedback.ShouldSend(nowUs))
+		return 0;
+
+	TransportWideFeedbackField* field = new TransportWideFeedbackField();
+	if (!transportFeedback.BuildFeedback(*field,nowUs))
+	{
+		delete(field);
+		return 0;
+	}
+
+	//Paquet RTCP seul, sans rapport d'emission en tete : CreateSenderReport a
+	//des effets de bord (fenetre du taux de perte des RR, horodatage du dernier
+	//SR pour le RTT) qu'un rapport toutes les 50 ms ruinerait. C'est aussi ce
+	//que fait le temoin, qui emet ses rapports en RTCP de taille reduite.
+	RTCPRTPFeedback* fb = RTCPRTPFeedback::Create(RTCPRTPFeedback::TransportWideFeedbackMessage,
+						      sendSSRC,transportFeedback.GetMediaSSRC());
+	fb->AddField(field);
+
+	RTCPCompoundPacket rtcp;
+	rtcp.AddRTCPacket(fb);
+
+	if (!transportFeedbackStarted)
+	{
+		transportFeedbackStarted = true;
+		Log("-RTPSession transport-cc feedback started on %s stream %p [ssrc:%x]\n",
+		    MediaFrame::TypeToString(media),this,transportFeedback.GetMediaSSRC());
+	}
+
+	Debug("-RTPSession transport-cc feedback [base:%u,statuses:%u,interval:%llu ms]\n",
+	      field->baseSeq,(DWORD)field->packets.size(),transportFeedback.GetIntervalUs()/1000);
+
+	return SendPacket(rtcp);
 }
 
 void RTPSession::ReSendPacket(int seq)
@@ -4311,6 +4374,10 @@ void RTPSession::ProcessTransportWideFeedback(RTCPRTPFeedback* fb)
 		}
 		estimate = senderBWE.GetEstimatedBitrate();
 	}
+	//Nos rapports voyagent sur le meme lien montant que notre media : leur
+	//cadence se cale sur ce qu'il porte (temoin, 5 % du debit d'emission).
+	if (estimate)
+		transportFeedback.SetSendBitrate(estimate);
 	//Notification HORS du verrou : le listener peut rappeler la session
 	if (changed && estimate)
 		if (auto l = LockListener())

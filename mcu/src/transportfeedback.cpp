@@ -1,4 +1,5 @@
 #include <cstring>
+#include <iterator>
 #include "transportfeedback.h"
 
 //Symboles du format : la taille du delta EST le symbole (0 = perdu, 1 = petit
@@ -233,4 +234,122 @@ DWORD TransportWideFeedbackField::Parse(BYTE* data, DWORD size)
 	}
 	//Consommer le bourrage de fin : le champ occupe tout le paquet
 	return size;
+}
+
+TransportWideFeedbackGenerator::TransportWideFeedbackGenerator()
+{
+	lastSeq = 0;
+	hasLastSeq = false;
+	windowStart = 0;
+	hasWindowStart = false;
+	lastSendUs = 0;
+	intervalUs = DefaultIntervalUs;
+	mediaSSRC = 0;
+	fbSeq = 0;
+}
+
+void TransportWideFeedbackGenerator::OnPacketReceived(DWORD ssrc, WORD seq, QWORD nowUs)
+{
+	mediaSSRC = ssrc;
+	QWORD unwrapped = UnwrapSeq16(seq, lastSeq, hasLastSeq);
+	if (!hasLastSeq || unwrapped > lastSeq)
+	{
+		lastSeq = unwrapped;
+		hasLastSeq = true;
+	}
+	//Premiere arrivee gagnante : un doublon ne redate pas le paquet
+	if (arrivals.find(unwrapped) == arrivals.end())
+		arrivals[unwrapped] = nowUs;
+	//Un paquet reordonne rouvre la fenetre : le prochain rapport repart de lui,
+	//quitte a redire des statuts deja envoyes (le pair ignore les doublons)
+	if (!hasWindowStart || unwrapped < windowStart)
+	{
+		windowStart = unwrapped;
+		hasWindowStart = true;
+	}
+	//Purge par la duree : au-dela de la fenetre, un reordonnancement n'est plus
+	//rapportable et l'arrivee ne sert plus a rien
+	while (!arrivals.empty() && arrivals.begin()->second + BackWindowUs < nowUs)
+	{
+		QWORD old = arrivals.begin()->first;
+		arrivals.erase(arrivals.begin());
+		if (hasWindowStart && windowStart <= old)
+			windowStart = old + 1;
+	}
+}
+
+DWORD TransportWideFeedbackGenerator::GetPendingCount() const
+{
+	if (!hasWindowStart)
+		return 0;
+	return (DWORD)std::distance(arrivals.lower_bound(windowStart), arrivals.end());
+}
+
+bool TransportWideFeedbackGenerator::HasPending() const
+{
+	return hasWindowStart && arrivals.lower_bound(windowStart) != arrivals.end();
+}
+
+bool TransportWideFeedbackGenerator::ShouldSend(QWORD nowUs) const
+{
+	return HasPending() && nowUs >= lastSendUs + intervalUs;
+}
+
+bool TransportWideFeedbackGenerator::BuildFeedback(TransportWideFeedbackField& field, QWORD nowUs)
+{
+	if (!hasWindowStart)
+		return false;
+	std::map<QWORD,QWORD>::const_iterator it = arrivals.lower_bound(windowStart);
+	if (it == arrivals.end())
+		return false;
+
+	const QWORD base = it->first;
+	field.SetBase((WORD)base, it->second);
+	field.fbSeq = fbSeq++;
+
+	QWORD covered = base;
+	bool any = false;
+	for (; it != arrivals.end(); ++it)
+	{
+		//Ce que ce paquet ajoute au rapport, trous compris : c'est la distance
+		//au premier seq couvert qui borne, pas le nombre de paquets recus
+		if (it->first - base + 1 > MaxStatusPerReport)
+			break;
+		//Un delta qui ne tient pas dans le format arrete le rapport ici
+		if (!field.AddReceived((WORD)it->first, it->second))
+			break;
+		covered = it->first;
+		any = true;
+	}
+
+	//Le premier paquet lui-meme refuse : il n'est pas rapportable, on l'ecarte
+	//plutot que de bloquer la fenetre sur lui a chaque tour
+	if (!any)
+	{
+		windowStart = base + 1;
+		return false;
+	}
+
+	windowStart = covered + 1;
+	lastSendUs = nowUs;
+	return true;
+}
+
+void TransportWideFeedbackGenerator::SetSendBitrate(DWORD bitrate)
+{
+	//Les rapports occupent au plus 5 % du lien (temoin :143-165) : sous le
+	//debit ou meme un rapport par MaxIntervalUs depasserait, on s'en tient au
+	//rapport le plus espace.
+	QWORD twccBps = (QWORD)bitrate / 20;
+	if (!twccBps)
+	{
+		intervalUs = MaxIntervalUs;
+		return;
+	}
+	QWORD interval = ((QWORD)ReportBytes * 8 * 1000000) / twccBps;
+	if (interval < MinIntervalUs)
+		interval = MinIntervalUs;
+	if (interval > MaxIntervalUs)
+		interval = MaxIntervalUs;
+	intervalUs = interval;
 }
