@@ -199,7 +199,7 @@ marqueurs ne viennent pas de la même séance.
 | régime établi | médiane de l'estimation sur le palier, hors transitoire, rapportée à l'entrant médian | ±25 % |
 | réaction à la baisse | 1er échantillon sous 1,25 × le nouveau lien | < 3 s |
 | re-montée | 1er échantillon ≥ 80 % du lien, **compté depuis la libération observée** | < 30 s |
-| pas d'oscillation | bascules `Increase`↔`Decrease` et coef. de variation, hors transitoire | ≤ 6/min, ≤ 0,20 |
+| pas d'oscillation | alternances de direction des ticks `rate` (`Increase`↔`Decrease`) et coef. de variation, hors transitoire | ≤ 6/min, ≤ 0,20 |
 | pertes : pas d'effondrement | médiane rapportée à la phase saine précédente | ≥ 25 % |
 | gigue : faux positifs | part des échantillons hors `Normal`, rapportée à la phase saine précédente | ≤ +10 points |
 | pas de NaN | toute valeur imprimée `nan` | 0 |

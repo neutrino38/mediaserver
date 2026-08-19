@@ -465,14 +465,24 @@ def judge_segments(leg, markers, args):
                                         'estimation mediane %.0f kb/s soit %+.0f %% de l entrant %.0f kb/s'
                                         ' (lien nominal %g) [%s]'
                                         % (est, 100.0 * ecart, inc, cap, motif)))
-            # Oscillation : bascules d'etat et dispersion sur la meme fenetre.
+            # Oscillation : bascules de direction et dispersion sur la meme
+            # fenetre. L'etat publie dans l'echantillon est celui d'APRES la
+            # transition : depuis que la descente repasse en Hold dans le meme
+            # tick (commit 3adcdc7), 'Decrease' n'apparait plus jamais dans les
+            # echantillons et compter leurs etats rendait 0 bascule par
+            # construction. La direction de chaque tick reste dans les
+            # evenements 'rate' (Increase/Decrease rate to current).
             flips = 0
             previous = None
-            for sample in window:
-                if sample['state'] in ('Increase', 'Decrease'):
-                    if previous and sample['state'] != previous:
-                        flips += 1
-                    previous = sample['state']
+            for event in leg.events:
+                if event['kind'] != 'rate':
+                    continue
+                if not (window[0]['t'] <= event['t'] <= window[-1]['t']):
+                    continue
+                direction = event['detail'].split()[0]
+                if previous and direction != previous:
+                    flips += 1
+                previous = direction
             duree_min = max((window[-1]['t'] - window[0]['t']) / 60.0, 1e-9)
             taux = flips / duree_min
             valeurs = [s['kbps'] for s in window if not math.isnan(s['kbps'])]
