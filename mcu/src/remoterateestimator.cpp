@@ -13,7 +13,11 @@
 //Duree d'initialisation avant la premiere estimation (cf. Update, plus bas).
 static const QWORD kInitializationMs = 5000;
 
-RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(200)
+//Fenetre de mesure du debit entrant : 1 s, celle du temoin (kBitrateWindow,
+//bwe_defines.h ; remote_bitrate_estimator_single_stream.cc). A 200 ms, la
+//descente visant beta x debit retenait le PIRE echantillon de 200 ms de
+//l'episode au lieu de sa moyenne — un quantile bas, pas une mesure.
+RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(1000)
 {
 	//Not last estimate
 	//Bornes realignees (rate-control.md, annexe B) : l'ancien plancher 128000
@@ -232,8 +236,31 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	lock.DecUse();
 }
 
+//Frein temporel du temoin (aimd_rate_control.cc, TimeToReduceFurther) : une
+//descente n'est rejouee que si le temps d'une reaction s'est ecoule, ou si le
+//debit s'est effondre sous la moitie de la consigne. Sans lui, chaque rapport
+//de perte ou de RTT relance toute la machine — mesure du 2026-08-18 : 102
+//reestimations en 5,1 s, une toutes les 12 ms, et l'estimation qui retient le
+//pire echantillon de l'episode au lieu de sa moyenne.
+bool RemoteRateEstimator::TimeToReduceFurther(QWORD now) const
+{
+	const QWORD interval = rtt < 10 ? 10 : (rtt > 200 ? 200 : rtt);
+	if (now >= lastChange + interval)
+		return true;
+	//Effondrement franc : on ne fait pas attendre une chute de moitie.
+	if (currentBitRate)
+		return bitrateAcu.GetInstantAvg() < 0.5 * currentBitRate;
+	return false;
+}
+
 void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool reactNow, QWORD now)
 {
+	//reactNow dit que la surutilisation vient d'apparaitre. Sur un FRONT on
+	//reagit tout de suite ; sur un NIVEAU repete, on attend le frein. Le
+	//parametre existait depuis l'origine sans etre lu.
+	if (usage==RemoteRateControl::OverUsing && !reactNow && !TimeToReduceFurther(now))
+		return;
+
 	//Blindage §3.1 bis : un instant qui recule (appelant defaillant, horloge
 	//melangee) ne doit plus empoisonner avgChangePeriod par soustraction non
 	//signee ni produire une conversion double->DWORD hors plage.
@@ -372,12 +399,20 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 			break;
 	}
 	
-	if (!recovery && (incomingBitRate > 100000 || current > 150000) && current > 1.5 * incomingBitRate)
+	//Plafond GLISSANT du temoin (aimd_rate_control.cc:238-239, :266) : on
+	//n'annonce pas plus de 1,5 fois ce qu'on recoit, mais on SUIT ce debit au
+	//lieu de se figer. L'ancien code posait current = currentBitRate, un gel
+	//dont on ne sortait plus : mesure du 2026-08-18, estimation immobile a
+	//3841 kb/s pendant 90 s pour 2465 kb/s recus — c'est ce gel qui rendait la
+	//re-montee inobservable.
+	if (!recovery && (incomingBitRate > 100000 || current > 150000))
 	{
-		// Allow changing the bit rate if we are operating at very low rates
-		// Don't change the bit rate if the send side is too far off
-		current = currentBitRate;
-		lastBitRateChange = now;
+		const DWORD increaseLimit = (DWORD)(1.5 * incomingBitRate) + 10000;
+		if (current > increaseLimit)
+		{
+			current = increaseLimit;
+			lastBitRateChange = now;
+		}
 	}
 
 	//Update
@@ -550,10 +585,15 @@ void RemoteRateEstimator::UpdateRTT(DWORD ssrc, DWORD rtt, QWORD now)
 	Streams::iterator it = streams.find(ssrc);
 	//If found
 	if (it!=streams.end())
-		//Set it
+	{
+		//Le FRONT se calcule ici, comme le temoin le fait avec prior_state
+		//(remote_bitrate_estimator_single_stream.cc:111-121) : ces deux chemins
+		//rendent un niveau, seul l'appelant sait si la surutilisation vient
+		//d'apparaitre. Le front passe, le niveau repete attend le frein.
+		const bool wasOverusing = it->second->GetUsage()==RemoteRateControl::OverUsing;
 		if (it->second->UpdateRTT(rtt))
-			//Update
-			Update(it->second->GetUsage(),true, now);
+			Update(it->second->GetUsage(),!wasOverusing, now);
+	}
 	//Unlock
 	lock.Unlock();
 }
@@ -566,10 +606,12 @@ void RemoteRateEstimator::UpdateLost(DWORD ssrc, DWORD lost, QWORD now)
 	Streams::iterator it = streams.find(ssrc);
 	//If found
 	if (it!=streams.end())
+	{
+		const bool wasOverusing = it->second->GetUsage()==RemoteRateControl::OverUsing;
 		//Set it (meme horloge que les paquets, §3.3)
 		if (it->second->UpdateLost(lost, now))
-			//Update
-			Update(it->second->GetUsage(),true, now);
+			Update(it->second->GetUsage(),!wasOverusing, now);
+	}
 	//Unlock
 	lock.Unlock();
 }

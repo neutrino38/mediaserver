@@ -69,6 +69,7 @@ private:
 	DWORD GetEstimatedBitrateUnlocked() const;
 	double RateIncreaseFactor(QWORD now, QWORD last, DWORD reactionTime) const;
 	void Update(RemoteRateControl::BandwidthUsage usage,bool reactNow,QWORD now);
+	bool TimeToReduceFurther(QWORD now) const;
 	void UpdateChangePeriod(QWORD now);
 	void UpdateMaxBitRateEstimate(float incomingBitRateKbps);
 	void ChangeState(State newState);

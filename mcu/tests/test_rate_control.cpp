@@ -1092,4 +1092,98 @@ TEST(RateControlLoss, UneCongestionQuePlusRienNeConfirmeExpire)
 		   "et l'estimation s'effondre au plancher";
 }
 
+// ---------------------------------------------------------------------------
+// Suite RateControlBrake — lot A de docs/reference/kalman-vs-webrtc.md : ce qui
+// separe encore notre AIMD de celui du temoin, cote reaction.
+// ---------------------------------------------------------------------------
+
+// E1. UpdateLost et UpdateRTT rendent un NIVEAU, pas un front, et sont appeles a
+// chaque trou de numero de sequence — pendant une congestion, le trou est la
+// regle. Sans frein, chacun relançait toute la machine AIMD : mesure du
+// 2026-08-18, 102 reestimations en 5,1 s, une toutes les 12 ms, et l'estimation
+// qui degringole de 664 a 233 kb/s pendant que l'entrant tient 720.
+// Contrat : le temoin ne descend qu'au front, ou apres clamp(rtt, 10, 200) ms
+// (aimd_rate_control.cc, TimeToReduceFurther).
+//
+// Ce test forme une PAIRE avec LeFreinLaissePasserLaReactionSuivante : meme
+// preparation, meme rapport de perte, seul l'instant change. Sans son pendant, un
+// vert ici pourrait tout aussi bien signifier que rien ne descend jamais.
+//
+// Le front, lui, ne descend pas : la premiere surutilisation passe en Hold
+// (ecart E8 du rapport, mesure du 2026-08-18). Le test ne le suppose donc pas.
+TEST(RateControlBrake, DesRapportsDePerteRapprochesNeDescendentQuUneFois)
+{
+	RemoteRateEstimator estimator;
+	const DWORD ssrc = 0x1234;
+
+	QWORD now = FeedRegular(estimator, ssrc, /*from=*/100000, /*durationMs=*/70000);
+	ForceOveruseViaRtt(estimator, ssrc, now);
+	const DWORD apresFront = estimator.GetEstimatedBitrate();
+	ASSERT_GT(apresFront, 0u) << "prérequis : une estimation existe";
+
+	// Dix rapports dans les 100 ms qui suivent, le flux continuant d'arriver : le
+	// frein les écarte. Sans les paquets, le débit mesuré s'effondrerait et la
+	// clause « chute de moitié » s'ouvrirait — à raison, mais ce n'est pas ce
+	// qu'on teste, et en production les paquets ne s'arrêtent pas.
+	int descentes = 0;
+	DWORD precedente = apresFront;
+	for (int i = 1; i <= 10; ++i)
+	{
+		estimator.Update(ssrc, now + i * 10, /*ts=*/now + i * 10, kFrameBytes, /*mark=*/true);
+		estimator.UpdateLost(ssrc, 50, now + i * 10);
+		const DWORD courante = estimator.GetEstimatedBitrate();
+		if (courante < precedente) ++descentes;
+		precedente = courante;
+	}
+
+	EXPECT_LE(descentes, 1)
+		<< "dix rapports en 100 ms ont produit " << descentes
+		<< " descentes, de " << apresFront << " à " << precedente << " b/s";
+}
+
+// Le frein ne doit pas rendre sourd : passé le délai d'une réaction, la descente
+// suivante doit avoir lieu. Sinon on aurait échangé une sur-réaction contre une
+// absence de réaction.
+TEST(RateControlBrake, LeFreinLaissePasserLaReactionSuivante)
+{
+	RemoteRateEstimator estimator;
+	const DWORD ssrc = 0x1234;
+
+	QWORD now = FeedRegular(estimator, ssrc, /*from=*/100000, /*durationMs=*/70000);
+	ForceOveruseViaRtt(estimator, ssrc, now);
+	const DWORD apresFront = estimator.GetEstimatedBitrate();
+	ASSERT_GT(apresFront, 0u) << "prérequis : le front a bien fait descendre";
+
+	// 500 ms plus tard : bien au-delà de clamp(rtt, 10, 200).
+	estimator.UpdateLost(ssrc, 50, now + 500);
+	EXPECT_LT(estimator.GetEstimatedBitrate(), apresFront)
+		<< "le frein bloque une descente séparée d'une demi-seconde";
+}
+
+// E4. Au-dela de 1,5 x l'entrant, l'ancien code posait current = currentBitRate :
+// un gel dont on ne sortait plus, ni vers le haut ni vers le bas. Mesure du
+// 2026-08-18 : estimation immobile a 3841 kb/s pendant 90 s pour 2465 kb/s
+// recus. C'est ce gel qui rendait la re-montee inobservable en boucle fermee.
+// Contrat du temoin : un plafond GLISSANT, que l'estimation suit.
+TEST(RateControlBrake, LEstimationSuitLePlafondAuLieuDeGeler)
+{
+	RemoteRateEstimator estimator;
+	const DWORD ssrc = 0x1234;
+
+	// Une source genereuse, le temps que l'estimation monte et bute au plafond.
+	QWORD now = FeedRegular(estimator, ssrc, /*from=*/100000, /*durationMs=*/90000);
+	const DWORD hautPlafond = estimator.GetEstimatedBitrate();
+	ASSERT_GT(hautPlafond, 0u) << "prérequis : une estimation existe";
+
+	// La source tombe de moitié : le plafond descend avec elle, donc
+	// l'estimation aussi. Sous l'ancien gel, elle ne bougeait plus du tout.
+	for (QWORD end = now + 60000; now < end; now += kFrameMs * 2)
+		estimator.Update(ssrc, now, /*ts=*/now, kFrameBytes, /*mark=*/true);
+
+	EXPECT_LT(estimator.GetEstimatedBitrate(), hautPlafond)
+		<< "estimation figée à " << hautPlafond
+		<< " kb/s alors que la source a été divisée par deux";
+}
+
+
 } // namespace
