@@ -606,6 +606,34 @@ technique page de garde si parsing de l'extension).
 send-side active (le débit d'émission de Chrome monte au-delà du départ et réagit
 à un netem sur notre lien) ; pcap de nos rapports conforme.
 
+**Livré le 2026-08-19** (points 1, 2 et 4 ; le CCFB du point 3 reste à faire).
+`TransportWideFeedbackGenerator`, dans `mcu/src/transportfeedback.{h,cpp}` à côté
+du format de fil : arrivées indexées par numéro transport-wide déroulé, fenêtre
+de retour de 500 ms (un paquet réordonné se redit au rapport suivant), découpe à
+400 statuts, `fbSeq` incrémenté par rapport, purge par la durée. `RTPSession` lit
+l'extension entrante dans `ReadRTP` — `ProcessExtensions` n'était appelé nulle
+part dans le chemin de réception — et émet depuis sa boucle `Run`, dont l'attente
+se borne à 25 ms tant qu'un rapport reste dû : sans cela le dernier rapport d'une
+rafale attendrait le paquet suivant, et il n'y en a pas toujours un.
+
+Le rapport part **seul**, sans rapport d'émission en tête. `CreateSenderReport` a
+des effets de bord — fenêtre du taux de perte des RR, horodatage du dernier SR
+pour le RTT — qu'un envoi toutes les 50 ms détruirait. C'est aussi ce que fait le
+témoin, qui émet ses rapports en RTCP de taille réduite.
+
+**Correction au point 2 ci-dessus.** La cadence qui y est citée
+(`congestion_control_feedback_generator.cc`) est celle du CCFB, pas celle de
+transport-cc. Le témoin de ce format est
+`transport_sequence_number_feedback_generator.cc:37-40` : rapport périodique,
+intervalle par défaut 100 ms, borné à [50 ; 250] ms, dimensionné pour que les
+rapports occupent 5 % du débit d'émission (`:143-165`). C'est cette cadence qui
+est implémentée ; celle au bit marqueur reviendra avec le CCFB.
+
+**Vérifié hors de notre propre parseur.** Un rapport sérialisé est disséqué par
+`tshark` : base seq, compte de statuts, temps de référence, chunk vecteur
+`SD SD NR SD`, deltas 40/5/7 ms. Notre encodeur et notre parseur ayant la même
+main, un aller-retour interne ne prouve rien sur la conformité au format.
+
 ---
 
 ## Lot 5 — Propagation inter-pattes amortie (§6, le cas relais)
@@ -744,12 +772,13 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
       de l'entrant, pertes et gigue tenues ; annexe D remplie, **GO du lot 6
       recommandé** ; A3 refermé sans changement ; reste l'arbitrage du seuil
       d'oscillation 6/min, cf. D.6)
-- [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB — le format
-      de fil et l'extension sont partagés avec le lot 6 (module
-      `transportfeedback`, cf. `sender_bwe_plan.md` D3). **Prérequis de toute
-      activation de transport-cc**, et donc de la recette du lot 6.5 : sans
-      générateur, le pair recule jusqu'au plancher (mesure du 2026-08-19, dans
-      le corps du lot)
+- [x] Lot 4 — transport-cc reçu ET rapporté (2026-08-19 :
+      `TransportWideFeedbackGenerator`, lecture de l'extension entrante,
+      émission depuis la boucle `Run`, cadence 50-250 ms, 12 tests
+      `TransportFeedbackGenerator*` joués par `make check-senderbwe`, format
+      vérifié à `tshark`). Le prérequis à l'activation de transport-cc est levé.
+      **Restent** le CCFB fmt 11 (point 3) et la recette live, commune au
+      lot 6.5
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live
 - [ ] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
       implémentation v1 en sous-lots 6.1-6.5 (suivi dans ce document)
