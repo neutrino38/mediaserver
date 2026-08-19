@@ -643,6 +643,10 @@ int RTPSession::SetProperties(const Properties& properties)
 		Log("Activated %s bitrate feedback on %s stream %p.\n",
 		    bitrateFeedbackMode == BitrateFeedbackTMMBR ? "TMMBR+REMB" : "REMB",
 		    MediaFrame::TypeToString(media), this);
+	if (useTransportCC)
+		Log("Activated transport-cc on %s stream %p, extmap id=%d.\n",
+		    MediaFrame::TypeToString(media), this,
+		    extMap.GetCodecForType(RTPPacket::HeaderExtension::TransportWideCC));
 	mutex.unlock();
 	return 1;
 }
