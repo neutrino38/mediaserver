@@ -247,8 +247,14 @@ La formule 1,1× sur les deux smoothers (§6), et rien d'autre.
 
 ### 6.5 — Négociation, recette et mesure (portillon interne)
 
+**Ce sous-lot est bloqué par le lot 4.** La négociation ne se coupe pas en deux :
+l'`a=rtcp-fb transport-cc` de la ligne média engage les deux sens, donc activer
+le bouton sans générateur de rapports fait reculer le pair jusqu'à son plancher
+(mesure du 2026-08-19, `rate_control_plan.md` lot 4). Il n'existe pas de montage
+où l'on consomme le feedback du pair sans lui devoir le sien.
+
 - elixip : extmap + `a=rtcp-fb:* transport-cc` (chantier SDP commun avec le
-  lot 4).
+  lot 4). **Fait** ; le bouton `[mediaserver] transport_cc` reste à `false`.
 - Recette : face à un Chrome **récepteur**, `webrtc-internals` montre nos
   rapports consommés ; pcap de nos paquets portant l'extension.
 - Mesure : mêmes scénarios netem que le lot 3 mais sur notre lien **sortant**
@@ -276,4 +282,5 @@ et l'extension, c'est tout.
       par `min()` participant + JSR-309, no-op en relais) (2026-08-19)
 - [x] 6.4 — pacing 1,1× sur les deux smoothers (2026-08-19)
 - [ ] 6.5 — elixip SDP (extmap + `a=rtcp-fb:* transport-cc`, chantier commun
-      lot 4) + recette Chrome + séance netem sortante
+      lot 4) FAIT ; recette Chrome et séance netem sortante **bloquées par le
+      lot 4**, bouton à `false` en attendant

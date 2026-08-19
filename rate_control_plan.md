@@ -552,6 +552,32 @@ filtre ni machine à états. Deux formats derrière une même mécanique de cade
 transport-cc d'abord (c'est ce que les navigateurs consomment aujourd'hui),
 CCFB RFC 8888 ensuite (la cible normalisée).
 
+**Ce lot conditionne toute activation de transport-cc.** Négocier
+`a=rtcp-fb transport-cc` engage les deux sens d'un coup : le pair rapporte nos
+arrivées, et il attend les siennes. Un pair qui n'obtient jamais de rapport ne
+se contente pas de cesser de monter — il recule jusqu'au plancher.
+
+Mesuré le 2026-08-19, Chrome en conférence, bouton elixip `transport_cc` actif,
+mediaserver sans générateur : le débit vidéo reçu de Chrome tombe de 177 à
+30 kb/s en huit secondes, **×0,8 par seconde**, puis reste plat. Notre REMB
+autorise en permanence 1,5 fois ce que Chrome envoie, donc il n'est jamais la
+contrainte mordante ; notre détecteur reste en `usage=Normal`. La décision vient
+du navigateur seul.
+
+Le mécanisme est dans le témoin. `RttBasedBackoff::CorrectedRtt`
+(`send_side_bandwidth_estimation.cc:143`) rend `(dernier paquet émis − dernière
+mise à jour) + RTT de propagation`, et `UpdatePropagationRtt` n'a que deux
+appelants : le premier paquet émis (`goog_cc_network_control.cc:273`) et **la
+réception d'un feedback transport** (`:446`). Sans rapport, le terme de
+correction grandit sans fin, dépasse la limite, et `UpdateEstimate`
+(`:414-422`) coupe la cible de 20 % par seconde jusqu'au plancher. Notre silence
+ne se lit pas « pas d'information » : il se lit « RTT infini ». La limite vaut
+`+∞` dans le défaut amont et vient du field trial `WebRTC-Bwe-MaxRttLimit`
+(`:119-129`) ; la mesure dit qu'un Chrome de production l'active.
+
+Deux conséquences : le bouton `transport_cc` d'elixip reste à `false` tant que ce
+lot n'est pas livré, et la recette du lot 6.5 ne peut pas avoir lieu avant lui.
+
 1. **Extension d'en-tête `transport-wide-cc`** : lire le numéro de séquence
    transport-wide sur les paquets entrants (même mécanique que l'abs-send-time
    déjà lu, `HasAbsSentTime`) ; extmap négocié → propriété RTP posée par elixip,
@@ -720,7 +746,10 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
       d'oscillation 6/min, cf. D.6)
 - [ ] Lot 4 — transport-cc (extmap, générateur, elixip), puis CCFB — le format
       de fil et l'extension sont partagés avec le lot 6 (module
-      `transportfeedback`, cf. `sender_bwe_plan.md` D3)
+      `transportfeedback`, cf. `sender_bwe_plan.md` D3). **Prérequis de toute
+      activation de transport-cc**, et donc de la recette du lot 6.5 : sans
+      générateur, le pair recule jusqu'au plancher (mesure du 2026-08-19, dans
+      le corps du lot)
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live
 - [ ] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
       implémentation v1 en sous-lots 6.1-6.5 (suivi dans ce document)
