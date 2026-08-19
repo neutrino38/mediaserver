@@ -196,16 +196,24 @@ marqueurs ne viennent pas de la même séance.
 
 | critère | source | seuil |
 |---|---|---|
-| régime établi | médiane de l'estimation sur le palier, hors transitoire | ±25 % du lien |
+| régime établi | médiane de l'estimation sur le palier, hors transitoire, rapportée à l'entrant médian | ±25 % |
 | réaction à la baisse | 1er échantillon sous 1,25 × le nouveau lien | < 3 s |
 | re-montée | 1er échantillon ≥ 80 % du lien, **compté depuis la libération observée** | < 30 s |
 | pas d'oscillation | bascules `Increase`↔`Decrease` et coef. de variation, hors transitoire | ≤ 6/min, ≤ 0,20 |
 | pertes : pas d'effondrement | médiane rapportée à la phase saine précédente | ≥ 25 % |
-| gigue : faux positifs | part des échantillons hors `Normal` | ≤ 10 % |
+| gigue : faux positifs | part des échantillons hors `Normal`, rapportée à la phase saine précédente | ≤ +10 points |
 | pas de NaN | toute valeur imprimée `nan` | 0 |
 | hypothèse non gelée | plus longue plage continue hors `Normal` | ≤ 30 s |
 | pas d'écrêtage | temps cumulé à 30 000 kb/s (plafond du lot 1) | ≤ 5 s |
 | covariance | avertissements `no longer positive semi-definite` | 0 |
+
+**Pourquoi l'entrant et pas le lien `-r`.** `tc` façonne le paquet entier,
+en-têtes IP/UDP/Ethernet compris ; l'estimateur ne voit que la charge utile RTP,
+qui plafonne 15 à 20 % plus bas. Jugé contre le nominal, tout palier était KO
+d'autant. Le débit entrant médian est la seule référence que l'estimateur peut
+atteindre — le nominal reste affiché entre parenthèses, comme contexte. Un
+palier qui ne mord pas se trahit du même coup : l'estimation s'installe à
+1,5 × l'entrant (le plafond glissant), soit +50 %.
 
 **Où commence un régime établi.** Une marche laisse l'estimation grimper ou
 chuter de façon strictement monotone pendant tout le transitoire : y calculer une

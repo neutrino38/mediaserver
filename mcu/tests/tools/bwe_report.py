@@ -450,12 +450,21 @@ def judge_segments(leg, markers, args):
         else:
             est = median([s['kbps'] for s in window])
             inc = median([s['incoming'] for s in window])
-            ecart = abs(est - cap) / cap if cap else float('nan')
-            status = 'OK' if ecart <= TOLERANCE else 'KO'
-            verdicts.append(Verdict(status, title,
-                                    'estimation mediane %.0f kb/s (entrant %.0f) soit %+.0f %% du lien'
-                                    ' [%s]'
-                                    % (est, inc, 100.0 * (est - cap) / cap if cap else float('nan'), motif)))
+            # Le nominal -r de tc compte l'overhead IP/UDP/Ethernet que
+            # l'estimateur ne voit pas : la charge utile plafonne ~15 % plus
+            # bas, et tout palier juge contre le nominal etait KO d'autant
+            # (mesure du 2026-08-19). Le regime etabli se juge donc contre le
+            # debit effectivement recu ; le nominal n'est que du contexte. Un
+            # palier qui ne mord pas se trahit ici : est ~ 1,5 x l'entrant.
+            if math.isnan(inc) or not inc:
+                verdicts.append(Verdict('--', title, 'pas de debit entrant mesure [%s]' % motif))
+            else:
+                ecart = (est - inc) / inc
+                status = 'OK' if abs(ecart) <= TOLERANCE else 'KO'
+                verdicts.append(Verdict(status, title,
+                                        'estimation mediane %.0f kb/s soit %+.0f %% de l entrant %.0f kb/s'
+                                        ' (lien nominal %g) [%s]'
+                                        % (est, 100.0 * ecart, inc, cap, motif)))
             # Oscillation : bascules d'etat et dispersion sur la meme fenetre.
             flips = 0
             previous = None
@@ -527,6 +536,7 @@ def judge_impairments(leg, markers, args):
     """Pertes et gigue : on rapporte, on ne prononce que l'evident."""
     verdicts = []
     reference = None
+    reference_over = None
     for index, marker in enumerate(markers):
         end = markers[index + 1].t if index + 1 < len(markers) else float('inf')
         window = samples_between(leg, marker.t + args.settle, end)
@@ -538,6 +548,8 @@ def judge_impairments(leg, markers, args):
         if marker.label not in ('loss', 'jitter'):
             if not math.isnan(est):
                 reference = est
+            if window:
+                reference_over = float(len([s for s in window if s['usage'] != 'Normal'])) / len(window)
             continue
         if marker.label == 'loss':
             pct = marker.params.get('pct', '?')
@@ -555,12 +567,21 @@ def judge_impairments(leg, markers, args):
             if not window:
                 verdicts.append(Verdict('--', 'gigue %s : faux positifs' % gigue, 'pas d echantillon'))
                 continue
+            if reference_over is None:
+                verdicts.append(Verdict('--', 'gigue %s : faux positifs' % gigue,
+                                        'pas de phase saine de reference'))
+                continue
             over = [s for s in window if s['usage'] != 'Normal']
             part = float(len(over)) / len(window)
-            status = 'OK' if part <= 0.10 else 'KO'
+            # Comme les pertes, la gigue se juge contre la phase saine voisine :
+            # en boucle ouverte le detecteur vit deja hors Normal (88 % mesures
+            # le 2026-08-19 AVANT la gigue), un seuil absolu ne mesurait que ce
+            # fond, jamais l'effet de la gigue.
+            status = 'OK' if part <= reference_over + 0.10 else 'KO'
             verdicts.append(Verdict(status, 'gigue %s : faux positifs' % gigue,
-                                    '%.0f %% des echantillons hors Normal (max 10 %%), estimation mediane %.0f kb/s'
-                                    % (100 * part, median([s['kbps'] for s in window]))))
+                                    '%.0f %% des echantillons hors Normal contre %.0f %% en phase saine'
+                                    ' (max +10 points), estimation mediane %.0f kb/s'
+                                    % (100 * part, 100 * reference_over, median([s['kbps'] for s in window]))))
     return verdicts
 
 
