@@ -591,7 +591,7 @@ void RemoteRateEstimator::UpdateRTT(DWORD ssrc, DWORD rtt, QWORD now)
 		//rendent un niveau, seul l'appelant sait si la surutilisation vient
 		//d'apparaitre. Le front passe, le niveau repete attend le frein.
 		const bool wasOverusing = it->second->GetUsage()==RemoteRateControl::OverUsing;
-		if (it->second->UpdateRTT(rtt))
+		if (it->second->UpdateRTT(rtt, now))
 			Update(it->second->GetUsage(),!wasOverusing, now);
 	}
 	//Unlock

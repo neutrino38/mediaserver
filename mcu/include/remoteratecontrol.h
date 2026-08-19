@@ -67,8 +67,10 @@ public:
 
 	RemoteRateControl();
 	void Update(QWORD time,QWORD ts,DWORD size, bool mark);
-	bool UpdateRTT(DWORD rtt);
-	//now : la MEME horloge (ms) que Update — plus de getTime() µs interne (§3.3)
+	//now : la MEME horloge (ms) que Update — plus de getTime() µs interne (§3.3).
+	//C'est aussi l'horloge dont depend l'expiration EpisodicTtlMs : un instant
+	//d'une autre source ne peut pas expirer.
+	bool UpdateRTT(DWORD rtt, QWORD now);
 	bool UpdateLost(DWORD num, QWORD now);
 	void SetRateControlRegion(Region region);
 	//Une hypothese par chemin de detection, composee ici : chacun repond a un

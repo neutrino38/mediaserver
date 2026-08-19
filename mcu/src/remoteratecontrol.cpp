@@ -283,14 +283,17 @@ void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelt
 }
 
 
-bool RemoteRateControl::UpdateRTT(DWORD rtt)
+bool RemoteRateControl::UpdateRTT(DWORD rtt, QWORD now)
 {
 	//Ce chemin porte sa propre hypothese, et doit donc revenir au calme de
 	//lui-meme : c'est l'ecrasement par le detecteur de delai qui l'y ramenait.
 	if (this->rtt>40 && rtt>this->rtt*1.50)
 	{
 		rttHypothesis = OverUsing;
-		rttOverAt = getTimeMS();
+		//Horloge de l'appelant, comme UpdateLost : l'expiration d'Update compare
+		//a cette horloge, un getTimeMS() ici ne pouvait expirer qu'en production,
+		//ou les deux coincident par accident.
+		rttOverAt = now;
 	} else {
 		rttHypothesis = Normal;
 	}
