@@ -267,8 +267,13 @@ et l'extension, c'est tout.
 ## Suivi
 
 - [x] 6.0 — ce document
-- [ ] 6.1 — extension + `transportfeedback` + `sentpackethistory` + tests
-- [ ] 6.2 — `trendlinedetector` + `senderbwe` + `test_sender_bwe.cpp`
-- [ ] 6.3 — intégration `RTPSession` + composition `min()` + traces `BWE-TX:`
-- [ ] 6.4 — pacing 1,1× sur les deux smoothers
-- [ ] 6.5 — elixip SDP + recette Chrome + séance netem sortante
+- [x] 6.1 — extension + `transportfeedback` + `sentpackethistory` (2026-08-19,
+      15 tests : aller-retours, troncatures, enroulements)
+- [x] 6.2 — `trendlinedetector` + `senderbwe` + `test_sender_bwe.cpp`
+      (2026-08-19, 14 tests sous horloge simulée, `make check-senderbwe`)
+- [x] 6.3 — intégration `RTPSession` (historique à l'envoi, fmt 15 apparié,
+      pertes RR/SR branchées, RTT partagé, `onSenderEstimatedBitrate` composé
+      par `min()` participant + JSR-309, no-op en relais) (2026-08-19)
+- [x] 6.4 — pacing 1,1× sur les deux smoothers (2026-08-19)
+- [ ] 6.5 — elixip SDP (extmap + `a=rtcp-fb:* transport-cc`, chantier commun
+      lot 4) + recette Chrome + séance netem sortante
