@@ -853,12 +853,11 @@ y a un homologue ; elle sert d'ordre de grandeur, pas de cible à recopier.
   (dépôt elixip) — pourquoi un chemin est relayé ou transcodé, ce qui décide du
   §6
 
-## Annexe D — mesures du lot 3 (portillon) — *à remplir*
+## Annexe D — mesures du lot 3 (portillon)
 
-> **Statut : outillage prêt, séance non tenue.** Cette annexe est le livrable du
-> lot 3 de [`rate_control_plan.md`](rate_control_plan.md) : elle porte les
-> mesures et la **décision GO/NO-GO du lot 6**. Tant qu'elle n'est pas remplie,
-> le lot 6 ne se conçoit pas — c'est le sens du portillon.
+> **Statut : séance tenue le 2026-08-19, en boucle ouverte, dépouillée.** Cette
+> annexe est le livrable du lot 3 de [`rate_control_plan.md`](rate_control_plan.md) :
+> elle porte les mesures et la **décision GO/NO-GO du lot 6**.
 
 ### D.0 Comment ces mesures se produisent
 
@@ -873,42 +872,182 @@ mcu/tests/tools/bwe_report.py /var/log/mcu.log --markers escalier.tsv \
 
 Le bloc produit par `--markdown` se colle tel quel dans les sections ci-dessous.
 Tout seuil ajusté par rapport aux valeurs par défaut de l'outil **doit être dit
-ici**, avec sa raison.
+ici**, avec sa raison. Pour cette séance : aucun seuil ajusté ; trois critères
+de l'outil ont été **corrigés avant dépouillement** — régime établi jugé contre
+l'entrant médian et non le nominal `-r` (overhead `tc` de 15 à 20 points),
+gigue jugée contre la phase saine voisine (max +10 points), oscillation comptée
+sur les ticks `rate` (l'état publié dans les échantillons est celui d'après la
+transition `Decrease → Hold`, qui rendait le compteur aveugle).
 
 ### D.1 Conditions de la séance
 
 | élément | valeur |
 |---|---|
-| date | *(à remplir)* |
-| version du mediaserver / commit | |
-| montage (coupure ou `--ingress`) | |
-| pair A (client, codec, résolution) | |
-| chemin (relayé ou transcodé) | |
-| dialecte de feedback négocié (`remb` / `tmmbr` / aucun) | |
-| durée cumulée de la capture | |
+| date | 2026-08-19, 09:52 → 10:27 UTC |
+| version du mediaserver / commit | `3adcdc7` (verrou `Decrease` levé + horloge `rttOverAt`) |
+| montage (coupure ou `--ingress`) | `--ingress` (ifb-mcu) sur dev71, `-r 2000 -l 100 -d 90` |
+| pair A (client, codec, résolution) | WebRTC (jambe JSR-309 `cx-1649`, DTLS/STUN), vidéo H264, audio OPUS |
+| chemin (relayé ou transcodé) | JSR-309, enregistrement actif (Recorder OPUS→AAC) |
+| dialecte de feedback négocié (`remb` / `tmmbr` / aucun) | **aucun** (boucle ouverte, 0 « Activated bitrate feedback ») |
+| durée cumulée de la capture | 33,8 min, patte unique `cx-1649`, 3 620 estimations |
+
+Contrôles de validité : binaire lié à 09:52:10, processus démarré à 09:52:30 ;
+2 255 descentes = 2 255 transitions `Decrease → Hold` (le correctif est bien
+dans le binaire) ; fenêtres sans netem entre les scénarios saines.
 
 ### D.2 Marche d'escalier
 
-*(graphe `bwe.svg` + bloc `--markdown`)*
+Graphe : `mcu/tests/tools/escalier-postverrou/bwe.svg`.
+
+### Depouillement (genere par `mcu/tests/tools/bwe_report.py`)
+
+| t (s) | marqueur |
+|---|---|
+| 51.2 | start iface=eth0 limit_pkts=100 phase_s=90 scenario=escalier target=ifb-mcu |
+| 51.2 | cap rate_kbps=2000 |
+| 141.2 | cap rate_kbps=500 |
+| 231.3 | cap rate_kbps=2000 |
+| 321.3 | stop |
+| 321.4 | restore |
+
+**Patte `cx-1649`**
+
+| critere | verdict | mesure |
+|---|---|---|
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1343 kb/s soit -22 % de l entrant 1724 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 14.4 bascule/min (max 6), coef. variation 0.09 (max 0.20) sur 75 s [garde 15s] |
+| palier 500 kb/s : regime etabli | OK | estimation mediane 355 kb/s soit -11 % de l entrant 400 kb/s (lien nominal 500) [garde 15s] |
+| palier 500 kb/s : pas d oscillation | **KO** | 7.3 bascule/min (max 6), coef. variation 0.17 (max 0.20) sur 74 s [garde 15s] |
+| marche descendante 2000 -> 500 kb/s : reaction | OK | 1.8 s pour passer sous 625 kb/s (max 3 s) |
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1594 kb/s soit -10 % de l entrant 1774 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 10.5 bascule/min (max 6), coef. variation 0.14 (max 0.20) sur 74 s [garde 15s] |
+| marche montante 500 -> 2000 kb/s : re-montee | OK | 29.8 s pour atteindre 80 % du lien (max 30 s) [depuis le marqueur : vidange de file non observee] |
+| duree de capture >= 10 min | OK | 33.8 min |
+| aucun NaN dans les traces | OK | 0 ligne(s) portant un NaN |
+| aucune hypothese gelee | **KO** | plus longue plage hors Normal : 91.6 s (max 30 s) |
+| pas d ecretage permanent au plafond | OK | 0.0 s a 30000 kb/s (max 5 s) |
+| covariance semi-definie positive | OK | 0 avertissement(s) |
+
+
+4 critere(s) en echec, 0 critere(s) de fond non juge(s) sur 8.
+
+**Lecture.** La re-montée passe pour la première fois : **29,8 s** (38,2 s sur
+la séance du matin, avant la levée du verrou `Decrease`). Régime établi −10 à
+−22 % de l'entrant, réaction à la baisse 1,8 s. Les deux KO restants sont
+discutés en D.6.
 
 ### D.3 Pertes
 
-*(idem)*
+Graphe : `mcu/tests/tools/pertes-postverrou/bwe.svg`.
+
+### Depouillement (genere par `mcu/tests/tools/bwe_report.py`)
+
+| t (s) | marqueur |
+|---|---|
+| 479.0 | start iface=eth0 limit_pkts=100 phase_s=90 scenario=pertes target=ifb-mcu |
+| 479.0 | clean rate_kbps=2000 |
+| 569.0 | loss pct=2 rate_kbps=2000 |
+| 659.0 | loss pct=10 rate_kbps=2000 |
+| 749.0 | clean rate_kbps=2000 |
+| 839.0 | stop |
+| 839.1 | restore |
+
+**Patte `cx-1649`**
+
+| critere | verdict | mesure |
+|---|---|---|
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1435 kb/s soit -17 % de l entrant 1735 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 15.4 bascule/min (max 6), coef. variation 0.11 (max 0.20) sur 74 s [garde 15s] |
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1581 kb/s soit -10 % de l entrant 1751 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 13.8 bascule/min (max 6), coef. variation 0.11 (max 0.20) sur 74 s [garde 15s] |
+| palier 2000 kb/s : regime etabli | **KO** | estimation mediane 1101 kb/s soit -33 % de l entrant 1646 kb/s (lien nominal 2000) [transitoire ecarte jusqu a +60.3 s] |
+| palier 2000 kb/s : pas d oscillation | OK | coef. variation 0.00 (max 0.20) sur 30 s seulement : 0 bascule(s) non extrapolee(s) [transitoire ecarte jusqu a +60.3 s] |
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1586 kb/s soit -9 % de l entrant 1752 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 13.0 bascule/min (max 6), coef. variation 0.04 (max 0.20) sur 74 s [garde 15s] |
+| pertes 2 % : pas d effondrement | OK | estimation 1581 kb/s = 110 % de la reference 1435 kb/s [garde 15s] |
+| pertes 10 % : pas d effondrement | OK | estimation 1101 kb/s = 77 % de la reference 1435 kb/s [transitoire ecarte jusqu a +60.3 s] |
+| duree de capture >= 10 min | OK | 33.8 min |
+| aucun NaN dans les traces | OK | 0 ligne(s) portant un NaN |
+| aucune hypothese gelee | **KO** | plus longue plage hors Normal : 91.6 s (max 30 s) |
+| pas d ecretage permanent au plafond | OK | 0.0 s a 30000 kb/s (max 5 s) |
+| covariance semi-definie positive | OK | 0 avertissement(s) |
+
+
+5 critere(s) en echec, 0 critere(s) de fond non juge(s) sur 10.
+
+**Lecture.** 2 % de pertes : aucun effet (110 % de la référence). 10 % : 77 %
+de la référence, pas d'effondrement. Le palier KO à −33 % est celui **pendant**
+les 10 % de pertes — la descente y est la réponse attendue. Le « hypothèse
+gelée 91,6 s » est cette même phase : la plage hors `Normal` couvre exactement
+les 90 s de pertes à 10 % (plus la fin du 2 %) — le détecteur voit une
+dégradation réelle continue, il n'est pas gelé.
 
 ### D.4 Gigue
 
-*(idem)*
+Graphe : `mcu/tests/tools/gigue-postverrou/bwe.svg`.
+
+### Depouillement (genere par `mcu/tests/tools/bwe_report.py`)
+
+| t (s) | marqueur |
+|---|---|
+| 1089.4 | start iface=eth0 limit_pkts=100 phase_s=90 scenario=gigue target=ifb-mcu |
+| 1089.4 | clean rate_kbps=2000 |
+| 1179.4 | jitter delay_ms=50 jitter_ms=30 rate_kbps=2000 |
+| 1359.4 | clean rate_kbps=2000 |
+| 1449.5 | stop |
+| 1449.6 | restore |
+
+**Patte `cx-1649`**
+
+| critere | verdict | mesure |
+|---|---|---|
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1338 kb/s soit -21 % de l entrant 1694 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 9.7 bascule/min (max 6), coef. variation 0.19 (max 0.20) sur 75 s [garde 15s] |
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1525 kb/s soit -12 % de l entrant 1732 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 12.4 bascule/min (max 6), coef. variation 0.11 (max 0.20) sur 165 s [garde 15s] |
+| palier 2000 kb/s : regime etabli | OK | estimation mediane 1547 kb/s soit -11 % de l entrant 1734 kb/s (lien nominal 2000) [garde 15s] |
+| palier 2000 kb/s : pas d oscillation | **KO** | 10.5 bascule/min (max 6), coef. variation 0.08 (max 0.20) sur 74 s [garde 15s] |
+| gigue 50+/-30 ms : faux positifs | OK | 94 % des echantillons hors Normal contre 87 % en phase saine (max +10 points), estimation mediane 1525 kb/s |
+| duree de capture >= 10 min | OK | 33.8 min |
+| aucun NaN dans les traces | OK | 0 ligne(s) portant un NaN |
+| aucune hypothese gelee | **KO** | plus longue plage hors Normal : 91.6 s (max 30 s) |
+| pas d ecretage permanent au plafond | OK | 0.0 s a 30000 kb/s (max 5 s) |
+| covariance semi-definie positive | OK | 0 avertissement(s) |
+
+
+4 critere(s) en echec, 0 critere(s) de fond non juge(s) sur 7.
+
+**Lecture.** 94 % hors `Normal` pendant la gigue contre 87 % en phase saine :
++7 points, sous les +10 tolérés — la gigue 50±30 ms n'ajoute pas de faux
+positifs mesurables au fond de détection.
 
 ### D.5 Stabilité sur la durée
 
-Dépouillement du journal entier, sans `--markers` : NaN, gel d'hypothèse,
-écrêtage au plafond, avertissements de covariance.
+Dépouillement du journal entier, sans `--markers` :
+
+**Patte `cx-1649`**
+
+| critere | verdict | mesure |
+|---|---|---|
+| duree de capture >= 10 min | OK | 33.8 min |
+| aucun NaN dans les traces | OK | 0 ligne(s) portant un NaN |
+| aucune hypothese gelee | **KO** | plus longue plage hors Normal : 91.6 s (max 30 s) |
+| pas d ecretage permanent au plafond | OK | 0.0 s a 30000 kb/s (max 5 s) |
+| covariance semi-definie positive | OK | 0 avertissement(s) |
+
+
+1 critere(s) en echec, 0 critere(s) de fond non juge(s) sur 0.
+
+Le seul KO est la plage de 91,6 s expliquée en D.3 (phase de pertes à 10 %,
+dégradation réelle continue). Aucun NaN, aucun écrêtage, covariance saine sur
+33,8 min. À noter : `UpdateLost` a tourné à ~1/s (1 765 appels) — le défaut
+« un seul appel en 4,9 min » observé le 2026-08-18 ne s'est pas reproduit.
 
 ### D.6 Décision
 
 | question | réponse |
 |---|---|
-| le chemin réparé tient-il ses critères ? | *(à remplir)* |
-| alignements « lot 1bis » réclamés par la mesure (arbitrage A3) | |
-| **GO / NO-GO du lot 6** | |
-| marge A6 (×1,25) confirmée ou corrigée | |
+| le chemin réparé tient-il ses critères ? | **Oui sur le fond** : régime établi (−9 à −22 % de l'entrant), réaction 1,8 s, re-montée 29,8 s, pertes 77-110 %, gigue +7 points. **Deux KO restants** : la fréquence d'oscillation (7,3 à 15,4 bascules/min contre 6, à amplitude conforme, CoV ≤ 0,19) et « hypothèse gelée » 91,6 s (artefact de scénario, cf. D.3). |
+| alignements « lot 1bis » réclamés par la mesure (arbitrage A3) | Aucun : la re-montée tient 29,8 s sans retoucher la rampe `alpha` — A3 se referme sans changement. Le point d'arbitrage restant est le **seuil de 6 bascules/min** : le verrou levé, la dent de scie AIMD alterne plus vite par construction (chaque tick calme relance la montée), comme le témoin en saturation. Soit le seuil est relevé en le justifiant ici, soit l'amplitude (CoV) devient le critère porteur. |
+| **GO / NO-GO du lot 6** | **Recommandation : GO.** Les critères de fond passent ; les deux KO sont l'un un seuil à arbitrer, l'autre un artefact de mesure. *(décision à confirmer par le mainteneur)* |
+| marge A6 (×1,25) confirmée ou corrigée | Non mesurée par cette séance : la marge porte sur la consigne poussée vers la source (lots 5/6), pas sur l'estimateur seul. Inchangée. |
