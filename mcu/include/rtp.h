@@ -323,6 +323,21 @@ public:
             return false;
         //Set size
         len = size - headerLen;
+        //RFC 3550 §5.1 : P=1, le dernier octet compte les octets de bourrage,
+        //lui compris. Les sondes de debit WebRTC sont des paquets entierement
+        //en bourrage sur le SSRC media : sans ce retrait, leurs zeros entrent
+        //au depaquetiseur comme du media et corrompent l'image.
+        if( GetP() )
+        {
+            BYTE pad = buffer[size - 1];
+            if( pad == 0 || pad > len )
+            {
+                //Error : rien de lisible, len a deja ete pose ci-dessus
+                len = 0;
+                return false;
+            }
+            len -= pad;
+        }
         //OK
         valid = true;
         return true;

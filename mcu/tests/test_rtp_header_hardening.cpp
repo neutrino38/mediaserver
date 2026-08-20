@@ -123,6 +123,68 @@ TEST(RtpHeader, UnDatagrammePlusCourtQueLEnTeteEstRejete)
 }
 
 // ---------------------------------------------------------------------------
+// Le bourrage (RFC 3550 §5.1) : P=1, le dernier octet compte les octets de
+// bourrage, lui compris. Les sondes de débit WebRTC sont des paquets
+// entièrement en bourrage sur le SSRC média : sans retrait, leurs zéros
+// entrent au dépaquetiseur comme du média et corrompent l'image.
+// ---------------------------------------------------------------------------
+
+// P=1 : le bourrage ne fait pas partie de la charge utile.
+TEST(RtpHeader, LeBourrageEstRetireDeLaChargeUtile)
+{
+	std::vector<BYTE> pkt;
+	PushRtpHeader(pkt, false, 0);
+	pkt[0] |= 0x20;                           //P=1
+	for (int i = 0; i < 4; ++i)
+		pkt.push_back(0xAA);                  //média
+	pkt.push_back(0x00); pkt.push_back(0x00); //bourrage
+	pkt.push_back(0x03);                      //compte, lui compris
+
+	RTPTimedPacket packet(MediaFrame::Video, pkt.data(), pkt.size());
+	ASSERT_TRUE(packet.IsValid());
+	EXPECT_EQ(4u, packet.GetMediaLength());
+}
+
+// Une sonde de débit : P=1 et RIEN d'autre que du bourrage. Le paquet est
+// valide (il compte pour la séquence et l'estimateur) mais son média est vide.
+TEST(RtpHeader, UnPaquetDeBourrageSeulEstValideEtVide)
+{
+	std::vector<BYTE> pkt;
+	PushRtpHeader(pkt, false, 0);
+	pkt[0] |= 0x20;
+	for (int i = 0; i < 219; ++i)
+		pkt.push_back(0x00);
+	pkt.push_back(220);                       //tout le paquet est du bourrage
+
+	RTPTimedPacket packet(MediaFrame::Video, pkt.data(), pkt.size());
+	ASSERT_TRUE(packet.IsValid());
+	EXPECT_EQ(0u, packet.GetMediaLength());
+}
+
+// P=1 avec un compte qui déborde la charge utile, ou un compte nul : rejet.
+TEST(RtpHeader, UnBourrageMenteurInvalideLePaquet)
+{
+	std::vector<BYTE> gros;
+	PushRtpHeader(gros, false, 0);
+	gros[0] |= 0x20;
+	gros.push_back(0xAA);
+	gros.push_back(0x07);                     //7 > 2 octets de charge
+
+	RTPTimedPacket packet(MediaFrame::Video, gros.data(), gros.size());
+	EXPECT_FALSE(packet.IsValid());
+	EXPECT_EQ(0u, packet.GetMediaLength());
+
+	std::vector<BYTE> nul;
+	PushRtpHeader(nul, false, 0);
+	nul[0] |= 0x20;
+	nul.push_back(0xAA);
+	nul.push_back(0x00);                      //P=1 mais compte 0 : malformé
+
+	RTPTimedPacket zero(MediaFrame::Video, nul.data(), nul.size());
+	EXPECT_FALSE(zero.IsValid());
+}
+
+// ---------------------------------------------------------------------------
 // Le décodage des extensions
 // ---------------------------------------------------------------------------
 
