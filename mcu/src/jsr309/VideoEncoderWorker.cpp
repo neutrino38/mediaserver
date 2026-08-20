@@ -602,10 +602,10 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//BWE emetteur (lot 6) mesurerait nos rafales au lieu du reseau.
 		DWORD sendingTime = videoFrame->GetLength()*8/(current+current/10);
 
-		//Adjust to maximum time
-		if (sendingTime>frameTime/1000)
-			//Cap it
-			sendingTime = frameTime/1000;
+		//PAS de plafonnement a la periode d'image : c'est lui qui tronquait
+		//l'etalement d'une trame cle (2,2 x une trame inter, mesure du
+		//2026-08-20) et la faisait partir en rafale. Le pacer du lisseur
+		//reporte le depassement sur l'image suivante, borne par MaxAheadUs.
 
 		//Send it smoothly
 		SmoothFrame(videoFrame,sendingTime);

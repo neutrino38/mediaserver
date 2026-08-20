@@ -17,6 +17,7 @@ RTPSmoother::RTPSmoother()
 	//NO session
 	session = NULL;
 	inited = false;
+	nextSendUs = 0;
 }
 
 RTPSmoother::~RTPSmoother()
@@ -118,6 +119,10 @@ int RTPSmoother::SendFrame(MediaFrame* frame,DWORD duration)
 		//Get total length
 		frameLength += info[i]->GetTotalLength();
 
+	//Borne de latence sur l'etalement de cette image (cf. MaxSpreadUs)
+	if ((QWORD)duration*1000 > MaxSpreadUs)
+		duration = (DWORD)(MaxSpreadUs/1000);
+
 	DWORD current = 0;
 	
 	//For each one
@@ -156,10 +161,12 @@ int RTPSmoother::SendFrame(MediaFrame* frame,DWORD duration)
 		else
 			//No last
 			packet->SetMark(false);
+		//Temps de passage de CE paquet sur le fil, en us : sa part du budget
+		//de l'image. La somme sur l'image vaut `duration`, mais c'est le pacer
+		//qui les enchaine, donc un depassement se reporte au lieu d'etre perdu.
+		packet->SetSendingTime(frameLength ? (DWORD)((QWORD)len*duration*1000/frameLength) : 0);
 		//Calculate partial lenght
 		current += len;
-		//Calculate sending time offset from first frame
-		packet->SetSendingTime(current*duration/frameLength);
 		//Append it
 		queue.Add(packet);
 	}
@@ -199,13 +206,11 @@ int RTPSmoother::End()
 
 int RTPSmoother::Run()
 {
-	timeval prev;
-	DWORD	sendingTime = 0;
-	
-	//Calculate first
-	getUpdDifTime(&prev);
-
 	Log(">RTPSmoother run\n");
+
+	//Curseur du pacer : instant auquel le prochain paquet peut partir
+	nextSendUs = getTime();
+	QWORD lastWarnUs = 0;
 	
 	while(inited)
 	{
@@ -222,30 +227,50 @@ int RTPSmoother::Run()
 			//Exit
 			continue;
 
+		QWORD now = getTime();
+
+		//Pas de rattrapage en rafale : apres un silence, le curseur ne traine
+		//pas dans le passe (sinon toute une image partirait d'un coup).
+		if (nextSendUs < now)
+			nextSendUs = now;
+
+		//Attendre son tour (annulable). Le curseur garde la verite en us, donc
+		//l'arrondi a la milliseconde ne s'accumule pas.
+		if (nextSendUs > now)
+		{
+			QWORD waitMs = (nextSendUs - now)/1000;
+			if (waitMs)
+				wait.WaitSignal(waitMs);
+			//Wait annulé : ne pas émettre sur une file en cours d'arrêt
+			if (!inited)
+			{
+				delete(sched);
+				break;
+			}
+			now = getTime();
+		}
+
 		//Send it
 		session->SendPacket(*sched,sched->GetTimestamp());
 
-		//Update sending time
-		sendingTime = sched->GetSendingTime();
-		
-		//If it was not last
-		if (!sched->GetMark())
+		//Avancer le curseur du temps de passage de ce paquet — c'est ici que la
+		//dette se reporte d'une image a l'autre.
+		nextSendUs += sched->GetSendingTime();
+
+		//Borne d'avance : au-dela, c'est de la latence pure, on preferre la
+		//rafale (et le detecteur de delai la verra, ce qui est correct).
+		if (nextSendUs > now + MaxAheadUs)
 		{
-			//If we have to sleep
-			if (sendingTime)
+			nextSendUs = now + MaxAheadUs;
+			//La source produit plus vite que le debit de pacing : l'avance est
+			//ecretee, donc on emet en rafale. C'est LE signal a lire pour
+			//savoir si le budget suffit — au plus une trace par seconde.
+			if (now - lastWarnUs > 1000000)
 			{
-				//Dormir jusqu'à l'échéance prev+sendingTime (annulable)
-				QWORD elapsed = getDifTime(&prev)/1000;
-				if (sendingTime > elapsed)
-					wait.WaitSignal(sendingTime - elapsed);
+				lastWarnUs = now;
+				Log("-RTPSmoother: avance ecretee a %llu ms, la source depasse le debit de pacing [enfiles:%d]\n",
+					(QWORD)(MaxAheadUs/1000), queue.Length());
 			}
-		} else {
-			//Update time of the previous frame
-			DWORD frameTime = getUpdDifTime(&prev)/1000;
-			//Check queue length, it should be empty
-			if (queue.Length()>0)
-				//Log it
-				Log("-RTPSmoother lagging behind [enqueued:%d,frameTime:%u,sendingTime:%u]\n",queue.Length(),frameTime,sendingTime);
 		}
 
 		//DElete it

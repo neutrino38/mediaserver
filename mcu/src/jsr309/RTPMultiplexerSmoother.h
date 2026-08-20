@@ -33,7 +33,15 @@ protected:
 	virtual int Run();
 
 private:
+	//Pacer a budget, meme mecanique que RTPSmoother (cf. son en-tete) : chaque
+	//paquet porte son temps de passage sur le fil et `nextSendUs` les enchaine,
+	//donc la dette d'une trame cle se reporte au lieu de partir en rafale.
+	static const QWORD MaxAheadUs = 100000;
+	//Etalement maximal d'UNE image : borne de LATENCE (cf. RTPSmoother)
+	static const QWORD MaxSpreadUs = 200000;
+
 	bool		inited;
+	QWORD		nextSendUs;
 	WaitQueue<RTPPacketSched*> queue;
 	//SSRC du run d'encodage courant, posé sur chaque paquet produit. Tiré à
 	//neuf à chaque Start() : un encodeur relancé (SetCodec d'une renégociation)
