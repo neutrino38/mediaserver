@@ -40,6 +40,7 @@ public:
 	DWORD GetEstimatedBitrate() const;
 	DWORD GetDelayBasedLimit() const	{ return delayCurrentBitrate; }
 	DWORD GetAckedBitrate() const	{ return ackedBitrate > 0 ? (DWORD)(ackedBitrate * 1000) : 0; }
+	DWORD GetSentBitrate() const	{ return sentBitrate > 0 ? (DWORD)(sentBitrate * 1000) : 0; }
 	TrendlineDetector::BandwidthUsage GetUsage() const	{ return detector.GetUsage(); }
 	const char* GetStateName() const;
 
@@ -102,6 +103,19 @@ private:
 	//Trace : au changement de cible, et au moins une fois par seconde —
 	//une serie echantillonnee aux seuls changements biaise le depouillement
 	//(dispersion, oscillation) du lot 3 etendu aux traces BWE-TX.
+	//Debit reellement EMIS, fenetre glissante sur les instants d'emission des
+	//paquets rapportes (pertes comprises, a la taille moyenne du rapport).
+	//C'est lui qui separe le regime auto-limite (emis << cible : notre
+	//encodeur borne, le plafond 1,5 x l'acquitte ne prouve rien) du regime
+	//limite par le reseau (emis ~= cible : le plafond est legitime).
+	void UpdateSentBitrate(QWORD sentUs, DWORD bytes);
+	bool IsSelfLimited(DWORD currentBps) const;
+	double sentBitrate;		//kb/s, -1 tant que la fenetre n'est pas pleine
+	QWORD sentPrevMs;
+	bool  hasSentPrev;
+	QWORD sentSum;
+	QWORD sentWindowMs;
+
 	void TraceEstimate(QWORD nowUs, bool changed);
 	QWORD lastTraceUs;
 	EvenSource* eventSource;

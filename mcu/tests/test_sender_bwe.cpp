@@ -185,13 +185,58 @@ TEST(SenderBWETest, LaCibleMonteSurUnLienLarge)
 	SenderBWE bwe;
 	bwe.SetStartBitrate(300000, 1000000);
 	LinkSim link(2000000);
-	// 10 s à 300 kb/s sur un lien de 2000 : découverte multiplicative,
-	// plafonnée à 1,5 x l'acquitté + 10 kb/s.
+	// 10 s à 300 kb/s sur un lien de 2000 : la source émet moins que la cible
+	// ne l'autorise — régime AUTO-LIMITÉ. Le plafond 1,5 x l'acquitté ne
+	// s'applique pas (l'acquitté ne peut par construction pas dépasser ce que
+	// nous émettons : appliqué ici, il refermait la cible sur elle-même —
+	// séance du 2026-08-20, cible gelée à 318 kb/s sur un lien revenu à 2000).
+	// La cible monte librement, bornée par la configuration seule.
 	Drive(bwe, link, 300000, 1000000, 10000);
 	ASSERT_TRUE(bwe.HasEstimate());
 	DWORD target = bwe.GetEstimatedBitrate();
-	EXPECT_GT(target, 330000u) << "la découverte n'a pas monté";
-	EXPECT_LE(target, (DWORD)(1.5 * 320000) + 20000) << "plafond glissant dépassé";
+	EXPECT_GT(target, (DWORD)(1.5 * 300000) + 10000)
+		<< "le plafond glissant s'applique encore en régime auto-limité";
+	EXPECT_LE(target, 30000000u) << "borne de configuration dépassée";
+}
+
+// LE test de la séance egress du 2026-08-20 : après une congestion, la cible
+// tombe vers 0,85 x l'acquitté ; le lien revient mais la source reste pauvre
+// (mosaïque statique). L'acquitté suit la source, donc l'ancien plafond
+// interdisait toute remontée : cible gelée à 318 kb/s pour un lien à 2000,
+// « l'émission ne remonte pas ». Le débit ÉMIS, que l'estimateur connaît,
+// tranche : émis << cible = c'est nous qui bornons, pas le réseau.
+TEST(SenderBWETest, LeRegimeAutoLimiteNEmprisonnePasLaCible)
+{
+	SenderBWE bwe;
+	bwe.SetStartBitrate(2000000, 1000000);
+	// Congestion : 2000 kb/s poussés dans un lien de 500, la cible s'effondre
+	LinkSim narrow(500000);
+	QWORD now = Drive(bwe, narrow, 2000000, 1000000, 6000);
+	DWORD low = bwe.GetEstimatedBitrate();
+	ASSERT_LT(low, 700000u) << "prérequis : la congestion a fait descendre";
+	// Le lien revient à 2000 mais la source n'émet plus que 150 kb/s : sans
+	// la détection du régime auto-limité, la cible reste prisonnière de
+	// 1,5 x 150 + 10 pour toujours.
+	LinkSim wide(2000000);
+	wide.freeAtUs = now;
+	Drive(bwe, wide, 150000, now, 20000);
+	EXPECT_GT(bwe.GetEstimatedBitrate(), 1000000u)
+		<< "la cible reste prisonnière du plafond en régime auto-limité";
+}
+
+// Le garde-fou du même mécanisme : quand nous émettons À la cible et que le
+// réseau n'en livre qu'une partie, le plafond reste légitime et tient.
+TEST(SenderBWETest, LeReseauLimitantGardeLePlafond)
+{
+	SenderBWE bwe;
+	bwe.SetStartBitrate(2000000, 1000000);
+	LinkSim link(1000000);
+	// 20 s de 2000 kb/s dans un lien de 1000 : émis >> acquitté, le réseau
+	// limite. La cible doit rester tenue par le lien, pas s'en évader.
+	Drive(bwe, link, 2000000, 1000000, 20000);
+	DWORD target = bwe.GetEstimatedBitrate();
+	EXPECT_LT(target, 1300000u) << "le plafond a laissé la cible s'évader";
+	EXPECT_GT(target, 400000u) << "effondrement sous beta x acquitté";
 }
 
 TEST(SenderBWETest, LaSurchargeDescendVersLeDebitAcquitte)

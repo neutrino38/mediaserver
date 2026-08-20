@@ -57,6 +57,11 @@ SenderBWE::SenderBWE()
 	lastFeedbackUs = 0;
 
 	ackedBitrate = -1;
+	sentBitrate = -1;
+	sentPrevMs = 0;
+	hasSentPrev = false;
+	sentSum = 0;
+	sentWindowMs = 0;
 	ackedVar = 50;
 	ackedWindowMs = 0;
 	ackedPrevMs = 0;
@@ -84,11 +89,12 @@ void SenderBWE::TraceEstimate(QWORD nowUs, bool changed)
 	if (!changed && lastTraceUs && nowUs - lastTraceUs < 1000000)
 		return;
 	lastTraceUs = nowUs;
-	Debug("BWE-TX: estimation stream=%s state=%s usage=%s target=%u delay=%u acked=%u lost=%u trend=%.3f threshold=%.1f\n",
+	Debug("BWE-TX: estimation stream=%s state=%s usage=%s target=%u delay=%u acked=%u lost=%u trend=%.3f threshold=%.1f sent=%u\n",
 	      eventSource ? eventSource->GetName() : "",
 	      GetStateName(), TrendlineDetector::GetName(detector.GetUsage()),
 	      GetEstimatedBitrate() / 1000, delayCurrentBitrate / 1000, GetAckedBitrate() / 1000,
-	      lastFractionLost, detector.GetTrend(), detector.GetThreshold());
+	      lastFractionLost, detector.GetTrend(), detector.GetThreshold(),
+	      GetSentBitrate() / 1000);
 }
 
 void SenderBWE::SetMinMaxBitrate(DWORD min, DWORD max)
@@ -137,6 +143,43 @@ DWORD SenderBWE::GetEstimatedBitrate() const
 }
 
 //--- Debit acquitte -----------------------------------------------------------
+
+void SenderBWE::UpdateSentBitrate(QWORD sentUs, DWORD bytes)
+{
+	QWORD nowMs = sentUs / 1000;
+	QWORD window = sentBitrate < 0 ? AckedInitialWindowMs : AckedWindowMs;
+	if (hasSentPrev && nowMs < sentPrevMs)
+	{
+		hasSentPrev = false;
+		sentSum = 0;
+		sentWindowMs = 0;
+	}
+	if (hasSentPrev)
+	{
+		sentWindowMs += nowMs - sentPrevMs;
+		if (nowMs - sentPrevMs > window)
+		{
+			sentSum = 0;
+			sentWindowMs %= window;
+		}
+	}
+	sentPrevMs = nowMs;
+	hasSentPrev = true;
+	if (sentWindowMs >= window)
+	{
+		sentBitrate = 8.0 * sentSum / (double)window;	//kb/s
+		sentWindowMs -= window;
+		sentSum = 0;
+	}
+	sentSum += bytes;
+}
+
+bool SenderBWE::IsSelfLimited(DWORD currentBps) const
+{
+	//Seuil du temoin alr_detector.cc (bandwidth_usage_ratio 0,65, arret 0,80) :
+	//la mediane, sans hysteresis — l'enjeu n'est que le mode de montee.
+	return sentBitrate >= 0 && sentBitrate * 1000 < 0.75 * currentBps;
+}
 
 void SenderBWE::UpdateAckedBitrate(QWORD nowUs, DWORD bytes)
 {
@@ -273,12 +316,25 @@ void SenderBWE::UpdateDelayEstimate(QWORD nowUs)
 		{
 			if (ackedBps / 1000 > linkCapacity.UpperBoundKbps())
 				linkCapacity.Reset();
-			//Plafond glissant : pas plus de 1,5 x le debit acquitte + 10 kb/s
+			//Plafond glissant : pas plus de 1,5 x le debit acquitte + 10 kb/s.
+			//SAUF en regime auto-limite (emis << cible) : l'acquitte ne peut
+			//par construction pas depasser ce que nous emettons, et la cible
+			//plafonne notre propre encodeur — applique la, le plafond se
+			//refermait sur la cible elle-meme (seance du 2026-08-20, cible
+			//gelee a 318 kb/s sur un lien revenu a 2000). Le temoin s'evade
+			//par l'ALR et le sondage ; sans sondes, le debit emis tranche.
+			//Le detecteur de delai garde la porte dans les deux regimes.
+			bool selfLimited = IsSelfLimited(current);
 			DWORD increaseLimit = (DWORD)(1.5 * ackedBps) + 10000;
-			if (current < increaseLimit)
+			if (selfLimited || current < increaseLimit)
 			{
 				DWORD increased;
-				if (linkCapacity.hasEstimate)
+				//En regime auto-limite la montee est multiplicative meme si
+				//une capacite est memorisee : cette memoire date du dernier
+				//episode de congestion, et la cible ne s'applique a aucun
+				//trafic reel — la prudence additive n'y protege rien et
+				//coutait 2 minutes de re-montee (13 kb/s par seconde).
+				if (linkCapacity.hasEstimate && !selfLimited)
 				{
 					//Capacite connue : montee ADDITIVE, un paquet par temps
 					//de reponse
@@ -291,7 +347,7 @@ void SenderBWE::UpdateDelayEstimate(QWORD nowUs)
 					DWORD multiplicative = (DWORD)std::max(current * (alpha - 1.0), 1000.0);
 					increased = current + multiplicative;
 				}
-				current = std::min(increased, increaseLimit);
+				current = selfLimited ? increased : std::min(increased, increaseLimit);
 			}
 			Debug("BWE-TX: Increase rate to current = %u kbps\n", current / 1000);
 			lastChangeUs = nowUs;
@@ -410,8 +466,14 @@ bool SenderBWE::ProcessFeedback(const std::vector<SentPacketHistory::Result>& re
 	for (const SentPacketHistory::Result& r : results)
 	{
 		UpdateAckedBitrate(r.recvTimeUs, r.size);
+		UpdateSentBitrate(r.sentTimeUs, r.size);
 		detector.OnPacket(r.sentTimeUs, r.recvTimeUs, r.size);
 	}
+	//Les paquets perdus ont ete EMIS aussi : sans eux, un lien a fortes
+	//pertes ressemblerait a un emetteur timide et leverait le plafond a tort.
+	if (lost)
+		UpdateSentBitrate(results.back().sentTimeUs,
+				  lost * results.back().size);
 
 	if (detector.GetUsage() == TrendlineDetector::OverUsing)
 	{
