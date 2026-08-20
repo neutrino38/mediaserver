@@ -790,10 +790,16 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
       `TransportWideFeedbackGenerator`, lecture de l'extension entrante,
       émission depuis la boucle `Run`, cadence 50-250 ms, 12 tests
       `TransportFeedbackGenerator*` + 3 `TransportCCWiring*` joués par
-      `make check-senderbwe`, format vérifié à `tshark`). Le prérequis à
-      l'activation de transport-cc est levé.
-      **Restent** le CCFB fmt 11 (point 3) et la recette live, commune au
-      lot 6.5
+      `make check-senderbwe`, format vérifié à `tshark`). **Recette Chrome
+      VALIDÉE le 2026-08-20** (appel réel, les deux sens : rampe entrante
+      2,3 Mb/s en 2 s, rapports consommés, image nette au décrochage). Elle a
+      coûté trois défauts, tous corrigés rouge→vert : la table extMap écrite
+      type→id mais relue id→type — le générateur n'émettait rien malgré 474
+      tests verts, d'où la suite `TransportCCWiring` de bout en bout (commit
+      1b4039b) ; le bit P jamais traité — les sondes padding-only de Chrome
+      entraient au dépaquetiseur VP8 comme du média, signature `Invalid sync
+      code 000000` au journal (commit 28970c8) ; et `len` non remis à zéro sur
+      paquet rejeté. **Reste** le CCFB fmt 11 (point 3), non bloquant
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live
 - [ ] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
       implémentation v1 en sous-lots 6.1-6.5 (suivi dans ce document)
