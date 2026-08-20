@@ -337,6 +337,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	useTransportCC = false;
 	transportSeqNum = 0;
 	transportFeedbackStarted = false;
+	absSendTimeExtId = 0;
+	transportCCExtId = 0;
 	isNACKEnabled = false;
 	//Fill with 0
 	memset(sendPacket,0,MTU+SRTP_MAX_TRAILER_LEN);
@@ -617,19 +619,19 @@ int RTPSession::SetProperties(const Properties& properties)
 		}
 		else if (it->first.compare(0, 5, "codec")==0) {
 			// Ignore codec props
-			//Set extension
-			extMap[RTPPacket::HeaderExtension::SSRCAudioLevel] =  atoi(it->second.c_str());
 		} else if (it->first.compare("urn:ietf:params:rtp-hdrext:toffset")==0) {
 			//Set extension
-			extMap[RTPPacket::HeaderExtension::TimeOffset] =  atoi(it->second.c_str());
+			extMap[atoi(it->second.c_str())] = RTPPacket::HeaderExtension::TimeOffset;
 		} else if (it->first.compare("http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time")==0) {
 			//Set extension
-			extMap[RTPPacket::HeaderExtension::AbsoluteSendTime] =  atoi(it->second.c_str());
+			absSendTimeExtId = (BYTE)atoi(it->second.c_str());
+			extMap[absSendTimeExtId] = RTPPacket::HeaderExtension::AbsoluteSendTime;
 			//Use timestamsp
 			useAbsTime = true;
 		} else if (it->first.compare("http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01")==0) {
 			//Set extension
-			extMap[RTPPacket::HeaderExtension::TransportWideCC] = atoi(it->second.c_str());
+			transportCCExtId = (BYTE)atoi(it->second.c_str());
+			extMap[transportCCExtId] = RTPPacket::HeaderExtension::TransportWideCC;
 			useTransportCC = true;
 		} else {
 			Error("Unknown RTP property [%s]\n",it->first.c_str());
@@ -646,8 +648,7 @@ int RTPSession::SetProperties(const Properties& properties)
 		    MediaFrame::TypeToString(media), this);
 	if (useTransportCC)
 		Log("Activated transport-cc on %s stream %p, extmap id=%d.\n",
-		    MediaFrame::TypeToString(media), this,
-		    extMap.GetCodecForType(RTPPacket::HeaderExtension::TransportWideCC));
+		    MediaFrame::TypeToString(media), this, transportCCExtId);
 	mutex.unlock();
 	return 1;
 }
@@ -2083,7 +2084,7 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			// Encoding: Timestamp is in seconds, 24 bit 6.18 fixed point, yielding 64s wraparound and 3.8us resolution (one increment for each 477 bytes going out on a 1Gbps interface).
 			DWORD abs = ((getTimeMS() << 18) / 1000) & 0x00ffffff;
 			//Set header
-			sendPacket[ini] = extMap.GetCodecForType(RTPPacket::HeaderExtension::AbsoluteSendTime) << 4 | 0x02;
+			sendPacket[ini] = absSendTimeExtId << 4 | 0x02;
 			//Set data
 			set3(sendPacket,ini+1,abs);
 			//Increase ini
@@ -2095,7 +2096,7 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			//repart pourtant avec le numero d'origine, comme l'abs-send-time
 			//(le paquet stocke est deja chiffre, cf. ReSendPacket) : le
 			//doublon se resout a l'appariement, premiere arrivee gagnante.
-			sendPacket[ini] = extMap.GetCodecForType(RTPPacket::HeaderExtension::TransportWideCC) << 4 | 0x01;
+			sendPacket[ini] = transportCCExtId << 4 | 0x01;
 			set2(sendPacket,ini+1,(WORD)(++transportSeqNum));
 			ini+=3;
 		}

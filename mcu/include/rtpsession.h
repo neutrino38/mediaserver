@@ -686,6 +686,12 @@ private:
 	//(sender_bwe_plan.md 6.1) ; le pair le renvoie dans ses rapports fmt 15.
 	bool			useTransportCC;
 	DWORD			transportSeqNum;
+	//`extMap` va de l'id du fil vers le type d'extension, comme `rtpMapIn` va du
+	//payload type vers le codec : c'est le sens dont la LECTURE a besoin
+	//(RTPPacket::ProcessExtensions). L'ECRITURE a besoin de l'inverse, d'ou ces
+	//deux ids gardes a part plutot qu'une seconde table a tenir coherente.
+	BYTE			absSendTimeExtId;
+	BYTE			transportCCExtId;
 	//Estimateur émetteur (lot 6.3) : historique alimenté par le thread
 	//d'émission, consommé par le thread RTCP — le mutex couvre les deux.
 	void ProcessTransportWideFeedback(RTCPRTPFeedback* fb);

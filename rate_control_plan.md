@@ -634,6 +634,20 @@ est implémentée ; celle au bit marqueur reviendra avec le CCFB.
 `SD SD NR SD`, deltas 40/5/7 ms. Notre encodeur et notre parseur ayant la même
 main, un aller-retour interne ne prouve rien sur la conformité au format.
 
+**`extMap` va de l'id du fil vers le type d'extension**, comme `rtpMapIn` va du
+payload type vers le codec : c'est le sens dont la lecture a besoin. L'écriture a
+besoin de l'inverse, d'où `absSendTimeExtId` et `transportCCExtId` gardés à part
+plutôt qu'une seconde table à tenir cohérente. La propriété `codec*` ne touche
+plus à cette table : sous un index par id, la valeur d'un payload type y serait
+entrée comme un id d'extension.
+
+Ce sens-là est ce que la suite `TransportCCWiring` protège : une sonde en loopback
+envoie du RTP porteur de l'extension à une vraie `RTPSession` et attend le rapport
+fmt 15 en retour, plus le contrôle symétrique (nos paquets portent l'id négocié) et
+le garde-fou (sans négociation, aucun rapport). Les suites de composant peuvent
+toutes passer sur une session qui n'émet rien : c'est arrivé, et seul un test qui
+traverse la session pouvait le voir.
+
 ---
 
 ## Lot 5 — Propagation inter-pattes amortie (§6, le cas relais)
@@ -775,8 +789,9 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
 - [x] Lot 4 — transport-cc reçu ET rapporté (2026-08-19 :
       `TransportWideFeedbackGenerator`, lecture de l'extension entrante,
       émission depuis la boucle `Run`, cadence 50-250 ms, 12 tests
-      `TransportFeedbackGenerator*` joués par `make check-senderbwe`, format
-      vérifié à `tshark`). Le prérequis à l'activation de transport-cc est levé.
+      `TransportFeedbackGenerator*` + 3 `TransportCCWiring*` joués par
+      `make check-senderbwe`, format vérifié à `tshark`). Le prérequis à
+      l'activation de transport-cc est levé.
       **Restent** le CCFB fmt 11 (point 3) et la recette live, commune au
       lot 6.5
 - [ ] Lot 5 — propagation inter-pattes via throttler + recette live
