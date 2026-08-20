@@ -283,5 +283,13 @@ et l'extension, c'est tout.
       par `min()` participant + JSR-309, no-op en relais) (2026-08-19)
 - [x] 6.4 — pacing 1,1× sur les deux smoothers (2026-08-19)
 - [ ] 6.5 — elixip SDP (extmap + `a=rtcp-fb:* transport-cc`, chantier commun
-      lot 4) FAIT, lot 4 FAIT ; restent la recette Chrome (les deux sens) et la
-      séance netem sortante
+      lot 4) FAIT, lot 4 FAIT, recette Chrome VALIDÉE (2026-08-20). La première
+      séance egress a rendu le verdict du portillon : la re-montée était
+      prisonnière du plafond 1,5 x l'acquitté, qui se refermait sur notre
+      propre encodeur dès que la source émettait moins que la cible (cible
+      gelée à 318 kb/s sur un lien revenu à 2000). Corrigé (commit 97fee86) :
+      l'estimateur mesure le débit émis, et le plafond ne s'applique qu'en
+      régime limité par le réseau — la moitié « détection » de l'ALR, toujours
+      sans sondes ni padding. **Reste** à rejouer la séance egress avec une
+      source animée en continu (contrôle : `sent=` > 1000 dans les traces
+      BWE-TX pendant toute la séance) pour remplir l'annexe D côté émetteur
