@@ -11,6 +11,10 @@ static const QWORD  StreamTimeoutUs       = 2000000;	//delay_based_bwe.cc:42
 static const QWORD  AckedInitialWindowMs  = 500;	//bitrate_estimator.cc:29
 static const QWORD  AckedWindowMs         = 150;	//bitrate_estimator.cc:30
 static const double AckedUncertaintyScale = 10.0;	//bitrate_estimator.cc:48
+//Bornes du regime auto-limite (temoin alr_detector.cc) : on y entre en emettant
+//moins de 65 % de la cible, on n'en sort qu'au-dela de 80 %.
+static const double SelfLimitedEnter      = 0.65;	//alr_detector.cc
+static const double SelfLimitedExit       = 0.80;	//alr_detector.cc
 static const float  LowLossThreshold      = 0.02f;	//send_side_bandwidth_estimation.cc:50
 static const float  HighLossThreshold     = 0.1f;	//send_side_bandwidth_estimation.cc:51
 static const QWORD  BweIncreaseIntervalUs = 1000000;	//send_side_bandwidth_estimation.cc:39
@@ -58,6 +62,8 @@ SenderBWE::SenderBWE()
 
 	ackedBitrate = -1;
 	sentBitrate = -1;
+	sentVar = 0;
+	selfLimited = false;
 	sentPrevMs = 0;
 	hasSentPrev = false;
 	sentSum = 0;
@@ -165,20 +171,44 @@ void SenderBWE::UpdateSentBitrate(QWORD sentUs, DWORD bytes)
 	}
 	sentPrevMs = nowMs;
 	hasSentPrev = true;
+	double sample = -1;
 	if (sentWindowMs >= window)
 	{
-		sentBitrate = 8.0 * sentSum / (double)window;	//kb/s
+		sample = 8.0 * sentSum / (double)window;	//kb/s
 		sentWindowMs -= window;
 		sentSum = 0;
 	}
 	sentSum += bytes;
+	if (sample < 0)
+		return;
+	if (sentBitrate < 0)
+	{
+		sentBitrate = sample;
+		return;
+	}
+	FilterSample(sample, sentBitrate, sentVar);
 }
 
-bool SenderBWE::IsSelfLimited(DWORD currentBps) const
+bool SenderBWE::IsSelfLimited(DWORD currentBps)
 {
-	//Seuil du temoin alr_detector.cc (bandwidth_usage_ratio 0,65, arret 0,80) :
-	//la mediane, sans hysteresis — l'enjeu n'est que le mode de montee.
-	return sentBitrate >= 0 && sentBitrate * 1000 < 0.75 * currentBps;
+	//Sans echantillon ni cible, le regime ne change pas : mieux vaut le
+	//dernier connu qu'une bascule sur une absence de mesure.
+	if (sentBitrate < 0 || !currentBps)
+		return selfLimited;
+
+	const double ratio = sentBitrate * 1000 / (double)currentBps;
+
+	if (selfLimited)
+	{
+		if (ratio > SelfLimitedExit)
+			selfLimited = false;
+	}
+	else if (ratio < SelfLimitedEnter)
+	{
+		selfLimited = true;
+	}
+
+	return selfLimited;
 }
 
 void SenderBWE::UpdateAckedBitrate(QWORD nowUs, DWORD bytes)
@@ -217,12 +247,17 @@ void SenderBWE::UpdateAckedBitrate(QWORD nowUs, DWORD bytes)
 		ackedBitrate = sample;
 		return;
 	}
-	//Filtre bayesien du temoin : l'incertitude croit avec l'ecart relatif
-	double uncertainty = AckedUncertaintyScale * fabs(ackedBitrate - sample) / (ackedBitrate + sample);
+	FilterSample(sample, ackedBitrate, ackedVar);
+}
+
+void SenderBWE::FilterSample(double sample, double& value, double& var)
+{
+	//L'incertitude croit avec l'ecart relatif (temoin bitrate_estimator.cc)
+	double uncertainty = AckedUncertaintyScale * fabs(value - sample) / (value + sample);
 	double sampleVar = uncertainty * uncertainty;
-	double predVar = ackedVar + 5;
-	ackedBitrate = (sampleVar * ackedBitrate + predVar * sample) / (sampleVar + predVar);
-	ackedVar = sampleVar * predVar / (sampleVar + predVar);
+	double predVar = var + 5;
+	value = (sampleVar * value + predVar * sample) / (sampleVar + predVar);
+	var = sampleVar * predVar / (sampleVar + predVar);
 }
 
 //--- Controleur de delai ------------------------------------------------------

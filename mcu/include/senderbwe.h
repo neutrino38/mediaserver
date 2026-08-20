@@ -77,6 +77,12 @@ private:
 	QWORD  lastFeedbackUs;		//coupure de flux : 2 s sans rapport = reset
 
 	//--- Debit acquitte (temoin bitrate_estimator.cc) ---
+	//Filtre bayesien du temoin : l'incertitude croit avec l'ecart relatif.
+	//Partage par les deux estimateurs (acquitte et emis) pour qu'ils ne
+	//divergent pas — un echantillon brut d'un cote et filtre de l'autre rendait
+	//leur comparaison absurde (mesure du 2026-08-20 : acquitte > 2 x emis dans
+	//39 % des echantillons, jusqu'a 32 x).
+	static void FilterSample(double sample, double& value, double& var);
 	void UpdateAckedBitrate(QWORD nowUs, DWORD bytes);
 	double ackedBitrate;		//kb/s ; <0 = pas encore d'echantillon
 	double ackedVar;
@@ -109,8 +115,13 @@ private:
 	//encodeur borne, le plafond 1,5 x l'acquitte ne prouve rien) du regime
 	//limite par le reseau (emis ~= cible : le plafond est legitime).
 	void UpdateSentBitrate(QWORD sentUs, DWORD bytes);
-	bool IsSelfLimited(DWORD currentBps) const;
+	bool IsSelfLimited(DWORD currentBps);
 	double sentBitrate;		//kb/s, -1 tant que la fenetre n'est pas pleine
+	double sentVar;
+	//Regime courant, a hysteresis (le temoin alr_detector.cc en a une) : sans
+	//elle, une fenetre tombee dans un trou entre deux images fait basculer le
+	//regime, donc le mode de montee, a chaque rapport.
+	bool   selfLimited;
 	QWORD sentPrevMs;
 	bool  hasSentPrev;
 	QWORD sentSum;
