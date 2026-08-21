@@ -711,6 +711,13 @@ mapping) et pour le RTCP non muxé sur son propre paquet.
 - La correction exige une **preuve** (un paquet réellement reçu d'ailleurs), elle est
   **one-shot** par session — rejouable après un nouveau `StartSending`, donc un
   re-INVITE — et **ignorée quand ICE est en jeu**, ICE possédant déjà la cible.
+- « ICE en jeu » se lit sur le **pair** : il faut que
+  `EndpointSetRemoteSTUNCredentials` ait été appelé. Nos seuls credentials locaux ne
+  suffisent pas — offrir ICE n'est pas le pratiquer. Une jambe où le contrôleur a
+  annoncé ses candidats et dont le pair répond **sans ICE** (un poste SIP ordinaire)
+  n'a pas d'ICE du tout : les checks entrants y sont jetés faute de mot de passe
+  distant, personne ne posera jamais la cible, et le rattrapage est la seule chose
+  qui reste.
 
 #### `GetSupportedCodecs`
 Liste les codecs supportés pour un type de média.

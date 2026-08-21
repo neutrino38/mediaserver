@@ -13,6 +13,9 @@
  *   - l'adresse annoncée doit être PRIVÉE (RFC 1918, CGNAT RFC 6598, link-local) :
  *     sur une adresse publique, une divergence est plus probablement du routage
  *     asymétrique légitime qu'un NAT à corriger ;
+ *   - ICE ne doit pas être en jeu : quand le PAIR a répondu ses credentials STUN,
+ *     ce sont les checks de connectivité qui posent la cible. Nos seuls
+ *     credentials ne comptent pas — offrir ICE n'est pas le pratiquer ;
  *   - la correction est ONE-SHOT par cible (`natCorrected`), et le droit est
  *     rouvert par un nouveau `SetRemotePort` (re-INVITE / UPDATE).
  *
@@ -323,6 +326,47 @@ TEST(RtpLatching, DoesNotReAimFromANonRoutableButNonPrivateAnnouncement)
 	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
 	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
 		<< "non routable n'est pas privee : aucun rattrapage NAT ici";
+}
+
+// ICE réellement en jeu : le pair a répondu avec ses credentials, donc les checks
+// de connectivité désigneront la cible. Le rattrapage se retire.
+TEST(RtpLatching, DoesNotReAimWhenIceIsInPlace)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "ICE pose la cible lui-meme : ne pas la lui disputer";
+}
+
+// ADVERSE — offrir ICE n'est pas le pratiquer. Nous avons annoncé nos credentials,
+// le pair a répondu SANS ICE (un Linphone, un poste SIP quelconque) : personne ne
+// posera jamais la cible, puisque les checks entrants sont jetés faute
+// d'iceRemotePwd. Vetoer sur nos SEULS credentials laissait la jambe muette pour
+// tout l'appel — trafic du 2026-08-21, Alice WebRTC vers Bob Linphone : la poignée
+// DTLS aboutissait, et Bob ne recevait pas un paquet RTP de bout en bout.
+TEST(RtpLatching, ReAimsWhenWeOfferedIceAndThePeerDeclinedIt)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "ICE offert et decline : le rattrapage est la seule chose qui reste";
 }
 
 // Un nouveau SetRemotePort (re-INVITE, UPDATE) rouvre le droit au rattrapage :

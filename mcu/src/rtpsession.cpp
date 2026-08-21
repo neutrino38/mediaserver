@@ -672,6 +672,7 @@ int RTPSession::SetLocalSTUNCredentials(const char* username, const char* pwd)
 int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 {
 	Log("-SetRemoteSTUNCredentials [frag:%s,pwd:%s]\n",username,pwd);
+
 	//Clean mem
 	if (iceRemoteUsername)
 		free(iceRemoteUsername);
@@ -1112,8 +1113,11 @@ bool RTPSession::NatCorrectable(const IPAddress& announced)
 		return false;
 
 	//ICE possède déjà la cible d'envoi (OnICEConnectivityConfirmed la pose lui-même
-	//sur le pair validé) : ne pas la lui disputer.
-	if (iceRemotePwd || iceLocalPwd)
+	//sur le pair validé) : ne pas la lui disputer. Le critère est le pair, PAS nous :
+	//offrir ICE n'est pas le pratiquer. iceLocalPwd seul dit « nous avons proposé »,
+	//et un pair qui répond sans ICE laisse alors la cible à personne — les checks
+	//entrants sont jetés faute d'iceRemotePwd, et rien ne posera jamais l'adresse.
+	if (iceRemotePwd)
 		return false;
 
 	//Plages privées v4 au sens propre (10/8, 172.16/12, 192.168/16, 100.64/10,
