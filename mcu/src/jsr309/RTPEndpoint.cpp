@@ -263,6 +263,31 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
 		return;
 	}
 	
+	//Un paquet sans média n'est pas une image : ne rien émettre.
+	//
+	//RTPPacket::SetData retire le bourrage (RFC 3550 §5.1) et rend donc une longueur
+	//NULLE pour une sonde de débit WebRTC, qui est entièrement en bourrage sur le SSRC
+	//média. Relayée telle quelle, elle part vers le pair comme un paquet RTP vide qui
+	//porte l'horodatage de l'image en cours et consomme un numéro de séquence : le
+	//dépaquetiseur d'en face y cherche un descripteur VP8, ou un NAL H.264, et ne
+	//trouve rien. L'image entière est déclarée invalide.
+	//
+	//Mesuré sur la capture du 2026-08-21 20:09 (Chrome -> Linphone, VP8 relayé) : sur
+	//les 1368 paquets d'Alice, 1356 sont relayés à l'octet près et les 12 qui portent
+	//P=1 avec 255 octets de bourrage arrivent chez Bob avec une charge utile de ZÉRO.
+	//Trois d'entre eux tombent dans la toute première image — l'intra — donc l'image
+	//est corrompue dès le décroché, et comme rien ne renvoie d'intra ensuite elle ne
+	//se rétablit jamais. Côté Linphone : `Vp8RtpFmtUnpackerCtx: sequence inconsistency
+	//detected`, `VP8 invalid frame`, et en H.264 un décodeur qui ne trouve jamais de
+	//jeu de paramètres (`DecodeFrame2 failed: 0x10`).
+	//
+	//Le jeter ICI et pas à la réception : la sonde doit rester comptée par la patte
+	//qui la reçoit (séquence, pertes, transport-cc), sans quoi nous rapporterions à
+	//l'émetteur la perte de ses propres sondes — l'inverse de ce que sert le
+	//mécanisme.
+	if (packet.GetMediaLength()==0)
+		return;
+
         //Get type
         MediaFrame::Type packetType = packet.GetMedia();
         //Check types

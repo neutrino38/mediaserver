@@ -22,6 +22,33 @@ La v1 se limite volontairement (fiche du lot 6, actée) :
   congestion, unification audio+vidéo (pas de bundle dans le mcu), abandon de
   couche. La montée en découverte est multiplicative ×1,08/s, point.
 
+> **Le jour où le sondage actif arrivera : ses paquets ne passent PAS par
+> `RTPEndpoint::onRTPPacket`.** Ce chemin est celui d'un paquet remis par une
+> SOURCE attachée (transcodeur, mixeur, player), et il jette désormais tout
+> paquet de longueur média nulle — donc toute sonde entièrement en bourrage.
+> C'est voulu : une sonde reçue d'un pair n'a aucun sens relayée sur l'autre
+> patte, elle y invalide même l'image du destinataire (voir plus bas). Mais une
+> sonde que NOUS produisons est un paquet à nous, pas un paquet relayé : elle a
+> besoin de son propre chemin d'émission, sur le modèle de
+> `RTPSession::SendEmptyPacket` qui fait son `sendto` directement. Sans ça le
+> garde l'avalerait en silence, et un sondage qui n'émet rien se lit comme un
+> lien qui ne monte pas.
+>
+> Le garde vient de la seconde moitié de `28970c8`. Ce commit avait retiré le
+> bourrage de la charge utile (RFC 3550 §5.1) et réglé le dépaquetiseur LOCAL —
+> les sondes de Chrome n'entrent plus dans notre décodeur VP8 comme du média. Il
+> restait le relais : après retrait du bourrage la sonde est un paquet de
+> longueur nulle, et l'émettre vers le pair lui livre un paquet RTP vide portant
+> l'horodatage de l'image en cours, qui invalide l'image entière chez lui.
+> Capture du 2026-08-21 20:09, Chrome → Linphone en VP8 relayé : 1356 des 1368
+> paquets d'Alice relayés à l'octet près, et les 12 qui portent du bourrage
+> arrivés vides. Trois tombaient dans l'intra, d'où une image cassée dès le
+> décroché qui ne se rétablissait jamais.
+>
+> Effet mesuré sur l'estimateur, à connaître mais négligeable : ces octets ne
+> sont plus comptés comme émis, soit ~2 kb/s sur l'échantillon. C'est le bon
+> sens — ils ne portaient aucun média.
+
 Doctrine inchangée : le chemin REMB côté réception se **répare** (fait, lots
 0-3) mais ne se raffine pas. L'estimateur émetteur est du code **neuf** : lui se
 construit aligné sur le témoin actuel, pas sur l'ancêtre.
