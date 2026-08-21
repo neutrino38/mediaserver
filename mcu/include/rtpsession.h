@@ -527,6 +527,13 @@ private:
 	DWORD	iceCheckRto;
 	timeval	iceLastCheck;
 	BYTE	iceCheckTransId[12];
+	//La cible d'envoi courante a été posée par ICE sur une paire VALIDÉE, pas par le
+	//plan de contrôle : le `c=` du SDP est alors la moins bonne des deux sources, et
+	//SetRemotePort ne doit pas l'écraser. Posé aux deux seuls endroits où ICE écrit
+	//sendAddr (réponse valide reçue, check entrant valide) ; effacé par un
+	//redémarrage ICE — SetRemoteSTUNCredentials avec un mot de passe DIFFÉRENT —
+	//puisque la paire validée ne vaut plus rien pour la nouvelle session.
+	bool	iceOwnsSendAddr;
 	//P5 : anti-rebond one-shot de l'événement « média établi » (premier paquet RTP/SRTP
 	//reçu). Remis à false par ArmRTPReceivedNotification() à chaque StartReceiving.
 	bool	rtpReceivedNotified;

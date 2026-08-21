@@ -915,6 +915,16 @@ Ouvre l'émission RTP d'un média vers une destination.
 l'API sans être interprétée, c'est la couche transport qui la résout. `0.0.0.0`
 **et** `::` valent tous deux la demande de latch (§ NAT).
 
+**Une paire validée par ICE n'est pas écrasée.** Sur une jambe où les checks de
+connectivité ont désigné le pair, cette paire est une meilleure information que le
+`c=` du SDP : `sendIp`/`sendPort` sont alors **ignorés** et l'émission continue vers
+la paire validée (le log le dit : *cible ICE validee conservee*). C'est ce que veut
+un contrôleur qui rappelle `StartSending` à chaque renégociation avec le `c=`
+d'origine — reposer l'annonce coupait le média jusqu'au check STUN suivant. Un pair
+qui se déplace vraiment redémarre ICE, c'est-à-dire pousse un nouveau mot de passe
+par `SetRemoteSTUNCredentials` : la paire validée est alors périmée et le
+`StartSending` suivant reprend la main. Sans ICE, rien ne change.
+
 #### `StopSending`
 - **Params** `(iiii)` : `confId`, `partId`, `media`, `role`.
 - **Params** (sans role) `(iii)` : idem, `role` = VIDEO_MAIN.
@@ -1005,6 +1015,12 @@ Positionne l'empreinte DTLS distante et le rôle de setup.
 - **Params** `(iiissi)` : `confId`, `partId`, `media`, `username`, `pwd`, `role`.
 - **Params** (sans role) `(iiiss)` : idem, `role` = VIDEO_MAIN.
 - **Retour** : vide.
+
+Un `pwd` **différent** du précédent est lu comme un **redémarrage ICE** (RFC 8445
+§9) : la paire validée appartenait à la session précédente, elle est périmée. La
+connectivité redevient à valider (checks sortants réarmés) et la cible d'envoi
+revient au plan de contrôle. Reposer les **mêmes** credentials ne fait rien — c'est
+le cas normal d'une renégociation, et périmer là couperait le média pour rien.
 
 ---
 

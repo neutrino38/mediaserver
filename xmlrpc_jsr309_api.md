@@ -552,7 +552,10 @@ média `media` vers `endpointId`.
   gateway) qui répond aux checks mais n'en initie jamais. Le traitement des checks
   **entrants** (rôle serveur / navigateur) est inchangé, et un check entrant valide
   confirme aussi la connectivité (aucune régression ; émission inoffensive vers un
-  pair full qui répond immédiatement).
+  pair full qui répond immédiatement). La paire ainsi validée **tient la cible
+  d'envoi** : un `EndpointStartSending` ultérieur ne la remplace pas par l'adresse
+  annoncée (cf. `MCU-API.md`, `StartSending`). Un **mot de passe différent** la
+  périme — c'est un redémarrage ICE ; les mêmes credentials reposés ne changent rien.
 
 ### 6.7 Endpoints — média RTP (send / receive)
 

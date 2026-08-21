@@ -325,6 +325,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	iceCheckRto     = 0;
 	setZeroTime(&iceLastCheck);
 	memset(iceCheckTransId,0,sizeof(iceCheckTransId));
+	//La cible d'envoi n'a encore été posée par personne
+	iceOwnsSendAddr = false;
 	//P5 : événement « média établi » pas encore émis
 	rtpReceivedNotified = false;
 	//P6 : aucune rafale d'amorçage NAT en cours
@@ -673,6 +675,16 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 {
 	Log("-SetRemoteSTUNCredentials [frag:%s,pwd:%s]\n",username,pwd);
 
+	//Un mot de passe DIFFÉRENT est un redémarrage ICE (RFC 8445 §9) : la paire validée
+	//appartenait à la session précédente et ne prouve plus rien. On rouvre donc la
+	//validation — checks sortants réarmés, et la cible d'envoi rendue au plan de
+	//contrôle. Le test porte sur la VALEUR et non sur l'appel : le contrôleur repose
+	//les mêmes credentials à chaque renégociation (trafic du 2026-08-21 : le même
+	//`IYAI` au décroché et au re-INVITE), et effacer là recréerait exactement le trou
+	//de média que iceOwnsSendAddr évite.
+	//Un PREMIER mot de passe n'est pas un redémarrage : il n'y avait rien à périmer.
+	const bool iceRestart = iceRemotePwd && pwd && strcmp(iceRemotePwd,pwd)!=0;
+
 	//Clean mem
 	if (iceRemoteUsername)
 		free(iceRemoteUsername);
@@ -681,6 +693,14 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	//Store values
 	iceRemoteUsername = strdup(username);
 	iceRemotePwd = strdup(pwd);
+
+	if (iceRestart)
+	{
+		Log("-SetRemoteSTUNCredentials: redemarrage ICE, la paire validee est perimee\n");
+		iceConnected    = false;
+		iceCheckStarted = false;
+		iceOwnsSendAddr = false;
+	}
 	//P3 : réveille le thread Run (eventfd du Wait, jamais perdu) pour (ré)évaluer
 	//l'émission de checks STUN sortants dès que la destination sera connue.
 	wait.Signal();
@@ -1187,6 +1207,22 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 		sendAddr     = IPEndpoint();
 		sendRtcpAddr = IPEndpoint();
 	}
+	else if (iceOwnsSendAddr)
+	{
+		//ICE a validé une paire : l'adresse annoncée est la moins bonne des deux
+		//sources et l'écraser coupe le média. Une renégociation (re-INVITE, caméra
+		//qu'on allume) rappelle StartSending avec le `c=` d'origine sans que rien
+		//n'ait bougé côté réseau ; le pair ne remontre sa vraie adresse qu'au check
+		//STUN suivant, d'où un trou de plusieurs centaines de millisecondes à CHAQUE
+		//renégociation — 0,9 s mesurée sur la jambe WebRTC du trafic du 2026-08-21,
+		//audio et vidéo ensemble. Un vrai déplacement du pair passe par un
+		//redémarrage ICE, qui efface iceOwnsSendAddr et rouvre cette porte.
+		//sendRtcpAddr n'est pas retouché non plus. Une jambe ICE est en rtcp-mux —
+		//le RTCP part sur sendAddr et la question ne se pose pas ; hors mux, elle
+		//garde la cible RTCP annoncée, ce qu'elle avait déjà.
+		Log("-SetRemotePort: cible ICE validee [%s:%d] conservee, annonce [%s:%d] ignoree\n",
+		    sendAddr.Address().ToString().c_str(),sendAddr.Port(),ip,sendPort);
+	}
 	else
 	{
 		sendAddr = Dest(remote,sendPort);
@@ -1408,7 +1444,11 @@ void RTPSession::OnICEConnectivityConfirmed(const IPEndpoint& from)
 		recPort = from.Port();
 	}
 	if (!HasRemote())
+	{
 		sendAddr = Dest(from.Address(),from.Port());
+		//Posée par ICE sur une paire validée : un SetRemotePort ultérieur ne l'écrase pas
+		iceOwnsSendAddr = true;
+	}
 
 	if (!iceConnected)
 	{
@@ -2448,8 +2488,11 @@ int RTPSession::ReadRTP()
 					     || 
 					     sendAddr.Port() != recPort )
 					{
-						// Do symetric RTP 
+						// Do symetric RTP
 						sendAddr = Dest(recIP,recPort);
+						//Paire validée par un check entrant : c'est ICE qui tient
+						//désormais la cible, pas le `c=` du SDP
+						iceOwnsSendAddr = true;
 					}
 				}
 

@@ -42,6 +42,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "medkit/stunmessage.h"
 #include "rtp.h"
 #include "rtpsession.h"
 
@@ -114,6 +115,32 @@ public:
 		to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		to.sin_port        = htons(port);
 		return sendto(fd, packet, sizeof(packet), 0, (sockaddr*)&to, sizeof(to)) == (ssize_t)sizeof(packet);
+	}
+
+	// Émet un STUN Binding Request, ce que fait un pair ICE quand il vérifie la
+	// connectivité. C'est ce check qui fait poser la cible d'envoi par ICE sur la
+	// source observée — un chemin distinct du rattrapage NAT, et le seul que suit
+	// un navigateur. `UseCandidate` désigne la paire, comme dans un vrai contrôle.
+	bool SendStunBindingTo(int port)
+	{
+		BYTE transId[12];
+		memset(transId, 0, sizeof(transId));
+		transId[0] = 0x2a;
+
+		STUNMessage request(STUNMessage::Request, STUNMessage::Binding, transId);
+		request.AddAttribute(STUNMessage::Attribute::UseCandidate);
+
+		BYTE buffer[MTU];
+		const DWORD len = request.NonAuthenticatedFingerPrint(buffer, sizeof(buffer));
+		if (!len)
+			return false;
+
+		sockaddr_in to;
+		memset(&to, 0, sizeof(to));
+		to.sin_family      = AF_INET;
+		to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		to.sin_port        = htons(port);
+		return sendto(fd, buffer, len, 0, (sockaddr*)&to, sizeof(to)) == (ssize_t)len;
 	}
 
 	// Attend un datagramme portant kMagic (donc issu de SendPacket, pas de
@@ -506,4 +533,72 @@ TEST(RtpLatching, RequestsAKeyFrameOnSourceChange)
 	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs));
 	EXPECT_GT(sess.listener.fpuRequests, 0)
 		<< "un changement de source observee doit declencher onFPURequested";
+}
+
+// ─── La cible posée par ICE, face au plan de contrôle ────────────────────────
+//
+// Sur une jambe ICE, la cible d'envoi n'est PAS celle du `c=` : elle est celle de
+// la paire que les checks de connectivité ont validée. `StartSending` est pourtant
+// rappelé à chaque renégociation avec le `c=` d'origine, sans que rien n'ait bougé
+// côté réseau — et il écrasait la paire validée. Le pair ne remontrait sa vraie
+// adresse qu'au check STUN suivant : trou de média à CHAQUE renégociation, 0,9 s
+// mesurée sur la jambe WebRTC du trafic du 2026-08-21, audio et vidéo ensemble
+// (l'appelée allume sa caméra, l'appelant devient sourd et aveugle le temps que
+// le prochain check passe).
+//
+// `natLatch` reste à false dans les deux tests : le rattrapage NAT est un tout
+// autre chemin, et le laisser éteint prouve que c'est bien ICE qui pose la cible.
+
+TEST(RtpLatching, TheIceValidatedTargetSurvivesARenegotiation)
+{
+	ProbeSocket probe;
+	Session sess;
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	// Le pair se manifeste par un check : ICE valide la paire et pose la cible.
+	ASSERT_TRUE(probe.SendStunBindingTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "prealable : un check entrant doit poser la cible sur la source observee";
+
+	// Renégociation : le contrôleur repose le `c=` d'origine, à l'identique.
+	sess.session.SetRemotePort(announced, 5000);
+	probe.Drain(150);   // sinon un kMagic de la phase precedente ferait passer la suite
+
+	EXPECT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "la cible validee par ICE doit survivre a la renegociation";
+}
+
+// Le pendant, sans lequel le correctif enfermerait la session sur un pair parti :
+// un pair qui se déplace vraiment redémarre ICE (RFC 8445 §9), c'est-à-dire annonce
+// un NOUVEAU mot de passe. La paire validée est alors périmée et la cible revient
+// au plan de contrôle.
+TEST(RtpLatching, AnIceRestartGivesTheTargetBackToTheControlPlane)
+{
+	ProbeSocket probe;
+	Session sess;
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendStunBindingTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "prealable : un check entrant doit poser la cible sur la source observee";
+
+	// Redémarrage ICE, puis la nouvelle adresse du plan de contrôle.
+	sess.session.SetRemoteSTUNCredentials("remoteufrag2", "remotepwd2");
+	sess.session.SetRemotePort(announced, 5000);
+	probe.Drain(150);
+
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "apres un redemarrage ICE, la cible redevient celle du plan de controle";
 }
