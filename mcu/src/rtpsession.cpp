@@ -3336,9 +3336,33 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 							l->onFPURequested(this);
 						break;
 					case RTCPPayloadFeedback::SliceLossIndication:
+						//Le pair a perdu des tranches : sa référence est abîmée et il ne
+						//se répare pas tout seul. Nous ne savons pas retransmettre une
+						//tranche, donc la seule réparation dont nous disposons est une
+						//intra — la même que pour un PLI, et l'aval borne déjà la cadence
+						//(VideoTranscoder::RequestSourceFPU, une par seconde) et sait à
+						//qui la demander selon le mode (absorbée par l'encodeur en
+						//transcodage, relayée à la source en pont).
+						//
+						//Ceci n'était que journalisé. En pont il n'y a plus d'encodeur
+						//pour produire une intra périodique : la seule source d'image clé
+						//est la patte amont, et elle n'est sollicitée que si nous relayons
+						//la demande. Trafic du 2026-08-21 : une rafale de pertes de 300 ms
+						//au décroché abîme la référence VP8, Linphone réclame en SLI
+						//pendant onze secondes, personne ne répond, et l'image reste
+						//pleine d'artéfacts jusqu'au raccroché.
 						Log("-RTCP SliceLossIndication received\n");
+						if (auto l = LockListener())
+							l->onFPURequested(this);
 						break;
 					case RTCPPayloadFeedback::ReferencePictureSelectionIndication:
+						//PAS une demande de réparation, et surtout pas une intra : le RPSI
+						//désigne une référence que le pair POSSÈDE (RFC 4585 §6.3.3), et
+						//mediastreamer l'émet périodiquement sur chaque image de référence
+						//correctement décodée. Dans la trace du 2026-08-21 il revient
+						//toutes les secondes pendant que le décodeur tourne à 31 fps. Le
+						//traiter comme un PLI arroserait la source de FIR pour toute la
+						//durée de l'appel.
 						Log("-RTCP ReferencePictureSelectionIndication  received\n");
 						break;
 					case RTCPPayloadFeedback::TemporalSpatialTradeOffRequest:
