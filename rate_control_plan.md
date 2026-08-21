@@ -74,6 +74,8 @@ flowchart LR
     L2 --> L4["Lot 4<br/>rapports d'arrivée<br/>transport-cc puis CCFB"]
     L3 -->|GO| L6["Lot 6<br/>estimateur émetteur<br/>+ pacing"]
     L4 --> L6
+    L6 --> L7["Lot 7<br/>interopérabilité<br/>de la propagation"]
+    L5 --> L7
 ```
 
 | lot | contenu | taille | dépend de |
@@ -86,6 +88,7 @@ flowchart LR
 | 4 | génération transport-cc, puis CCFB RFC 8888 | L | 2 (+ elixip) |
 | 5 | propagation inter-pattes via le throttler | S–M | 1, 2 |
 | 6 | estimateur côté émetteur + pacing (conception dédiée) | L | 3 GO, 4 |
+| 7 | campagne d'interopérabilité : WebRTC ↔ WebRTC, WebRTC ↔ Linphone | M | 6 (dont 6.6 et 6.7), 5 partiel |
 
 Branche proposée : `feat/rate-control`, un commit par étape testable.
 
@@ -722,6 +725,204 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
 
 ---
 
+## Lot 7 — Interopérabilité de la propagation (campagne demandée le 2026-08-20)
+
+Le mainteneur déclare les deux boucles satisfaisantes en appel réel — qualité
+d'image et latence tenues (2026-08-20). Ce lot ne corrige donc plus une
+estimation : il éprouve un **chemin de consigne**, de la patte qui constate la
+congestion jusqu'au seul organe qui peut y répondre — notre encodeur, ou la
+source distante. Trois montages : navigateur ↔ navigateur, navigateur → Linphone,
+Linphone → navigateur.
+
+### 7.0 Ce qui doit se propager, et par où
+
+Chaque patte porte **deux** estimateurs indépendants, et la campagne les distingue :
+
+| estimateur | ce qu'il mesure | ce qu'il produit | trace |
+|---|---|---|---|
+| réception (lots 1-3) | ce qui **arrive** sur cette patte | REMB ou TMMBR **vers le pair** | `BWE:` |
+| émission (lot 6) | ce que le pair **acquitte** de nos paquets | consigne locale : encodeur, ou TMMBR vers la source amont | `BWE-TX:` |
+
+En 1:1 les deux pattes sont reliées par un `VideoTranscoder`, qui a deux modes
+décidés sur le codec réellement reçu : **pont** (state 2, relais paquet à paquet
+— notre encodeur n'est PAS dans le chemin, la seule réponse possible est de faire
+ralentir la source) et **transcodage** (state 1 — notre encodeur absorbe la
+consigne). Le mode change le sens de tous les critères : il se constate au
+journal, il ne se suppose pas.
+
+### 7.1 Deux trous vérifiés, à combler AVANT la séance
+
+**Trou n°1 — la consigne de notre émetteur meurt dans le chemin JSR-309.**
+`Joinable::SetSenderEstimate` est un no-op par défaut (`Joinable.h:53`) ;
+`VideoEncoderMultiplexerWorker` l'implémente (`VideoEncoderWorker.cpp:283`), mais
+`VideoTranscoder` — le joinable réellement attaché à un `RTPEndpoint`
+(`RTPEndpoint.cpp:468`, `j->SetSenderEstimate`) — **ne l'implémente pas**. Tout
+appel 1:1 elixip passe par lui : aujourd'hui, aucun des trois cas ne propage quoi
+que ce soit venu de l'estimateur d'émission. Seul le chemin conférence est
+complet (`RTPParticipant::onSenderEstimatedBitrate` →
+`VideoStream::SetSenderEstimatedBitrate`, `videostream.cpp:133`).
+
+Correctif, calqué sur `VideoTranscoder::SetREMB` (`VideoTranscoder.cpp:117`) :
+
+- state 1 : `encoder.SetSenderEstimate(estimation)` — la limite du pair et la
+  limite BWE se composent déjà par `min()` dans la boucle d'encodage
+  (`VideoEncoderWorker.cpp:525`) ;
+- state 2 : remonter à la source, `j->SetREMB(...)`, bornée par la consigne
+  négociée exactement comme `SetREMB` le fait déjà. C'est la même contrainte
+  qu'un REMB aval, d'une autre origine : notre lien sortant ne porte pas ce que
+  la source nous envoie ;
+- state 0 : rien — aucun mode n'est encore connu.
+
+**Trou n°2 — sans transport-cc, notre estimateur d'émission est muet à jamais.**
+`SetStartBitrate` et `SetMinMaxBitrate` n'ont **aucun appelant en production**
+(seuls les tests les appellent) ; `delayInitialized` ne devient vrai que dans
+`UpdateDelayEstimate`, atteint par le seul `ProcessFeedback` (fmt 15) ; et
+`GetEstimatedBitrate` rend 0 tant que `lossBasedTarget` est nul
+(`senderbwe.cpp:140-149`), lui-même amorcé sur `delayCurrentBitrate`
+(`senderbwe.cpp:540`). L'étage de perte, lui, est bel et bien alimenté sans
+transport-cc : les RR et les SR sont parsés dans tous les cas
+(`rtpsession.cpp:3169` et `:3195`). Il tourne donc à vide, et rien ne sort
+jamais. Face à un pair qui n'offre que `ccm tmmbr` et des RR — hypothèse de
+travail pour Linphone, à **confirmer en phase 0** — les cas 2 et 3 n'ont aucun
+contrôle d'émission.
+
+Correctif : amorcer l'estimateur sur la **consigne négociée** de la patte
+(`SetMinMaxBitrate(16000, consigne)` puis `SetStartBitrate(consigne)` là où la
+consigne devient connue), et rendre l'étage de perte autonome — `lossBasedTarget`
+part de cette valeur d'amorçage au lieu d'exiger `delayInitialized`. La borne de
+délai reste conditionnelle, le `min()` de `GetEstimatedBitrate` l'est déjà.
+Attendu : vers un pair sans transport-cc, la consigne descend sur les pertes
+rapportées et remonte quand elles cessent, au lieu de rester à la valeur signalée
+quoi qu'il arrive.
+
+Les deux correctifs s'écrivent et se testent **sous horloge simulée, sans appel
+réel** ; ils sont suivis comme sous-lots 6.6 et 6.7 dans
+[`sender_bwe_plan.md`](sender_bwe_plan.md).
+
+### 7.2 Phase 0 commune — relever le dialecte avant de mesurer
+
+Cinq vérifications, appel établi, avant tout `netem`. Elles coûtent deux minutes
+et une séance ratée en coûte deux heures (deux précédents : le sens du trafic le
+2026-08-20 matin, la source figée l'après-midi).
+
+1. **Le bouton** `[mediaserver] transport_cc` côté elixip est à `false`
+   aujourd'hui : le passer à `true` pour le cas 1, sinon on mesure le
+   comportement REMB seul.
+2. **Le dialecte de CHAQUE patte**, tel que le mediaserver l'a résolu :
+   `Activated TMMBR+REMB|REMB bitrate feedback on video stream` et
+   `Activated transport-cc on video stream … extmap id=` (`rtpsession.cpp:650`).
+   Ce que le SDP du pair offre se relève en parallèle au pcap — c'est le seul
+   moyen de savoir si un dialecte absent vient du pair ou de notre contrôleur.
+3. **Le mode du transcodeur** (pont ou transcodage) au journal, pour chaque sens.
+   En pont, tout critère portant sur notre débit émis n'a plus de sens : nous
+   n'encodons pas.
+4. **La source est-elle animée ?** `sent=` > 1000 dans les traces `BWE-TX:`
+   pendant toute la séance, `incoming=` franchement au-dessus du palier haut pour
+   les traces `BWE:`. Une source app-limited rend un verdict qui ne vaut rien.
+5. **La FEC de Linphone** (cas 2 et 3) : Linphone 6 émet FlexFEC RFC 8627 par
+   défaut ([`flexfec-linphone.md`](flexfec-linphone.md)). Elle **répare une part
+   des pertes injectées**, donc elle déforme précisément le signal sur lequel
+   repose le contrôle sans transport-cc. La désactiver côté Linphone pour la
+   séance, ou relever le biais explicitement.
+
+Ce que chaque pair est censé parler, à confirmer et non à supposer :
+
+| pair | délai | perte | consigne qu'il comprend |
+|---|---|---|---|
+| Chrome/Firefox | transport-cc (fmt 15) | RR | `goog-remb` — **pas** `ccm tmmbr` |
+| Linphone 6 | à confirmer (probablement rien) | RR | `ccm tmmbr` à confirmer |
+
+Si le relevé démentait la seconde ligne, l'arbitrage tombe côté elixip : c'est
+lui qui pose `remb` ou `tmmbr` d'après le SDP (lot 2, point 4).
+
+### 7.3 Cas 1 — navigateur ↔ navigateur
+
+Trois mécanismes concourent, et une séance qui ne les sépare pas ne prouve rien :
+
+- **(a)** RX-BWE de la patte A → REMB vers A : c'est la boucle fermée déjà
+  mesurée au lot 3 ;
+- **(b)** TX-BWE de la patte B → notre encodeur (transcodage) ou la source A
+  (pont) : c'est le trou n°1, donc **muet aujourd'hui** ;
+- **(c)** REMB reçu de B → source A en pont, encodeur en transcodage : en place
+  depuis le lot 2 (anticipation 5.1).
+
+Deux séances distinctes, jamais les deux dégradations à la fois :
+
+| séance | où netem | attendu | ce que ça isole |
+|---|---|---|---|
+| 1.1 | sortie du mcu **vers B** | A réduit en < 2 s, l'image chez B reste nette, A remonte en < 60 s au lever | (b) et (c) : la congestion aval remonte-t-elle à l'amont ? |
+| 1.2 | entrée du mcu **depuis A** | A réduit (acquis au lot 3) et **aucune** consigne fabriquée ne part vers B — B reçoit simplement moins de média | absence de contagion croisée |
+
+Le critère de 1.2 est un garde-fou : une propagation qui déclenche sur la mauvaise
+patte transforme un lien A dégradé en dégradation pour tout le monde.
+
+### 7.4 Cas 2 — navigateur → Linphone
+
+Notre patte sortante parle à un pair **sans transport-cc** (sauf démenti de la
+phase 0). Conséquence à énoncer avant la séance, parce qu'elle décide du
+scénario : **un goulot qui met en file sans jeter est invisible pour nous** — il
+ne reste que la perte rapportée en RR. Le scénario `rate` seul ne mesurerait donc
+rien ; on utilise `rate` avec une file courte (qui provoque des pertes réelles),
+et le scénario `loss` comme référence.
+
+Les deux modes doivent être joués, en forçant le codec offert par elixip
+(`prefer_codecs`) :
+
+- **pont** (H.264 des deux côtés) : la seule réponse est de faire ralentir
+  Chrome. Attendu : REMB décroissant vers Chrome, débit entrant qui suit, image
+  chez Linphone qui se stabilise sans gel ;
+- **transcodage** (VP8 côté Chrome, H.264 côté Linphone) : notre encodeur baisse
+  sa cible (`BWE-TX:` puis la cible de l'encodeur au journal), et la contrainte
+  amont du lot 5 fait respirer l'entrée à ×1,25 de la cible (arbitrage A6).
+
+### 7.5 Cas 3 — Linphone → navigateur
+
+Symétrique, et c'est le cas où **notre émission de consigne change de dialecte** :
+
+- côté réception (Linphone → nous) : notre RX-BWE doit émettre du **TMMBR**, pas
+  du REMB, et Linphone doit y obéir. Attendu : son débit entrant baisse après
+  notre TMMBR, puis remonte. Un TMMBR qui part sans effet observable est un
+  résultat en soi : il faut alors savoir si Linphone l'ignore ou si elixip a posé
+  le mauvais dialecte (phase 0, point 2) ;
+- côté émission (nous → Chrome) : transport-cc disponible, donc le TX-BWE
+  complet ; en transcodage, la consigne descend à notre encodeur — trou n°1.
+
+Cas particulier à surveiller : la **sémantique collante du TMMBR**. Une limite
+posée vers Linphone ne se relâche que par un TMMBR plus haut ; c'est la moitié
+« remontée » du lot 5, point 5. Si la re-montée ne vient pas alors que le lien est
+propre, la cause est là avant d'être dans l'estimateur.
+
+### 7.6 Critères, outillage et livrable
+
+Les critères de l'annexe D s'appliquent tels quels (réaction < 2 s, régime établi
+à ±25 %, re-montée ≥ 80 % en < 60 s, ≤ 6 bascules/min, 10 minutes sans NaN ni
+écrêtage permanent) avec **une addition propre à ce lot** : le délai entre la
+dégradation d'une patte et la consigne effectivement appliquée sur l'autre —
+c'est la grandeur que la campagne existe pour mesurer. `bwe_report.py` la sort en
+mettant en regard les séries `BWE:` et `BWE-TX:` des deux pattes, déjà nommées
+par `stream=`.
+
+Livrable : annexe E de `rate-control.md`, une section par cas, avec le relevé de
+dialecte de la phase 0 en tête — sans lui les mesures ne sont pas
+interprétables.
+
+### 7.7 Dépendances hors mcu
+
+- elixip : bouton `transport_cc` à `true` ; `prefer_codecs` pour forcer
+  pont/transcodage dans le cas 2 ; vérifier que `remb`/`tmmbr` est posée d'après
+  le SDP réellement reçu de Linphone.
+- Poste Linphone 6 avec FEC désactivable.
+
+### 7.8 Tests à ajouter avant la séance
+
+- `SetSenderEstimate` en state 1 (l'encodeur reçoit) et en state 2 (la source
+  reçoit un TMMBR borné par la consigne négociée), plus state 0 (rien ne part) ;
+- amorçage hors transport-cc : consigne posée, deux rapports de perte à 12 %, la
+  cible baisse ; pertes qui cessent, la cible remonte ; aucun feedback fmt 15
+  n'est jamais reçu.
+
+---
+
 ## Hors périmètre de ce plan (chantiers ultérieurs, dans cet ordre)
 
 - **Arbitrage NACK/FEC et budget de protection** (§5.3) : n'a de sens qu'avec une
@@ -800,6 +1001,16 @@ GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
       entraient au dépaquetiseur VP8 comme du média, signature `Invalid sync
       code 000000` au journal (commit 28970c8) ; et `len` non remis à zéro sur
       paquet rejeté. **Reste** le CCFB fmt 11 (point 3), non bloquant
-- [ ] Lot 5 — propagation inter-pattes via throttler + recette live
-- [ ] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
-      implémentation v1 en sous-lots 6.1-6.5 (suivi dans ce document)
+- [ ] Lot 5 — propagation inter-pattes via throttler + recette live. La partie
+      « dialecte » (5.1) est faite depuis le lot 2 ; restent la partie dynamique
+      et bidirectionnelle en transcodage (point 5) et le retrait de
+      `SetTemporalMaxLimit` comme véhicule de propagation
+- [x] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
+      sous-lots 6.1 à 6.4 faits, 6.5 ouvert (séance egress à rejouer avec une
+      source animée) ; 6.6 et 6.7 ajoutés le 2026-08-20, prérequis du lot 7.
+      **Les deux boucles, ouverte et fermée, sont déclarées satisfaisantes par le
+      mainteneur** (2026-08-20 : qualité d'image et latence tenues en appel réel)
+- [ ] Lot 7 — interopérabilité de la propagation : WebRTC ↔ WebRTC,
+      WebRTC → Linphone, Linphone → WebRTC. Gated par 6.6 et 6.7 (sans eux la
+      consigne d'émission ne descend nulle part en 1:1, et elle n'existe même pas
+      face à un pair sans transport-cc). Livrable : annexe E de `rate-control.md`

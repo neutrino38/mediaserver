@@ -263,7 +263,59 @@ lieu : elle éprouve les deux sens à la fois.
   traces `BWE-TX:`, mêmes critères que l'annexe D. C'est la séance qui décide
   si le pacer à budget (§6) est nécessaire.
 
+### 6.6 — L'estimateur vit sans transport-cc (prérequis du lot 7)
+
+Constat vérifié le 2026-08-20 : face à un pair qui n'offre pas
+`a=rtcp-fb:* transport-cc`, l'estimateur est **muet à jamais**, y compris son
+étage de perte. `SetStartBitrate` et `SetMinMaxBitrate` n'ont aucun appelant en
+production (seuls les tests les appellent) ; `delayInitialized` ne devient vrai
+que dans `UpdateDelayEstimate`, atteint par le seul `ProcessFeedback` (fmt 15) ;
+et `GetEstimatedBitrate` rend 0 tant que `lossBasedTarget` est nul
+(`senderbwe.cpp:140-149`), lui-même amorcé sur `delayCurrentBitrate`
+(`senderbwe.cpp:540`). Or les RR et les SR sont parsés quel que soit le dialecte
+(`rtpsession.cpp:3169` et `:3195`) : `UpdateFractionLost` est bien appelé, il
+tourne à vide.
+
+C'est la moitié « perte » du témoin, qui chez lui existe **sans** signal de
+délai. La rendre autonome :
+
+1. amorcer la patte sur sa consigne négociée — `SetMinMaxBitrate(16000, consigne)`
+   puis `SetStartBitrate(consigne)` là où la consigne devient connue côté session ;
+2. `lossBasedTarget` part de cette valeur d'amorçage au lieu d'exiger
+   `delayInitialized` ; la borne de délai reste conditionnelle, le `min()` de
+   `GetEstimatedBitrate` l'est déjà.
+
+Effet attendu, et c'est tout le contrôle d'émission vers un pair SIP : la cible
+descend sur les pertes rapportées et remonte quand elles cessent, au lieu de
+rester à la valeur signalée quoi qu'il arrive.
+
+**Tests** (horloge simulée, aucun fmt 15 injecté) : consigne posée → cible égale à
+la consigne ; deux rapports à 12 % → cible en baisse, une seule fois par 300 ms +
+RTT ; pertes < 2 % → remontée +8 % par seconde ; jamais sous `minConfiguredBitrate`.
+
+### 6.7 — La consigne descend dans le chemin JSR-309 (prérequis du lot 7)
+
+`Joinable::SetSenderEstimate` est un no-op par défaut (`Joinable.h:53`) et
+`VideoTranscoder` ne le redéfinit pas, alors que c'est lui le joinable attaché à
+un `RTPEndpoint` (`RTPEndpoint.cpp:468`). En 1:1 — donc dans tous les appels
+elixip — l'estimation d'émission n'atteint **rien** : ni l'encodeur en
+transcodage, ni la source en pont. Seul le chemin conférence est complet
+(`videostream.cpp:133`).
+
+Implémenter `VideoTranscoder::SetSenderEstimate` sur le modèle de
+`VideoTranscoder::SetREMB` (`VideoTranscoder.cpp:117`) : state 1 →
+`encoder.SetSenderEstimate` (la composition par `min()` avec la limite du pair
+existe déjà, `VideoEncoderWorker.cpp:525`) ; state 2 → `j->SetREMB` vers la
+source, borné par la consigne négociée ; state 0 → rien.
+
+**Tests** : les trois états, et la borne « consigne négociée » en pont.
+
 ## 8. Ordre et dépendances
+
+6.6 et 6.7 sont indépendants l'un de l'autre, se testent sous horloge simulée, et
+sont tous deux **prérequis du lot 7** (`rate_control_plan.md`) : sans 6.7 la
+consigne d'émission n'atteint aucun organe en 1:1, sans 6.6 elle n'existe même pas
+face à un pair sans transport-cc — soit, probablement, Linphone.
 
 6.1 → 6.2 → 6.3 → 6.4 sont séquentiels côté mcu et ne dépendent **pas**
 d'elixip : tout se teste sous fake clock et en pcap rejoué. 6.5 exige la moitié
@@ -293,3 +345,9 @@ et l'extension, c'est tout.
       sans sondes ni padding. **Reste** à rejouer la séance egress avec une
       source animée en continu (contrôle : `sent=` > 1000 dans les traces
       BWE-TX pendant toute la séance) pour remplir l'annexe D côté émetteur
+- [ ] 6.6 — amorçage hors transport-cc (l'étage de perte vit seul) ; prérequis
+      du lot 7, cas Linphone
+- [ ] 6.7 — `VideoTranscoder::SetSenderEstimate` (states 1 et 2) ; prérequis du
+      lot 7, tous les cas 1:1. Précision au passage sur le « no-op en relais »
+      noté en 6.3 : dans le chemin JSR-309 la consigne est aujourd'hui no-op
+      dans les DEUX modes, pas seulement en relais

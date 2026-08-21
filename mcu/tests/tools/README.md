@@ -1,8 +1,10 @@
-# Outillage de mesure du contrôle de débit (lot 3)
+# Outillage de mesure du contrôle de débit (lots 3, 6.5 et 7)
 
-Ce répertoire porte de quoi **exécuter et dépouiller** la séance de mesure du
-lot 3 de [`rate_control_plan.md`](../../../rate_control_plan.md) — le *portillon*
-qui décide du GO/NO-GO du lot 6. Il ne contient aucun test unitaire : la suite
+Ce répertoire porte de quoi **exécuter et dépouiller** les séances de mesure du
+chantier : le lot 3 de [`rate_control_plan.md`](../../../rate_control_plan.md) —
+le *portillon* qui décide du GO/NO-GO du lot 6 —, la séance egress du 6.5, et la
+campagne d'interopérabilité du lot 7 (voir plus bas). Il ne contient aucun test
+unitaire : la suite
 gtest du chantier est `mcu/tests/test_rate_control.cpp`, jouée par
 `make check-ratecontrol`.
 
@@ -315,7 +317,41 @@ Les valeurs elles-mêmes se lisent plus commodément dans `events.csv`
 (colonne `value_kbps`, lignes `REMB`/`TMMBR`) — le pcap sert à prouver le
 **dialecte** et le fait que ça sort de la machine.
 
+## Campagne d'interopérabilité (lot 7)
+
+Trois montages, décrits au lot 7 de
+[`rate_control_plan.md`](../../../rate_control_plan.md) : navigateur ↔ navigateur,
+navigateur → Linphone, Linphone → navigateur. L'outillage ne change pas ; ce qui
+change, c'est **où l'on dégrade** et **ce qu'on lit**.
+
+Une règle avant tout : **une dégradation à la fois, sur une patte à la fois.** Ce
+que la campagne mesure est le délai entre la dégradation d'une patte et la
+consigne appliquée sur l'autre. Deux dégradations simultanées le rendent illisible.
+
+| montage | où poser `netem` | ce qu'on lit |
+|---|---|---|
+| 1.1 aval congestionné | sortie du mcu vers B (egress natif) | `BWE-TX:` de la patte B, puis le REMB émis vers A (`events.csv`) et le débit entrant de A |
+| 1.2 amont congestionné (garde-fou) | entrée du mcu depuis A (machine en coupure, ou `--ingress`) | `BWE:` de la patte A ; **aucune** consigne nouvelle vers B |
+| 2 et 3 face à Linphone | selon le sens éprouvé, même logique | `BWE-TX:` (nous → Linphone) ou `BWE:` + TMMBR émis (Linphone → nous) |
+
+Deux pièges propres à ces montages :
+
+- **un pair sans transport-cc ne nous montre que ses pertes.** Un goulot qui met
+  en file sans jeter est invisible pour notre estimateur d'émission : le scénario
+  `rate` seul ne mesurerait rien. Utiliser `rate` **avec une file courte**, qui
+  provoque de vraies pertes, et garder `loss` comme référence ;
+- **la FEC de Linphone répare une part des pertes injectées**
+  ([`flexfec-linphone.md`](../../../flexfec-linphone.md)), donc elle atténue le
+  seul signal disponible. La désactiver pour la séance, ou relever le biais.
+
+Le mode du transcodeur (pont ou transcodage) se constate au journal et se force,
+côté elixip, par le codec offert (`prefer_codecs`). En pont notre encodeur n'est
+pas dans le chemin : tout critère portant sur notre débit émis change de sens.
+
 ## Livrable
+
+Les séances du lot 7 vont en **annexe E** du même document, une section par
+montage, le relevé de dialecte de la phase 0 en tête.
 
 Les mesures et la décision GO/NO-GO vont en **annexe D de
 [`rate-control.md`](../../../rate-control.md)** : le graphe, le bloc `--markdown`

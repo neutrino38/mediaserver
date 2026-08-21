@@ -1051,3 +1051,59 @@ dégradation réelle continue). Aucun NaN, aucun écrêtage, covariance saine su
 | alignements « lot 1bis » réclamés par la mesure (arbitrage A3) | Aucun : la re-montée tient 29,8 s sans retoucher la rampe `alpha` — A3 se referme sans changement. Le point d'arbitrage restant est le **seuil de 6 bascules/min** : le verrou levé, la dent de scie AIMD alterne plus vite par construction (chaque tick calme relance la montée), comme le témoin en saturation. Soit le seuil est relevé en le justifiant ici, soit l'amplitude (CoV) devient le critère porteur. |
 | **GO / NO-GO du lot 6** | **Recommandation : GO.** Les critères de fond passent ; les deux KO sont l'un un seuil à arbitrer, l'autre un artefact de mesure. *(décision à confirmer par le mainteneur)* |
 | marge A6 (×1,25) confirmée ou corrigée | Non mesurée par cette séance : la marge porte sur la consigne poussée vers la source (lots 5/6), pas sur l'estimateur seul. Inchangée. |
+
+---
+
+## Annexe E — interopérabilité de la propagation (lot 7)
+
+> **Statut : gabarit, séances non tenues.** Livrable du lot 7 de
+> [`rate_control_plan.md`](rate_control_plan.md) : la campagne demandée le
+> 2026-08-20, une fois les deux boucles déclarées satisfaisantes. Elle ne mesure
+> pas un estimateur mais la **propagation** d'une consigne d'une patte à l'autre.
+> Rien ne se remplit ici avant que 6.6 et 6.7 (`sender_bwe_plan.md`) soient
+> livrés : sans eux la consigne d'émission n'atteint aucun organe en 1:1.
+
+### E.0 Relevé de dialecte (phase 0) — sans lui, rien n'est interprétable
+
+À remplir **par patte**, avant tout `netem`, d'après le journal
+(`Activated … bitrate feedback`, `Activated transport-cc`) et un pcap du SDP.
+
+| patte | pair | offert par le pair | résolu chez nous | mode transcodeur | FEC du pair |
+|---|---|---|---|---|---|
+| | | | | | |
+
+Bouton `[mediaserver] transport_cc` côté elixip : ______ (doit être `true` pour
+le cas 1). Contrôle de source animée : `sent=` min observé ______ ,
+`incoming=` médian ______ .
+
+### E.1 Cas 1 — navigateur ↔ navigateur
+
+| séance | où netem | délai dégradation → consigne appliquée sur l'autre patte | verdict |
+|---|---|---|---|
+| 1.1 netem sortie vers B | | | |
+| 1.2 netem entrée depuis A (garde-fou : aucune consigne fabriquée vers B) | | | |
+
+### E.2 Cas 2 — navigateur → Linphone
+
+| mode | scénario | ce qui a bougé | verdict |
+|---|---|---|---|
+| pont (H.264/H.264) | `rate` + file courte | | |
+| pont | `loss` | | |
+| transcodage (VP8 → H.264) | `rate` + file courte | | |
+| transcodage | `loss` | | |
+
+### E.3 Cas 3 — Linphone → navigateur
+
+| sens | ce qu'on attend | observé | verdict |
+|---|---|---|---|
+| réception : notre TMMBR vers Linphone | son débit entrant baisse puis remonte | | |
+| émission : notre TX-BWE vers Chrome | la cible de l'encodeur suit | | |
+| relâchement de la limite TMMBR (sémantique collante) | un TMMBR plus haut part quand le lien est propre | | |
+
+### E.4 Décision
+
+| question | réponse |
+|---|---|
+| la consigne traverse-t-elle le mcu dans les trois montages ? | |
+| dialecte manquant chez un pair : correction côté elixip ou côté mcu ? | |
+| ce que la campagne renvoie au lot 5 (propagation dynamique en transcodage) | |
