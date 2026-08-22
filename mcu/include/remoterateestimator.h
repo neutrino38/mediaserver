@@ -11,6 +11,7 @@
 #include "use.h"
 #include "remoteratecontrol.h"
 #include "rtp.h"
+#include <deque>
 #include <set>
 
 class RemoteRateEstimator
@@ -100,6 +101,14 @@ private:
 	QWORD lastChange;
 	float beta;
 	DWORD rtt;
+	//Fenetre du plafond glissant : le debit entrant MAXIMAL des dernieres
+	//IncreaseLimitWindowMs, tenu en deque monotone decroissante (le front est
+	//le max). Un trou d'emission de la source ne doit pas faire chuter
+	//l'annonce sans signal de congestion — mesure du 2026-08-22 (alice_bob_1) :
+	//lien sain a 87 Mb/s, zero OverUsing, et l'annonce qui suivait chaque
+	//reouverture d'encodeur du pair vers le bas, oscillation entretenue de 20 s.
+	static constexpr QWORD IncreaseLimitWindowMs = 5000;
+	std::deque<std::pair<QWORD,float>> incomingMaxWindow;
 };
 
 #endif	/* REMOTERATEESTIMATOR_H */

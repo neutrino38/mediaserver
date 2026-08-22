@@ -64,12 +64,13 @@ public:
 
 // Nourrit l'estimateur (overload 5 args, horloge simulée) d'un flux régulier :
 // une image par tick de kFrameMs, horloge média alignée sur l'horloge murale.
-// Rend l'instant atteint.
-QWORD FeedRegular(RemoteRateEstimator& estimator, DWORD ssrc, QWORD from, DWORD durationMs)
+// La taille d'image fixe le débit (défaut ~303 kb/s). Rend l'instant atteint.
+QWORD FeedRegular(RemoteRateEstimator& estimator, DWORD ssrc, QWORD from, DWORD durationMs,
+		  DWORD frameBytes = kFrameBytes)
 {
 	QWORD now = from;
 	for (QWORD end = from + durationMs; now < end; now += kFrameMs)
-		estimator.Update(ssrc, now, /*ts=*/now, kFrameBytes, /*mark=*/true);
+		estimator.Update(ssrc, now, /*ts=*/now, frameBytes, /*mark=*/true);
 	return now;
 }
 
@@ -223,6 +224,50 @@ TEST(RateControlEstimator, UneLimiteTemporelleBasseEstRespectee)
 
 	EXPECT_LE(estimator.GetEstimatedBitrate(), 64000u)
 		<< "la limite 64 kb/s a été ignorée (plancher 128 000)";
+}
+
+// ─── Plafond FENÊTRÉ (mesure alice_bob_1 du 2026-08-22) ─────────────────────
+// Lien sain à 87 Mb/s, zéro OverUsing, et pourtant l'annonce s'effondrait de
+// 826 à 165 kb/s en une seconde : le plafond glissant (1,5 × entrant) suivait
+// chaque trou d'émission de la source — réouverture d'encodeur du pair — et le
+// pair, qui obéit à la lettre à l'annonce, en faisait son nouveau régime ; la
+// re-montée à +8 %/s donnait l'oscillation de 20 s. Contrat : sans signal de
+// congestion, un trou plus court que la fenêtre ne fait pas chuter l'annonce.
+TEST(RateControlEstimator, UnTrouDEmissionDeLaSourceNeFaitPasChuterLAnnonce)
+{
+	RemoteRateEstimator estimator;
+	const DWORD ssrc = 0x1234;
+	const DWORD kHighFrameBytes = 8250; // ~2 Mb/s à 30 im/s
+	const DWORD kLowFrameBytes  = 250;  // ~60 kb/s : le trou
+
+	QWORD now = FeedRegular(estimator, ssrc, 100000, 65000, kHighFrameBytes);
+	DWORD before = estimator.GetEstimatedBitrate();
+	ASSERT_GT(before, 1000000u) << "prérequis : estimation établie sur le flux à 2 Mb/s";
+
+	now = FeedRegular(estimator, ssrc, now, 2000, kLowFrameBytes);
+	DWORD during = estimator.GetEstimatedBitrate();
+
+	EXPECT_GE(during, before * 9 / 10)
+		<< "un trou d'émission de 2 s a fait chuter l'annonce de " << before
+		<< " à " << during << " sans aucun signal de congestion";
+}
+
+// GARDE-FOU : l'anti-spirale reste — une baisse DURABLE de la source finit par
+// être suivie, la fenêtre du plafond une fois écoulée. Sans lui, on annoncerait
+// indéfiniment 1,5 × un débit qui ne circule plus.
+TEST(RateControlEstimator, UneBaisseDurableDeLaSourceEstSuivie)
+{
+	RemoteRateEstimator estimator;
+	const DWORD ssrc = 0x1234;
+
+	QWORD now = FeedRegular(estimator, ssrc, 100000, 65000, 8250);
+	ASSERT_GT(estimator.GetEstimatedBitrate(), 1000000u) << "prérequis : estimation établie";
+
+	// 15 s à ~60 kb/s : la fenêtre (5 s) est largement écoulée.
+	FeedRegular(estimator, ssrc, now, 15000, 250);
+
+	EXPECT_LE(estimator.GetEstimatedBitrate(), 200000u)
+		<< "l'anti-spirale est perdu : l'annonce ne suit plus une baisse durable";
 }
 
 // ---------------------------------------------------------------------------

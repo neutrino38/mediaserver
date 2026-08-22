@@ -322,6 +322,14 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 	DWORD current = currentBitRate;
 	//Get incoming bitrate
 	float incomingBitRate = bitrateAcu.GetInstantAvg();
+
+	//Fenetre du plafond glissant (deque monotone : le front est le max).
+	while (!incomingMaxWindow.empty() && incomingMaxWindow.front().first + IncreaseLimitWindowMs < now)
+		incomingMaxWindow.pop_front();
+	while (!incomingMaxWindow.empty() && incomingMaxWindow.back().second <= incomingBitRate)
+		incomingMaxWindow.pop_back();
+	incomingMaxWindow.emplace_back(now, incomingBitRate);
+	const float windowedIncomingBitRate = incomingMaxWindow.front().second;
 	// Calculate the max bit rate std dev given the normalized
 	// variance and the current incoming bit rate.
 	float stdMaxBitRate = sqrt(varMaxBitRate * avgMaxBitRate);
@@ -413,9 +421,17 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 	//dont on ne sortait plus : mesure du 2026-08-18, estimation immobile a
 	//3841 kb/s pendant 90 s pour 2465 kb/s recus — c'est ce gel qui rendait la
 	//re-montee inobservable.
+	//
+	//La borne est le max FENETRE de l'entrant, pas l'entrant instantane : nos
+	//pairs obeissent a la lettre (Linphone cale son emission sur le TMMBR,
+	//Chrome plafonne sur le REMB), donc suivre un trou d'emission d'une seconde
+	//le transformait en plafond dont on ne sortait qu'a +8 %/s — 20 s
+	//d'oscillation mesures le 2026-08-22 sur un lien sain, sans un seul
+	//OverUsing. Une baisse DURABLE est toujours suivie (la fenetre se vide en
+	//IncreaseLimitWindowMs) et une congestion reelle passe par Decrease.
 	if (!recovery && (incomingBitRate > 100000 || current > 150000))
 	{
-		const DWORD increaseLimit = (DWORD)(1.5 * incomingBitRate) + 10000;
+		const DWORD increaseLimit = (DWORD)(1.5 * windowedIncomingBitRate) + 10000;
 		if (current > increaseLimit)
 		{
 			current = increaseLimit;
