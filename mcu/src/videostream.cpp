@@ -396,6 +396,18 @@ int VideoStream::StopSending()
 	     return 1;
 	}
 
+	//Le thread d'envoi n'était ni Running ni Starting : il est sorti de lui-même
+	//(SendVideo tombe en TaskIdle quand le pair arrête d'envoyer, ce qu'une mise
+	//en attente provoque). L'objet std::thread reste JOINABLE pour autant, et
+	//StartSending lui réaffecte un thread neuf : réaffecter un std::thread
+	//joinable appelle std::terminate(), donc abort(). C'est ce qui tuait le
+	//serveur à la reprise d'un appel mis en attente.
+	//
+	//La postcondition de StopSending est donc inconditionnelle : au retour,
+	//sendVideoThread n'est plus joignable. C'est déjà ce que StartSending
+	//suppose, lui qui exige TaskIdle juste après nous avoir appelés.
+	if (sendVideoThread.joinable()) sendVideoThread.join();
+
 	Log("<StopSending\n");
 
 	return 1;
@@ -440,6 +452,13 @@ int VideoStream::StopReceiving()
 	    if (recVideoThread.joinable()) recVideoThread.join();
 	    Log("<StopReceiving thread=[%s] joined after forced wait\n", threadID.c_str());
 	}
+
+	//Même postcondition inconditionnelle que StopSending, et pour la même raison :
+	//StartReceiving réaffecte recVideoThread, et un std::thread joinable réaffecté
+	//appelle std::terminate(). Le chemin n'a pas encore tué le serveur — RecVideo
+	//reste Running tant que la session RTP vit — mais rien ne le garantit, et
+	//chaque renégociation rappelle StartReceiving.
+	if (recVideoThread.joinable()) recVideoThread.join();
 
 	Log("<StopReceiving\n");
 
