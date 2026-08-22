@@ -31,6 +31,7 @@ public:
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties);
 	int SetTemporalBitrateLimit(int bitrate);
+	int SetSenderEstimatedBitrate(int bitrate);
 	int StartSending(char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap);
 	int StartSending();
 	int StopSending();
@@ -118,6 +119,7 @@ private:
 	//Limite TMMBR/REMB en vigueur (kbps, 0 = aucune) : plafond STRICT du débit
 	//cible, persistant jusqu'à remplacement par une nouvelle valeur (RFC 5104).
 	int 		videoBitrateLimit;
+	int 		senderBweLimit;
 	int		videoIntraPeriod;
 public:
 	//P8a : les proprietes codec locales, telles que SetRTPProperties les a retenues

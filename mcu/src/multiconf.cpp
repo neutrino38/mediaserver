@@ -1347,6 +1347,43 @@ int MultiConf::SetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char
 	return ret;
 }
 
+int MultiConf::SetAddressProfile(int id,MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role)
+{
+	//Rien demandé : profil par défaut, comportement d'un contrôleur qui ignore
+	//cette notion. Inutile de chercher le participant pour ne rien faire.
+	if (!profile || !*profile)
+		return 1;
+
+	participantsLock.IncUse();
+
+	RTPParticipantPtr part = GetRTPParticipant(id);
+	int ret = 0;
+
+	if (part)
+		ret = part->SetAddressProfile(media,profile,error,role);
+	else
+		error = "participant inconnu";
+
+	participantsLock.DecUse();
+
+	return ret;
+}
+
+IPAddress MultiConf::GetAnnouncedAddress(int id,MediaFrame::Type media,MediaFrame::MediaRole role)
+{
+	participantsLock.IncUse();
+
+	RTPParticipantPtr part = GetRTPParticipant(id);
+	IPAddress addr;
+
+	if (part)
+		addr = part->GetAnnouncedAddress(media,role);
+
+	participantsLock.DecUse();
+
+	return addr;
+}
+
 int MultiConf::StartSending(int id,MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap,MediaFrame::MediaRole role)
 {
 	int ret = 0;

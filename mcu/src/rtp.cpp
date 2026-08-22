@@ -1,18 +1,26 @@
 #include <arpa/inet.h>
 #include "log.h"
 #include "rtp.h"
+#include "transportfeedback.h"
 #include "audio.h"
 #include <h264/h264depacketizer.h>
+#include <vp8/vp8depacketizer.h>
 
 void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 {
+	//Un paquet dont l'en-tete ne tient pas dans ce qui a ete recu n'a pas
+	//d'extension exploitable : la longueur annoncee y designe de la memoire
+	//qui n'a jamais ete recue.
+	if (!IsValid())
+		//Exit
+		return;
 	//Check extensions
 	if (GetX())
 	{
 		//Get extension data
 		const BYTE* ext = GetExtensionData();
 		//Get extesnion lenght
-		WORD length = GetExtensionLength();
+		DWORD length = GetExtensionLength();
 		//Read all
 		while (length)
 		{
@@ -76,6 +84,15 @@ void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 					extension.hasAbsSentTime = true;
 					extension.absSentTime = ((QWORD)get3(ext,0))*1000 >> 18;
 					break;
+				case RTPPacket::HeaderExtension::TransportWideCC:
+					//  0                   1                   2
+					//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3
+					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+					// |  ID   | len=1 |transport-wide sequence number |
+					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+					extension.hasTransportSeqNum = true;
+					extension.transportSeqNum = get2(ext,0);
+					break;
 				default:
 					Debug("-Unknown or unmapped extension [%d]\n",id);
 					break;
@@ -117,6 +134,27 @@ public:
 	virtual void ResetFrame()                     { impl.ResetFrame(); }
 private:
 	H264Depacketizer impl;
+};
+
+// Même adaptateur pour le VP8Depacketizer de libmedkit (RFC 7741). Le mark RTP
+// est transmis par symétrie d'interface, mais c'est l'appelant qui s'en sert
+// pour clore la trame (comme pour H264).
+class VP8RTPDepacketizer : public RTPDepacketizer
+{
+public:
+	VP8RTPDepacketizer() : RTPDepacketizer(MediaFrame::Video, VideoCodec::VP8) {}
+	virtual ~VP8RTPDepacketizer() {}
+	virtual void SetTimestamp(DWORD ts)           { impl.SetTimestamp(ts); }
+	virtual MediaFrame* AddPacket(RTPPacket* pkt) {
+		impl.SetTimestamp(pkt->GetTimestamp());
+		return impl.AddPayload(pkt->GetMediaData(), pkt->GetMediaLength(), pkt->GetMark());
+	}
+	virtual MediaFrame* AddPayload(BYTE* data, DWORD len) {
+		return impl.AddPayload(data, len, false);
+	}
+	virtual void ResetFrame()                     { impl.ResetFrame(); }
+private:
+	VP8Depacketizer impl;
 };
 
 class DummyAudioDepacketizer : public RTPDepacketizer
@@ -178,6 +216,8 @@ RTPDepacketizer* RTPDepacketizer::Create(MediaFrame::Type mediaType,DWORD codec)
 			 {
 				 case VideoCodec::H264:
 					 return new H264RTPDepacketizer();
+				 case VideoCodec::VP8:
+					 return new VP8RTPDepacketizer();
 			 }
 			 break;
 		 case MediaFrame::Audio:
@@ -217,6 +257,18 @@ RTCPCompoundPacket* RTCPCompoundPacket::Parse(BYTE *data,DWORD size)
 	while (bufferLen)
 	{
 		RTCPPacket *packet = NULL;
+		//IsRTCP n'a valide QUE le premier en-tete : a partir du second sous-paquet,
+		//c'est ici qu'on verifie qu'il reste de quoi en lire un. Sans ce test, une
+		//queue de 1 a 3 octets faisait lire l'en-tete hors du datagramme.
+		if (bufferLen<sizeof(rtcp_common_t))
+		{
+			//error
+			Error("Wrong rtcp packet size, %u trailing bytes\n",bufferLen);
+			//Libere le compound partiellement construit
+			delete rtcp;
+			//Exit
+			return NULL;
+		}
 		//Get header
 		rtcp_common_t* header = (rtcp_common_t*) buffer;
 		//Get type
@@ -381,11 +433,21 @@ DWORD RTCPSenderReport::GetSize()
 
 DWORD RTCPSenderReport::Parse(BYTE* data,DWORD size)
 {
+	//Un SR de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
+	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
-	if (size<GetRTCPHeaderLength(header))
+	if (size<packetSize)
+		//Exit
+		return 0;
+	//Les six mots du corps (ssrc, NTP, timestamp RTP, compteurs) sont lus plus bas
+	//sans autre garde : c'est ici qu'on exige qu'ils tiennent dans ce qui a ete recu.
+	if (packetSize<sizeof(rtcp_common_t)+24)
 		//Exit
 		return 0;
 	//Skip headder
@@ -400,7 +462,7 @@ DWORD RTCPSenderReport::Parse(BYTE* data,DWORD size)
 	//Move forward
 	len += 24;
 	//for each
-	for(int i=0;i<header->count&&size>=len+24;i++)
+	for(int i=0;i<header->count&&packetSize>=len+24;i++)
 	{
 		//New report
 		RTCPReport* report = new RTCPReport();
@@ -479,11 +541,20 @@ DWORD RTCPReceiverReport::GetSize()
 
 DWORD RTCPReceiverReport::Parse(BYTE* data,DWORD size)
 {
+	//Un RR de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
+	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
-	if (size<GetRTCPHeaderLength(header))
+	if (size<packetSize)
+		//Exit
+		return 0;
+	//Le SSRC de l'emetteur du rapport suit l'en-tete : il doit y avoir la place
+	if (packetSize<sizeof(rtcp_common_t)+4)
 		//Exit
 		return 0;
 	//Skip headder
@@ -493,7 +564,7 @@ DWORD RTCPReceiverReport::Parse(BYTE* data,DWORD size)
 	//Move forward
 	len += 4;
 	//for each
-	for(int i=0;i<header->count&&size>=len+24;i++)
+	for(int i=0;i<header->count&&packetSize>=len+24;i++)
 	{
 		//New report
 		RTCPReport* report = new RTCPReport();
@@ -559,6 +630,10 @@ DWORD RTCPBye::GetSize()
 
 DWORD RTCPBye::Parse(BYTE* data,DWORD size)
 {
+	//Un BYE de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
@@ -570,7 +645,9 @@ DWORD RTCPBye::Parse(BYTE* data,DWORD size)
 	//Skip headder
 	DWORD len = sizeof(rtcp_common_t);
 	//for each
-	for(int i=0;i<header->count;i++)
+	//`count` est un champ du paquet : 31 SSRC peuvent y etre annonces dans un BYE
+	//qui n'en porte aucun. La borne, c'est la taille recue.
+	for(int i=0;i<header->count&&len+4<=packetSize;i++)
 	{
 		//Get ssrc
 		ssrcs.push_back(get4(data,len));
@@ -583,6 +660,11 @@ DWORD RTCPBye::Parse(BYTE* data,DWORD size)
 	{
 		//Get len or reason
 		DWORD n = data[len];
+		//La longueur de la raison est declaree par l'emetteur : on ne lit que ce
+		//qui reste reellement derriere son octet de longueur.
+		DWORD available = packetSize-len-1;
+		if (n>available)
+			n = available;
 		//Allocate mem
 		reason = (char*)malloc(n+1);
 		//Copy
@@ -653,17 +735,23 @@ DWORD RTCPExtendedJitterReport::GetSize()
 
 DWORD RTCPExtendedJitterReport::Parse(BYTE* data,DWORD size)
 {
+	//Un rapport de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
+	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
-	if (size<GetRTCPHeaderLength(header))
+	if (size<packetSize)
 		//Exit
 		return 0;
 	//Skip headder
 	DWORD len = sizeof(rtcp_common_t);
 	//for each
-	for(int i=0;i<header->count;i++)
+	//Meme regle que pour le BYE : le compteur annonce, la taille recue borne.
+	for(int i=0;i<header->count&&len+4<=packetSize;i++)
 	{
 		//Get ssrc
 		jitters.push_back(get4(data,len));
@@ -758,6 +846,10 @@ DWORD RTCPApp::Serialize(BYTE* data, DWORD size)
 
 DWORD RTCPApp::Parse(BYTE* data,DWORD size)
 {
+	//Un APP de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
@@ -765,6 +857,12 @@ DWORD RTCPApp::Parse(BYTE* data,DWORD size)
 	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
 	if (size<packetSize)
+		//Exit
+		return 0;
+	//SSRC + nom applicatif = 8 octets derriere l'en-tete. Sans cette garde, la
+	//taille des donnees (`packetSize-len`) passait sous zero sur un paquet court :
+	//en DWORD, cela donne ~4 Go, aussitot passes a malloc puis a memcpy.
+	if (packetSize<sizeof(rtcp_common_t)+8)
 		//Exit
 		return 0;
 	//Get subtype
@@ -815,6 +913,10 @@ DWORD RTCPRTPFeedback::GetSize()
 
 DWORD RTCPRTPFeedback::Parse(BYTE* data,DWORD size)
 {
+	//Un feedback de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
@@ -822,6 +924,10 @@ DWORD RTCPRTPFeedback::Parse(BYTE* data,DWORD size)
 	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
 	if (size<packetSize)
+		//Exit
+		return 0;
+	//Les deux SSRC (emetteur et media) font 8 octets : ils doivent tenir
+	if (packetSize<sizeof(rtcp_common_t)+8)
 		//Exit
 		return 0;
 	//Get subtype
@@ -847,6 +953,9 @@ DWORD RTCPRTPFeedback::Parse(BYTE* data,DWORD size)
 			case TempMaxMediaStreamBitrateNotification:
 				field = new TempMaxMediaStreamBitrateField();
 				break;
+			case TransportWideFeedbackMessage:
+				field = new TransportWideFeedbackField();
+				break;
 			default:
 				return Error("Unknown RTCPRTPFeedback type [%d]\n",header->count);
 		}
@@ -854,15 +963,20 @@ DWORD RTCPRTPFeedback::Parse(BYTE* data,DWORD size)
 		DWORD parsed = field->Parse(data+len,packetSize-len);
 		//If not parsed
 		if (!parsed)
+		{
+			//Le champ n'a pas ete ajoute a la liste : c'est ici qu'il se libere,
+			//sinon une entree malformee fuit a chaque paquet recu.
+			delete field;
 			//Error
 			return 0;
+		}
 		//Add field
 		fields.push_back(field);
 		//Skip
 		len += parsed;
 	}
-	//Return consumed len
-	return len+12;
+	//Return consumed len (les 12 octets d'en-tete et de SSRC sont deja dans len)
+	return len;
 }
 
 DWORD RTCPRTPFeedback::Serialize(BYTE* data,DWORD size)
@@ -939,7 +1053,7 @@ void RTCPPayloadFeedback::Dump()
 				if (len>8 && payload[0]=='R' && payload[1]=='E' && payload[2]=='M' && payload[3]=='B')
 				{
 					//Get num of ssrcs
-					BYTE num = payload[4];
+					DWORD num = payload[4];
 					//GEt exponent
 					BYTE exp = payload[5] >> 2;
 					DWORD mantisa = payload[5] & 0x03;
@@ -949,8 +1063,13 @@ void RTCPPayloadFeedback::Dump()
 					DWORD bitrate = mantisa << exp;
 					//Log
 					Debug("\t[REMB bitrate=%d exp=%d mantisa=%d/]\n",bitrate,exp,mantisa);
+					//Le nombre de SSRC est annonce par l'emetteur : il ne dit rien
+					//de ce qui a reellement ete recu. On s'arrete a ce qui tient.
+					DWORD maxSsrc = (len-8)/4;
+					if (num>maxSsrc)
+						num = maxSsrc;
 					//For each
-					for (int i=0;i<num;++i)
+					for (DWORD i=0;i<num;++i)
 						//Log
 						Debug("\t[ssrc=%x/]\n",get4(payload,8+4*i));
 					//Log
@@ -976,6 +1095,10 @@ DWORD RTCPPayloadFeedback::GetSize()
 
 DWORD RTCPPayloadFeedback::Parse(BYTE* data,DWORD size)
 {
+	//Un feedback de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
@@ -983,6 +1106,10 @@ DWORD RTCPPayloadFeedback::Parse(BYTE* data,DWORD size)
 	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
 	if (size<packetSize)
+		//Exit
+		return 0;
+	//Les deux SSRC (emetteur et media) font 8 octets : ils doivent tenir
+	if (packetSize<sizeof(rtcp_common_t)+8)
 		//Exit
 		return 0;
 	//Get subtype
@@ -1029,8 +1156,12 @@ DWORD RTCPPayloadFeedback::Parse(BYTE* data,DWORD size)
 		DWORD parsed = field->Parse(data+len,packetSize-len);
 		//If not parsed
 		if (!parsed)
+		{
+			//Idem : champ non ajoute a la liste, donc a liberer ici.
+			delete field;
 			//Error
 			return 0;
+		}
 		//Add field
 		fields.push_back(field);
 		//Skip
@@ -1083,11 +1214,20 @@ DWORD RTCPFullIntraRequest::GetSize()
 
 DWORD RTCPFullIntraRequest::Parse(BYTE* data,DWORD size)
 {
+	//Une FIR de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
+	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
-	if (size<GetRTCPHeaderLength(header))
+	if (size<packetSize)
+		//Exit
+		return 0;
+	//Le SSRC suit l'en-tete : il doit y avoir la place
+	if (packetSize<sizeof(rtcp_common_t)+4)
 		//Exit
 		return 0;
 	//Skip headder
@@ -1134,11 +1274,20 @@ DWORD RTCPNACK::GetSize()
 
 DWORD RTCPNACK::Parse(BYTE* data,DWORD size)
 {
+	//Un NACK de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
+	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
-	if (size<GetRTCPHeaderLength(header))
+	if (size<packetSize)
+		//Exit
+		return 0;
+	//SSRC + FSN + BLP = 8 octets derriere l'en-tete
+	if (packetSize<sizeof(rtcp_common_t)+8)
 		//Exit
 		return 0;
 	//Skip headder
@@ -1146,7 +1295,9 @@ DWORD RTCPNACK::Parse(BYTE* data,DWORD size)
 	//Get ssrcs
 	ssrc = get4(data,len);
 	fsn = get2(data,len+4);
-	blp = get2(data,len+2);
+	//Le BLP est ECRIT en len+6 par Serialize : c'est la qu'il faut le relire
+	//(il etait lu en len+2, soit la moitie haute du SSRC).
+	blp = get2(data,len+6);
 	//Return consumed len
 	return len+8;
 }
@@ -1210,11 +1361,16 @@ DWORD RTCPSDES::GetSize()
 }
 DWORD RTCPSDES::Parse(BYTE* data,DWORD size)
 {
+	//Un SDES de moins de 4 octets n'a meme pas d'en-tete
+	if (size<sizeof(rtcp_common_t))
+		//Exit
+		return 0;
 	//Get header
 	rtcp_common_t * header = (rtcp_common_t *)data;
 
+	DWORD packetSize = GetRTCPHeaderLength(header);
 	//Check size
-	if (size<GetRTCPHeaderLength(header))
+	if (size<packetSize)
 		//Exit
 		return 0;
 	//Skip headder
@@ -1222,19 +1378,27 @@ DWORD RTCPSDES::Parse(BYTE* data,DWORD size)
 	//Parse fields
 	DWORD i = 0;
 	//While we have
-	while (size>len && i<header->count)
+	//`i` n'etait jamais incremente : le compteur d'annonces du paquet ne bornait
+	//rien, et seule la fin du tampon arretait la boucle.
+	while (packetSize>len && i<header->count)
 	{
 		Description *desc = new Description();
 		//Parse field
-		DWORD parsed = desc->Parse(data+len,size-len);
+		DWORD parsed = desc->Parse(data+len,packetSize-len);
 		//If not parsed
 		if (!parsed)
+		{
+			//Description non ajoutee a la liste : a liberer ici.
+			delete desc;
 			//Error
 			return 0;
+		}
 		//Add field
 		descriptions.push_back(desc);
 		//Skip
 		len += parsed;
+		//Next
+		i++;
 	}
 	//Return consumed len
 	return len;
@@ -1409,13 +1573,15 @@ void RTPRedundantPacket::DecodeRedundantPayload(BYTE *payload,DWORD redsize)
         if ( redsize == 0 )  return;
 
     	//Number of bytes to skip of text until primary data
-	WORD skip = 0;
+	//DWORD, et non WORD : une suite de blocs annoncant chacun jusqu'a 1023 octets
+	//fait deborder un compteur 16 bits bien avant la fin du paquet.
+	DWORD skip = 0;
 
 	//The the payload
 	//BYTE *payload = GetMediaData();
 
 	//redundant counter
-	WORD i = 0;
+	DWORD i = 0;
 
 	//Check if it is the last
 	bool last = !(payload[i]>>7);
@@ -1448,14 +1614,23 @@ void RTPRedundantPacket::DecodeRedundantPayload(BYTE *payload,DWORD redsize)
 
 		 */
 
+		//Un bloc d'en-tete redondant fait QUATRE octets, et il en faut encore un
+		//derriere lui (celui du bloc primaire) pour que la boucle puisse tester sa
+		//sortie. Sans cette borne, le bit « un autre bloc suit » se suivait hors
+		//du paquet, aussi loin qu'il restait des octets impairs en memoire.
+		if (i+4+1>redsize)
+			//Paquet incoherent : rien d'exploitable
+			return;
 		//Get Type
 		BYTE type = payload[i++] & 0x7F;
 		//Get offset
 		WORD offset = payload[i++];
 		offset = offset <<6 | payload[i]>>2;
 		//Get size
+		//La longueur du bloc fait DIX bits : deux dans cet octet, huit dans le
+		//suivant (le decalage etait de 6, ce qui melangeait les deux moities).
 		WORD size = payload[i++] & 0x03;
-		size = size <<6 | payload[i++];
+		size = size <<8 | payload[i++];
 		//Append new red header
 		headers.push_back(RedHeader(type,offset,skip,size));
 		//Skip the redundant payload
@@ -1463,12 +1638,25 @@ void RTPRedundantPacket::DecodeRedundantPayload(BYTE *payload,DWORD redsize)
 		//Check if it is the last
 		last = !(payload[i]>>7);
 	}
+	//L'en-tete du bloc primaire fait un octet : il doit etre la
+	if (i>=redsize)
+		//Exit
+		return;
 	//Get primaty type
 	primaryType = payload[i] & 0x7F;
 	//Skip it
 	i++;
 	//Get redundant payload
 	redundantData = payload+i;
+	//Les longueurs annoncees par les blocs redondants doivent tenir dans ce qui
+	//reste : sinon la taille du bloc primaire (`redsize-i-skip`) passe sous zero,
+	//et primaryData pointe derriere la fin du paquet.
+	if (skip>redsize-i)
+	{
+		//Paquet incoherent : on n'expose ni redondance ni primaire
+		headers.clear();
+		return;
+	}
 	//Get prymary payload
 	primaryData = redundantData+skip;
 	//Get size of primary payload

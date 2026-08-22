@@ -614,11 +614,17 @@ public final class SdpPortManagerImpl implements SdpPortManager{
 
     public String createSDP() {
 
+        //Le type d'adresse SUIT l'adresse : "IN IP4" ou "IN IP6" (RFC 4566
+        //§5.2 et §5.7). Il etait code en dur, si bien qu'une adresse v6 rendue
+        //par le serveur aurait ete annoncee comme de l'IPv4 — un SDP que le
+        //pair rejette, ou pire interprete de travers.
+        String addrType = getAddrType(getRecIp());
+
         //Create the sdp string
         String sdp = "v=0\r\n";
-        sdp += "o=- 0 0 IN IP4 " + getRecIp() +"\r\n";
+        sdp += "o=- 0 0 IN " + addrType + " " + getRecIp() +"\r\n";
         sdp += "s=MediaMixerSession\r\n";
-        sdp += "c=IN IP4 "+ getRecIp() +"\r\n";
+        sdp += "c=IN " + addrType + " " + getRecIp() +"\r\n";
         sdp += "t=0 0\r\n";
 
         //Check if supported
@@ -747,19 +753,70 @@ public final class SdpPortManagerImpl implements SdpPortManager{
         return mediaLine+formatLine;
     }
 
+    /**
+     * Type d'adresse SDP d'une adresse : "IP6" si elle contient un ':', "IP4"
+     * sinon (RFC 4566 §5.7). Le ':' suffit : il ne peut pas apparaitre dans un
+     * litteral v4, et un nom d'hote n'en porte pas non plus.
+     */
+    private static String getAddrType(String ip) {
+        return (ip!=null && ip.indexOf(':')>=0) ? "IP6" : "IP4";
+    }
+
+    /**
+     * Adresse NON SPECIFIEE de la meme famille : "::" en v6, "0.0.0.0" en v4.
+     * C'est la convention par laquelle le controleur dit au serveur « je ne
+     * connais pas la vraie adresse du pair, latche sur ce que tu recevras ».
+     */
+    private static String unspecifiedFor(String ip) {
+        return "IP6".equals(getAddrType(ip)) ? "::" : "0.0.0.0";
+    }
+
+    /**
+     * Position d'une ligne de connexion, quelle que soit la famille.
+     *
+     * <p>Rend l'index du "\r\n" qui precede, comme le faisait l'indexOf
+     * litteral d'origine — les appelants ajoutent 11, longueur de
+     * "\r\nc=IN IPx " qui est la MEME pour les deux familles. C'est ce qui
+     * permet de n'avoir rien d'autre a changer dans le decoupage.</p>
+     */
+    private static int findConnectionLine(String content, int from) {
+        int v4 = content.indexOf("\r\nc=IN IP4 ", from);
+        int v6 = content.indexOf("\r\nc=IN IP6 ", from);
+
+        if (v4<0) return v6;
+        if (v6<0) return v4;
+
+        //Les deux presents (SDP malforme, ou multi-sections) : le premier gagne
+        return Math.min(v4,v6);
+    }
+
     public void processSDP(String content) throws SdpPortManagerException {
         //Check required
         HashSet<Integer> required = (HashSet<Integer>) requiredCodecs.clone();
-        //Search for the ip
-        int i = content.indexOf("\r\nc=IN IP4 ");
-        int j = content.indexOf("\r\n", i+1);
+        //Search for the ip. Les DEUX types d'adresse : la recherche etait
+        //litterale sur "c=IN IP4 ", si bien qu'un SDP distant en IP6 n'etait
+        //tout simplement PAS VU — indexOf rendait -1 et le substring qui suit
+        //partait sur un decalage negatif.
+        int i = findConnectionLine(content, 0);
+        int j = (i<0) ? -1 : content.indexOf("\r\n", i+1);
+
+        //Aucune ligne de connexion : le SDP est inexploitable. L'ancien code
+        //partait sur un indexOf a -1 et decoupait a partir de l'octet 10 —
+        //l'adresse obtenue etait alors un morceau de la ligne o=, propage
+        //jusqu'au serveur media sans que rien ne le signale. Mieux vaut une
+        //panne franche, ici, ou l'on sait encore pourquoi.
+        if (i<0 || j<0)
+            throw new SdpPortManagerException("SDP without a connection line (c=IN IP4/IP6)");
+
         //Get the ip
         String ip = content.substring(i + 11, j);
 
         //Check if ip should be nat for this media mixer
         if (conn.getMediaServer().isNated(ip))
-            //Do natting
-            ip = "0.0.0.0";
+            //Do natting. L'adresse NON SPECIFIEE de la bonne famille : en v6
+            //c'est "::", et 0.0.0.0 n'y voudrait rien dire. Les deux valent
+            //la meme chose pour le serveur — « latche-moi ».
+            ip = unspecifiedFor(ip);
 
         //Disable supported media
         audioSupported = false;
@@ -835,8 +892,8 @@ public final class SdpPortManagerImpl implements SdpPortManager{
             //By default the media IP is the general IO
             String mediaIp = ip;
 
-            //Search for the ip inside the media
-            i = content.indexOf("\r\nc=IN IP4 ", j);
+            //Search for the ip inside the media (les deux types d'adresse)
+            i = findConnectionLine(content, j);
 
             //Check if we found it inside this media
             if (i>0 && (i<m || m<0))
@@ -847,8 +904,8 @@ public final class SdpPortManagerImpl implements SdpPortManager{
                 mediaIp = content.substring(i+11, k);
                 //Check if ip should be nat for this media mixer
                 if (conn.getMediaServer().isNated(mediaIp))
-                    //Do natting
-                    mediaIp = "0.0.0.0";
+                    //Do natting, dans la famille de l'adresse
+                    mediaIp = unspecifiedFor(mediaIp);
             }
 
             //Search the first format in this media

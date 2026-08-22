@@ -10,11 +10,22 @@
 #include <cmath>
 #include "remoterateestimator.h"
 
-RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(200)
+//Duree d'initialisation avant la premiere estimation (cf. Update, plus bas).
+static const QWORD kInitializationMs = 5000;
+
+//Fenetre de mesure du debit entrant : 1 s, celle du temoin (kBitrateWindow,
+//bwe_defines.h ; remote_bitrate_estimator_single_stream.cc). A 200 ms, la
+//descente visant beta x debit retenait le PIRE echantillon de 200 ms de
+//l'episode au lieu de sa moyenne — un quantile bas, pas une mesure.
+RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(1000)
 {
 	//Not last estimate
-	minConfiguredBitRate	= 128000;
-	maxConfiguredBitRate	= 1280000000;
+	//Bornes realignees (rate-control.md, annexe B) : l'ancien plancher 128000
+	//interdisait d'annoncer un reseau lent, l'ancien plafond 1280000000
+	//(coquille probable) n'en etait pas un — temoin : 30 Mb/s, plancher 16 kb/s
+	//(arbitrage A1 : en-dessous, mieux vaut geler l'image).
+	minConfiguredBitRate	= 16000;
+	maxConfiguredBitRate	= 30000000;
 	currentBitRate		= 0;
 	maxHoldRate		= 0;
 	avgMaxBitRate		= -1.0f;
@@ -31,7 +42,6 @@ RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(200)
 	cameFromState		= Decrease;
 	state			= Hold;
 	region			= RemoteRateControl::MaxUnknown;
-	listener		= NULL;
 	eventSource		= NULL;
 }
 
@@ -79,8 +89,11 @@ void RemoteRateEstimator::RemoveStream(DWORD ssrc)
 	lock.Unlock();
 }
 
-void RemoteRateEstimator::Update(DWORD ssrc, RTPTimedPacket * packet,DWORD size)
+void RemoteRateEstimator::Update(DWORD ssrc, RTPTimedPacket * packet)
 {
+	//§3.1 : la taille sort du paquet (vue transport, en-tete compris, comme le
+	//temoin) — l'ancien 3e parametre recevait getTimeMS() en production.
+	DWORD size = packet->GetSize();
 	//Get rtp timestamp in ms
 	QWORD ts = packet->GetClockTimestamp();
 
@@ -167,11 +180,19 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	//Normalize
 	noiseVar = streams.size() ? noiseVar/streams.size() : 0;
 
-	//If not firs update
+	//Initialisation : le temps de remplir les accumulateurs avant de prononcer
+	//une estimation, aligne sur le temoin (kInitializationTime, 5 s,
+	//aimd_rate_control.cc). Les 60 s qui s'y ajoutaient — un « TMMBR skipping
+	//delay » — n'ont plus d'objet : l'emission est desormais verrouillee par la
+	//negociation et amortie par le RembThrottler (lot 2), ce n'est plus a
+	//l'estimateur de se taire une minute. Elles rendaient surtout tout appel de
+	//moins de 61,5 s de video INOBSERVABLE : aucune reestimation periodique,
+	//donc aucune trace « BWE: estimation » (constate en mesure, 2026-08-17).
 	if (!lastChange)
-		//Skip the first half second + TMMBR skiping delay of 60sec
-		lastChange = now+500 + 60000;
-	
+		lastChange = now + kInitializationMs;
+
+	bool estimated = false;
+
 	//Only update once per second or when the stream starts to overuse
 	if (lastChange+1000<now)
 	{
@@ -179,19 +200,73 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 		Update(usage,streamOverusing,now);
 		//Reset min max
 		bitrateAcu.ResetMinMax();
+		estimated = true;
 	} else if ( streamOverusing) {
 		//Update but not reset
 		Update(usage,streamOverusing,now);
+		estimated = true;
 	}
-		
+
+	DWORD estimation = estimated ? GetEstimatedBitrateUnlocked() : 0;
+
 	//Unloc
 	lock.Unlock();
-	//Exit
-	return;
+
+	if (!estimated)
+		return;
+
+	//La consigne se publie sous le verrou LECTEUR — ni sous l'ecrivain, ni sans
+	//verrou. Les deux autres choix ont chacun leur panne :
+	//  - sous l'ecrivain, le premier REMB pendait le thread RTP pour toujours :
+	//    le listener rappelle l'estimateur (RTPSession::onTargetBitrateRequested
+	//    -> GetSSRCs, pour nommer les flux couverts) et IncUse attend l'ecrivain ;
+	//  - sans verrou, RemoveListener aboutit PENDANT la notification et
+	//    ~RTPSession libere la session sous nos pieds. L'estimateur est un membre
+	//    de l'Endpoint (jsr309/Endpoint.h), partage par ses jambes : le thread RTP
+	//    de l'une notifie les sessions des autres, que le thread XML-RPC detruit
+	//    par EndpointDelete. C'est une ecriture apres liberation, donc un tas
+	//    corrompu et un crash differe, ailleurs (mesure du 2026-08-17).
+	//IncUse tient les deux bouts : il est reentrant, et il bloque RemoveListener
+	//le temps de la notification. La liste n'est donc PAS copiee — un listener
+	//retire entre-temps n'y est simplement plus.
+	lock.IncUse();
+	for (Listener* l : listeners)
+		//Send it
+		l->onTargetBitrateRequested(estimation);
+	lock.DecUse();
+}
+
+//Frein temporel du temoin (aimd_rate_control.cc, TimeToReduceFurther) : une
+//descente n'est rejouee que si le temps d'une reaction s'est ecoule, ou si le
+//debit s'est effondre sous la moitie de la consigne. Sans lui, chaque rapport
+//de perte ou de RTT relance toute la machine — mesure du 2026-08-18 : 102
+//reestimations en 5,1 s, une toutes les 12 ms, et l'estimation qui retient le
+//pire echantillon de l'episode au lieu de sa moyenne.
+bool RemoteRateEstimator::TimeToReduceFurther(QWORD now) const
+{
+	const QWORD interval = rtt < 10 ? 10 : (rtt > 200 ? 200 : rtt);
+	if (now >= lastChange + interval)
+		return true;
+	//Effondrement franc : on ne fait pas attendre une chute de moitie.
+	if (currentBitRate)
+		return bitrateAcu.GetInstantAvg() < 0.5 * currentBitRate;
+	return false;
 }
 
 void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool reactNow, QWORD now)
 {
+	//reactNow dit que la surutilisation vient d'apparaitre. Sur un FRONT on
+	//reagit tout de suite ; sur un NIVEAU repete, on attend le frein. Le
+	//parametre existait depuis l'origine sans etre lu.
+	if (usage==RemoteRateControl::OverUsing && !reactNow && !TimeToReduceFurther(now))
+		return;
+
+	//Blindage §3.1 bis : un instant qui recule (appelant defaillant, horloge
+	//melangee) ne doit plus empoisonner avgChangePeriod par soustraction non
+	//signee ni produire une conversion double->DWORD hors plage.
+	if (now < lastChange)
+		now = lastChange;
+
 	// If it is the first estimation
 	if (!currentBitRate)
 		//Init to maximum
@@ -247,6 +322,14 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 	DWORD current = currentBitRate;
 	//Get incoming bitrate
 	float incomingBitRate = bitrateAcu.GetInstantAvg();
+
+	//Fenetre du plafond glissant (deque monotone : le front est le max).
+	while (!incomingMaxWindow.empty() && incomingMaxWindow.front().first + IncreaseLimitWindowMs < now)
+		incomingMaxWindow.pop_front();
+	while (!incomingMaxWindow.empty() && incomingMaxWindow.back().second <= incomingBitRate)
+		incomingMaxWindow.pop_back();
+	incomingMaxWindow.emplace_back(now, incomingBitRate);
+	const float windowedIncomingBitRate = incomingMaxWindow.front().second;
 	// Calculate the max bit rate std dev given the normalized
 	// variance and the current incoming bit rate.
 	float stdMaxBitRate = sqrt(varMaxBitRate * avgMaxBitRate);
@@ -321,15 +404,39 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 			Debug("BWE: Decrease rate to current = %u kbps\n", current / 1000);
 		
 			lastBitRateChange = now;
+			//« Stay on hold until the pipes are cleared » (aimd_rate_control.cc:310-311).
+			//Sans cette ligne, l'etat restait Decrease : aucune transition ne l'en
+			//sortait, le retour au calme le menait a Hold et il fallait un SECOND
+			//tick Normal pour relancer la montee. Un lien qui alterne n'en offre
+			//jamais deux de suite — mesure du 2026-08-19 en boucle ouverte,
+			//estimation figee 17 s a 871 kb/s pour 1500 a 1860 kb/s recus, puis
+			//descendant encore a chaque tick sur un accumulateur qui baisse.
+			ChangeState(Hold);
 			break;
 	}
 	
-	if (!recovery && (incomingBitRate > 100000 || current > 150000) && current > 1.5 * incomingBitRate)
+	//Plafond GLISSANT du temoin (aimd_rate_control.cc:238-239, :266) : on
+	//n'annonce pas plus de 1,5 fois ce qu'on recoit, mais on SUIT ce debit au
+	//lieu de se figer. L'ancien code posait current = currentBitRate, un gel
+	//dont on ne sortait plus : mesure du 2026-08-18, estimation immobile a
+	//3841 kb/s pendant 90 s pour 2465 kb/s recus — c'est ce gel qui rendait la
+	//re-montee inobservable.
+	//
+	//La borne est le max FENETRE de l'entrant, pas l'entrant instantane : nos
+	//pairs obeissent a la lettre (Linphone cale son emission sur le TMMBR,
+	//Chrome plafonne sur le REMB), donc suivre un trou d'emission d'une seconde
+	//le transformait en plafond dont on ne sortait qu'a +8 %/s — 20 s
+	//d'oscillation mesures le 2026-08-22 sur un lien sain, sans un seul
+	//OverUsing. Une baisse DURABLE est toujours suivie (la fenetre se vide en
+	//IncreaseLimitWindowMs) et une congestion reelle passe par Decrease.
+	if (!recovery && (incomingBitRate > 100000 || current > 150000))
 	{
-		// Allow changing the bit rate if we are operating at very low rates
-		// Don't change the bit rate if the send side is too far off
-		current = currentBitRate;
-		lastBitRateChange = now;
+		const DWORD increaseLimit = (DWORD)(1.5 * windowedIncomingBitRate) + 10000;
+		if (current > increaseLimit)
+		{
+			current = increaseLimit;
+			lastBitRateChange = now;
+		}
 	}
 
 	//Update
@@ -344,13 +451,18 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 		//Set maximum
 		currentBitRate = maxConfiguredBitRate;
 
-	Debug("BWE: estimation state=%s region=%s usage=%s currentBitRate=%d current=%d incoming=%f min=%llf max=%llf\n",GetName(state),RemoteRateControl::GetName(region),RemoteRateControl::GetName(usage),currentBitRate/1000,current/1000,incomingBitRate/1000,bitrateAcu.GetMinAvg()/1000,bitrateAcu.GetMaxAvg()/1000);
+	//Formats : DWORD -> %u, long double -> cast double + %f ("%llf" n'existe pas,
+	//les valeurs affichees etaient fausses — rate-control.md §4, "traces").
+	//"stream=" nomme la patte (tag du participant / nom de l'endpoint) : sans lui
+	//un appel a deux pattes melange deux series dans le meme journal et le
+	//depouillement du lot 3 (mcu/tests/tools/) ne peut pas les separer.
+	Debug("BWE: estimation stream=%s state=%s region=%s usage=%s currentBitRate=%u current=%u incoming=%.0f min=%.0f max=%.0f\n",eventSource?eventSource->GetName():"",GetName(state),RemoteRateControl::GetName(region),RemoteRateControl::GetName(usage),currentBitRate/1000,current/1000,(double)incomingBitRate/1000,(double)bitrateAcu.GetMinAvg()/1000,(double)bitrateAcu.GetMaxAvg()/1000);
 
 	if (eventSource)
 		eventSource->SendEvent
 		(
 			"rre",
-			"[%llu,\"%s\",\"%s\",%d,%d,%d,%d,%d]",
+			"[%llu,\"%s\",\"%s\",%u,%u,%u,%u,%u]",
 			now,
 			GetName(state),
 			RemoteRateControl::GetName(region),
@@ -361,10 +473,8 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 			bitrateAcu.IsInMinMaxWindow()?(DWORD)bitrateAcu.GetMaxAvg()/1000:0
 		);
 
-	//Check if we need to send inmediate feedback
-	if (listener)
-		//Send it
-		listener->onTargetBitrateRequested(GetEstimatedBitrate());
+	//La notification des listeners appartient a l'appelant, qui l'emet apres
+	//avoir relache le verrou : cette fonction s'execute sous le verrou ecrivain.
 }
 
 double RemoteRateEstimator::RateIncreaseFactor(QWORD now, QWORD last, DWORD reactionTime) const
@@ -432,18 +542,30 @@ void RemoteRateEstimator::UpdateMaxBitRateEstimate(float incomingBitRate)
 
 }
 
-DWORD RemoteRateEstimator::GetEstimatedBitrate()
+DWORD RemoteRateEstimator::GetEstimatedBitrateUnlocked() const
 {
 	//Retun estimation
 	return bitrateAcu.IsInWindow() ? currentBitRate : 0;
 }
 
+DWORD RemoteRateEstimator::GetEstimatedBitrate()
+{
+	//Lecteur : trois threads lisent sans verrou jusqu'ici (revue rate-control)
+	lock.IncUse();
+	DWORD estimation = GetEstimatedBitrateUnlocked();
+	lock.DecUse();
+	return estimation;
+}
+
 void RemoteRateEstimator::GetSSRCs(std::list<DWORD> &ssrcs)
 {
+	//Lecteur : la map est modifiee par AddStream/RemoveStream/Update
+	lock.IncUse();
 	//For each one
 	for (Streams::iterator it = streams.begin();  it!=streams.end(); ++it)
 		//add ssrc
 		ssrcs.push_back(it->first);
+	lock.DecUse();
 }
 void RemoteRateEstimator::ChangeState(State newState)
 {
@@ -487,10 +609,15 @@ void RemoteRateEstimator::UpdateRTT(DWORD ssrc, DWORD rtt, QWORD now)
 	Streams::iterator it = streams.find(ssrc);
 	//If found
 	if (it!=streams.end())
-		//Set it
-		if (it->second->UpdateRTT(rtt))
-			//Update
-			Update(it->second->GetUsage(),true, now);
+	{
+		//Le FRONT se calcule ici, comme le temoin le fait avec prior_state
+		//(remote_bitrate_estimator_single_stream.cc:111-121) : ces deux chemins
+		//rendent un niveau, seul l'appelant sait si la surutilisation vient
+		//d'apparaitre. Le front passe, le niveau repete attend le frein.
+		const bool wasOverusing = it->second->GetUsage()==RemoteRateControl::OverUsing;
+		if (it->second->UpdateRTT(rtt, now))
+			Update(it->second->GetUsage(),!wasOverusing, now);
+	}
 	//Unlock
 	lock.Unlock();
 }
@@ -503,10 +630,12 @@ void RemoteRateEstimator::UpdateLost(DWORD ssrc, DWORD lost, QWORD now)
 	Streams::iterator it = streams.find(ssrc);
 	//If found
 	if (it!=streams.end())
-		//Set it
-		if (it->second->UpdateLost(lost))
-			//Update
-			Update(it->second->GetUsage(),true, now);
+	{
+		const bool wasOverusing = it->second->GetUsage()==RemoteRateControl::OverUsing;
+		//Set it (meme horloge que les paquets, §3.3)
+		if (it->second->UpdateLost(lost, now))
+			Update(it->second->GetUsage(),!wasOverusing, now);
+	}
 	//Unlock
 	lock.Unlock();
 }
@@ -514,55 +643,73 @@ void RemoteRateEstimator::UpdateLost(DWORD ssrc, DWORD lost, QWORD now)
 
 void RemoteRateEstimator::SetTemporalMaxLimit(DWORD limit)
 {
+	//Ecrivain : la borne est lue par Update sous verrou
+	lock.WaitUnusedAndLock();
 	//Check if reseting
-	if (limit) 
+	if (limit)
 	{
+		//Le garde n'exclut plus que l'absurde : avec le plancher a 16 kb/s,
+		//un maximum de 64 kb/s — un reseau lent — est enfin annonçable (§6).
 		if( limit > minConfiguredBitRate)
 		{
-			Log("-RemoteRateEstimator::SetTemporalMaxLimit() %d\n", limit);
+			Log("-RemoteRateEstimator::SetTemporalMaxLimit() %u\n", limit);
 			//Set maximun bitrate
 			maxConfiguredBitRate = limit;
 		}
 		else
 		{
-			Log("-RemoteRateEstimator::SetTemporalMaxLimit() ignored %d\n", limit);
+			Log("-RemoteRateEstimator::SetTemporalMaxLimit() ignored %u\n", limit);
 		}
 	}
 	else
 	{
-		//Set default max
-		maxConfiguredBitRate = 1280000000;
-		Log("-RemoteRateEstimator::SetTemporalMaxLimit() maximized %d\n", maxConfiguredBitRate);
+		//Set default max (temoin : 30 Mb/s)
+		maxConfiguredBitRate = 30000000;
+		Log("-RemoteRateEstimator::SetTemporalMaxLimit() maximized %u\n", maxConfiguredBitRate);
 	}
-
+	lock.Unlock();
 }
 
 void RemoteRateEstimator::SetTemporalMinLimit(DWORD limit)
 {
+	//Ecrivain : la borne est lue par Update sous verrou
+	lock.WaitUnusedAndLock();
 	//Check if reseting
 	if (limit)
-	{	
+	{
 		if( limit < maxConfiguredBitRate)
-		{		
-			Log("-RemoteRateEstimator::SetTemporalMinLimit %d\n", limit);
+		{
+			Log("-RemoteRateEstimator::SetTemporalMinLimit %u\n", limit);
 			//Set minimum bitrate
 			minConfiguredBitRate = limit;
-		}		
+		}
 		else
 		{
-			Log("-RemoteRateEstimator::SetTemporalMinLimit ignored %d\n", limit);
+			Log("-RemoteRateEstimator::SetTemporalMinLimit ignored %u\n", limit);
 		}
-	}	
+	}
 	else
 	{
 		//Set default min
-		minConfiguredBitRate = 128000;
-		Log("-RemoteRateEstimator::SetTemporalMinLimit minimized %d\n", minConfiguredBitRate);
+		minConfiguredBitRate = 16000;
+		Log("-RemoteRateEstimator::SetTemporalMinLimit minimized %u\n", minConfiguredBitRate);
 	}
+	lock.Unlock();
 }
 
-void RemoteRateEstimator::SetListener(Listener *listener)
+void RemoteRateEstimator::AddListener(Listener *listener)
 {
-	//Store listener
-	this->listener = listener;
+	if (!listener)
+		return;
+	//Ecrivain : le set est parcouru par Update sous verrou
+	lock.WaitUnusedAndLock();
+	listeners.insert(listener);
+	lock.Unlock();
+}
+
+void RemoteRateEstimator::RemoveListener(Listener *listener)
+{
+	lock.WaitUnusedAndLock();
+	listeners.erase(listener);
+	lock.Unlock();
 }

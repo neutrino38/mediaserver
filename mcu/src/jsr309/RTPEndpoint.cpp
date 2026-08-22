@@ -145,15 +145,19 @@ int RTPEndpoint::StopReceiving()
         //Not inited anymore
         receiving = false;
 
-	//Cancel grab
-	DeleteStreams();
+	//Cancel grab : RÉVEIL SEUL, rien n'est détruit. DeleteStreams réveillait ET
+	//détruisait, donc les streams disparaissaient avant le join ci-dessous — le
+	//thread lisait alors des objets libérés (tas corrompu, crash différé
+	//ailleurs, souvent dans un free() sans rapport).
+	CancelStreams();
 
 	//NB : l'ancien pthread_kill(SIGIO) ici était MORT : le thread bloque dans
 	//l'attente du jitter buffer (cv), pas dans poll ; c'est le Cancel des streams
-	//(DeleteStreams ci-dessus) qui le réveille réellement.
+	//(CancelStreams ci-dessus) qui le réveille réellement.
 
         //Y unimos
 	pthread_join(thread,NULL);
+	//Plus personne ne lit : on peut detruire.
 	DeleteStreams();
 
 	return 1;
@@ -259,6 +263,31 @@ void RTPEndpoint::onRTPPacket(RTPPacket &packet)
 		return;
 	}
 	
+	//Un paquet sans média n'est pas une image : ne rien émettre.
+	//
+	//RTPPacket::SetData retire le bourrage (RFC 3550 §5.1) et rend donc une longueur
+	//NULLE pour une sonde de débit WebRTC, qui est entièrement en bourrage sur le SSRC
+	//média. Relayée telle quelle, elle part vers le pair comme un paquet RTP vide qui
+	//porte l'horodatage de l'image en cours et consomme un numéro de séquence : le
+	//dépaquetiseur d'en face y cherche un descripteur VP8, ou un NAL H.264, et ne
+	//trouve rien. L'image entière est déclarée invalide.
+	//
+	//Mesuré sur la capture du 2026-08-21 20:09 (Chrome -> Linphone, VP8 relayé) : sur
+	//les 1368 paquets d'Alice, 1356 sont relayés à l'octet près et les 12 qui portent
+	//P=1 avec 255 octets de bourrage arrivent chez Bob avec une charge utile de ZÉRO.
+	//Trois d'entre eux tombent dans la toute première image — l'intra — donc l'image
+	//est corrompue dès le décroché, et comme rien ne renvoie d'intra ensuite elle ne
+	//se rétablit jamais. Côté Linphone : `Vp8RtpFmtUnpackerCtx: sequence inconsistency
+	//detected`, `VP8 invalid frame`, et en H.264 un décodeur qui ne trouve jamais de
+	//jeu de paramètres (`DecodeFrame2 failed: 0x10`).
+	//
+	//Le jeter ICI et pas à la réception : la sonde doit rester comptée par la patte
+	//qui la reçoit (séquence, pertes, transport-cc), sans quoi nous rapporterions à
+	//l'émetteur la perte de ses propres sondes — l'inverse de ce que sert le
+	//mécanisme.
+	if (packet.GetMediaLength()==0)
+		return;
+
         //Get type
         MediaFrame::Type packetType = packet.GetMedia();
         //Check types
@@ -461,6 +490,12 @@ void RTPEndpoint::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD e
                j->SetREMB(estimation);
 }
 
+void RTPEndpoint::onSenderEstimatedBitrate(RTPSession *session,DWORD estimation)
+{
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->SetSenderEstimate(estimation);
+}
+
 void RTPEndpoint::onRTPTimeout(RTPSession *session)
 {
 	//Inactivité RTP prolongée détectée par le watchdog de RTPSession (appelé une
@@ -504,11 +539,14 @@ void RTPEndpoint::SetREMB(DWORD estimation)
 
 	//Demande EXPLICITE venue de l'aval (mode pont : TMMBR/REMB du puits relayé,
 	//ou consigne négociée poussée au basculement). L'émettre sur le fil tout de
-	//suite : le feedback spontané ci-dessus est verrouillé par la propriété
-	//"tmmbr" (défaut : désactivé) et SetTemporalMaxLimit seul ne produit AUCUN
-	//paquet — la limite restait lettre morte. La retransmission tant que le
-	//TMMBN du pair n'arrive pas est assurée par SendSenderReport (pendingTMBR).
-	SendTempMaxMediaStreamBitrateRequest(estimation);
+	//suite : le feedback spontané ci-dessus est verrouillé par la négociation
+	//(défaut : aucun) et SetTemporalMaxLimit seul ne produit AUCUN paquet — la
+	//limite restait lettre morte. SetMaxReceiveBitrate la compose avec
+	//l'estimation locale, l'amortit (une baisse part tout de suite, une hausse
+	//attend 200 ms) et l'émet dans le dialecte négocié — un navigateur ne
+	//comprend que REMB. La retransmission tant que le TMMBN du pair n'arrive
+	//pas est assurée par SendSenderReport (pendingTMBR).
+	SetMaxReceiveBitrate(estimation);
 }
 
 int RTPEndpoint::RequestUpdate()

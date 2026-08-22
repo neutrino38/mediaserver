@@ -322,15 +322,21 @@ public:
 
 	//HTTPParser listener
 	virtual int on_url (HTTPParser*, const char *at, DWORD length);
-	virtual int on_header_field (HTTPParser*, const char *at, DWORD length);
+	virtual int on_header_field (HTTPParser* parser, const char *at, DWORD length);
 	virtual int on_header_value (HTTPParser*, const char *at, DWORD length);
 	virtual int on_body (HTTPParser*, const char *at, DWORD length);
 	virtual int on_message_begin (HTTPParser*);
 	virtual int on_status_complete (HTTPParser*);
-	virtual int on_headers_complete (HTTPParser*);
+	virtual int on_headers_complete (HTTPParser* parser);
 	virtual int on_message_complete (HTTPParser*);
 
 	HTTPRequest* GetRequest() { return request; };
+
+private:
+	//Reassemblage des chaines que le parseur HTTP rend par morceaux
+	void FlushPendingHeader();
+	void EnsureRequest(HTTPParser* parser);
+public:
 
 	//---- Interface pilotée par le thread serveur (boucle poll() unique) --------
 	uint64_t GetConnId() const	{ return connId;		}
@@ -376,8 +382,15 @@ private:
 	HTTPParser parser;
 	HTTPRequest* request;
 	HTTPResponse* response;
+	//URL et en-tetes sont ACCUMULES : le parseur HTTP rend ses chaines par
+	//morceaux, autant de fois que TCP a decoupe la requete (et un client peut
+	//decouper a l'octet). Cf. tests/test_websocket_http_hardening.cpp.
+	std::string requestUrl;
 	std::string headerField;
 	std::string headerValue;
+	//Vrai entre le debut d'une valeur d'en-tete et le champ suivant : c'est ce
+	//qui dit quand le couple (champ, valeur) est complet.
+	bool parsingHeaderValue = false;
 
 	std::weak_ptr<WebSocket::Listener> wsl;
 	WebSocketFrameHeader::Parser headerParser;

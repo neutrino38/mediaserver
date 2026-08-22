@@ -292,7 +292,10 @@ DWORD RTMPMessage::Parse(BYTE* data,DWORD size)
 		if (cmd)
 		{
 			//If it is an amf3 object skip the first byte if 0
-			if (skip && data[0]==0)
+			//`len` peut valoir zero (message annonce de longueur nulle, ou chunk
+			//deja entierement consomme) : lire data[0] sortirait du tampon, et
+			//len-1 passerait sous zero avant d'atteindre le parseur AMF.
+			if (skip && len && data[0]==0)
 			{
 				//Parse
 				pos +=  cmd->Parse(data+1,len-1)+1;
@@ -316,7 +319,8 @@ DWORD RTMPMessage::Parse(BYTE* data,DWORD size)
 		if (meta)
 		{
 			//If it is an amf3 object skip the first byte if 0
-			if (skip && data[0]==0)
+			//Meme garde que pour la commande AMF3 ci-dessus.
+			if (skip && len && data[0]==0)
 			{
 				//Parse
 				pos += meta->Parse(data+1,len-1)+1;
@@ -885,6 +889,12 @@ DWORD RTMPVideoFrame::Parse(BYTE *data,DWORD size)
 {
 	BYTE* buffer = data;
 	DWORD bufferLen = size;
+
+	//Rien a lire : sans cette garde, l'octet de codec etait lu hors du tampon et
+	//la longueur restante passait sous zero (comme le fait deja RTMPAudioFrame).
+	if (!size)
+		//Done
+		return 0;
 
 	//If it is the first
 	if (!headerPos)

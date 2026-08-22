@@ -52,6 +52,7 @@ public:
 	virtual void onFPURequested(RTPSession *session);
 	virtual void onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD bitrate);
 	virtual void onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD bitrate,DWORD overhead);
+	virtual void onSenderEstimatedBitrate(RTPSession *session,DWORD bitrate);
 	//Watchdog d'inactivité RTP (gap 5) : publie EndpointDisconnectedEvent
 	virtual void onRTPTimeout(RTPSession *session);
 	//P5 : premier paquet RTP/SRTP reçu (DTLS terminé ou pas de DTLS) : publie

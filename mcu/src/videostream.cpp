@@ -47,6 +47,7 @@ VideoStream::VideoStream(Listener* listener, PictPtr & muteLogo, MediaFrame::Med
 	videoBitrate=0;
 	videoIntraPeriod=0;
 	videoBitrateLimit=0;
+	senderBweLimit=0;
 	sendFPU = false;
 	this->listener = listener;
 	mediaListener = NULL;
@@ -126,6 +127,14 @@ int VideoStream::SetTemporalBitrateLimit(int estimation)
 	//précisément quand on lui répond TMMBN, ce que la session fait désormais.
 	videoBitrateLimit = estimation/1000;
 	//Exit
+	return 1;
+}
+
+int VideoStream::SetSenderEstimatedBitrate(int estimation)
+{
+	//Cible du BWE émetteur local (lot 6.3), deuxième champ à côté de la
+	//limite du pair : la boucle d'encodage prend le min des deux.
+	senderBweLimit = estimation/1000;
 	return 1;
 }
 
@@ -570,6 +579,10 @@ int VideoStream::SendVideo()
 		if (videoBitrateLimit>0 && target>videoBitrateLimit)
 			target = videoBitrateLimit;
 
+		//Cible du BWE émetteur local (lot 6.3) : min() avec la limite du pair
+		if (senderBweLimit>0 && target>senderBweLimit)
+			target = senderBweLimit;
+
 		//Check if we have a new bitrate
 		if (target && target!=current)
 		{
@@ -655,13 +668,17 @@ int VideoStream::SendVideo()
 		//Set sending time of previous frame
 		getUpdDifTime(&prev);
 
-		//Calculate sending times based on bitrate
-		DWORD sendingTime = videoFrame->GetLength()*8/current;
+		//Calculate sending times based on bitrate.
+		//Debit de pacing = 1,1 x la cible (temoin, pacing factor des que
+		//l'estimation depend des temps d'arrivee) : lisser tout juste A la
+		//cible transforme chaque image en sa propre file d'attente, et le
+		//BWE emetteur (lot 6) mesurerait nos rafales au lieu du reseau.
+		DWORD sendingTime = videoFrame->GetLength()*8/(current+current/10);
 
-		//Adjust to maximum time
-		if (sendingTime>frameTime/1000)
-			//Cap it
-			sendingTime = frameTime/1000;
+		//PAS de plafonnement a la periode d'image : c'est lui qui tronquait
+		//l'etalement d'une trame cle (2,2 x une trame inter, mesure du
+		//2026-08-20) et la faisait partir en rafale. Le pacer du lisseur
+		//reporte le depassement sur l'image suivante, borne par MaxAheadUs.
 
 		//Send it smoothly
 		smoother.SendFrame(videoFrame,sendingTime);

@@ -71,7 +71,10 @@ JSR309OBJ=JSR309Event.o WSEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSes
 # Speex fourni par libmedkit (FfAudioEncoder/Decoder, ffmpeg AV_CODEC_ID_SPEEX). Repertoire mcu supprime.
 
 
-DOCSHARINGOBJ= stunmessage.o crc32calc.o remoteratecontrol.o uploadhandler.o http.o appmixer.o
+# stunmessage.o / crc32calc.o : fournis par libmedkit.a (medkit/stunmessage.h).
+# Le mcu en portait une copie, et libmedikit une autre — morte et perimee. Une
+# seule implementation desormais, dans le sous-module.
+DOCSHARINGOBJ= remoteratecontrol.o uploadhandler.o http.o appmixer.o
 
 MOTELIDIR=moteli
 MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
@@ -82,7 +85,11 @@ OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o m
 # libmedkit tirent la classe Logo de l'archive).
 OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o mediagateway.o mediabridgesession.o 
 OBJS+=xmlrpcmediagateway.o textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o audiodecoder.o textencoder.o mp4recorder.o rtmpmp4stream.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
-      vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o
+      vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o transportfeedback.o sentpackethistory.o trendlinedetector.o senderbwe.o
+
+# ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
+# chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
+OBJS+=ipaddress.o addressprofiles.o stunclient.o
 
 OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ)
 TARGETS=mcu rtmptest mediagw
@@ -91,6 +98,7 @@ OBJS2=mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomix
 OBJS2+=overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.omediagateway.o mediabridgesession.o mcustatushandler.o
 OBJS2+=xmlrpcmediagateway.o textstream.o pipetextinput.o pipetextoutput.o audioencoder.o audiodecoder.o textencoder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o vad.o 
 OBJS2+=remoterateestimator.o eventstreaminghandler.o VideoTranscoder.o videopipe.o redcodec.o
+OBJS2+=ipaddress.o addressprofiles.o stunclient.o
 OBJS2+= $(JSR309OBJ) $(DOCSHARINGOBJ)
 
 ifeq ($(FLASHSTREAMER),yes)
@@ -109,6 +117,18 @@ ifeq ($(MOTELI),yes)
 	OPTS+= -DMOTELI=yes
 	OBJS+= $(MOTELIOBJ)
 	LDFLAGS += -Wl,-Bstatic -lamqpcpp -lrabbitmq -lprotobuf -Wl,-Bdynamic
+endif
+
+# ASAN=yes : AddressSanitizer. Pour la classe de defaut que ce depot rencontre le
+# plus — corruption de tas dont l'abort tombe tres loin de la cause (typiquement
+# dans un free() sans rapport) —, c'est le seul outil qui nomme le fichier et la
+# ligne de l'ecriture fautive. Le binaire est ~2x plus lent : utilisable en appel
+# reel, contrairement a valgrind.
+# Les objets vont dans le MEME repertoire que le build normal : rebatir sans
+# ASAN=yes apres, sinon on livre un binaire instrumente.
+ifeq ($(ASAN),yes)
+	OPTS    += -fsanitize=address -fno-omit-frame-pointer
+	LDFLAGS += -fsanitize=address
 endif
 
 OBJSMCU = $(OBJS) main.o
@@ -320,14 +340,25 @@ tests: tests/runtests
 check: tests/runtests
 	./tests/runtests
 
-# Suite IPv6 (tag :ipv6, cf. tests/test_ipv6.cpp et ipv6.md a la racine).
+# Suite IPv6 (tag :ipv6, cf. tests/test_ipv6.cpp).
 # ATTENDUE EN ECHEC tant qu'IPv6 n'est pas implemente : elle n'est PAS jouee par
 # `make check`. Les tests sont prefixes DISABLED_ (exclus par defaut) et leurs
 # suites prefixees IPv6 (selectionnables par filtre) — d'ou les deux options.
 check-ipv6: tests/runtests
 	./tests/runtests --gtest_filter='IPv6*' --gtest_also_run_disabled_tests
 
-.PHONY: tests check check-ipv6
+# Suite contrôle de débit (chantier rate-control, cf. tests/test_rate_control.cpp).
+# Tableau de bord du chantier : joue AUSSI les tests DISABLED_ (caractérisation
+# des défauts de rate-control.md §3, leves un a un par le lot 1 du plan).
+check-ratecontrol: tests/runtests
+	./tests/runtests --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
+
+# Suite transport-cc : le format de fil, l'historique d'emission, l'estimateur
+# emetteur (lot 6) et le generateur de rapports d'arrivee (lot 4).
+check-senderbwe: tests/runtests
+	./tests/runtests --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:TransportFeedbackGenerator*:TransportCCWiring*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
+
+.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe
 
 ############################################
 # Dependances generees automatiquement (headers -> objets)

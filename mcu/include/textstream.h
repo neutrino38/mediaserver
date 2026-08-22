@@ -15,6 +15,8 @@ class TextStream
 {
 public:
 	TextStream(RTPSession::Listener* listener);
+	//Session RTP de ce flux : le profil d'adressage se pose dessus (NETWORK-CONFIGURATION.md).
+	RTPSession& GetOwnSession() { return rtp; }
 	~TextStream();
 
 	//Surcharge brute conservée (appelant MediaBridgeSession, hors périmètre

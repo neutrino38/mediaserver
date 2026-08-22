@@ -22,3 +22,7 @@ test/websocket/wstest.key
 /*.log
 mcu/.dep.inc
 *.swp
+
+# Outillage python du lot 3 (mcu/tests/tools)
+__pycache__/
+*.pyc

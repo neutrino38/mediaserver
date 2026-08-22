@@ -154,3 +154,94 @@ TEST(TextMixerSite, ReInitAfterEndStillMixes)
 }
 
 } // namespace
+
+// ---------------------------------------------------------------------------
+// Caractérisation posée AVANT le retrait de use.h (cf. la fiche mémoire
+// wait-primitive-unification et le motif décrit dans smart_pointers_plan.md) :
+// ces chemins-là ne sont couverts par rien, et ce sont précisément ceux dont
+// la migration change la discipline de verrou.
+// ---------------------------------------------------------------------------
+
+// Le texte PRIVÉ va au seul participant visé — et à personne d'autre.
+// CreatePrivate/InitPrivate/DeletePrivate étaient les seules mutations prises
+// sous le verrou LECTEUR : elles modifiaient le worker d'une source pendant que
+// le thread de mixage l'itérait.
+TEST(TextMixerSite, PrivateTextReachesOnlyItsTarget)
+{
+	TextMixer mixer;
+	std::wstring alice = L"alice", bob = L"bob", moderator = L"moderateur";
+	ASSERT_TRUE(mixer.Init());
+	ASSERT_TRUE(mixer.CreateMixer(1, alice));
+	ASSERT_TRUE(mixer.CreateMixer(2, bob));
+	ASSERT_TRUE(mixer.InitMixer(1));
+	ASSERT_TRUE(mixer.InitMixer(2));
+
+	//Un canal privé 3 -> 1
+	ASSERT_TRUE(mixer.CreatePrivate(3, 1, moderator));
+	ASSERT_TRUE(mixer.InitPrivate(3));
+
+	TextOutput* priv = mixer.GetPrivateOutput(3);
+	ASSERT_NE(priv, (TextOutput*)NULL);
+	TextFrame frame(0, std::wstring(L"message prive."));
+	priv->SendFrame(frame);
+
+	EXPECT_TRUE(ReceivedContains(mixer, 1, L"message prive", 3000));
+
+	//Bob ne doit rien en voir
+	TextFrame* leak = mixer.GetInput(2)->GetFrame(300);
+	if (leak)
+	{
+		EXPECT_EQ(leak->GetWString().find(L"message prive"), std::wstring::npos);
+		delete leak;
+	}
+
+	EXPECT_TRUE(mixer.EndPrivate(3));
+	mixer.DeletePrivate(3);
+	mixer.End();
+}
+
+// Le chemin de sortie normal (celui de MultiConf) : EndMixer puis DeleteMixer
+// PENDANT que le mixage tourne. Les autres continuent de s'entendre.
+TEST(TextMixerSite, EndThenDeleteMixerWhileRunningKeepsTheOthers)
+{
+	TextMixer mixer;
+	std::wstring alice = L"alice", bob = L"bob", carol = L"carol";
+	ASSERT_TRUE(mixer.Init());
+	ASSERT_TRUE(mixer.CreateMixer(1, alice));
+	ASSERT_TRUE(mixer.CreateMixer(2, bob));
+	ASSERT_TRUE(mixer.CreateMixer(3, carol));
+	ASSERT_TRUE(mixer.InitMixer(1));
+	ASSERT_TRUE(mixer.InitMixer(2));
+	ASSERT_TRUE(mixer.InitMixer(3));
+
+	//Carol s'en va, proprement
+	EXPECT_TRUE(mixer.EndMixer(3));
+	EXPECT_EQ(0, mixer.DeleteMixer(3));
+
+	Speak(mixer, 1, L"toujours la");
+	EXPECT_TRUE(ReceivedContains(mixer, 2, L"toujours la", 3000));
+
+	mixer.End();
+}
+
+// Le même départ, mais SANS EndMixer préalable : DeleteMixer détruisait le
+// worker en le laissant dans la liste que parcourt le thread de mixage.
+TEST(TextMixerSite, DeleteMixerWithoutEndMixerKeepsTheOthers)
+{
+	TextMixer mixer;
+	std::wstring alice = L"alice", bob = L"bob", carol = L"carol";
+	ASSERT_TRUE(mixer.Init());
+	ASSERT_TRUE(mixer.CreateMixer(1, alice));
+	ASSERT_TRUE(mixer.CreateMixer(2, bob));
+	ASSERT_TRUE(mixer.CreateMixer(3, carol));
+	ASSERT_TRUE(mixer.InitMixer(1));
+	ASSERT_TRUE(mixer.InitMixer(2));
+	ASSERT_TRUE(mixer.InitMixer(3));
+
+	EXPECT_EQ(0, mixer.DeleteMixer(3));
+
+	Speak(mixer, 1, L"encore la");
+	EXPECT_TRUE(ReceivedContains(mixer, 2, L"encore la", 3000));
+
+	mixer.End();
+}

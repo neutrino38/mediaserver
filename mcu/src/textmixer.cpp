@@ -42,13 +42,15 @@ int TextMixer::Run()
 	while(mixingText)
 	{
 		//Lock list of text mixers
-		lstTextsUse.IncUse();
+		//La passe entiere tient le verrou : elle itere les trois collections ET
+		//appelle les workers, qui ne se protegent pas eux-memes.
+		std::unique_lock<std::mutex> mixLock(mutex);
 
 		//Send to all participants
 		for (TextSources::iterator it=sources.begin();it!=sources.end();++it)
 		{
 			//Get text source
-			TextSource *text = it->second;
+			const std::shared_ptr<TextSource>& text = it->second;
 
 			//Check if it has somethin in the queue
 			if (text->output->Length())
@@ -59,7 +61,7 @@ int TextMixer::Run()
 				for (TextWorkers::iterator w=workers.begin();w!=workers.end();++w)
 				{
 					//Get worker
-					TextMixerWorker *worker = (*w);
+					const std::shared_ptr<TextMixerWorker>& worker = (*w);
 					//Check it is not the ixer worker
 					if (text->worker!=worker)
 						//Write it
@@ -72,7 +74,7 @@ int TextMixer::Run()
 		for (TextPrivates::iterator it=privates.begin();it!=privates.end();++it)
 		{
 			//Get text source
-			TextPrivate *priv = it->second;
+			const std::shared_ptr<TextPrivate>& priv = it->second;
 
 			//Check if it has somethin in the queue
 			if (priv->output->Length())
@@ -95,16 +97,21 @@ int TextMixer::Run()
 			(*w)->ProcessText();
 
 		//Un lock
-		lstTextsUse.DecUse();
+		//L'attente se fait HORS verrou : sinon rien ne pourrait plus entrer ni
+		//sortir de la conference pendant les 200 ms du tick.
+		mixLock.unlock();
 
 		//Tick de 200 ms, interruptible par End()/StopThread()
 		wait.WaitSignal(200);
 	}
 
 	//Know for each worker
-	for (TextWorkers::iterator w=workers.begin();w!=workers.end();++w)
-		//Flush any text in the queue
-		(*w)->FlushText();
+	{
+		std::unique_lock<std::mutex> flushLock(mutex);
+		for (TextWorkers::iterator w=workers.begin();w!=workers.end();++w)
+			//Flush any text in the queue
+			(*w)->FlushText();
+	}
 
 	//Logeamos
 	Log("<MixText\n");
@@ -148,10 +155,21 @@ int TextMixer::End()
 
 	//Borramos los texts restantes. DeleteMixer EFFACE l'entrée de la map :
 	//itérer dessus pendant la suppression invalidait l'itérateur (UB, crash
-	//constaté par TextMixerSite.ForwardsTextToOtherParticipantOnly).
-	while (!sources.empty())
+	//constaté par TextMixerSite.ForwardsTextToOtherParticipantOnly). On relève
+	//donc une clé sous le verrou, et on supprime en dehors — DeleteMixer le
+	//reprend pour son propre compte.
+	for (;;)
+	{
+		DWORD id;
+		{
+			std::unique_lock<std::mutex> lock(mutex);
+			if (sources.empty())
+				break;
+			id = sources.begin()->first;
+		}
 		//Borramos el text
-		DeleteMixer(sources.begin()->first);
+		DeleteMixer(id);
+	}
 
 	Log("<End textmixer\n");
 	
@@ -167,18 +185,18 @@ int TextMixer::CreateMixer(int id,std::wstring &name)
 	Log(">CreateMixer text [%d]\n",id);
 
 	//Protegemos la lista
-	lstTextsUse.WaitUnusedAndLock();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Miramos que si esta
 	if (sources.find(id)!=sources.end())
 	{
 		//Desprotegemos la lista
-		lstTextsUse.Unlock();
+		lock.unlock();
 		return Error("Text sourecer already existed\n");
 	}
 
 	//Creamos el source
-	TextSource *text = new TextSource();
+	std::shared_ptr<TextSource> text = std::make_shared<TextSource>();
 
 	//Set id
 	text->id = id;
@@ -187,18 +205,18 @@ int TextMixer::CreateMixer(int id,std::wstring &name)
 	text->input  = std::make_shared<PipeTextInput>();
 	text->output = std::make_shared<PipeTextOutput>();
 	//Create the worker
-	text->worker = new TextMixerWorker();
+	text->worker = std::make_shared<TextMixerWorker>();
 
 	//Set name
 	text->name = name;
 
 	//Add source to the list
 	sources[id] = text;
-	
+
 	Log("-Text [%d,%ls]\n",text->id,text->name.c_str());
 
 	//Desprotegemos la lista
-	lstTextsUse.Unlock();
+	lock.unlock();
 
 	//Y salimos
 	Log("<CreateMixer text\n");
@@ -215,22 +233,22 @@ int TextMixer::InitMixer(int id)
 	Log(">Init mixer [%d]\n",id);
 
 	//Protegemos la lista
-	lstTextsUse.WaitUnusedAndLock();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextSources::iterator it = sources.find(id);
 
-	//Si no esta	
+	//Si no esta
 	if (it == sources.end())
 	{
 		//Desprotegemos
-		lstTextsUse.Unlock();
+		lock.unlock();
 		//Salimos
 		return Error("Mixer not found\n");
 	}
 
 	//Obtenemos el text source
-	TextSource *text = it->second;
+	std::shared_ptr<TextSource> text = it->second;
 
 	//INiciamos los pipes
 	text->input->Init();
@@ -253,7 +271,7 @@ int TextMixer::InitMixer(int id)
 	for (TextSources::iterator it=sources.begin();it!=sources.end();++it)
 	{
 		//Get source
-		TextSource *source = it->second;
+		const std::shared_ptr<TextSource>& source = it->second;
 		Log("[%d,%d]\n",text->id,source->id);
 		//Check if it is us
 		if (source->id!=text->id)
@@ -265,7 +283,7 @@ int TextMixer::InitMixer(int id)
 	workers.insert(text->worker);
 
 	//Desprotegemos
-	lstTextsUse.Unlock();
+	lock.unlock();
 
 	Log("<Init mixer [%d]\n",id);
 
@@ -281,22 +299,22 @@ int TextMixer::InitMixer(int id)
 int TextMixer::EndMixer(int id)
 {
 	//Protegemos la lista
-	lstTextsUse.WaitUnusedAndLock();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextSources::iterator it = sources.find(id);
 
-	//Si no esta	
+	//Si no esta
 	if (it == sources.end())
 	{
 		//Desprotegemos
-		lstTextsUse.Unlock();
+		lock.unlock();
 		//Salimos
 		return false;
 	}
 
 	//Obtenemos el text source
-	TextSource *text = it->second;
+	std::shared_ptr<TextSource> text = it->second;
 
 	//Remove as writter to all the other participants
 	for (TextWorkers::iterator it=workers.begin();it!=workers.end();++it)
@@ -314,7 +332,7 @@ int TextMixer::EndMixer(int id)
 	text->output->End();
 
 	//Desprotegemos
-	lstTextsUse.Unlock();
+	lock.unlock();
 
 	//Si esta devolvemos el input
 	return true;;
@@ -329,7 +347,7 @@ int TextMixer::DeleteMixer(int id)
 	Log("-DeleteMixer text [%d]\n",id);
 
 	//Protegemos la lista
-	lstTextsUse.WaitUnusedAndLock();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Lo buscamos
 	TextSources::iterator it = sources.find(id);
@@ -338,26 +356,31 @@ int TextMixer::DeleteMixer(int id)
 	if (it == sources.end())
 	{
 		//DDesprotegemos la lista
-		lstTextsUse.Unlock();
+		lock.unlock();
 		//Salimos
 		return Error("Text source not found\n");
 	}
 
 	//Obtenemos el text source
-	TextSource *text = it->second;
+	std::shared_ptr<TextSource> text = it->second;
 
 	//Lo quitamos de la lista
 	sources.erase(it);
 
-	//Desprotegemos la lista
-	lstTextsUse.Unlock();
+	//ET de la liste des workers que parcourt la passe de mixage. Sans cela, une
+	//suppression sans EndMixer prealable y laissait un worker detruit : le tick
+	//suivant ecrivait dedans (segfault reproduit par
+	//TextMixerSite.DeleteMixerWithoutEndMixerKeepsTheOthers).
+	if (text->worker)
+		workers.erase(text->worker);
 
-	//Les pipes sont des shared_ptr : rendus quand le dernier stream les relâche
-	//(Point 1 / C-4). Le worker (raw) est détruit avant les shared_ptr : il
-	//détient un pointeur brut vers input, mais son propre thread est arrêté par
-	//DetachAllReaders/End dans EndMixer.
-	delete text->worker;
-	delete text;
+	//Desprotegemos la lista
+	lock.unlock();
+
+	//Plus personne ne peut obtenir de nouvelle reference : la source meurt avec
+	//le dernier `shared_ptr` (ici, ou plus tard chez un appelant en vol). Ses
+	//membres partent dans le bon ordre — worker d'abord, pipes ensuite.
+	text.reset();
 
 	return 0;
 }
@@ -369,7 +392,7 @@ int TextMixer::DeleteMixer(int id)
 TextInput* TextMixer::GetInput(int id)
 {
 	//Protegemos la lista
-	lstTextsUse.IncUse();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextSources::iterator it = sources.find(id);
@@ -382,7 +405,7 @@ TextInput* TextMixer::GetInput(int id)
 		input = (TextInput*)it->second->input.get();
 
 	//Desprotegemos
-	lstTextsUse.DecUse();
+	lock.unlock();
 
 	//Si esta devolvemos el input
 	return input;
@@ -394,12 +417,12 @@ TextInput* TextMixer::GetInput(int id)
 ************************/
 std::shared_ptr<TextInput> TextMixer::GetSharedInput(int id)
 {
-	lstTextsUse.IncUse();
+	std::unique_lock<std::mutex> lock(mutex);
 	TextSources::iterator it = sources.find(id);
 	std::shared_ptr<TextInput> input;
 	if (it != sources.end())
 		input = it->second->input;
-	lstTextsUse.DecUse();
+	lock.unlock();
 	return input;
 }
 
@@ -410,7 +433,7 @@ std::shared_ptr<TextInput> TextMixer::GetSharedInput(int id)
 TextOutput* TextMixer::GetOutput(int id)
 {
 	//Protegemos la lista
-	lstTextsUse.IncUse();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextSources::iterator it = sources.find(id);
@@ -435,7 +458,7 @@ TextOutput* TextMixer::GetOutput(int id)
 	}
 
 	//Desprotegemos
-	lstTextsUse.DecUse();
+	lock.unlock();
 
 	//Si esta devolvemos el input
 	return output;
@@ -447,7 +470,7 @@ TextOutput* TextMixer::GetOutput(int id)
 ************************/
 std::shared_ptr<TextOutput> TextMixer::GetSharedOutput(int id)
 {
-	lstTextsUse.IncUse();
+	std::unique_lock<std::mutex> lock(mutex);
 	std::shared_ptr<TextOutput> output;
 	//Chercher d'abord dans les sources
 	TextSources::iterator it = sources.find(id);
@@ -460,7 +483,7 @@ std::shared_ptr<TextOutput> TextMixer::GetSharedOutput(int id)
 		if (itp != privates.end())
 			output = itp->second->output;
 	}
-	lstTextsUse.DecUse();
+	lock.unlock();
 	return output;
 }
 
@@ -474,19 +497,19 @@ int TextMixer::CreatePrivate(int id,int to,std::wstring &name)
 	Log(">CreatePrivate text [%d,%d]\n",id,to);
 
 	//Protegemos la lista
-	lstTextsUse.WaitUnusedAndLock();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Miramos que si esta
 	if (privates.find(id)!=privates.end())
 	{
 		//Desprotegemos la lista
-		lstTextsUse.Unlock();
+		lock.unlock();
 		//Error
 		return Error("Private sourecer already existed\n");
 	}
 
 	//Create the private text
-	TextPrivate *priv = new TextPrivate();
+	std::shared_ptr<TextPrivate> priv = std::make_shared<TextPrivate>();
 
 	//Set id
 	priv->id = id;
@@ -499,9 +522,9 @@ int TextMixer::CreatePrivate(int id,int to,std::wstring &name)
 
 	//Add private the list
 	privates[id] = priv;
-	
+
 	//Desprotegemos la lista
-	lstTextsUse.Unlock();
+	lock.unlock();
 
 	//Y salimos
 	Log("<CreateMixer text\n");
@@ -518,7 +541,10 @@ int TextMixer::InitPrivate(int id)
 	Log(">Init private [%d]\n",id);
 
 	//Protegemos la lista
-	lstTextsUse.IncUse();
+	//Verrou EXCLUSIF : AddWritter modifie le worker d'une source, que le thread
+	//de mixage parcourt — c'etait pris ici sous le verrou lecteur, donc en
+	//concurrence avec lui (TextMixerWorker n'a aucune synchronisation propre).
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextPrivates::iterator it = privates.find(id);
@@ -527,13 +553,13 @@ int TextMixer::InitPrivate(int id)
 	if (it == privates.end())
 	{
 		//Desprotegemos
-		lstTextsUse.DecUse();
+		lock.unlock();
 		//Salimos
 		return Error("Mixer not found\n");
 	}
 
 	//Obtenemos el text source
-	TextPrivate *priv = it->second;
+	std::shared_ptr<TextPrivate> priv = it->second;
 
 	//INiciamos los pipes
 	priv->output->Init();
@@ -547,7 +573,7 @@ int TextMixer::InitPrivate(int id)
 		itSource->second->worker->AddWritter(id,priv->name,false);
 
 	//Desprotegemos
-	lstTextsUse.DecUse();
+	lock.unlock();
 
 	Log("<Init private [%d]\n",id);
 
@@ -563,7 +589,9 @@ int TextMixer::InitPrivate(int id)
 int TextMixer::EndPrivate(int id)
 {
 	//Protegemos la lista
-	lstTextsUse.IncUse();
+	//Verrou EXCLUSIF, pour la meme raison qu'InitPrivate : RemoveWritter touche
+	//le worker d'une source.
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextPrivates::iterator it = privates.find(id);
@@ -572,13 +600,13 @@ int TextMixer::EndPrivate(int id)
 	if (it == privates.end())
 	{
 		//Desprotegemos
-		lstTextsUse.DecUse();
+		lock.unlock();
 		//Salimos
 		return false;
 	}
 
 	//Obtenemos el text source
-	TextPrivate *priv = it->second;
+	std::shared_ptr<TextPrivate> priv = it->second;
 
 	//Find private target
 	TextSources::iterator itSource=sources.find(priv->to);
@@ -592,7 +620,7 @@ int TextMixer::EndPrivate(int id)
 	priv->output->End();
 
 	//Desprotegemos
-	lstTextsUse.DecUse();
+	lock.unlock();
 
 	//Si esta devolvemos el input
 	return true;;
@@ -607,7 +635,7 @@ int TextMixer::DeletePrivate(int id)
 	Log("-DeletePrivate text [%d]\n",id);
 
 	//Protegemos la lista
-	lstTextsUse.WaitUnusedAndLock();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	///Buscamos el text source
 	TextPrivates::iterator it = privates.find(id);
@@ -616,23 +644,23 @@ int TextMixer::DeletePrivate(int id)
 	if (it == privates.end())
 	{
 		//Desprotegemos
-		lstTextsUse.Unlock();
+		lock.unlock();
 		//Salimos
 		return false;
 	}
 
 	//Obtenemos el text source
-	TextPrivate *priv = it->second;
+	std::shared_ptr<TextPrivate> priv = it->second;
 
 	//Lo quitamos de la lista
 	privates.erase(it);
 
 	//Desprotegemos la lista
-	lstTextsUse.Unlock();
+	lock.unlock();
 
-	//priv->output est un shared_ptr : rendu quand le dernier détenteur le
-	//relâche (Point 1). La struct conteneur est libérée ici.
-	delete priv;
+	//Le canal prive meurt avec le dernier `shared_ptr` — celui-ci, ou celui d'un
+	//appelant en vol ; son pipe de sortie survit tant qu'un flux le tient.
+	priv.reset();
 
 	return 0;
 }
@@ -643,7 +671,7 @@ int TextMixer::DeletePrivate(int id)
 TextOutput* TextMixer::GetPrivateOutput(int id)
 {
 	//Protegemos la lista
-	lstTextsUse.IncUse();
+	std::unique_lock<std::mutex> lock(mutex);
 
 	//Buscamos el text source
 	TextPrivates::iterator it = privates.find(id);
@@ -656,7 +684,7 @@ TextOutput* TextMixer::GetPrivateOutput(int id)
 		output = it->second->output.get();
 
 	//Desprotegemos
-	lstTextsUse.DecUse();
+	lock.unlock();
 
 	//Si esta devolvemos el input
 	return output;

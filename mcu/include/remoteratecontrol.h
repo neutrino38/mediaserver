@@ -11,6 +11,7 @@
 #include "config.h"
 #include "acumulator.h"
 #include "eventstreaminghandler.h"
+#include <deque>
 
 class RemoteRateControl
 {
@@ -60,17 +61,40 @@ public:
 		return "Unknown";
 	}
 public:
+	//Duree de validite d'une conclusion episodique (perte, RTT) sans nouvelle
+	//confirmation : deux periodes de rapport RTCP.
+	static const QWORD EpisodicTtlMs = 2000;
+
 	RemoteRateControl();
 	void Update(QWORD time,QWORD ts,DWORD size, bool mark);
-	bool UpdateRTT(DWORD rtt);
-	bool UpdateLost(DWORD num);
+	//now : la MEME horloge (ms) que Update — plus de getTime() µs interne (§3.3).
+	//C'est aussi l'horloge dont depend l'expiration EpisodicTtlMs : un instant
+	//d'une autre source ne peut pas expirer.
+	bool UpdateRTT(DWORD rtt, QWORD now);
+	bool UpdateLost(DWORD num, QWORD now);
 	void SetRateControlRegion(Region region);
-	BandwidthUsage GetUsage()	{ return hypothesis; }
+	//Une hypothese par chemin de detection, composee ici : chacun repond a un
+	//signal independant, a sa propre cadence, et aucun n'a autorite pour effacer
+	//la conclusion d'un autre. Une seule surutilisation suffit a contraindre ;
+	//sinon c'est le detecteur de delai qui parle, seul a distinguer Normal
+	//d'UnderUsing.
+	BandwidthUsage GetUsage()
+	{
+		if (hypothesis==OverUsing || lostHypothesis==OverUsing || rttHypothesis==OverUsing)
+			return OverUsing;
+		return hypothesis;
+	}
 	double GetNoise()		{ return varNoise;   }
+	//Observabilite pour les tests (lot 0 du chantier rate-control) :
+	//l'invariant que l'amont verifie par RTC_DCHECK (overuse_estimator.cc:90-93).
+	bool CovarianceIsPositiveSemiDefinite() const
+	{
+		return E[0][0]+E[1][1]>=0 && E[0][0]*E[1][1]-E[0][1]*E[1][0]>=0 && E[0][0]>=0;
+	}
 	void SetEventSource(EvenSource *eventSource) {	this->eventSource = eventSource; }
 
 private:
-	void UpdateKalman(int deltaTime, int deltaSize);
+	void UpdateKalman(int deltaTime, int deltaSize, double tsDelta);
 private:
 	EvenSource *eventSource;
 	Acumulator bitrateCalc;
@@ -87,7 +111,11 @@ private:
 	DWORD curSize;
 	DWORD prevTarget;
 	int64_t curDelta;
-	int64_t prevDelta;
+	//Horodatage media (ms) de la derniere image close : donne la periode
+	//inter-images, l'exposant du facteur d'oubli du bruit (temoin :
+	//overuse_estimator.cc:105-115, UpdateMinFramePeriod).
+	QWORD lastFrameTS;
+	std::deque<double> tsDeltaHist;
 	double slope;
 	double offset;
 	double E[2][2];
@@ -96,8 +124,25 @@ private:
 	double varNoise;
 	double threshold;
 	double prevOffset;
+	//Hypothese du detecteur par delai. Celles des deux autres chemins vivent a
+	//part : partagee, elle etait reecrite a chaque image (~30 Hz) et effacait la
+	//congestion vue par les pertes des la premiere image au delai sain.
 	BandwidthUsage hypothesis;
+	BandwidthUsage lostHypothesis;
+	BandwidthUsage rttHypothesis;
+	//Instant (ms) de la derniere confirmation de chacun des deux chemins
+	//episodiques. Leur conclusion EXPIRE sans confirmation : un rapport RTCP peut
+	//ne jamais revenir — mesure du 2026-08-18, un seul rapport de perte en
+	//4,9 minutes — et une hypothese qui ne retombe pas cloue l'estimation au
+	//plancher. Avant que chaque chemin ne porte la sienne, la sortie etait
+	//fortuite : le detecteur de delai les reecrivait a chaque image.
+	QWORD lostOverAt;
+	QWORD rttOverAt;
+	//Un compteur PAR chemin de detection : le delai est juge a chaque image
+	//(~30 Hz), les pertes a chaque rapport RTCP (~1 Hz). Partages, le premier
+	//efface l'accumulation du second trente fois par seconde.
 	int overUseCount;
+	int lostOverCount;
 };
 
 #endif	/* REMOTERATECONTROL_H */

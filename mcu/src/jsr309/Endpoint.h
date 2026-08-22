@@ -22,6 +22,13 @@ class RTPEndpoint;
 class Endpoint
 {
 public:
+	//Profil d'adressage demandé par le contrôleur pour cette jambe (voir
+	//NETWORK-CONFIGURATION.md) : décide de l'adresse liée — donc de l'interface — et
+	//de l'adresse
+	//annoncée dans les candidats. À poser AVANT StartReceiving/StartSending.
+	bool SetAddressProfile(MediaFrame::Type media, const char* profile, std::string& error,
+	                       MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+
 	class Port : public RTPMultiplexer
 	{
 	public:
@@ -222,13 +229,23 @@ private:
 	
 private:
 	std::wstring name;
-	//RTP sessions
-	std::shared_ptr<Port> ports[4];
-	std::shared_ptr<Port> ports2[4];
-	
+
+	//DECLARES AVANT ports/ports2, ET C'EST LE CONTRAT : les RTPSession des ports
+	//pointent sur ces deux membres (Init -> SetRemoteRateEstimator, ctor ->
+	//SetEventSource), or les membres se detruisent dans l'ORDRE INVERSE de leur
+	//declaration. Declares apres, ils mouraient AVANT les ports, et
+	//~RTPSession appelait remoteRateEstimator->RemoveListener(this) sur un
+	//estimateur detruit : erase() dans un std::set libere, donc un tas corrompu a
+	//CHAQUE EndpointDelete, et un abort differe ailleurs (souvent le SSL_free du
+	//DTLS). Ne pas regrouper ces membres "proprement" en fin de classe.
 	RemoteRateEstimator estimator;
 	RemoteRateEstimator estimator2;
 	EvenSource eventSource;
+
+	//RTP sessions
+	std::shared_ptr<Port> ports[4];
+	std::shared_ptr<Port> ports2[4];
+
         Statistics stats;
 };
 

@@ -24,6 +24,7 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	bitrate = 0;
 	//Aucune limite TMMBR/REMB en vigueur
 	videoBitrateLimit = 0;
+	senderBweLimit = 0;
         useInputSize = false;
 	negotiatedDirty = false;
 }
@@ -279,6 +280,13 @@ void VideoEncoderMultiplexerWorker::SetREMB(int estimation)
 	videoBitrateLimit = estimation/1000;
 }
 
+void VideoEncoderMultiplexerWorker::SetSenderEstimate(DWORD estimation)
+{
+	//Cible du BWE émetteur local (lot 6.3), deuxième champ à côté de la
+	//limite du pair : la boucle d'encodage prend le min des deux.
+	senderBweLimit = estimation/1000;
+}
+
 int VideoEncoderMultiplexerWorker::Encode()
 {
 	timeval first;
@@ -513,6 +521,10 @@ int VideoEncoderMultiplexerWorker::Encode()
 		if (videoBitrateLimit>0 && target>videoBitrateLimit)
 			target = videoBitrateLimit;
 
+		//Cible du BWE émetteur local (lot 6.3) : min() avec la limite du pair
+		if (senderBweLimit>0 && target>senderBweLimit)
+			target = senderBweLimit;
+
 		//Check if we have a new bitrate
 		if (target && target!=current)
 		{
@@ -583,13 +595,17 @@ int VideoEncoderMultiplexerWorker::Encode()
 		//Set sending time of previous frame
 		getUpdDifTime(&prev);
 		
-		//Calculate sending times based on bitrate
-		DWORD sendingTime = videoFrame->GetLength()*8/current;
+		//Calculate sending times based on bitrate.
+		//Debit de pacing = 1,1 x la cible (temoin, pacing factor des que
+		//l'estimation depend des temps d'arrivee) : lisser tout juste A la
+		//cible transforme chaque image en sa propre file d'attente, et le
+		//BWE emetteur (lot 6) mesurerait nos rafales au lieu du reseau.
+		DWORD sendingTime = videoFrame->GetLength()*8/(current+current/10);
 
-		//Adjust to maximum time
-		if (sendingTime>frameTime/1000)
-			//Cap it
-			sendingTime = frameTime/1000;
+		//PAS de plafonnement a la periode d'image : c'est lui qui tronquait
+		//l'etalement d'une trame cle (2,2 x une trame inter, mesure du
+		//2026-08-20) et la faisait partir en rafale. Le pacer du lisseur
+		//reporte le depassement sur l'image suivante, borne par MaxAheadUs.
 
 		//Send it smoothly
 		SmoothFrame(videoFrame,sendingTime);

@@ -2,8 +2,8 @@
 
 Test de non-régression **autonome** du serveur WebSocket
 (`WebSocketServer` / `WebSocketConnection` / `WebSocketTransport`), sans
-dépendance à JSR309/RTP/média. Sert de garde-fou pour le refactor décrit dans
-`websocket-refactor.md` (Phases 0 → 2).
+dépendance à JSR309/RTP/média. Sert de garde-fou contre les régressions du
+transport WebSocket mono-thread (TLS compris, cf. § WSS ci-dessous).
 
 ## Composants
 

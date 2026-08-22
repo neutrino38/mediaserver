@@ -1,7 +1,6 @@
 #ifndef _TEXTMIXER_H_
 #define _TEXTMIXER_H_
-#include <pthread.h>
-#include <use.h>
+#include <mutex>
 #include "worker.h"
 #include "text.h"
 #include "textmixerworker.h"
@@ -52,7 +51,10 @@ private:
 		std::wstring	name;
 		std::shared_ptr<PipeTextInput>	input;
 		std::shared_ptr<PipeTextOutput>	output;
-		TextMixerWorker *worker;
+		//Le worker est co-detenu avec la liste `workers` : il porte un pointeur
+		//BRUT vers `input` (AddReader), donc il doit mourir avant lui. C'est le
+		//cas ici — dernier membre declare, donc premier detruit.
+		std::shared_ptr<TextMixerWorker> worker;
 	};
 
 	struct TextPrivate
@@ -63,17 +65,22 @@ private:
 		std::shared_ptr<PipeTextOutput>	output;
 	};
 
-	typedef std::map<DWORD,TextSource*> TextSources;
-	typedef std::map<DWORD,TextPrivate*> TextPrivates;
-	typedef std::set<TextMixerWorker*> TextWorkers;
-	
+	typedef std::map<DWORD,std::shared_ptr<TextSource>> TextSources;
+	typedef std::map<DWORD,std::shared_ptr<TextPrivate>> TextPrivates;
+	typedef std::set<std::shared_ptr<TextMixerWorker>> TextWorkers;
+
 private:
 	//All the mixer participants
+	//`workers` est declare APRES `sources` : detruit avant, il rend ses parts
+	//aux sources, qui detruisent alors worker puis pipes dans le bon ordre.
 	TextSources	sources;
 	TextWorkers	workers;
 	TextPrivates	privates;
 	int		mixingText;
-	Use		lstTextsUse;
+	//Un seul verrou pour les trois collections ET pour les workers qu'elles
+	//portent : TextMixerWorker n'a aucune synchronisation propre, et la passe de
+	//mixage l'itere pendant que les chemins de controle le modifient.
+	std::mutex	mutex;
 };
 
 #endif

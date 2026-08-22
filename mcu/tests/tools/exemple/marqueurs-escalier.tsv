@@ -1,0 +1,5 @@
+1755292799.800	start	scenario=escalier iface=eth0 target=eth0 phase_s=60
+1755292800.000	cap	rate_kbps=2000
+1755292860.000	cap	rate_kbps=500
+1755292920.000	cap	rate_kbps=2000
+1755292980.000	stop	

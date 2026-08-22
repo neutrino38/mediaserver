@@ -1,3 +1,9 @@
+#include "addressprofiles.h"
+#include <errno.h>
+#include <unistd.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include "ipaddress.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,8 +67,79 @@ int XmlRpcServer::Run()
 		//Le pasamos como nombre un puntero a nosotros mismos
 		sprintf(name,"%p",this);
 
+		//Socket d'écoute créée ICI, et non par Abyss : ServerCreate() ouvre une
+		//socket AF_INET, donc un contrôleur en IPv6 ne pourrait pas atteindre
+		//l'API de contrôle — celle par laquelle TOUT passe. AF_INET6 +
+		//IPV6_V6ONLY=0 entend les deux familles sur une seule socket, et
+		//ServerCreateSocket prend le descripteur tel quel.
+		//
+		//OÙ ÉCOUTER — c'est une question de SÛRETÉ, pas de confort. Dès qu'un
+		//réseau interne est déclaré (--internal-ip), l'API de contrôle s'y
+		//restreint : elle pilote entièrement le serveur média, elle n'a rien à
+		//faire sur une interface publique. Sans réseau interne déclaré, on garde
+		//l'écoute historique sur toutes les interfaces — c'est le déploiement
+		//simple, et le restreindre casserait l'existant.
+		//
+		//Une seule socket, donc une seule famille quand l'adresse est précise :
+		//si les deux profils internes sont configurés, l'IPv4 l'emporte (choix
+		//déterministe, majoritaire sur les plans de contrôle). Le log le dit.
+		IPAddress listenAddr;
+
+		if (AddressProfiles::IsAvailable(AddressProfiles::InternalV4))
+			listenAddr = AddressProfiles::BindAddress(AddressProfiles::InternalV4);
+		else if (AddressProfiles::IsAvailable(AddressProfiles::InternalV6))
+			listenAddr = AddressProfiles::BindAddress(AddressProfiles::InternalV6);
+
+		const int listenFamily = listenAddr.IsSet() ? listenAddr.Family() : AF_INET6;
+
+		int listenFd = socket(listenFamily, SOCK_STREAM, 0);
+
+		if (listenFd < 0)
+		{
+			Error("-XmlRpcServer: cannot create listening socket (errno %d)\n",errno);
+			return 0;
+		}
+
+		int optval = 1;
+		setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
+		//Échec non fatal : on perd les clients v4, on ne perd pas le serveur.
+		//Sans objet quand on écoute sur une adresse v6 précise, où la question de
+		//la double famille ne se pose pas.
+		if (listenFamily == AF_INET6 && !listenAddr.IsSet())
+		{
+			int v6only = 0;
+			if (setsockopt(listenFd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
+				Error("-XmlRpcServer: cannot clear IPV6_V6ONLY (errno %d) — IPv4 controllers will not be served\n",errno);
+		}
+
+		const IPEndpoint listenOn = listenAddr.IsSet() ? listenAddr.To(port)
+		                                              : IPAddress::Any(AF_INET6).To(port);
+
+		if (listenAddr.IsSet())
+			Log("-XmlRpcServer: ecoute restreinte au reseau interne [%s:%d] (--internal-ip)\n",
+			    listenAddr.ToString().c_str(),port);
+		else
+			Log("-XmlRpcServer: ecoute sur toutes les interfaces [:::%d]\n",port);
+
+		if (bind(listenFd, listenOn, listenOn.Len()) < 0)
+		{
+			Error("-XmlRpcServer: cannot bind %s:%d (errno %d)\n",
+			      listenAddr.IsSet() ? listenAddr.ToString().c_str() : "::",port,errno);
+			close(listenFd);
+			return 0;
+		}
+
+		//Abyss attend une socket DÉJÀ en écoute.
+		if (listen(listenFd, 32) < 0)
+		{
+			Error("-XmlRpcServer: cannot listen on port %d (errno %d)\n",port,errno);
+			close(listenFd);
+			return 0;
+		}
+
 		//Creamos el servidor
-		ServerCreate(&srv,name, port, DEFAULT_DOCS, "http.log");
+		ServerCreateSocket(&srv,name, listenFd, DEFAULT_DOCS, "http.log");
 
 		//Iniciamos el servidor
 		ServerInit(&srv);

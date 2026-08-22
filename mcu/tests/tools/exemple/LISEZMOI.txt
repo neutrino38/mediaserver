@@ -1,0 +1,19 @@
+Ce journal est SYNTHETIQUE. Il n'a jamais ete produit par un mediaserver et ne
+mesure rien : c'est une marche d'escalier fabriquee au format exact des traces
+(mcu/include/log.h + les Debug de remoterateestimator.cpp), pour verifier que la
+chaine de depouillement fonctionne avant la seance de mesure.
+
+    ./bwe_report.py exemple/mcu-escalier.log \
+                    --markers exemple/marqueurs-escalier.tsv \
+                    --stream Alice --out /tmp/verif
+
+Attendu : "0 critere(s) en echec".
+
+Deux pattes y figurent volontairement — "Alice Martin" (celle qui est sur le lien
+degrade) et "sip:bob@ives.fr" (une patte temoin, a 340 kb/s constants) — pour
+exercer le regroupement par thread et rappeler pourquoi --stream est necessaire :
+sans lui, la patte temoin est jugee contre des marqueurs qui ne la concernent pas
+et produit des KO qui ne veulent rien dire.
+
+Ne pas confondre avec un resultat : les vraies mesures vont en annexe D de
+rate-control.md.

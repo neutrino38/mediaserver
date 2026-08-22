@@ -18,14 +18,23 @@ class FECData
 public:
 	FECData()
 	{
+		memset(data,0,sizeof(data));
 		size = 0;
 		cycles = 0;
 	}
 	
 	FECData(BYTE* data,DWORD size)
 	{
+		//La charge utile d'un paquet RTP peut faire jusqu'a 1700 octets (la
+		//taille du tampon RTPPacket) ; celui-ci n'en fait que MTU. On ne copie
+		//donc que ce qui tient, et les accesseurs plus bas se bornent a `size`.
+		if (size>sizeof(this->data))
+			size = sizeof(this->data);
 		//Copy data
 		memcpy(this->data,data,size);
+		//Le reste du tampon n'est jamais recu : le mettre a zero evite de decoder
+		//des octets indetermines quand l'en-tete FEC est incomplet.
+		memset(this->data+size,0,sizeof(this->data)-size);
 		//Set size
 		this->size = size;
 		//No cycles
@@ -78,8 +87,22 @@ public:
 		| mask cont. (present only when L = 1)                          |
 		+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 	 */
-	BYTE*	GetLevel0Data()		{ return GetLongMask() ? data+18: data+14;	}
-	DWORD	GetLevel0Size()		{ return get2(data,10);				}
+	//Taille reellement recue (bornee a MTU par le constructeur).
+	DWORD	GetSize()		{ return size;					}
+	//Decalage du bloc de protection : 14 octets d'en-tete FEC + niveau, 18 si le
+	//masque long est demande.
+	DWORD	GetLevel0Offset()	{ return GetLongMask() ? 18 : 14;		}
+	BYTE*	GetLevel0Data()		{ return data+GetLevel0Offset();		}
+	//La longueur de protection est ANNONCEE sur 16 bits par l'emetteur, et sert
+	//de taille de copie vers un tampon de MTU octets sur la pile du recuperateur.
+	//Elle ne peut pas depasser ce qui a ete recu derriere l'en-tete.
+	DWORD	GetLevel0Size()
+	{
+		DWORD announced = get2(data,10);
+		DWORD offset = GetLevel0Offset();
+		DWORD available = size>offset ? size-offset : 0;
+		return announced<available ? announced : available;
+	}
 	QWORD	GetLevel0Mask()
 	{
 		//Get first part of the mask and shift it to the left

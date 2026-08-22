@@ -16,6 +16,7 @@ RTPMultiplexerSmoother::RTPMultiplexerSmoother() : RTPMultiplexer()
 {
 	//NO session
 	inited = false;
+	nextSendUs = 0;
 	//Un SSRC dès la construction : SmoothFrame peut précéder Start()
 	ssrc = random();
 }
@@ -104,6 +105,10 @@ int RTPMultiplexerSmoother::SmoothFrame(MediaFrame* frame,DWORD duration)
 		//Get total length
 		frameLength += info[i]->GetTotalLength();
 
+	//Borne de latence sur l'etalement de cette image (cf. MaxSpreadUs)
+	if ((QWORD)duration*1000 > MaxSpreadUs)
+		duration = (DWORD)(MaxSpreadUs/1000);
+
 	//Calculate bitrate for frame
 	DWORD current = 0;
 	
@@ -154,10 +159,10 @@ int RTPMultiplexerSmoother::SmoothFrame(MediaFrame* frame,DWORD duration)
 		else
 			//No last
 			packet->SetMark(false);
+		//Temps de passage de CE paquet sur le fil, en us (cf. RTPSmoother)
+		packet->SetSendingTime(frameLength ? (DWORD)((QWORD)len*duration*1000/frameLength) : 0);
 		//Calculate partial lenght
 		current += len;
-		//Calculate sending time offset from first frame
-		packet->SetSendingTime(current*duration/frameLength);
 		//Append it
 		queue.Add(packet);
 	}
@@ -201,14 +206,11 @@ int RTPMultiplexerSmoother::Stop()
 
 int RTPMultiplexerSmoother::Run()
 {
-	timeval prev;
-	DWORD	sendingTime = 0;
-	
-	int count =0;
-	//Calculate first
-	getUpdDifTime(&prev);
-
 	Log(">RTPMultiplexerSmoother run\n");
+
+	//Curseur du pacer : instant auquel le prochain paquet peut partir
+	nextSendUs = getTime();
+	QWORD lastWarnUs = 0;
 	
 	while(inited)
 	{
@@ -229,30 +231,46 @@ int RTPMultiplexerSmoother::Run()
 			//Exit
 			continue;
 		}
+		QWORD now = getTime();
+
+		//Pas de rattrapage en rafale apres un silence
+		if (nextSendUs < now)
+			nextSendUs = now;
+
+		//Attendre son tour (annulable) ; le curseur garde la verite en us
+		if (nextSendUs > now)
+		{
+			QWORD waitMs = (nextSendUs - now)/1000;
+			if (waitMs)
+				wait.WaitSignal(waitMs);
+			//Wait annulé : ne pas émettre sur une file en cours d'arrêt
+			if (!inited)
+			{
+				delete(sched);
+				break;
+			}
+			now = getTime();
+		}
+
 		//Multiplex
 		Multiplex(*(RTPPacket*)sched);
 
-		//Update sending time
-		sendingTime = sched->GetSendingTime();
+		//Avancer le curseur : c'est ici que la dette se reporte
+		nextSendUs += sched->GetSendingTime();
 
-		//Dormir jusqu'à l'échéance prev+sendingTime (annulable)
+		//Borne d'avance : au-dela c'est de la latence pure
+		if (nextSendUs > now + MaxAheadUs)
 		{
-			QWORD elapsed = getDifTime(&prev)/1000;
-			if (sendingTime > elapsed)
-				wait.WaitSignal(sendingTime - elapsed);
+			nextSendUs = now + MaxAheadUs;
+			//Meme signal que dans RTPSmoother, au plus une trace par seconde
+			if (now - lastWarnUs > 1000000)
+			{
+				lastWarnUs = now;
+				Log("-RTPMultiplexerSmoother: avance ecretee a %llu ms, la source depasse le debit de pacing [enfiles:%d]\n",
+					(QWORD)(MaxAheadUs/1000), queue.Length());
+			}
 		}
 
-		//If it was last
-		if (sched->GetMark())
-		{
-		        if (queue.Length()>2)
-                                //Log it
-                                Log("-RTPSmoother lagging behind [enqueued:%d,frameTime:%u,sendingTime:%u]\n",queue.Length(),sendingTime,sendingTime);
-			//Update time of the previous frame
-			getUpdDifTime(&prev);
-			//if ( (count % 20) == 0 ) Log("RTPSmoother: frame out codec %d.\n", sched->GetCodec() );
-			//count++; 
-		}
 		//DElete it
 		delete(sched);
 	}

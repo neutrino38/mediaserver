@@ -14,12 +14,16 @@
 #include "config.h"
 #include "use.h"
 #include "rtp.h"
+#include "senderbwe.h"
 #include "rtpbuffer.h"
 #include "remoteratecontrol.h"
 #include "fecdecoder.h"
-#include "stunmessage.h"
+#include "medkit/stunmessage.h"
 #include "remoterateestimator.h"
+#include "rembthrottler.h"
 #include "dtls.h"
+#include "ipaddress.h"
+#include "addressprofiles.h"
 
 
 
@@ -48,11 +52,28 @@ public:
 		//reçu et validé (déchiffrement OK => DTLS terminé, ou pas de crypto). Ré-armé
 		//via ArmRTPReceivedNotification(). Non pur (Listener existants inchangés).
 		virtual void onRTPPacketReceived( RTPSession *session ) {}
+		//Lot 6.3 : l'estimateur émetteur LOCAL a une nouvelle cible pour ce
+		//flux sortant (bps). À composer par min() avec la limite du pair
+		//(REMB/TMMBR reçu), jamais à écraser. Non pur (Listener inchangés).
+		virtual void onSenderEstimatedBitrate( RTPSession *session, DWORD bitrate ) {}
 	};
-	
+
+	//Ce que la session émet comme feedback de débit vers le pair, posé par la
+	//NÉGOCIATION (propriétés "tmmbr"/"remb", cf. SetProperties) et par elle
+	//seule : un pair qui n'a pas demandé d'AVPF n'en reçoit pas. TMMBR
+	//(RFC 5104) est le dialecte SIP, REMB (draft-alvestrand-rmcat-remb-03)
+	//celui des navigateurs, qui n'offrent que "goog-remb". Le mode TMMBR émet
+	//les deux — c'est le comportement historique, et un pair qui comprend
+	//TMMBR ne perd rien à recevoir aussi le REMB.
+	enum BitrateFeedbackMode
+	{
+		BitrateFeedbackNone	= 0,
+		BitrateFeedbackREMB	= 1,
+		BitrateFeedbackTMMBR	= 2
+	};
+
 public:
-	
-public:
+
 	static bool SetPortRange(int minPort, int maxPort);
 	static DWORD GetMinPort() { return minLocalPort; }
 	static DWORD GetMaxPort() { return maxLocalPort; }
@@ -89,6 +110,33 @@ public:
 	//constructeur (utilisé tel quel par MediaBridgeSession, non converti).
 	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
 	int Init();
+	//Adresse à lier par les sockets média, AVANT Init : c'est elle qui décide de
+	//l'interface empruntée, donc du profil d'adressage effectif de cette jambe
+	//(voir NETWORK-CONFIGURATION.md). Vide (le défaut) = écoute dual-stack sur
+	//interfaces, comportement historique. Rend false si l'adresse est
+	//inutilisable ; la session reste alors sur le défaut.
+	bool SetBindAddress(const IPAddress& addr);
+	const IPAddress& GetBindAddress() const { return bindAddress; }
+
+	//Profil d'adressage de CETTE jambe (NETWORK-CONFIGURATION.md) : le contrôleur le
+	//demande dans StartSending/StartReceiving, le serveur en tire l'adresse à
+	//lier — donc l'interface — et l'adresse à annoncer.
+	//
+	//Le profil se fixe UNE FOIS : le second appel, s'il en porte un différent,
+	//est un ÉCHEC et non une reconfiguration silencieuse. En RTP symétrique la
+	//socket est la même dans les deux sens, et changer d'adresse en cours
+	//d'appel voudrait dire la relier sous le média — le port publié dans le SDP
+	//changerait sans que le pair en sache rien.
+	//
+	//`profile` : "publicv4" | "publicv6" | "internalv4" | "internalv6", ou NULL
+	/// chaîne vide pour « le profil par défaut », c'est-à-dire le comportement
+	//d'un contrôleur qui ignore cette notion. Rend false et remplit `error` si
+	//le nom est inconnu, le profil indisponible, ou déjà fixé à un autre.
+	bool SetAddressProfile(const char* profile, std::string& error);
+
+	//Adresse à publier dans le SDP pour cette jambe : celle du profil retenu
+	//(NATée s'il y a lieu). Vide si aucun profil n'est disponible.
+	IPAddress GetAnnouncedAddress() const;
 	void SetRemoteRateEstimator(RemoteRateEstimator* estimator);
 	int SetLocalPort(int recvPort);
 	int GetLocalPort();
@@ -120,7 +168,7 @@ public:
 	
 	
 	RemoteRateEstimator* 	GetRemoteRateEstimator() 	{	return remoteRateEstimator; };
-	bool 			SendBitrateFeedback() 		{	return sendBitrateFeedback; };
+	BitrateFeedbackMode	GetBitrateFeedbackMode()	{	return bitrateFeedbackMode; };
 	bool 			IsNACKEnabled() 		{	return isNACKEnabled; }
 	bool 			IsRequestFPU() 			{	return requestFPU; };
 	bool 			UseFEC()			{	return useFEC; };
@@ -143,6 +191,12 @@ public:
 
 
         bool DeleteStreams();
+	/**
+	 * Reveille les lecteurs des streams (disabled + Cancel) SANS rien detruire.
+	 * A appeler avant de joindre un thread qui lit les streams : DeleteStreams
+	 * fait les deux, donc l'utiliser pour reveiller detruit trop tot.
+	 **/
+	bool CancelStreams();
 	/**
 	 * Set the stream designated by SSRC as the defaut stream, if the stream does not exist create it
 	 *
@@ -240,10 +294,23 @@ public:
 	//consigne négociée) — non verrouillé par la propriété "tmmbr", qui ne
 	//gouverne que le feedback spontané de l'estimateur.
 	int SendTempMaxMediaStreamBitrateRequest(DWORD bitrate);
+	//Annonce au pair le débit qu'on estime pouvoir recevoir de lui (REMB,
+	//draft-alvestrand-rmcat-remb-03). Même rôle que le TMMBR ci-dessus dans un
+	//autre dialecte, sans retransmission : REMB n'a pas d'accusé, il se redit
+	//simplement au rapport suivant.
+	int SendReceiverEstimatedMaxBitrate(DWORD bitrate);
+	//Plafond de débit posé de l'EXTÉRIEUR (l'autre patte d'un relais) : composé
+	//par min() avec l'estimation locale dans l'amortisseur, et annoncé au pair
+	//dans le dialecte négocié. Rend 0 si rien n'est parti (rien de neuf à dire).
+	int SetMaxReceiveBitrate(DWORD bitrate);
 
 	virtual void onTargetBitrateRequested(DWORD bitrate);
 	virtual void onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DWORD localMasterKeySize,BYTE* remoteMasterKey,DWORD remoteMasterKeySize);
 private:
+	//Le champ REMB (identifiant 'REMB' + débit + SSRC couverts) prêt à être
+	//ajouté à un paquet composé. Un seul constructeur pour les deux chemins qui
+	//l'émettent : l'annonce immédiate et la répétition dans le rapport.
+	RTCPPayloadFeedback* CreateReceiverEstimatedMaxBitrateFeedback(DWORD bitrate);
 	int SetLocalCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	void SetRTT(DWORD rtt);
@@ -253,7 +320,7 @@ private:
 	int  ReadRTCP();
 	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
 	//unknownPtCount). Rend toujours 0 : l'appelant jette le paquet.
-	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const sockaddr_in& from);
+	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const IPEndpoint& from);
 	//Rattrapage de renégociation : le codec que la map de réception PRÉCÉDENTE
 	//donnait à ce payload type, ou RTPMap::NotFound (cf. rtpMapInPrev).
 	BYTE CodecFromPreviousMap(BYTE type);
@@ -283,7 +350,7 @@ private:
 	//P3 (offreur WebRTC) : binding requests STUN sortants vers un pair ICE-lite
 	void SendICEBindingRequest();               //émet un Binding Request vers sendAddr
 	void DriveICEChecks();                       //depuis Run : émission + retransmission
-	void OnICEConnectivityConfirmed(sockaddr_in* from); //réponse valide reçue -> débloque
+	void OnICEConnectivityConfirmed(const IPEndpoint& from); //réponse valide reçue -> débloque
 
 private:
 protected:
@@ -460,6 +527,13 @@ private:
 	DWORD	iceCheckRto;
 	timeval	iceLastCheck;
 	BYTE	iceCheckTransId[12];
+	//La cible d'envoi courante a été posée par ICE sur une paire VALIDÉE, pas par le
+	//plan de contrôle : le `c=` du SDP est alors la moins bonne des deux sources, et
+	//SetRemotePort ne doit pas l'écraser. Posé aux deux seuls endroits où ICE écrit
+	//sendAddr (réponse valide reçue, check entrant valide) ; effacé par un
+	//redémarrage ICE — SetRemoteSTUNCredentials avec un mot de passe DIFFÉRENT —
+	//puisque la paire validée ne vaut plus rien pour la nouvelle session.
+	bool	iceOwnsSendAddr;
 	//P5 : anti-rebond one-shot de l'événement « média établi » (premier paquet RTP/SRTP
 	//reçu). Remis à false par ArmRTPReceivedNotification() à chaque StartReceiving.
 	bool	rtpReceivedNotified;
@@ -480,16 +554,82 @@ private:
 	bool	natLatch;
 	bool	natCorrected;
 	bool	natRtcpCorrected;
-	bool	NatCorrectable(in_addr_t announced);
-	static bool IsRFC1918(in_addr_t addr);
-	std::mutex mutex;	
+	bool	NatCorrectable(const IPAddress& announced);
+	std::mutex mutex;
+
+	//--- Prédicats d'adressage (étape 3 du chantier IPv6) ---
+	//
+	// « Pas encore d'adresse » se disait jusqu'ici `== INADDR_ANY`, répété sur
+	// une vingtaine de sites. Or INADDR_ANY est une ADRESSE (0.0.0.0, celle
+	// qu'on lie pour écouter partout), pas une sentinelle : la convention ne
+	// survit pas au passage en sockaddr_storage, où l'absence se dit
+	// `ss_family == AF_UNSPEC`. Ces prédicats rassemblent la convention en UN
+	// SEUL endroit — l'étape 5 les réécrit, pas leurs appelants.
+	//
+	// Ils sont volontairement à comportement CONSTANT : à ce stade, ils rendent
+	// exactement ce que rendaient les tests qu'ils remplacent.
+	bool HasRemote()     const { return sendAddr.IsSet();     }
+	bool HasRemoteRtcp() const { return sendRtcpAddr.IsSet(); }
+	bool HasRecIP()      const { return recIP.IsSet();        }
+	bool HasIceRemote()  const { return iceRemoteIP.IsSet();  }
+
+	// Deux adresses désignent-elles le même pair ? La question n'est PAS
+	// triviale en dual-stack : le même hôte v4 s'écrit `1.2.3.4` quand le
+	// contrôleur l'annonce, et `::ffff:1.2.3.4` quand son paquet arrive sur
+	// notre socket v6. `IPAddress::operator==` dé-mappe avant de comparer,
+	// donc le latching NAT ne se déclenche pas sur cette seule différence
+	// d'écriture — c'était LE piège du dual-stack.
+	static bool SameAddr(const IPAddress& a, const IPAddress& b) { return a == b; }
+
+	// Destination dans la famille de NOTRE socket : forme v6 mappée quand la
+	// socket est dual-stack (le cas par défaut), forme native quand elle est
+	// liée à une adresse v4 précise. Un seul endroit décide, donc aucun site
+	// d'émission ne peut se tromper de forme.
+	IPEndpoint Dest(const IPAddress& addr, WORD port) const
+	{
+		return (socketFamily == AF_INET6) ? addr.ToDualStack(port) : addr.To(port);
+	}
+
+	// Pose la même destination sur les deux jambes. Les deux appelants
+	// (StartSending et le basculement sur candidat ICE) le faisaient ligne à
+	// ligne ; en oublier une donnerait un RTCP émis vers l'ancien pair.
+	void SetRemoteIp(const IPAddress& addr)
+	{
+		sendAddr     = Dest(addr,sendAddr.Port());
+		sendRtcpAddr = Dest(addr,sendRtcpAddr.Port());
+	}
+
+	//Famille des sockets média : AF_INET6 + IPV6_V6ONLY=0 par défaut (les deux
+	//familles sur une socket), AF_INET si le profil d'adressage impose une
+	//adresse de bind v4. Posée par Init.
+	int socketFamily;
+
+	//IPV6_V6ONLY=0 sur une socket v6 : elle entend alors les deux familles.
+	void SetDualStack(int fd);
+
+	//Adresse à lier, vide = toutes interfaces. C'est elle qui décide de
+	//l'interface empruntée quand un profil d'adressage est demandé (voir
+	//NETWORK-CONFIGURATION.md) ; vide, on garde l'écoute historique sur `::`.
+	IPAddress bindAddress;
+
+	//Profil d'adressage retenu, et le drapeau qui dit qu'il l'a été
+	//explicitement — sans quoi on ne pourrait pas distinguer « le contrôleur a
+	//demandé publicv4 » de « personne n'a rien demandé ».
+	AddressProfiles::Id addressProfile;
+	bool                addressProfileSet;
+
+	//Relie les sockets à une autre adresse : arrête la réception, ferme, rouvre,
+	//redémarre. Le port local CHANGE — c'est pourquoi cela ne peut se produire
+	//qu'avant que le contrôleur n'ait publié le SDP.
+	int Rebind(const IPAddress& addr);
 
 	//Tipos
 	int 	sendType;
 
-	//Transmision
-	sockaddr_in sendAddr;
-	sockaddr_in sendRtcpAddr;
+	//Transmision. Destinations RTP et RTCP : deux endpoints DISTINCTS — le
+	//rattrapage NAT du RTCP est independant de celui du RTP (voir ReadRTCP).
+	IPEndpoint sendAddr;
+	IPEndpoint sendRtcpAddr;
 	//srtp_protect() chiffre en place ET ajoute le trailer SRTP (jusqu'a
 	//SRTP_MAX_TRAILER_LEN octets au-dela de la charge utile) : le tampon doit
 	//donc reserver MTU + trailer, sinon debordement a l'emission (le memset du
@@ -505,8 +645,10 @@ private:
 	DWORD	recSR;
 	//Recepcion
 	BYTE	recBuffer[MTU];
-	in_addr_t recIP;
-	in_addr_t iceRemoteIP;
+	//Source reellement observee, et pair ICE retenu. Dé-mappees a l'entree :
+	//un pair v4 arrivant sur la socket dual-stack se compare a son annonce v4.
+	IPAddress recIP;
+	IPAddress iceRemoteIP;
 	DWORD	  recPort;
 
 	//RTP Map types
@@ -542,8 +684,34 @@ private:
 	bool			useFEC;
 	bool			useNACK;
 	bool			isNACKEnabled;
-	bool			sendBitrateFeedback;
+	//Le dialecte de feedback négocié, et l'amortisseur qui décide QUAND redire
+	//au pair combien il peut envoyer (baisse immédiate, hausse retenue 200 ms).
+	BitrateFeedbackMode	bitrateFeedbackMode;
+	RembThrottler		bitrateFeedbackThrottler;
 	bool			useAbsTime;
+	//Extension transport-wide-cc : compteur ecrit sur nos paquets sortants
+	//(sender_bwe_plan.md 6.1) ; le pair le renvoie dans ses rapports fmt 15.
+	bool			useTransportCC;
+	DWORD			transportSeqNum;
+	//`extMap` va de l'id du fil vers le type d'extension, comme `rtpMapIn` va du
+	//payload type vers le codec : c'est le sens dont la LECTURE a besoin
+	//(RTPPacket::ProcessExtensions). L'ECRITURE a besoin de l'inverse, d'ou ces
+	//deux ids gardes a part plutot qu'une seconde table a tenir coherente.
+	BYTE			absSendTimeExtId;
+	BYTE			transportCCExtId;
+	//Estimateur émetteur (lot 6.3) : historique alimenté par le thread
+	//d'émission, consommé par le thread RTCP — le mutex couvre les deux.
+	void ProcessTransportWideFeedback(RTCPRTPFeedback* fb);
+	void OnReportedLoss(BYTE fractionLost);
+	SentPacketHistory	sentHistory;
+	SenderBWE		senderBWE;
+	std::mutex		senderBweMutex;
+	//Rapports d'arrivee que NOUS devons au pair (lot 4). Ecrit et lu par le
+	//seul thread Run (reception RTP puis emission du rapport), donc sans
+	//verrou : le sortir de ce thread demanderait d'en poser un.
+	int SendTransportWideFeedback(QWORD nowUs);
+	TransportWideFeedbackGenerator	transportFeedback;
+	bool			transportFeedbackStarted;
 	bool 			useOriSeqNum;
 	bool 			useOriTS;
 	bool 			useExtFIR;

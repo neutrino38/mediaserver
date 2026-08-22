@@ -13,6 +13,9 @@
  *   - l'adresse annoncée doit être PRIVÉE (RFC 1918, CGNAT RFC 6598, link-local) :
  *     sur une adresse publique, une divergence est plus probablement du routage
  *     asymétrique légitime qu'un NAT à corriger ;
+ *   - ICE ne doit pas être en jeu : quand le PAIR a répondu ses credentials STUN,
+ *     ce sont les checks de connectivité qui posent la cible. Nos seuls
+ *     credentials ne comptent pas — offrir ICE n'est pas le pratiquer ;
  *   - la correction est ONE-SHOT par cible (`natCorrected`), et le droit est
  *     rouvert par un nouveau `SetRemotePort` (re-INVITE / UPDATE).
  *
@@ -39,6 +42,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "medkit/stunmessage.h"
 #include "rtp.h"
 #include "rtpsession.h"
 
@@ -111,6 +115,32 @@ public:
 		to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 		to.sin_port        = htons(port);
 		return sendto(fd, packet, sizeof(packet), 0, (sockaddr*)&to, sizeof(to)) == (ssize_t)sizeof(packet);
+	}
+
+	// Émet un STUN Binding Request, ce que fait un pair ICE quand il vérifie la
+	// connectivité. C'est ce check qui fait poser la cible d'envoi par ICE sur la
+	// source observée — un chemin distinct du rattrapage NAT, et le seul que suit
+	// un navigateur. `UseCandidate` désigne la paire, comme dans un vrai contrôle.
+	bool SendStunBindingTo(int port)
+	{
+		BYTE transId[12];
+		memset(transId, 0, sizeof(transId));
+		transId[0] = 0x2a;
+
+		STUNMessage request(STUNMessage::Request, STUNMessage::Binding, transId);
+		request.AddAttribute(STUNMessage::Attribute::UseCandidate);
+
+		BYTE buffer[MTU];
+		const DWORD len = request.NonAuthenticatedFingerPrint(buffer, sizeof(buffer));
+		if (!len)
+			return false;
+
+		sockaddr_in to;
+		memset(&to, 0, sizeof(to));
+		to.sin_family      = AF_INET;
+		to.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		to.sin_port        = htons(port);
+		return sendto(fd, buffer, len, 0, (sockaddr*)&to, sizeof(to)) == (ssize_t)len;
 	}
 
 	// Attend un datagramme portant kMagic (donc issu de SendPacket, pas de
@@ -306,6 +336,66 @@ TEST(RtpLatching, DoesNotReAimFromAPublicAnnouncement)
 		<< "annonce publique : pas de rattrapage (routage asymetrique legitime)";
 }
 
+// ADVERSE — le piège du vocabulaire, appliqué à la POLITIQUE. 192.0.2.1 est une
+// adresse de DOCUMENTATION (RFC 5737) : `IPAddress::IsPrivate()` la dit non
+// routable sur l'Internet public, et pourtant elle n'est nullement NATée. Si
+// `NatCorrectable` consultait `IsPrivate()` plutôt que `IsPrivateV4()`, le
+// rattrapage s'ouvrirait ici — sur une adresse qui n'en relève pas.
+TEST(RtpLatching, DoesNotReAimFromANonRoutableButNonPrivateAnnouncement)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	char announced[] = "192.0.2.1";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "non routable n'est pas privee : aucun rattrapage NAT ici";
+}
+
+// ICE réellement en jeu : le pair a répondu avec ses credentials, donc les checks
+// de connectivité désigneront la cible. Le rattrapage se retire.
+TEST(RtpLatching, DoesNotReAimWhenIceIsInPlace)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "ICE pose la cible lui-meme : ne pas la lui disputer";
+}
+
+// ADVERSE — offrir ICE n'est pas le pratiquer. Nous avons annoncé nos credentials,
+// le pair a répondu SANS ICE (un Linphone, un poste SIP quelconque) : personne ne
+// posera jamais la cible, puisque les checks entrants sont jetés faute
+// d'iceRemotePwd. Vetoer sur nos SEULS credentials laissait la jambe muette pour
+// tout l'appel — trafic du 2026-08-21, Alice WebRTC vers Bob Linphone : la poignée
+// DTLS aboutissait, et Bob ne recevait pas un paquet RTP de bout en bout.
+TEST(RtpLatching, ReAimsWhenWeOfferedIceAndThePeerDeclinedIt)
+{
+	ProbeSocket probe;
+	Session sess(/*natLatchProperty=*/true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendRtpTo(sess.session.GetLocalPort()));
+	EXPECT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "ICE offert et decline : le rattrapage est la seule chose qui reste";
+}
+
 // Un nouveau SetRemotePort (re-INVITE, UPDATE) rouvre le droit au rattrapage :
 // sinon un pair qui change de mapping resterait coincé sur l'ancienne cible.
 // Ici le pair déplacé se manifeste AVANT toute nouvelle émission — le mécanisme
@@ -443,4 +533,72 @@ TEST(RtpLatching, RequestsAKeyFrameOnSourceChange)
 	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs));
 	EXPECT_GT(sess.listener.fpuRequests, 0)
 		<< "un changement de source observee doit declencher onFPURequested";
+}
+
+// ─── La cible posée par ICE, face au plan de contrôle ────────────────────────
+//
+// Sur une jambe ICE, la cible d'envoi n'est PAS celle du `c=` : elle est celle de
+// la paire que les checks de connectivité ont validée. `StartSending` est pourtant
+// rappelé à chaque renégociation avec le `c=` d'origine, sans que rien n'ait bougé
+// côté réseau — et il écrasait la paire validée. Le pair ne remontrait sa vraie
+// adresse qu'au check STUN suivant : trou de média à CHAQUE renégociation, 0,9 s
+// mesurée sur la jambe WebRTC du trafic du 2026-08-21, audio et vidéo ensemble
+// (l'appelée allume sa caméra, l'appelant devient sourd et aveugle le temps que
+// le prochain check passe).
+//
+// `natLatch` reste à false dans les deux tests : le rattrapage NAT est un tout
+// autre chemin, et le laisser éteint prouve que c'est bien ICE qui pose la cible.
+
+TEST(RtpLatching, TheIceValidatedTargetSurvivesARenegotiation)
+{
+	ProbeSocket probe;
+	Session sess;
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	// Le pair se manifeste par un check : ICE valide la paire et pose la cible.
+	ASSERT_TRUE(probe.SendStunBindingTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "prealable : un check entrant doit poser la cible sur la source observee";
+
+	// Renégociation : le contrôleur repose le `c=` d'origine, à l'identique.
+	sess.session.SetRemotePort(announced, 5000);
+	probe.Drain(150);   // sinon un kMagic de la phase precedente ferait passer la suite
+
+	EXPECT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "la cible validee par ICE doit survivre a la renegociation";
+}
+
+// Le pendant, sans lequel le correctif enfermerait la session sur un pair parti :
+// un pair qui se déplace vraiment redémarre ICE (RFC 8445 §9), c'est-à-dire annonce
+// un NOUVEAU mot de passe. La paire validée est alors périmée et la cible revient
+// au plan de contrôle.
+TEST(RtpLatching, AnIceRestartGivesTheTargetBackToTheControlPlane)
+{
+	ProbeSocket probe;
+	Session sess;
+	REQUIRE_LOOPBACK(probe, sess);
+
+	sess.session.SetLocalSTUNCredentials("localufrag", "localpwd");
+	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
+
+	char announced[] = "192.168.255.254";
+	sess.session.SetRemotePort(announced, 5000);
+
+	ASSERT_TRUE(probe.SendStunBindingTo(sess.session.GetLocalPort()));
+	ASSERT_TRUE(sess.ReachesProbeWithin(probe, kExpectTimeoutMs))
+		<< "prealable : un check entrant doit poser la cible sur la source observee";
+
+	// Redémarrage ICE, puis la nouvelle adresse du plan de contrôle.
+	sess.session.SetRemoteSTUNCredentials("remoteufrag2", "remotepwd2");
+	sess.session.SetRemotePort(announced, 5000);
+	probe.Drain(150);
+
+	EXPECT_FALSE(sess.ReachesProbeWithin(probe, kDenyTimeoutMs))
+		<< "apres un redemarrage ICE, la cible redevient celle du plan de controle";
 }

@@ -502,8 +502,30 @@ public class XmlRpcMcuClient {
 
     public boolean StartSending(Integer confId,Integer partId,MediaType media,String sendIp,Integer sendPort,HashMap<Integer,Integer> rtpMap,MediaRole role) throws XmlRpcException
     {
-        //Create request
-        Object[] request = new Object[]{confId,partId,media.valueOf(),sendIp,sendPort,rtpMap,role.valueOf()};
+        //Sans profil d'adressage : le serveur emploie le sien par defaut, soit
+        //exactement le comportement d'avant.
+        return StartSending(confId,partId,media,sendIp,sendPort,rtpMap,role,null);
+    }
+
+    /**
+     * Ouvre l'emission RTP vers une destination, sur un PROFIL D'ADRESSAGE donne.
+     *
+     * <p>{@code profile} vaut "publicv4", "publicv6", "internalv4",
+     * "internalv6", ou {@code null} pour le profil par defaut du serveur. Il
+     * decide de l'interface d'emission et de l'adresse annoncee. Un profil
+     * inconnu, indisponible, ou en desaccord avec celui deja fixe sur cette
+     * jambe fait ECHOUER l'appel — le serveur ne retombe pas en silence sur le
+     * defaut, car cela emettrait par la mauvaise interface sans que rien ne le
+     * dise. Les profils disponibles s'obtiennent par {@code GetNetworkProfiles}.</p>
+     */
+    public boolean StartSending(Integer confId,Integer partId,MediaType media,String sendIp,Integer sendPort,HashMap<Integer,Integer> rtpMap,MediaRole role,String profile) throws XmlRpcException
+    {
+        //Create request. Le profil est le DERNIER parametre et n'est envoye que
+        //s'il est demande : XML-RPC etant positionnel, un serveur anterieur
+        //rejetterait une liste plus longue qu'il ne connait.
+        Object[] request = (profile==null || profile.isEmpty())
+            ? new Object[]{confId,partId,media.valueOf(),sendIp,sendPort,rtpMap,role.valueOf()}
+            : new Object[]{confId,partId,media.valueOf(),sendIp,sendPort,rtpMap,role.valueOf(),profile};
         //Execute
         HashMap response = (HashMap) client.execute("StartSending", request);
         //Return
@@ -535,15 +557,53 @@ public class XmlRpcMcuClient {
 
     public Integer StartReceiving(Integer confId,Integer partId,MediaType media,HashMap<Integer,Integer> rtpMap,MediaRole role,MediaProtocol proto) throws XmlRpcException
     {
+        //Sans profil d'adressage : celui par defaut du serveur.
+        return StartReceiving(confId,partId,media,rtpMap,role,proto,null);
+    }
 
-        //Create request
-        Object[] request = new Object[]{confId,partId,media.valueOf(),rtpMap,role.valueOf(),proto.valueOf()};
+    /**
+     * Ouvre la reception RTP d'un media sur un PROFIL D'ADRESSAGE donne.
+     *
+     * <p>Memes valeurs et memes regles que {@link #StartSending}. Le profil
+     * decide de l'adresse liee — donc du port rendu ici — et de l'adresse
+     * annoncee, disponible en {@code returnVal[1]}.</p>
+     *
+     * <p>A poser AVANT que le controleur ne publie le port dans son SDP : le
+     * serveur relie ses sockets au moment de cet appel, et le port en change.</p>
+     */
+    public Integer StartReceiving(Integer confId,Integer partId,MediaType media,HashMap<Integer,Integer> rtpMap,MediaRole role,MediaProtocol proto,String profile) throws XmlRpcException
+    {
+        //Create request : offer (7e parametre) doit etre present pour que le
+        //profil, qui le suit, soit a la bonne position. Une struct vide vaut
+        //« pas d'offre distante », ce que le serveur traite deja.
+        Object[] request = (profile==null || profile.isEmpty())
+            ? new Object[]{confId,partId,media.valueOf(),rtpMap,role.valueOf(),proto.valueOf()}
+            : new Object[]{confId,partId,media.valueOf(),rtpMap,role.valueOf(),proto.valueOf(),new HashMap<String,Object>(),profile};
         //Execute
         HashMap response = (HashMap) client.execute("StartReceiving", request);
         //Get result
         Object[] returnVal = (Object[]) response.get("returnVal");
         //Return port
         return (Integer)returnVal[0];
+    }
+
+    /**
+     * Les profils d'adressage que le serveur peut employer.
+     *
+     * <p>A INTERROGER, plutot qu'a recopier dans la configuration du
+     * controleur : un profil indisponible est refuse a l'appel, donc il faut
+     * savoir AVANT ce qu'on peut demander — et une liste tenue des deux cotes
+     * derive. Chaque entree porte {@code name}, {@code available},
+     * {@code announced}, {@code bind} et {@code default}.</p>
+     */
+    public Object[] GetNetworkProfiles() throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{};
+        //Execute
+        HashMap response = (HashMap) client.execute("GetNetworkProfiles", request);
+        //Get result
+        return (Object[]) response.get("returnVal");
     }
 
     public boolean StopReceiving(Integer confId,Integer partId,MediaType media,MediaRole role) throws XmlRpcException

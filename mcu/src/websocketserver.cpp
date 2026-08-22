@@ -1,3 +1,4 @@
+#include "ipaddress.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -62,7 +63,7 @@ void WebSocketServer::AddHandler(const std::string base,Handler* hnd)
 *************************/
 int WebSocketServer::Init(int port)
 {
-	sockaddr_in addr;
+
 
 	//Check not already inited
 	if (inited)
@@ -84,21 +85,29 @@ int WebSocketServer::Init(int port)
 	}
 
 
-	//Create socket
-	server = socket(AF_INET, SOCK_STREAM, 0);
+	//Create socket. AF_INET6 + IPV6_V6ONLY=0 : UNE socket entend les deux
+	//familles, un client v4 arrivant en ::ffff:a.b.c.d. Les plans de contrôle
+	//doivent tout entendre — contrairement au média, dont la famille est choisie
+	//par le profil d'adressage (NETWORK-CONFIGURATION.md).
+	server = socket(AF_INET6, SOCK_STREAM, 0);
 
 	//Set SO_REUSEADDR on a socket to true (1):
 	int optval = 1;
 	setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
+	//Sans cela une socket v6 n'entend QUE de l'IPv6 : la bascule ferait perdre
+	//tous les clients v4 d'un coup. Un échec n'est pas fatal (certains noyaux
+	//imposent net.ipv6.bindv6only=1), mais il change le service rendu : il se
+	//journalise.
+	int v6only = 0;
+	if (setsockopt(server, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
+		Error("-WebSocket Server: cannot clear IPV6_V6ONLY (errno %d) — IPv4 clients will not be served\n",errno);
+
 	//Bind to first available port
-	memset(&addr,0,sizeof(addr));
-	addr.sin_family 	= AF_INET;
-	addr.sin_addr.s_addr 	= INADDR_ANY;
-	addr.sin_port 		= htons(serverPort);
+	const IPEndpoint listenOn = IPAddress::Any(AF_INET6).To(serverPort);
 
 	//Bind
-     	if (bind(server, (sockaddr *) &addr, sizeof(addr)) < 0)
+     	if (bind(server, listenOn, listenOn.Len()) < 0)
 		//Error
 		return Error("Can't bind server socket. errno = %d.\n", errno);
 	//I am inited

@@ -134,6 +134,9 @@ public:
 	int EndpointStopSending(int endpointId,MediaFrame::Type media);
 	//P8a : `offerFmtp` (optionnel) = le fmtp de l'offre par payload type, relayé au
 	//négociateur ; NULL = pas d'entrée distante (contrôleur pré-P8a).
+	//Profil d'adressage demandé par le contrôleur pour une jambe (voir
+	//NETWORK-CONFIGURATION.md). À poser AVANT EndpointStartReceiving/StartSending.
+	bool EndpointSetAddressProfile(int endpointId,MediaFrame::Type media,const char* profile,std::string& error);
 	int EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut,
 	                           const std::map<int,std::string>* offerFmtp = NULL);
 	int EndpointStopReceiving(int endpointId,MediaFrame::Type media);

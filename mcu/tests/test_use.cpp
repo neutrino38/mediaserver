@@ -210,4 +210,53 @@ TEST(UsePrimitive, StressReadersVsWriters)
 	EXPECT_EQ(violations.load(), 0);
 }
 
+// ScopedUse : le DecUse doit partir à la sortie de portée, y compris par un
+// retour anticipé. C'est tout l'intérêt du garde — un DecUse manqué laisse le
+// compteur non nul et fait attendre POUR TOUJOURS le prochain écrivain.
+TEST(UsePrimitive, ScopedUseReleasesOnEarlyReturn)
+{
+	Use use;
+
+	// Fonction qui rend la main au milieu de la portée gardée.
+	auto readerWithEarlyReturn = [&use](bool bailOut) {
+		ScopedUse scoped(use);
+		if (bailOut)
+			return;
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	};
+
+	readerWithEarlyReturn(true);
+	readerWithEarlyReturn(false);
+
+	// Si un seul DecUse manquait, ce WaitUnusedAndLock n'aboutirait jamais :
+	// la variante timée transforme l'interblocage en échec lisible.
+	EXPECT_EQ(1, use.WaitUnusedAndLock(1000)) << "un DecUse a été perdu";
+	use.Unlock();
+}
+
+// Le garde tient bien le verrou pendant sa portée : un écrivain doit attendre.
+TEST(UsePrimitive, ScopedUseBlocksWriterWhileAlive)
+{
+	Use use;
+	std::atomic<bool> locked{false};
+	std::thread writer;
+
+	{
+		ScopedUse scoped(use);
+
+		writer = std::thread([&]() {
+			use.WaitUnusedAndLock();
+			locked = true;
+			use.Unlock();
+		});
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(150));
+		EXPECT_FALSE(locked.load()) << "l'écrivain est passé pendant la portée gardée";
+	}
+	// Sortie de portée : le DecUse est parti, l'écrivain doit entrer.
+
+	writer.join();
+	EXPECT_TRUE(locked.load());
+}
+
 } // namespace

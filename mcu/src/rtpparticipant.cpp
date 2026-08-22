@@ -236,6 +236,51 @@ int RTPParticipant::SetRemoteSTUNCredentials(MediaFrame::Type media,const char* 
 	return 0;
 }
 
+/***********************************
+* SetAddressProfile
+*	Le contrôleur dit quel côté du serveur il veut employer ; la session en tire
+*	l'adresse à lier et l'adresse à annoncer. Le refus est explicite : un profil
+*	indisponible qui retomberait en silence sur le défaut publierait une adresse
+*	que le pair ne peut pas joindre — la panne serait vue à l'appel, pas ici.
+***********************************/
+int RTPParticipant::SetAddressProfile(MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role)
+{
+	switch (media)
+	{
+		case MediaFrame::Audio:
+			return audio.GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
+		case MediaFrame::Video:
+			if (role>=MAX_VIDEO_STREAM || !video[role])
+			{
+				error = "role video inconnu";
+				return 0;
+			}
+			return video[role]->GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
+		case MediaFrame::Text:
+			return text.GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
+		default:
+			error = "media sans session RTP";
+			return 0;
+	}
+}
+
+IPAddress RTPParticipant::GetAnnouncedAddress(MediaFrame::Type media,MediaFrame::MediaRole role)
+{
+	switch (media)
+	{
+		case MediaFrame::Audio:
+			return audio.GetOwnSession().GetAnnouncedAddress();
+		case MediaFrame::Video:
+			if (role<MAX_VIDEO_STREAM && video[role])
+				return video[role]->GetOwnSession().GetAnnouncedAddress();
+			return IPAddress();
+		case MediaFrame::Text:
+			return text.GetOwnSession().GetAnnouncedAddress();
+		default:
+			return IPAddress();
+	}
+}
+
 int RTPParticipant::StartSending(MediaFrame::Type media,char *ip, int port,RTPMap& rtpMap,MediaFrame::MediaRole role)
 {
 	switch (media)
@@ -443,6 +488,12 @@ void RTPParticipant::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWOR
 	if (session->GetMediaType()==MediaFrame::Video)
 		//Limit video
 		video[session->GetMediaRole()]->SetTemporalBitrateLimit(estimation);
+}
+
+void RTPParticipant::onSenderEstimatedBitrate(RTPSession *session,DWORD estimation)
+{
+	if (session->GetMediaType()==MediaFrame::Video)
+		video[session->GetMediaRole()]->SetSenderEstimatedBitrate(estimation);
 }
 
 void RTPParticipant::onRequestFPU()

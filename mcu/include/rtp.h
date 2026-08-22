@@ -79,7 +79,8 @@ public:
         {
             SSRCAudioLevel = 1,
             TimeOffset = 2,
-            AbsoluteSendTime = 3
+            AbsoluteSendTime = 3,
+            TransportWideCC = 4
         };
     public:
         HeaderExtension()
@@ -88,23 +89,29 @@ public:
             timeOffset = 0;
             vad = 0;
             level = 0;
+            transportSeqNum = 0;
             hasAbsSentTime = 0;
             hasTimeOffset = 0;
             hasAudioLevel = 0;
+            hasTransportSeqNum = 0;
         }
     protected:
         QWORD absSentTime;
         int timeOffset;
         bool vad;
         BYTE level;
+        WORD transportSeqNum;
         bool hasAbsSentTime;
         bool hasTimeOffset;
         bool hasAudioLevel;
+        bool hasTransportSeqNum;
     };
 
     RTPPacket( MediaFrame::Type media, DWORD codec )
     {
         this->media = media;
+        //Paquet fabrique localement : coherent par construction
+        this->valid = true;
         //Set coced
         SetCodec( codec );
         //Get header pointer
@@ -134,6 +141,8 @@ public:
     RTPPacket( MediaFrame::Type media, BYTE *data, DWORD size )
     {
         this->media = media;
+        //Paquet RECU : c'est SetData qui dira s'il est exploitable
+        this->valid = false;
         //Get header pointer
         header = (rtp_hdr_t *)buffer;
         //Set Data
@@ -161,6 +170,8 @@ public:
     {
         this->media = media;
         this->codec = codec;
+        //Paquet fabrique localement : coherent par construction
+        this->valid = true;
         //Get header pointer
         header = (rtp_hdr_t *)buffer;
         //empty header
@@ -223,7 +234,10 @@ public:
     rtp_hdr_ext_t *GeExtensionHeader() const { return GetX() ? (rtp_hdr_ext_t *)(buffer + sizeof( rtp_hdr_t ) + 4 * header->cc) : NULL; }
     DWORD GetRTPHeaderLen() const { return sizeof( rtp_hdr_t ) + 4 * header->cc + GetExtensionSize(); }
     WORD GetExtensionType() const { return GeExtensionHeader()->ext_type; }
-    WORD GetExtensionLength() const { return GetX() ? htons( GeExtensionHeader()->len ) * 4 : 0; }
+    //DWORD, et non WORD : une extension peut annoncer 65535 mots, soit 262 140
+    //octets. Tronquer ce produit rendait la longueur annoncee incoherente avec
+    //celle qu'on verifie dans SetData.
+    DWORD GetExtensionLength() const { return GetX() ? (DWORD)ntohs( GeExtensionHeader()->len ) * 4 : 0; }
     const BYTE *GetExtensionData() const { return GetX() ? buffer + sizeof( rtp_hdr_t ) + 4 * header->cc + sizeof( rtp_hdr_ext_t ) : NULL; }
     DWORD GetExtensionSize() const { return GetX() ? GetExtensionLength() + sizeof( rtp_hdr_ext_t ) : 0; };
     DWORD GetCodec() const { return codec; }
@@ -258,6 +272,8 @@ public:
     BYTE GetLevel() const { return extension.level; }
     bool  HasAudioLevel() const { return extension.hasAudioLevel; }
     bool  HasAbsSentTime() const { return extension.hasAbsSentTime; }
+    bool  HasTransportSeqNum() const { return extension.hasTransportSeqNum; }
+    WORD  GetTransportSeqNum() const { return extension.transportSeqNum; }
     bool  HasTimeOffeset() const { return extension.hasTimeOffset; }
 
     bool SetPayload( BYTE *data, DWORD size )
@@ -274,17 +290,56 @@ public:
         return true;
     }
 
+    //Un paquet recu dont l'en-tete ne tient pas dans ce qui a ete recu est
+    //INEXPLOITABLE : GetMediaData() pointerait hors du tampon et
+    //GetMediaLength() passerait sous zero. Les appelants (RTPSession) doivent
+    //le jeter plutot que de le decoder.
+    bool IsValid() const { return valid; }
+
     bool SetData( BYTE *data, DWORD size )
     {
+        //Rien de lisible tant qu'on n'a pas prouve le contraire
+        valid = false;
+        len = 0;
         //Check
-        if( size > SIZE )
+        if( size > SIZE || size < sizeof( rtp_hdr_t ) )
             //Error
             return false;
         //Copy data
         memcpy( buffer, data, size );
+        //L'en-tete decrit sa propre longueur : `cc` CSRC de 4 octets, puis une
+        //extension dont la longueur est annoncee en mots de 32 bits (jusqu'a
+        //262 140 octets). Ce que le paquet ANNONCE doit tenir dans ce qu'on a
+        //RECU, sinon tout ce qui suit lit hors du tampon.
+        DWORD headerLen = sizeof( rtp_hdr_t ) + 4 * header->cc;
+        //L'en-tete d'extension lui-meme doit d'abord etre dans le tampon...
+        if( GetX() && headerLen + sizeof( rtp_hdr_ext_t ) > size )
+            //Error
+            return false;
+        //...apres quoi la longueur qu'il annonce est lisible sans risque
+        headerLen = GetRTPHeaderLen();
+        if( headerLen > size )
+            //Error
+            return false;
         //Set size
-        SetSize( size );
+        len = size - headerLen;
+        //RFC 3550 §5.1 : P=1, le dernier octet compte les octets de bourrage,
+        //lui compris. Les sondes de debit WebRTC sont des paquets entierement
+        //en bourrage sur le SSRC media : sans ce retrait, leurs zeros entrent
+        //au depaquetiseur comme du media et corrompent l'image.
+        if( GetP() )
+        {
+            BYTE pad = buffer[size - 1];
+            if( pad == 0 || pad > len )
+            {
+                //Error : rien de lisible, len a deja ete pose ci-dessus
+                len = 0;
+                return false;
+            }
+            len -= pad;
+        }
         //OK
+        valid = true;
         return true;
     }
 
@@ -325,6 +380,10 @@ private:
     DWORD len;
     rtp_hdr_t *header;
     HeaderExtension extension;
+    //Vrai tant que l'en-tete decrit un paquet coherent avec sa taille (cf. SetData).
+    //Un paquet FABRIQUE ici (les deux constructeurs sans donnees) l'est par
+    //construction ; seul un paquet RECU peut mentir.
+    bool valid;
 };
 
 class RTPPacketSched :
@@ -728,6 +787,13 @@ public:
     virtual DWORD GetSize();
     virtual DWORD Parse( BYTE *data, DWORD size );
     virtual DWORD Serialize( BYTE *data, DWORD size );
+
+    void SetSSRC( DWORD ssrc ) { this->ssrc = ssrc; }
+    void SetFSN( WORD fsn ) { this->fsn = fsn; }
+    void SetBLP( WORD blp ) { this->blp = blp; }
+    DWORD GetSSRC() const { return ssrc; }
+    WORD GetFSN() const { return fsn; }
+    WORD GetBLP() const { return blp; }
 private:
     DWORD ssrc;
     WORD fsn;
@@ -852,6 +918,12 @@ public:
     virtual DWORD GetSize();
     virtual DWORD Parse( BYTE *data, DWORD size );
     virtual DWORD Serialize( BYTE *data, DWORD size );
+
+    DWORD GetSSRC() const { return ssrc; }
+    BYTE GetSubType() const { return subtype; }
+    const char *GetName() const { return name; }
+    const BYTE *GetData() const { return data; }
+    DWORD GetDataSize() const { return size; }
 private:
     BYTE subtype;
     DWORD ssrc;
@@ -867,7 +939,8 @@ public:
     {
         NACK = 1,
         TempMaxMediaStreamBitrateRequest = 3,
-        TempMaxMediaStreamBitrateNotification = 4
+        TempMaxMediaStreamBitrateNotification = 4,
+        TransportWideFeedbackMessage = 15
     };
 
     static const char *TypeToString( FeedbackType type )
@@ -880,6 +953,8 @@ public:
                 return "TempMaxMediaStreamBitrateRequest";
             case TempMaxMediaStreamBitrateNotification:
                 return "TempMaxMediaStreamBitrateNotification";
+            case TransportWideFeedbackMessage:
+                return "TransportWideFeedbackMessage";
         }
         return "Unknown";
     }
@@ -1138,7 +1213,10 @@ public:
             number = data[1] & 0x07;
             number = number << 8 | data[2];
             number = number << 2 | data[3] >> 6;
-            pictureId = data[4] & 0x3F;
+            //Le champ fait QUATRE octets (c'est ce que GetSize et Serialize
+            //disent) : le pictureId tient dans les 6 bits bas du quatrieme,
+            //pas dans un cinquieme octet qui n'existe pas.
+            pictureId = data[3] & 0x3F;
             return 4;
         }
         virtual DWORD Serialize( BYTE *data, DWORD size )
@@ -1415,11 +1493,14 @@ public:
 
             //Init exp
             BYTE bitrateExp = 0;
-            //Find 18 most significants bits
-            for( BYTE i = 0; i < 64; i++ )
+            //Find 18 most significants bits. Le décalage se fait en 64 bits :
+            //en int il débordait dès i=14 (0x3FFFF tient sur 18 bits), soit
+            //pour tout débit au-dessus de ~4 Gb/s en théorie, et surtout un
+            //comportement indéfini que le compilateur est libre d'exploiter.
+            for( BYTE i = 0; i < 32; i++ )
             {
                 //If bitrate is less than
-                if( bitrate <= (0x003FFFF << i) )
+                if( bitrate <= ( (QWORD)0x003FFFF << i ) )
                 {
                     //That's the exp
                     bitrateExp = i;
@@ -1428,10 +1509,13 @@ public:
             }
             //Get mantisa
             DWORD bitrateMantissa = (bitrate >> bitrateExp);
+            //Num SSRC est un champ de 8 bits : au-delà, la liste est tronquée
+            //ici plutôt que sur le fil.
+            DWORD num = ssrcs.size() < 255 ? ssrcs.size() : 255;
             //Create field
             ApplicationLayerFeeedbackField *field = new ApplicationLayerFeeedbackField();
             //Set size of data
-            field->length = 8 + 4 * ssrcs.size();
+            field->length = 8 + 4 * num;
             //Allocate memory
             field->payload = (BYTE *)malloc( field->length );
             //Set id
@@ -1439,15 +1523,19 @@ public:
             field->payload[1] = 'E';
             field->payload[2] = 'M';
             field->payload[3] = 'B';
-            //Set data
-            field->payload[4] = 1;
+            //Set data. Num SSRC annonce le NOMBRE de SSRC qui suivent : la
+            //valeur 1 était écrite en dur alors que la boucle ci-dessous en
+            //sérialise autant que la liste en contient — un REMB portant deux
+            //flux se lisait donc amputé du second (et le champ était plus long
+            //que ce qu'il déclarait).
+            field->payload[4] = num;
             field->payload[5] = bitrateExp << 2 | (bitrateMantissa >> 16 & 0x03);
             field->payload[6] = bitrateMantissa >> 8;
             field->payload[7] = bitrateMantissa;
             //Num of ssrcs
             DWORD i = 0;
             //For each ssrc
-            for( std::list<DWORD>::iterator it = ssrcs.begin(); it != ssrcs.end(); ++it )
+            for( std::list<DWORD>::iterator it = ssrcs.begin(); it != ssrcs.end() && i < num; ++it )
                 //Set ssrc
                 set4( field->payload, 8 + 4 * (i++), (*it) );
             //Return it
@@ -1522,7 +1610,11 @@ public:
         //Calculate
         for( RTCPPackets::iterator it = packets.begin(); it != packets.end(); ++it )
             //Append size
-            size = sizeof( rtcp_common_t ) + (*it)->GetSize();
+            //`=` au lieu de `+=` : la taille annoncee etait celle du DERNIER
+            //sous-paquet, et Serialize acceptait donc un tampon trop petit pour
+            //le compound entier. Le GetSize() de chaque sous-paquet compte deja
+            //son propre en-tete commun.
+            size += (*it)->GetSize();
         //Return total size
         return size;
     }

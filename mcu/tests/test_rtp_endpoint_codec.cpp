@@ -92,6 +92,47 @@ public:
 		return -1;
 	}
 
+	// Attend un datagramme RTP QUELCONQUE et rend la taille de sa charge utile
+	// (0 pour un en-tête nu), ou -1 si rien n'arrive. WaitForMagic ne convient pas
+	// ici : il écarte justement les paquets sans charge utile.
+	int WaitForAnyRtpPayloadSize(int timeoutMs)
+	{
+		pollfd pfd = { fd, POLLIN, 0 };
+		while (timeoutMs > 0)
+		{
+			const int slice = timeoutMs < 50 ? timeoutMs : 50;
+			const int ret = poll(&pfd, 1, slice);
+			timeoutMs -= slice;
+			if (ret <= 0)
+				continue;
+
+			BYTE buffer[MTU];
+			const ssize_t size = recv(fd, buffer, sizeof(buffer), 0);
+			if (size < 12)
+				continue;
+			return (int)(size - 12);
+		}
+		return -1;
+	}
+
+	// Vide la file sans rien attendre. Sert à évacuer la rafale d'amorçage NAT
+	// (3 paquets à 20 ms, cf. NAT_PRIMING_BURST) : ce sont des en-têtes nus, donc
+	// indistinguables d'un paquet sans média par la seule taille.
+	void Drain(int ms)
+	{
+		pollfd pfd = { fd, POLLIN, 0 };
+		while (ms > 0)
+		{
+			const int slice = ms < 25 ? ms : 25;
+			ms -= slice;
+			if (poll(&pfd, 1, slice) > 0)
+			{
+				BYTE buffer[MTU];
+				recv(fd, buffer, sizeof(buffer), 0);
+			}
+		}
+	}
+
 	int Port() const { return ntohs(bound.sin_port); }
 
 private:
@@ -137,6 +178,17 @@ public:
 		packet.SetTimestamp(ts);
 		memcpy(packet.GetMediaData(), kMagic, sizeof(kMagic));
 		packet.SetMediaLength(sizeof(kMagic));
+		endpoint.onRTPPacket(packet);
+	}
+
+	// Une sonde de débit WebRTC après retrait du bourrage : plus un octet de média.
+	void PublishPaddingOnly(DWORD codec, WORD seq, DWORD ts)
+	{
+		DWORD c = codec;
+		RTPPacket packet(MediaFrame::Video, c);
+		packet.SetSeqNum(seq);
+		packet.SetTimestamp(ts);
+		packet.SetMediaLength(0);
 		endpoint.onRTPPacket(packet);
 	}
 
@@ -247,4 +299,41 @@ TEST(RTPEndpointCodec, UneRenegociationQuiAjouteLeTypeDebloqueLEmission)
 
 	EXPECT_EQ(probe.WaitForMagic(kExpectTimeoutMs), (int)kPayloadTypeVP8)
 		<< "apres renegociation, VP8 doit sortir sous SON type";
+}
+
+// ADVERSE — une sonde de débit n'est pas une image.
+//
+// libwebrtc sonde la capacité du réseau en émettant, sur le SSRC média, des paquets
+// ENTIÈREMENT en bourrage (RFC 3550 §5.1, P=1, 255 octets). `RTPPacket::SetData`
+// retire ce bourrage et rend donc une longueur de média nulle. Relayé tel quel, un
+// tel paquet part vers le pair avec l'horodatage de l'image en cours et un numéro de
+// séquence à lui : le dépaquetiseur d'en face y cherche un descripteur VP8 ou un NAL
+// H.264 et ne trouve rien, donc il invalide l'image ENTIÈRE.
+//
+// Capture du 2026-08-21 20:09, Chrome -> Linphone en VP8 relayé : 1356 des 1368
+// paquets d'Alice sont relayés à l'octet près, et les 12 qui portent du bourrage
+// arrivent chez Bob avec une charge utile de zéro. Trois tombent dans la première
+// image — l'intra — d'où une image corrompue dès le décroché qui ne se rétablit
+// jamais.
+TEST(RTPEndpointCodec, UneSondeDeDebitSansMediaNEstPasEmise)
+{
+	ProbeSocket probe;
+	ASSERT_TRUE(probe.Open()) << "socket loopback indisponible";
+
+	SendingEndpoint ep(probe.Port());
+	if (!ep.ok)
+		GTEST_SKIP() << "impossible de binder une paire de ports RTP";
+
+	// Garde-fou : le chemin nominal émet bien, sinon l'attente négative ne prouve rien.
+	ep.Publish(kCodecH264, 1, 90000);
+	ASSERT_EQ(probe.WaitForMagic(kExpectTimeoutMs), (int)kPayloadTypeH264);
+
+	// La rafale d'amorçage NAT est encore en vol et porte le même en-tête nu que
+	// ce qu'on s'apprête à interdire : on l'évacue avant de mesurer.
+	probe.Drain(200);
+
+	ep.PublishPaddingOnly(kCodecH264, 2, 90000);
+
+	EXPECT_EQ(probe.WaitForAnyRtpPayloadSize(kDenyTimeoutMs), -1)
+		<< "un paquet sans media ne doit pas partir : il invaliderait l'image chez le pair";
 }
