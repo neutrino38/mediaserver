@@ -644,6 +644,14 @@ int RTPSession::SetProperties(const Properties& properties)
 	bitrateFeedbackMode = askedTMMBR ? BitrateFeedbackTMMBR
 			    : askedREMB  ? BitrateFeedbackREMB
 					 : BitrateFeedbackNone;
+	//La cadence de hausse suit le dialecte : un pair TMMBR (Linphone)
+	//reconfigure son encodeur à chaque annonce, on espace donc les hausses ;
+	//un pair REMB (navigateur) lisse lui-même, la période courte reste.
+	if (bitrateFeedbackMode == BitrateFeedbackTMMBR)
+		bitrateFeedbackThrottler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
+							RembThrottler::TmmbrRaiseStepPercent);
+	else
+		bitrateFeedbackThrottler.SetRaisePolicy(RembThrottler::SendIntervalMs, 0);
 	if (bitrateFeedbackMode != BitrateFeedbackNone)
 		Log("Activated %s bitrate feedback on %s stream %p.\n",
 		    bitrateFeedbackMode == BitrateFeedbackTMMBR ? "TMMBR+REMB" : "REMB",

@@ -540,6 +540,61 @@ TEST(RateControlThrottler, LePlafondSurvitAUneMesureBasse)
 	EXPECT_EQ(2000000u, out);
 }
 
+// ─── Politique de hausse du dialecte TMMBR (mesure alice_bob_1, 2026-08-22) ───
+// Linphone reconfigure son encodeur à CHAQUE TMMBR reçu (msvideoqualitycontroller.c,
+// aucune hystérésis d'amplitude) : nos hausses AIMD à une par seconde le
+// faisaient rouvrir en boucle. En dialecte TMMBR, une hausse attend 5 s — sauf
+// pas franc de 20 % — et une baisse franche part toujours immédiatement.
+
+TEST(RateControlThrottler, EnDialecteTMMBRUneHausseAttendCinqSecondes)
+{
+	RembThrottler throttler;
+	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
+				 RembThrottler::TmmbrRaiseStepPercent);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+
+	// La rampe AIMD réelle : ~+8 % par seconde. Aucune ne doit partir avant 5 s.
+	EXPECT_FALSE(throttler.OnEstimateChanged(1080000, 2000, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(1166000, 3000, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(1160000, 4000, out))
+		<< "une variation dans le bruit a devancé la période de hausse";
+
+	EXPECT_TRUE(throttler.OnEstimateChanged(1259000, 6001, out));
+	EXPECT_EQ(1259000u, out);
+}
+
+TEST(RateControlThrottler, EnDialecteTMMBRUnPasFrancDevanceLaPeriode)
+{
+	RembThrottler throttler;
+	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
+				 RembThrottler::TmmbrRaiseStepPercent);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+
+	// +19 % : sous le pas franc, attend la période.
+	EXPECT_FALSE(throttler.OnEstimateChanged(1190000, 2000, out));
+	// +20 % : le pas franc part sans attendre.
+	EXPECT_TRUE(throttler.OnEstimateChanged(1200000, 2100, out));
+	EXPECT_EQ(1200000u, out);
+}
+
+TEST(RateControlThrottler, EnDialecteTMMBRUneBaisseFranchePartToujoursImmediatement)
+{
+	RembThrottler throttler;
+	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
+				 RembThrottler::TmmbrRaiseStepPercent);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+
+	EXPECT_TRUE(throttler.OnEstimateChanged(850000, 1200, out))
+		<< "une baisse de 15 % (un pas d'AIMD) retenue par la période de hausse";
+	EXPECT_EQ(850000u, out);
+}
+
 // Le champ REMB annonce le NOMBRE de SSRC qu'il porte : la valeur était écrite
 // en dur à 1 alors que la liste en sérialise autant qu'elle en contient — un
 // REMB à deux flux se lisait amputé du second.

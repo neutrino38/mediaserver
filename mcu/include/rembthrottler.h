@@ -10,8 +10,12 @@
  *
  *   - une BAISSE de plus de 3 % part TOUT DE SUITE — c'est le message urgent,
  *     le lien sature et le pair doit ralentir ;
- *   - tout le reste (hausse, ou variation dans le bruit) attend 200 ms depuis
- *     la dernière annonce ;
+ *   - tout le reste (hausse, ou variation dans le bruit) attend la période de
+ *     hausse depuis la dernière annonce — 200 ms par défaut, mais le dialecte
+ *     peut l'allonger (SetRaisePolicy) : Linphone reconfigure son encodeur à
+ *     CHAQUE TMMBR reçu (msvideoqualitycontroller.c, aucune hystérésis), donc
+ *     une hausse par seconde le fait rouvrir en boucle — mesure du 2026-08-22 ;
+ *     un pas franc (raiseStepPercent) devance la période ;
  *   - un plafond venu d'AILLEURS (l'autre patte d'un relais, lot 5) se compose
  *     par min() avec la mesure locale : on annonce le plus contraint des deux.
  *
@@ -35,12 +39,25 @@ public:
 	static constexpr QWORD SendIntervalMs = 200;
 	//Une annonce ne devance sa période que si elle descend de plus de 3 %.
 	static constexpr QWORD SendThresholdPercent = 103;
+	//Politique de hausse du dialecte TMMBR : au plus une hausse toutes les 5 s,
+	//sauf pas franc de 20 % qui devance la période.
+	static constexpr QWORD TmmbrRaiseIntervalMs  = 5000;
+	static constexpr DWORD TmmbrRaiseStepPercent = 20;
 	//Valeur d'« aucun plafond externe » et de « rien encore annoncé ».
 	static constexpr DWORD NoLimit = 0xFFFFFFFF;
 
 	RembThrottler()
 	{
 		Reset();
+	}
+
+	//La cadence de hausse du dialecte : REMB garde le défaut (200 ms, pas de
+	//pas franc), TMMBR passe à (TmmbrRaiseIntervalMs, TmmbrRaiseStepPercent).
+	//Survit à Reset() : c'est une propriété de la négociation, pas de l'état.
+	void SetRaisePolicy(QWORD intervalMs, DWORD stepPercent)
+	{
+		raiseIntervalMs  = intervalMs;
+		raiseStepPercent = stepPercent;
 	}
 
 	//Remet l'amortisseur à l'état neuf : la prochaine annonce part sans attendre.
@@ -62,10 +79,13 @@ public:
 	bool OnEstimateChanged(DWORD bitrate, QWORD now, DWORD& out)
 	{
 		//Une hausse — ou une variation dans le bruit — attend son tour ; seule
-		//une baisse de plus de 3 % devance la période.
+		//une baisse de plus de 3 % devance la période, et un pas franc quand la
+		//politique du dialecte en définit un.
 		if (hasSent
 		    && (QWORD)bitrate * SendThresholdPercent / 100 > (QWORD)lastSent
-		    && now < lastSendTime + SendIntervalMs)
+		    && now < lastSendTime + raiseIntervalMs
+		    && !(raiseStepPercent
+			 && (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + raiseStepPercent)))
 			return false;
 
 		//C'est la mesure qui est mémorisée, pas la valeur émise : le plafond
@@ -118,6 +138,8 @@ private:
 	QWORD	lastSendTime;
 	bool	hasSent;
 	DWORD	maxBitrate;
+	QWORD	raiseIntervalMs  = SendIntervalMs;
+	DWORD	raiseStepPercent = 0;
 };
 
 #endif	/* REMBTHROTTLER_H */
