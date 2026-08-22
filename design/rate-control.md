@@ -861,7 +861,7 @@ y a un homologue ; elle sert d'ordre de grandeur, pas de cible à recopier.
 
 ### D.0 Comment ces mesures se produisent
 
-Protocole, montage et seuils : [`mcu/tests/tools/README.md`](mcu/tests/tools/README.md).
+Protocole, montage et seuils : [`mcu/tests/tools/README.md`](../mcu/tests/tools/README.md).
 En deux commandes, une fois l'appel établi et le mediaserver lancé avec `-d` :
 
 ```sh
@@ -1060,7 +1060,7 @@ dégradation réelle continue). Aucun NaN, aucun écrêtage, covariance saine su
 > [`rate_control_plan.md`](rate_control_plan.md) : la campagne demandée le
 > 2026-08-20, une fois les deux boucles déclarées satisfaisantes. Elle ne mesure
 > pas un estimateur mais la **propagation** d'une consigne d'une patte à l'autre.
-> Rien ne se remplit ici avant que 6.6 et 6.7 (`sender_bwe_plan.md`) soient
+> Rien ne se remplit ici avant que 6.6 et 6.7 (BWE émetteur) soient
 > livrés : sans eux la consigne d'émission n'atteint aucun organe en 1:1.
 
 ### E.0 Relevé de dialecte (phase 0) — sans lui, rien n'est interprétable

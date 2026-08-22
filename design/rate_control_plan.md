@@ -704,9 +704,10 @@ A réduit et que ça n'oscille pas (le critère d'oscillation du lot 3 s'appliqu
 
 ## Lot 6 — Estimateur côté émetteur + pacing (développement, gated lot 3)
 
-C'est le seul lot qui soit un développement et non une correction, et il mérite
-sa propre conception avant tout code (`sender_bwe_plan.md`, à écrire au moment
-GO). Le présent plan fige seulement le périmètre v1 et les interfaces :
+C'est le seul lot qui soit un développement et non une correction, et il a
+mérité sa propre conception avant le code (BWE émetteur, livré — cf. §7.1 pour
+le détail des sous-lots 6.6/6.7). Le présent plan fige seulement le périmètre
+v1 et les interfaces :
 
 - **Entrée** : le feedback transport-cc/CCFB reçu de nos pairs sur nos flux
   sortants (le lot 4 nous a appris les formats ; ici on les *consomme*).
@@ -796,8 +797,8 @@ rapportées et remonte quand elles cessent, au lieu de rester à la valeur signa
 quoi qu'il arrive.
 
 Les deux correctifs s'écrivent et se testent **sous horloge simulée, sans appel
-réel** ; ils sont suivis comme sous-lots 6.6 et 6.7 dans
-[`sender_bwe_plan.md`](sender_bwe_plan.md).
+réel** ; ils sont suivis comme sous-lots 6.6 et 6.7 du lot 6 (livrés le
+2026-08-20).
 
 ### 7.2 Phase 0 commune — relever le dialecte avant de mesurer
 
@@ -1005,7 +1006,7 @@ interprétables.
       « dialecte » (5.1) est faite depuis le lot 2 ; restent la partie dynamique
       et bidirectionnelle en transcodage (point 5) et le retrait de
       `SetTemporalMaxLimit` comme véhicule de propagation
-- [x] Lot 6 — [`sender_bwe_plan.md`](sender_bwe_plan.md) ÉCRIT (2026-08-19) ;
+- [x] Lot 6 — BWE émetteur, conception écrite (2026-08-19) ;
       sous-lots 6.1 à 6.4 faits, 6.5 ouvert (séance egress à rejouer avec une
       source animée) ; 6.6 et 6.7 ajoutés le 2026-08-20, prérequis du lot 7.
       **Les deux boucles, ouverte et fermée, sont déclarées satisfaisantes par le

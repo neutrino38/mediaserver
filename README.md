@@ -8,7 +8,7 @@ This software is a fork of the mendooze media server originaly written by Sergio
 
 and can be used to provide these functions. It is controlled remotely over XML-RPC and also speaks RTMP, WebSocket, RTP/SRTP, BFCP and (optionally) RabbitMQ. It supports:
 
-- Bitstream : RTP, SRTP, SRTP-DTLS (Webrtc); NACK, REMB, TMMBR, Text over Websocket
+- Bitstream : RTP, SRTP, SRTP-DTLS (Webrtc); NACK, REMB, TMMBR, Text over Websocket, `transport_cc`
 - RTMP (flash related protocol) support
 - Audio Codecs : GSM, G.711, G.722, OPUS, AAC some others
 - Video Codecs : H.263, H.263+, H.264, VP8, AV1
@@ -28,9 +28,9 @@ The codebase is mostly C++ (in `mcu/`) around a shared conference engine (`MCU` 
 
 The mediaserver exposes three XML-RPC interfaces
 
-- a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [xmlrpc_jsr309_api.md](xmlrpc_jsr309_api.md).
+- a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [xmlrpc_jsr309_api.md](design/xmlrpc_jsr309_api.md).
 
-- a specialized MCU API, oriented around conferences, participants and video mosaics. It is documented in [MCU-API.md](MCU-API.md).
+- a specialized MCU API, oriented around conferences, participants and video mosaics. It is documented in [MCU-API.md](docs/MCU-API.md).
 
 - other APIs are present but unmaintained.
 
@@ -38,9 +38,9 @@ The mediaserver exposes three XML-RPC interfaces
 
 | Document | Contenu |
 |---|---|
-| [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md) | **Configuration réseau, par cas d'usage** : IP publique portée par l'hôte, IP publique nattée 1:1, deux adresses (publique + interne). Ports à ouvrir, vérification, diagnostic. À lire avant tout déploiement. |
-| [MCU-API.md](MCU-API.md) | API XML-RPC MCU (conférences, participants, mosaïques) |
-| [xmlrpc_jsr309_api.md](xmlrpc_jsr309_api.md) | API XML-RPC JSR-309 |
+| [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md) | **Configuration réseau, par cas d'usage** : IP publique portée par l'hôte, IP publique nattée 1:1, deux adresses (publique + interne). Ports à ouvrir, vérification, diagnostic. À lire avant tout déploiement. |
+| [MCU-API.md](docs/MCU-API.md) | API XML-RPC MCU (conférences, participants, mosaïques) |
+| [xmlrpc_jsr309_api.md](design/xmlrpc_jsr309_api.md) | API XML-RPC JSR-309 |
 | [TEST.md](TEST.md) | Suite de tests du binaire `mcu` |
 
 
@@ -179,7 +179,7 @@ OPTIONS="--http-port 9090 --websocket-port 8100"
 
 > ⚠️ Behind a NAT, `--public-ip <ip>` is **mandatory** — without it the SDP
 > announces the private address and no media flows. See
-> [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md).
+> [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).
 
 After editing the unit or the sysconfig file, reload systemd:
 
@@ -229,7 +229,7 @@ mcu [-h|--help] [-f] [-d]
 | `--default-profile nom` | `publicv4` | Profil employé par un appel qui n'en demande aucun : `publicv4`, `publicv6`, `internalv4`, `internalv6`. |
 
 > 📖 **Ces cinq options se configurent ensemble, et le détail est dans un document
-> dédié : [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md).** Il procède par
+> dédié : [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).** Il procède par
 > cas d'usage — adresse publique portée par l'hôte, adresse publique nattée 1:1,
 > deux adresses (publique + interne) — et donne les ports à ouvrir, la
 > vérification au démarrage et le diagnostic des pannes de média.
@@ -260,7 +260,7 @@ internalv6 : indisponible
 > publique nattée 1:1, deux adresses publique + interne), les ports à ouvrir, la
 > vérification, le diagnostic des pannes de média et la liste des contrôles
 > bloquants au démarrage — est dans
-> [NETWORK-CONFIGURATION.md](NETWORK-CONFIGURATION.md).**
+> [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).**
 >
 > Côté contrôleur, le paramètre `profile` de `StartSending`/`StartReceiving` est
 > décrit dans `MCU-API.md` §6.7 bis et `xmlrpc_jsr309_api.md` §6.7 bis.

@@ -35,7 +35,7 @@ trois bugs avaient besoin.
 
 # Décision
 
-Le pendant audio de [avframe.md](avframe.md) : **les échantillons décompressés
+Le pendant audio de la migration vidéo vers AVFrame : **les échantillons décompressés
 circulent sous forme d'`AVFrame` refcompté** au sein du mediaserver. Un
 `AVFrame` audio porte `nb_samples`, `sample_rate`, `ch_layout` et `format`
 **avec** les données — les trois bugs du 14/08 deviennent impossibles par
@@ -48,7 +48,7 @@ construction :
   (`swr_convert_frame`/`aresample` lisent la fréquence sur la trame entrante et
   se reconfigurent seuls quand elle change).
 
-Mêmes conventions que la reprise manuelle vidéo (avframe.md, décisions du
+Mêmes conventions que la reprise manuelle vidéo (décisions du
 2026-07-16) : wrapper RAII partagé par `shared_ptr`, migration **remplaçante**
 (pas additive), build rouge tant que tous les implémenteurs n'ont pas basculé.
 
@@ -134,7 +134,7 @@ possèdent déjà.
    fréquence et son nombre d'échantillons, et tout consommateur convertit
    explicitement via `aresample` s'il attend autre chose. Aucune conversion
    implicite, aucune fréquence supposée.
-3. **Migration remplaçante** (décision avframe.md 2026-07-16) : les signatures
+3. **Migration remplaçante** (même décision que côté vidéo, 2026-07-16) : les signatures
    `SWORD*` disparaissent de `medkit/audio.h`, build rouge tant que tous les
    implémenteurs et appelants n'ont pas basculé, chaîne par chaîne.
 4. **La logique métier reste.** VAD, niveaux du mixer, élection du locuteur,

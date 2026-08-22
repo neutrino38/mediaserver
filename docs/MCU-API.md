@@ -6,7 +6,7 @@ Documentation de l'API XML-RPC exposée par `mcu/src/xmlrpcmcu.cpp`
 
 Cette interface est l'API **spécialisée MCU** (multipoint control unit) : elle
 pilote directement le moteur de conférence (`MCU` → `MultiConf` → participants /
-mixers / mosaïques). Contrairement à l'[API JSR-309](xmlrpc_jsr309_api.md), plus
+mixers / mosaïques). Contrairement à l'[API JSR-309](../design/xmlrpc_jsr309_api.md), plus
 générique et orientée « endpoint / joinable », l'API MCU raisonne en termes de
 **conférences** et de **participants** que l'on assemble dans des **mosaïques**,
 **sidebars** et incrustations vidéo. C'est l'API historique du produit MCU.
@@ -1356,5 +1356,5 @@ entier du tuple d'événement est le type (`MCU::Events`) :
   celui décrit au §7. Attention : la classe participant réellement instanciée
   est `RTPParticipant2` (et non `RTPParticipant`, l'ancienne variante).
 
-Voir aussi l'[API JSR-309](xmlrpc_jsr309_api.md) pour le pilotage bas niveau
+Voir aussi l'[API JSR-309](../design/xmlrpc_jsr309_api.md) pour le pilotage bas niveau
 générique (endpoints, joinables, transcoders).
