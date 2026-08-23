@@ -198,6 +198,7 @@ int  MediaBridgeSession::StartSendingVideo(char *sendVideoIp,int sendVideoPort,R
 		case Running:
 			Log("-StartSendingVideo : Video  was running,stopping it.\n");
 			StopSendingVideo();
+			sendingVideo=Starting;
 			break;
 		
 		case Starting:
@@ -230,22 +231,23 @@ int  MediaBridgeSession::StopSendingVideo()
 {
 	Log(">StopSendingVideo\n");
 
-	//Y esperamos a que se cierren las threads de recepcion
-	if (sendingVideo == Running)
-	{
-		//Dejamos de recivir
-		sendingVideo=Stopped;
+	//Demande d'arrêt inconditionnelle : le drapeau retombe et l'attente est annulée
+	//même si la boucle n'a pas encore atteint Running — la fenêtre Starting existe
+	//entre la création du thread et sa première instruction. Les annulations de ce
+	//fichier sont collantes (WaitQueue et ::Wait), donc elle ne se perd pas si elle
+	//précède l'attente.
+	sendingVideo = Stopped;
+	videoFrames.Cancel();
 
-		//Cancel any pending wait
-		videoFrames.Cancel();
-
-		//Esperamos
+	//Postcondition inconditionnelle : au retour, plus aucun thread en vol. Sur le
+	//drapeau seul, un thread lancé mais pas encore Running n'était jamais joint, et
+	//le membre std::thread partait joignable au destructeur — std::terminate().
+	if (sendVideoThread.joinable())
 		sendVideoThread.join();
-	}
-
-	return true;
 
 	Log("<StopSendingVideo\n");
+
+	return true;
 }
 
 int  MediaBridgeSession::StartReceivingVideo(RTPMap& rtpMap)
@@ -258,6 +260,7 @@ int  MediaBridgeSession::StartReceivingVideo(RTPMap& rtpMap)
 		case Running:
 			Log("-StartReceivingVideo : Video was running,stopping it.\n");
 			StopReceivingVideo();
+			receivingVideo=Starting;
 			break;
 		
 		case Starting:
@@ -286,18 +289,12 @@ int  MediaBridgeSession::StopReceivingVideo()
 {
 	Log(">StopReceivingVideo\n");
 
-	//Y esperamos a que se cierren las threads de recepcion
-	if (receivingVideo == Running)
-	{
-		//Dejamos de recivir
-		receivingVideo=Stopped;
-		
-		//Cancel the rtp
-		rtpVideo.CancelGetPacket();
-		
-		//Esperamos
+	//Postcondition inconditionnelle, cf. StopSendingVideo.
+	receivingVideo = Stopped;
+	rtpVideo.CancelGetPacket();
+
+	if (recVideoThread.joinable())
 		recVideoThread.join();
-	}
 
 	Log("<StopReceivingVideo\n");
 
@@ -313,6 +310,7 @@ int  MediaBridgeSession::StartSendingAudio(char *sendAudioIp,int sendAudioPort,R
 		case Running:
 			Log("-StartSendingAudio : Audio  was running,stopping it.\n");
 			StopSendingAudio();
+			sendingAudio=Starting;
 			break;
 		
 		case Starting:
@@ -349,19 +347,13 @@ int  MediaBridgeSession::StopSendingAudio()
 {
 	Log(">StopSendingAudio\n");
 
-	//Y esperamos a que se cierren las threads de recepcion
-	if (sendingAudio == Running)
-	{
-		//Dejamos de recivir
-		sendingAudio=Stopped;
-
-		
-		//Cancel any pending wait
+	//Postcondition inconditionnelle, cf. StopSendingVideo.
+	sendingAudio = Stopped;
+	if (audioInput)
 		audioInput->CancelRecBuffer();
 
-		//Esperamos
+	if (sendAudioThread.joinable())
 		sendAudioThread.join();
-	}
 
 	Log("<StopSendingAudio\n");
 
@@ -378,6 +370,7 @@ int  MediaBridgeSession::StartReceivingAudio(RTPMap& rtpMap)
 		case Running:
 			Log("-StartReceivingAudio : Audio was running,stopping it.\n");
 			StopReceivingAudio();
+			receivingAudio=Starting;
 			break;
 		
 		case Starting:
@@ -406,18 +399,12 @@ int  MediaBridgeSession::StopReceivingAudio()
 {
 	Log(">StopReceivingAudio\n");
 
-	//Y esperamos a que se cierren las threads de recepcion
-	if (receivingAudio == Running )
-	{
-		//Dejamos de recivir
-		receivingAudio=Stopped;
+	//Postcondition inconditionnelle, cf. StopSendingVideo.
+	receivingAudio = Stopped;
+	rtpAudio.CancelGetPacket();
 
-		//Cancel audio rtp get packet
-		rtpAudio.CancelGetPacket();
-		
-		//Esperamos
+	if (recAudioThread.joinable())
 		recAudioThread.join();
-	}
 
 	Log("<StopReceivingAudio\n");
 
@@ -564,7 +551,7 @@ int MediaBridgeSession::RecVideo()
 	//Bloqueamos las se�a�es
 	blocksignals();
 	Log(">RecVideo\n");
-	receivingVideo = Running;
+	if (receivingVideo == Starting) receivingVideo = Running;
 	//Mientras tengamos que capturar
 	while(receivingVideo == Running)
 	{
@@ -695,7 +682,7 @@ int MediaBridgeSession::RecAudio()
 	
 
 	Log(">RecAudio\n");
-	receivingAudio = Running;
+	if (receivingAudio == Starting) receivingAudio = Running;
 	//Mientras tengamos que capturar
 	while(receivingAudio == Running)
 	{
@@ -1068,7 +1055,7 @@ int MediaBridgeSession::SendVideo()
 	if (!rtpVideo.SetSendingCodec(rtpVideoCodec))
 		//Error
 		return Error("Peer do not support [%d,%s]\n",rtpVideoCodec,VideoCodec::GetNameFor(rtpVideoCodec));
-	sendingVideo = Running;
+	if (sendingVideo == Starting) sendingVideo = Running;
 	//While sending video
 	while (sendingVideo == Running)
 	{
@@ -1203,7 +1190,7 @@ int MediaBridgeSession::SendAudio()
 	SWORD recBuffer[512];
 	
 	Log(">SendAudio\n");
-	sendingAudio = Running;
+	if (sendingAudio == Starting) sendingAudio = Running;
 	//While sending audio
 	while (sendingAudio == Running)
 	{
