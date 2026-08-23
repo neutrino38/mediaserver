@@ -18,6 +18,7 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() : RTPMultiplexerS
 	//Nothing
 	input = NULL;
 	encoding = false;
+	threadStarted = false;
 	sendFPU = false;
 	codec = (VideoCodec::Type)-1;
 	//Consigne inconnue tant que SetCodec n'a pas été appelé (GetBitrate = 0)
@@ -126,9 +127,11 @@ void VideoEncoderMultiplexerWorker::SetNegotiatedCodecProperties(const std::map<
 		return;
 	}
 
-	//Encodeur ARRÊTÉ : il n'y a pas de thread d'encodage à joindre, donc le chemin
-	//historique est sûr — et c'est lui qui démarre l'encodeur quand la négociation
-	//est ce qui le rend possible.
+	//Encodeur ARRÊTÉ : aucune boucle ne tourne, donc le chemin historique est sûr —
+	//et c'est lui qui démarre l'encodeur quand la négociation est ce qui le rend
+	//possible. Ce Stop() peut désormais joindre la poignée d'un Encode() sorti de
+	//lui-même : le join est immédiat, ce thread a fini son deinit avant de rendre
+	//la main, donc le gel de verrou décrit plus haut reste hors de portée.
 	Stop();
 	if (!listeners.empty() && codec != (VideoCodec::Type)-1)
 	{
@@ -174,8 +177,10 @@ int VideoEncoderMultiplexerWorker::Start()
 		//Exit
 		return Error("null video input");
 	
-	//Check if need to restart
-	if (encoding)
+	//Une poignée en vol, et non pas « la boucle tourne » : Encode() peut être sorti
+	//de lui-même. Sur `encoding` seul, ce Stop() était sauté et la poignée écrasée
+	//juste en dessous — AddListener() démarre précisément sur `!encoding`.
+	if (threadStarted)
 		//Stop first
 		Stop();
 
@@ -187,6 +192,7 @@ int VideoEncoderMultiplexerWorker::Start()
 
 	//launc thread
 	createPriorityThread(&thread,startEncoding,this,0);
+	threadStarted = true;
 
 	return 1;
 }
@@ -208,20 +214,26 @@ int VideoEncoderMultiplexerWorker::Stop()
 {
 	Log(">Stop VideoEncoderMultiplexerWorker\n");
 
-	//If we were started
-	if (encoding)
-	{
-		//Stop
-		encoding=0;
+	//L'arrêt est demandé d'abord et sans condition : même si Encode() est déjà
+	//sorti, le drapeau doit retomber avant le join.
+	encoding = 0;
 
+	//Postcondition inconditionnelle : au retour, aucune poignée n'est en vol.
+	//Joindre un thread déjà sorti est immédiat — son `delete videoEncoder` a eu
+	//lieu avant le retour — donc ceci n'ajoute pas le gel de verrou du 2026-08-13,
+	//qui venait de joindre un thread ENCORE dans le deinit de SVT-AV1.
+	if (threadStarted)
+	{
 		//Cancel and frame grabbing
-		input->CancelGrabFrame();
+		if (input)
+			input->CancelGrabFrame();
 
 		//Cancel sending
 		pacer.Signal();
 
 		//Esperamos
 		pthread_join(thread,NULL);
+		threadStarted = false;
 	}
 
 	//Stop smoother
@@ -234,8 +246,10 @@ int VideoEncoderMultiplexerWorker::Stop()
 
 int VideoEncoderMultiplexerWorker::End()
 {
-	//Check if already decoding
-	if (encoding)
+	//Sur `threadStarted`, pas sur `encoding` : appelé depuis le destructeur, et un
+	//Encode() sorti de lui-même laissait l'objet détruit avec un thread vivant qui
+	//référence encore `this` et `input` — un use-after-free, pas une simple fuite.
+	if (threadStarted)
 		//Stop
 		Stop();
 

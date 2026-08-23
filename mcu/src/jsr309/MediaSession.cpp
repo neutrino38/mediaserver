@@ -30,6 +30,19 @@ RecorderTimer::~RecorderTimer()
 
 void RecorderTimer::Start()
 {
+	//Réaffecter un std::thread encore joignable appelle std::terminate(), donc
+	//abort() — c'est ce qui tuait le serveur dans VideoStream avant e69c881. Ici
+	//Run() se termine de lui-même à l'échéance, ce qui laisse la poignée joignable
+	//sans qu'aucune boucle ne tourne : un second Start() suffirait. Aujourd'hui
+	//aucun site d'appel ne le fait — MediaSession construit une minuterie neuve par
+	//enregistrement — mais la postcondition ne doit pas dépendre de cette
+	//discipline-là, tenue ailleurs.
+	if (thread.joinable())
+	{
+		Error("-RecorderTimer: Start() sur une minuterie deja lancee ; ignore\n");
+		return;
+	}
+
 	thread = std::thread(&RecorderTimer::Run,this);
 }
 

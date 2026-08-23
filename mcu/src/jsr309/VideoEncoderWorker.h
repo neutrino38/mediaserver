@@ -104,6 +104,11 @@ private:
 	std::atomic<bool> negotiatedDirty;
 
 	pthread_t	thread;
+	//`thread` porte-t-il une poignée non encore jointe ? Distinct de `encoding` :
+	//Encode() peut retomber à `encoding = false` de lui-même (échec de création
+	//d'encodeur) alors que la poignée reste à joindre. Sans ce drapeau, Stop()
+	//sautait le join et Start() écrasait la poignée — un thread fuité par cycle.
+	bool	threadStarted;
 	//Cadence de la boucle d'encodage (précision µs), réveillée par Stop
 	::Wait		pacer;
 	bool	encoding;
