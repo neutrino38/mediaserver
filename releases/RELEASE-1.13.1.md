@@ -12,6 +12,7 @@ Corrections de stabilité sur la reprise d'appel après mise en attente, paramé
 ## Vidéo
 
 - Le CRF de l'encodeur H.264 (libx264) s'ajuste au débit disponible par pixel et par image, ce qui évite le pompage de qualité quand la bande passante est limitée
+- Une renégociation qui interrompt la réception plus de 5 s (ex. retrait puis ajout d'une piste audio) n'effondre plus l'estimation de débit entrant : l'annonce REMB ne retombe plus au plancher (16 kb/s) à la reprise, ce qui provoquait une image grise le temps d'une remontée de plusieurs dizaines de secondes
 
 ## Nettoyage
 
