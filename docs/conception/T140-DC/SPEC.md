@@ -1,7 +1,8 @@
 # T.140 sur data channel WebRTC
 
-> Statut : **phases 0 à 3 faites** (build, couture DTLS, pile SCTP + DCEP + T.140,
-> jambe JSR-309). Branche `feat/t140-over-data-channel`.
+> Statut : **phases 0 à 4 faites** (build, couture DTLS, pile SCTP + DCEP + T.140,
+> jambe JSR-309, flux de conférence). Reste le contrôleur et l'interop.
+> Branche `feat/t140-over-data-channel`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par un
 > contrôleur externe (elixip), qui pilote le serveur par XML-RPC. « Contrôleur »
@@ -332,6 +333,25 @@ La couche que les deux API partagent, et la seule qui connaisse T.140.
 - **BOM seul** : plomberie de keepalive T.140, pas de la conversation. Non
   transmis, dans les deux sens — c'est ce que fait déjà `ParticipantTextWS`.
 
+### 5.6 `T140Bridge` — le câblage, une fois pour deux
+
+`mcu/include/t140bridge.h`, `mcu/src/sctp/t140bridge.cpp`.
+
+Les deux API portent le même texte sur le même transport, et le câblage est le
+même des deux côtés : livrer à la pile ce que le DTLS déchiffre, lui prêter la
+cadence de la boucle poll, ouvrir l'association quand le handshake est fini, et
+vider la file de sortie **depuis le thread de cette boucle**. Il vit donc dans
+une classe, dont le porteur est une `RTPSession` et dont le consommateur est un
+`T140DataChannel::Listener`.
+
+Elle ne connaît que trois choses de son porteur : chiffrer
+(`SendDTLSApplicationData`), se réveiller (`WakeUp`), et dire si le handshake est
+fini (`IsDTLSHandshakeCompleted`).
+
+Écrite à la phase 3 dans `DCEndpoint`, extraite à la phase 4 quand le second
+usage est apparu — pas avant : une abstraction pour un seul appelant n'aurait
+rien prouvé.
+
 ## 6. Côté JSR-309 : `DCEndpoint`, le miroir de `WSEndpoint`
 
 `src/jsr309/DCEndpoint.{h,cpp}`, à écrire en partant de `WSEndpoint.cpp` : la
@@ -398,20 +418,32 @@ jambe **est** ICE + DTLS + UDP, et `TextStream` en possède déjà une —
 `RTPSession rtp`. Ce qui change n'est pas le transport, c'est ce qu'on met
 dedans.
 
-`TextStream` gagne donc un mode :
+`TextStream` gagne donc un mode, et devient `T140DataChannel::Listener` :
 
-- `SetTransport(MediaFrame::MediaProtocol)`, `RTP` par défaut ;
-- en mode `SCTP`, `StartReceiving` monte un `T140DataChannel` sur `rtp` au lieu
-  de poser une `rtpMap` de réception, et ne démarre **pas** le thread `RecText`
-  (`textstream.cpp:308`) : les blocs entrants arrivent sur le thread de la
-  session et vont droit à `textOutput->SendFrame()` ;
-- le thread `SendText` (`textstream.cpp:392`) reste, inchangé dans sa forme : il
-  tire du `textInput` comme aujourd'hui, et pousse dans `SendText` du canal au
-  lieu d'émettre du RTP.
+- `SetTransport(MediaFrame::MediaProtocol)`, `RTP` par défaut, refusé si un
+  thread tourne déjà — on ne change pas de dialecte en marche. En mode `SCTP` il
+  démarre le pont tout de suite, pour que l'association monte dès que le DTLS est
+  prêt, sans attendre que le contrôleur ouvre le plan de réception ;
+- `StartReceiving` ne pose **pas** de `rtpMap` de réception — aucun payload type
+  ne voyage dans un data channel — et ne démarre **pas** le thread `RecText` :
+  les blocs entrants arrivent sur le thread de la session et vont droit à
+  `textOutput->SendFrame()`. `StopReceiving` n'a donc rien à joindre, et laisse
+  le pont branché : une re-négociation ne doit pas fermer un canal que le
+  navigateur tient toujours ouvert ;
+- `StartSending` pose la destination (`SetRemotePort`, ce qui suffit à ICE et au
+  DTLS) mais **ni `rtpMap` d'émission, ni codec** ;
+- le thread `SendText` reste, dans une boucle à lui de vingt lignes : il tire du
+  `textInput` comme aujourd'hui et pousse un T140block. Aucun keepalive à
+  émettre — ni BOM, ni bloc vide : SCTP est fiable, et le texte est légitimement
+  silencieux entre deux frappes ;
+- `End()` arrête la session AVANT de démonter le pont, jamais l'inverse.
 
 Aucune classe nouvelle côté conférence, aucun thread de plus, aucun token,
 aucune URL. Tout le reste de `RTPParticipant` — codec, mute, statistiques,
-crypto, profil d'adressage — continue de fonctionner par les mêmes chemins.
+crypto, profil d'adressage — continue de fonctionner par les mêmes chemins. Le
+pont est construit pour **tous** les flux texte, y compris ceux qui restent en
+RTP : son constructeur ne touche pas à usrsctp, un participant en RTP n'en paie
+donc rien.
 
 Côté `MultiConf`, `ConfigureParticipantMediaConnection` (`multiconf.cpp:1600`)
 accepte `proto = SCTP` sur `media = Text` et appelle `SetTransport` sur la
@@ -598,7 +630,7 @@ a-t-il un transport de forme RTP ? », et non « ce port porte-t-il du RTP ? ».
 | 1 | Transport | ~~Données applicatives DTLS (§5.1, §10.1), couture `RTPSession` (§5.2), scission de `SetupSRTP` (§10.2)~~ **fait** | 0 |
 | 2 | Pile | ~~`SCTPTransport`, `DCEP`, `T140DataChannel` (§5.3-5.5), testés en boucle locale~~ **fait** | 0 |
 | 3 | JSR-309 | ~~`MediaFrame::SCTP`, `DCEndpoint`, les 4 coutures du §6, les 2 méthodes XML-RPC~~ **fait** | 1, 2 |
-| 4 | Conférence | mode data channel de `TextStream` (§7), les 2 méthodes XML-RPC | 1, 2 |
+| 4 | Conférence | ~~mode data channel de `TextStream` (§7), les 2 méthodes XML-RPC~~ **fait** | 1, 2 |
 | 5 | Contrôleur | SDP `m=application`, réponse sans BUNDLE, protobuf MOTELI (§8.5) | 3, 4 |
 | 6 | Interop | Campagne navigateur, puis appel réel ponté vers une jambe T.140 sur RTP | 5 |
 
@@ -633,6 +665,11 @@ Suite `mcu/tests/` (GoogleTest), `cd mcu && make check`.
 - **Intégration** : deux `RTPSession` sur la boucle locale, handshake DTLS réel,
   un T140block traversant les deux piles. Les tests IPv6 montrent que ce genre
   de test tient dans cette suite.
+- **Livré en phase 4** : `tests/test_textstream_datachannel.cpp` — deux
+  `TextStream` en mode data channel sur la boucle locale, avec les VRAIS pipes du
+  mixeur : le texte écrit dans le pipe d'un participant ressort dans celui de
+  l'autre, sans détour par la couture du mixeur. Couvre aussi l'UTF-8, le rejeu
+  d'avant-ouverture et le U+FFFD dans le mixeur à la perte du canal.
 - **Livré en phase 3** : `tests/test_dcendpoint.cpp` — deux `DCEndpoint` sur la
   boucle locale, avec de VRAIES sockets UDP et un VRAI handshake DTLS. La chaîne
   entière y passe : jambe pontée → RED → T.140 → SCTP → DTLS → UDP et retour.
