@@ -116,16 +116,7 @@ int  AudioDecoderJoinableWorker::Stop()
 
 int AudioDecoderJoinableWorker::Decode()
 {
-	//8192 : une trame de 20 ms à 48 kHz fait 960 échantillons, 120 ms (opus)
-	//jusqu'à 5760. L'ancien 512 tronquait chaque trame 48 kHz : Decode borne à
-	//outLen et retient le reste en fifo, donc seuls 512 échantillons sur 960
-	//sortaient par paquet — débit utile à 53 %, latence croissante, et l'aval
-	//famélique (mesuré le 2026-08-14 : 25 paquets/s au lieu de 50 vers le pair).
-	SWORD		raw[8192];
-	DWORD		rawSize=8192;
 	AudioDecoder*	codec=NULL;
-	DWORD		frameTime=0;
-	DWORD		lastTime=0;
 
 	Log(">JSR309 DecodeAudio\n");
 
@@ -159,11 +150,10 @@ int AudioDecoderJoinableWorker::Decode()
             codec = AudioCodecFactory::CreateDecoder((AudioCodec::Type)packet->GetCodec());
 			if ( codec != NULL )
             {
-                DWORD rate = (output) ? output->GetNativeRate() : 16000;
-                rate = codec->TrySetRate(rate);
-                
-				if (input) input->Init(rate);
-				if (output) output->StartPlaying(rate);
+                //Le décodeur restitue à la fréquence native du flux, qu'il ne
+                //connaît qu'après son premier paquet. Personne n'a plus à
+                //l'annoncer : chaque trame décodée porte la sienne.
+                if (output) output->StartPlaying(codec->GetRate());
             }
             else
             {
@@ -175,17 +165,15 @@ int AudioDecoderJoinableWorker::Decode()
 		}
 
 		//Lo decodificamos
-		int len = codec->Decode(packet->GetMediaData(),packet->GetMediaLength(),raw,rawSize);
+		codec->Decode(packet->GetMediaData(),packet->GetMediaLength());
 
-		//Obtenemos el tiempo del frame
-		frameTime = packet->GetTimestamp() - lastTime;
-
-		//Actualizamos el ultimo envio
-		lastTime = packet->GetTimestamp();
-
-		//Y lo reproducimos
-		if (output != NULL) output->PlayBuffer(raw,len,frameTime);
-        if (input != NULL) input->PutSamples(raw, len);
+		//Un paquet peut donner plusieurs trames : les publier TOUTES. L'ancien
+		//appel unique en perdait — 53 % du débit utile mesuré le 2026-08-14.
+		for (SamplesPtr samples = codec->GetFrame(); samples; samples = codec->GetFrame())
+		{
+			if (output != NULL) output->PlayFrame(samples);
+			if (input  != NULL) input->PutFrame(samples);
+		}
 
 		//Delete packet
 		delete(packet);

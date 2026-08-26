@@ -101,7 +101,7 @@ int AudioEncoderMultiplexerWorker::Stop()
 		encoding=0;
 
 		//Stop any pending grab
-		input->CancelRecBuffer();
+		input->CancelRecFrame();
 
 		//Esperamos
 		StopThread();
@@ -132,13 +132,6 @@ int AudioEncoderMultiplexerWorker::End()
 int AudioEncoderMultiplexerWorker::Encode()
 {
 	RTPPacket	packet(MediaFrame::Audio,codec,codec);
-	//8192 : doit contenir numFrameSamples du codec ouvert — 960 pour l'opus
-	//48 kHz, là où l'ancien 512 suffisait aux codecs 8 kHz (160). RecBuffer
-	//écrit numFrameSamples échantillons sans connaître la taille du tampon :
-	//avec 512, chaque trame opus écrasait la pile — dont l'objet `packet`
-	//ci-dessus — et l'endpoint jetait des paquets au media corrompu
-	//(« packet contains media 851977 », mesuré le 2026-08-14).
-	SWORD 		recBuffer[8192];
 	//NULL explicite : ce pointeur était lu non initialisé au premier tour de boucle.
 	AudioEncoder* 	encoder = NULL;
 	DWORD		frameTime=0;
@@ -172,24 +165,25 @@ int AudioEncoderMultiplexerWorker::Encode()
                 if (encoder == NULL)
                     return Error("Could not create codec\n");
 
-                //RecBuffer écrit numFrameSamples échantillons sans borne : le
-                //tampon DOIT les contenir, sinon on recommence l'écrasement de
-                //pile que le 8192 ci-dessus vient de fermer.
-                if (encoder->numFrameSamples > (int)(sizeof(recBuffer)/sizeof(SWORD)))
+                //L'encodeur dit la fréquence à laquelle il travaille, le pipe
+                //convertit vers elle. Plus personne n'a à connaître la
+                //fréquence NATIVE du producteur, qui n'est de toute façon
+                //connue qu'après le premier paquet décodé.
+                rate = encoder->GetRate();
+                if (rate == 0)
                 {
-                    Error("-AudioEncoder: frame of %d samples exceeds the %d capture buffer\n",
-                          encoder->numFrameSamples, (int)(sizeof(recBuffer)/sizeof(SWORD)));
+                    Error("-AudioEncoder: %s failed to open, no working rate\n",
+                          AudioCodec::GetNameFor(codec));
                     delete encoder;
                     return 0;
                 }
 
-                input->StartRecording(encoder->GetRate());
+                input->StartRecording(rate);
                 Log("-JSR309 AudioEncoder: Started audio encoder %s at %d Hz.\n",
-                    AudioCodec::GetNameFor(codec), encoder->GetRate());
+                    AudioCodec::GetNameFor(codec), rate);
                 clock = encoder->GetClockRate();
                 packet.SetClockRate(clock);
 
-                rate = encoder->TrySetRate(input->GetNativeRate());
                 multiplier = (float) clock/ (float) rate;
 
                 //Nouvel encodeur = nouvelle base de temps (frameTime repart de
@@ -201,32 +195,36 @@ int AudioEncoderMultiplexerWorker::Encode()
                 //buffer du pair décrochait (audio haché mesuré en capture).
                 packet.SetSSRC(random());
             }
-		//Incrementamos el tiempo de envio
-		frameTime += encoder->numFrameSamples*multiplier;
-
-		//Capturamos
-		if (input->RecBuffer(recBuffer,encoder->numFrameSamples)==0)
-                {
-                    msleep(1000);
-                    continue;
-                }
-
-
-		//Lo codificamos
-		int len = encoder->Encode(recBuffer,encoder->numFrameSamples,
-                                          packet.GetMediaData(),packet.GetMaxMediaLength());
-
-		//Comprobamos que ha sido correcto
-		if(len<=0)
+		//Capturamos. La trame arrive à la taille que le producteur a écrite ;
+		//c'est l'encodeur qui la redécoupe à numFrameSamples, personne d'autre.
+		SamplesPtr samples = input->RecFrame(1000);
+		if (!samples)
 			continue;
 
-		//Set frame time
-		packet.SetTimestamp(frameTime);
-		//Set length
-		packet.SetMediaLength(len);
-		
-		//Multiplex it
-		Multiplex(packet);
+		//Une trame d'entrée peut en remplir plusieurs : on purge à chaque fois.
+		for (AudioFrame* frame = encoder->EncodeFrame(samples);
+		     frame; frame = encoder->EncodeFrame(NULL))
+		{
+			if (frame->GetLength() > packet.GetMaxMediaLength())
+			{
+				Error("-AudioEncoder: frame of %u bytes exceeds the RTP payload\n",
+				      frame->GetLength());
+				continue;
+			}
+
+			memcpy(packet.GetMediaData(),frame->GetData(),frame->GetLength());
+			//Set frame time
+			packet.SetTimestamp(frameTime);
+			//Set length
+			packet.SetMediaLength(frame->GetLength());
+
+			//Multiplex it
+			Multiplex(packet);
+
+			//L'horloge n'avance que sur ce qui est RÉELLEMENT émis : elle
+			//courait auparavant même quand l'encodage ne produisait rien.
+			frameTime += encoder->numFrameSamples*multiplier;
+		}
 	}
 
 	Log("-SendAudio cleanup[%d]\n",encoding);
