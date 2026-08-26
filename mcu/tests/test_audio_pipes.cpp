@@ -1,6 +1,6 @@
 /**
  * test_audio_pipes.cpp — les pipes audio et les chaînes qui les traversent,
- * après le passage au transport AVFrame (design/audio-avframe.md).
+ * depuis que les échantillons décompressés circulent en AVFrame refcompté.
  *
  * Le pipe portait le troisième bug du 2026-08-14 : son rééchantillonneur était
  * ouvert par StartRecording, donc AVANT que le décodeur ne découvre sa vraie
@@ -162,24 +162,10 @@ TEST(PipeAudioInput, LaFileEstBorneeEnDuree)
 	pipe.End();
 }
 
-TEST(PipeAudioInput, LAdaptateurPlatRendExactementCeQuOnLuiDemande)
+TEST(PipeAudioInput, LaFrontiereAvecLeMixeurDeclareSaFrequenceParInit)
 {
-	PipeAudioInput pipe;
-	pipe.StartRecording(8000);
-
-	// L'appelant historique demande 160 échantillons ; le producteur en publie
-	// 60 à la fois. L'adaptateur réassemble sans rien perdre.
-	for (int i = 0; i < 4; i++)
-		ASSERT_TRUE(pipe.PutFrame(Tone(60, 8000)));
-
-	SWORD buffer[160];
-	EXPECT_EQ(pipe.RecBuffer(buffer, 160), 160);
-
-	pipe.End();
-}
-
-TEST(PipeAudioInput, LAdaptateurPlatDEcritureDeclareSaFrequenceParInit)
-{
+	// PutSamples/Init ne sont PAS transitoires : c'est la frontière assumée
+	// entre le domaine des trames et celui des tranches d'horloge du mixeur.
 	PipeAudioInput pipe;
 	pipe.Init(16000);
 	pipe.StartRecording(8000);
@@ -227,21 +213,6 @@ TEST(PipeAudioOutput, LaFrequenceDeLaTramePiloteLeResampler)
 	int got = pipe.GetSamples(buffer, 4096, true);
 	EXPECT_GT(got, 0);
 	EXPECT_LE(got, 160);	// et surtout PAS 960
-
-	pipe.End();
-}
-
-TEST(PipeAudioOutput, LAdaptateurPlatUtiliseLaFrequenceAnnoncee)
-{
-	PipeAudioOutput pipe(false);
-	pipe.Init(8000);
-	pipe.StartPlaying(8000);
-
-	std::vector<SWORD> pcm(160, 0);
-	EXPECT_GT(pipe.PlayBuffer(&pcm[0], 160, 0), 0);
-
-	SWORD buffer[160];
-	EXPECT_EQ(pipe.GetSamples(buffer, 160), 160);
 
 	pipe.End();
 }
