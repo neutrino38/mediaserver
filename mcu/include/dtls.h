@@ -51,6 +51,21 @@ public:
 		CONNECTION_EXISTING /*!< Endpoint wishes to use existing connection */
 	};
 public:
+	//Consommateur des données APPLICATIVES du DTLS. Le DTLS de ce serveur ne
+	//servait qu'à dériver les clés SRTP : les records applicatifs étaient lus et
+	//jetés. Un data channel WebRTC (RFC 8831) est exactement cela — du SCTP dans
+	//ces records — d'où cette sortie. Sans consommateur posé, le comportement est
+	//inchangé : on lit et on jette.
+	class ApplicationListener
+	{
+	public:
+		virtual ~ApplicationListener(){};
+		//Un bloc applicatif déchiffré. Un record DTLS = un datagramme, donc un
+		//appel = un datagramme complet : c'est ce contrat que SCTP attend.
+		//Appelé depuis Write(), donc sur le thread qui lit la socket.
+		virtual void onDTLSApplicationData(const BYTE* data,DWORD size) = 0;
+	};
+
 	class Listener
 	{
 	public:
@@ -93,6 +108,13 @@ public:
 	int  Write(BYTE *buffer,int size);
 	int  Renegotiate();
 
+	//Le consommateur des données applicatives (NULL = aucun, défaut).
+	void SetApplicationListener(ApplicationListener* listener) { appListener = listener; }
+	//Chiffre des données applicatives. Elles attendent ensuite dans write_bio,
+	//que l'appelant vide par Read() puis émet lui-même. Rend le nombre d'octets
+	//pris, 0 en cas d'échec.
+	int  WriteApplicationData(const BYTE* data,DWORD size);
+
 	/* P2 (offreur WebRTC) : pilotage du handshake en rôle CLIENT.
 	 * Le rôle local est calculé par SetRemoteSetup (remote=passive -> local=active),
 	 * mais l'émission effective du ClientHello doit être déclenchée dès qu'une
@@ -109,6 +131,11 @@ public:
 	void onSSLInfo(int where, int ret);
 
 protected:
+	//L'empreinte du certificat du pair contre celle qu'a annoncée la
+	//signalisation. C'est la seule authentification du pair qu'il y ait, et elle
+	//ne dépend pas de ce que le transport portera ensuite : séparée de l'export
+	//des clés SRTP, que seule une jambe RTP demande.
+	int  VerifyRemoteFingerprint();
 	int  SetupSRTP();
 	int  CheckPending();
 private:
@@ -123,6 +150,7 @@ private:
 	unsigned int rekey;	/*!< Interval at which to renegotiate and rekey */
 	int rekeyid;		/*!< Scheduled item id for rekeying */
 	bool inited;        /*!< Set to true once the SSL stuff is set for this DTLS session */
+	ApplicationListener* appListener;	/*!< Consommateur des données applicatives, NULL par défaut */
 };
 
 #endif	/* DTLS_H */
