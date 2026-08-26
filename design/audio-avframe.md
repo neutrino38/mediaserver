@@ -115,9 +115,10 @@ Trois mécanismes distincts, non synchronisés, se partagent la vérité :
 
 | Site | Tampon | État |
 |---|---|---|
-| `jsr309/AudioEncoderWorker.cpp` | `recBuffer[8192]` + garde | corrigé 14/08 (était 512, écrasait la pile) |
-| `jsr309/AudioDecoderWorker.cpp` | `raw[8192]` | corrigé 14/08 (était 512, tronquait) |
-| `pipeaudioinput/output.cpp` | `resampled[4096]` | borne le swr, suffisant ≤ 60 ms |
+| `jsr309/AudioEncoderWorker.cpp` | `recBuffer[8192]` + garde | **supprimés** (phase 2) |
+| `jsr309/AudioDecoderWorker.cpp` | `raw[8192]` | **supprimé** (phase 2) |
+| `pipeaudioinput.cpp` | `resampled[4096]` + `fifo<SWORD,4096>` | **supprimés** (phase 2) |
+| `pipeaudiooutput.cpp` | `resampled[4096]` | **supprimé** (phase 2) |
 | `audiostream.cpp:321,437` | `playBuffer[1024]`, `recBuffer[512]` | latent (chaîne conférence SIP) |
 | `audioencoder.cpp:154`, `audiodecoder.cpp:83` | `[512]` | latent (streams du mixer) |
 | `mediabridgesession.cpp` ×3 | `[512]` | latent (bridge RTP↔RTMP) |
@@ -246,8 +247,26 @@ suivant, comme `VideoEncoder::EncodeFrame`.
    par bug du 14/08 — tampon de sortie trop court, trame tronquée au décodage,
    changement de fréquence en cours de flux.
 2. **Transcodeur JSR-309** (`AudioDecoderWorker`, `AudioEncoderWorker`,
-   `PipeAudioInput`) — la chaîne du 14/08. Les tampons 8192 et le garde-fou
-   `numFrameSamples` disparaissent avec `RecBuffer`.
+   `PipeAudioInput`) — ✅ **FAIT**. La chaîne du 14/08 ne porte plus un seul
+   tampon fixe : les `raw[8192]`/`recBuffer[8192]` et le garde-fou
+   `numFrameSamples` sont partis avec `RecBuffer`.
+
+   `AudioInput`/`AudioOutput` passent à `RecFrame(timeoutMs)`/`PlayFrame`,
+   `PipeAudioInput` à une file de `SamplesPtr` bornée en **durée** (500 ms) avec
+   `aresample` reconfiguré par la fréquence de la trame entrante. `Init(rate)`
+   ne pilote plus rien : il ne reste que pour dire leur fréquence aux
+   producteurs encore en `SWORD*` (mixeur, bridge). `PipeAudioOutput` reçoit le
+   même traitement côté `PlayFrame`, sa `fifo` plate restant pour le mixeur
+   (phase 3).
+
+   Deux corrections de fond au passage : le décodeur publie **toutes** les
+   trames d'un paquet (l'appel unique en perdait), et l'horloge RTP de
+   l'encodeur n'avance plus que sur ce qui est **réellement émis**.
+
+   Le critère de sortie est joué hors ligne par
+   `AudioTranscodeChain.OpusQuaranteHuitVersSpeexSeize`
+   (`mcu/tests/test_audio_pipes.cpp`) : 50 trames opus 48 kHz entrées, 50 trames
+   speex 16 kHz sorties. La recette en appel réel reste à faire.
 3. **Conférence** (`audiostream`, `audioencoder`/`audiodecoder`, `audiomixer`,
    `PipeAudioOutput`) — le mixer consomme des `SamplesPtr` par participant,
    `aresample` par entrée vers la fréquence de mixage ; VAD inchangé.
