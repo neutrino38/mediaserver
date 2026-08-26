@@ -187,11 +187,7 @@ Thread RecVideo (consommateur, seul thread du chemin RX)
 - `RTPEndpoint::End`/`StopReceiving` : `receiving=false; RTPSession::CancelGetPacket()` (→ `Wake()`), puis `pthread_join(thread)` (thread **de l'endpoint**, pas celui de RTPSession qui n'existe plus). Retirer `pthread_kill(...,SIGIO)`.
 - La thread propre de `RTPSession` disparaissant, `RTPEndpoint` n'a plus qu'une seule thread au lieu de deux.
 
-### 5.3 `MediaBridgeSession`
-
-`rtpVideo`/`rtpAudio` (l. 572/703) : mêmes boucles `GetPacket` + `CancelGetPacket`. `RTPSession` y est utilisé avec le listener brut du constructeur (pas de `weakListener`) — inchangé. Supprimer les `msleep` éventuels.
-
-### 5.4 Sessions *sendonly* / RTCP (B3)
+### 5.3 Sessions *sendonly* / RTCP (B3)
 
 Pour une session qui n'a pas de consommateur actif (sendonly), plus personne n'appelle `Run()` → le RTCP entrant (RR, REMB) n'est pas lu. Décision par média :
 - **Audio/texte** : impact faible, on tolère.
@@ -203,7 +199,7 @@ Découpage en lots livrables indépendamment, **build vert à chaque lot** (`./i
 
 ### Lot 0 — Filet de sécurité & instrumentation (préparation)
 - Ajouter des logs de comptage de threads / de cycles `poll` sous `-DLOG_` pour comparer avant/après.
-- Recenser les appelants de `GetPacket`/`CancelGetPacket`/`Start`/`Stop` (fait : audiostream, videostream, textstream, mediabridgesession, RTPEndpoint).
+- Recenser les appelants de `GetPacket`/`CancelGetPacket`/`Start`/`Stop` (fait : audiostream, videostream, textstream, RTPEndpoint).
 - **Critère** : aucun changement de comportement ; base de mesure établie.
 
 ### Lot 1 — `RTPBuffer` : extraction du déqueue non bloquant (B1)
@@ -222,7 +218,7 @@ Découpage en lots livrables indépendamment, **build vert à chaque lot** (`./i
 - **Critère** : build vert ; un appel audio SIP simple lit sans `msleep`, thread lecteur disparu (vérif via logs Lot 0).
 
 ### Lot 3 — Consommateurs : suppression des `msleep` (B10) + RTCP sendonly (B3)
-- `audiostream.cpp`, `videostream.cpp`, `textstream.cpp`, `mediabridgesession.cpp`, `jsr309/RTPEndpoint.cpp` : retirer les `msleep` post-`GetPacket`, retirer les `pthread_kill(...,SIGIO)` devenus inutiles.
+- `audiostream.cpp`, `videostream.cpp`, `textstream.cpp`, `jsr309/RTPEndpoint.cpp` : retirer les `msleep` post-`GetPacket`, retirer les `pthread_kill(...,SIGIO)` devenus inutiles.
 - Trancher et implémenter le service RTCP sendonly (§5.4) si nécessaire.
 - **Critère** : build vert ; appel audio+vidéo bidirectionnel OK (SIP puis WebRTC).
 

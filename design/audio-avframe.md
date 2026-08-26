@@ -121,8 +121,7 @@ Trois mécanismes distincts, non synchronisés, se partagent la vérité :
 | `pipeaudiooutput.cpp` | `resampled[4096]` | **supprimé** (phase 2) |
 | `audiostream.cpp:321,437` | `playBuffer[1024]`, `recBuffer[512]` | **supprimés** (phase 3) — le second n'était PAS latent |
 | `audioencoder.cpp:154`, `audiodecoder.cpp:83` | `[512]` | **supprimés** (phase 3) |
-| `mediabridgesession.cpp` ×3 | `[512]` | latent (bridge RTP↔RTMP) |
-| `rtmpparticipant.cpp` ×2, `rtmpmp4stream.cpp:229` | `[512]` | latent |
+| `rtmpparticipant.cpp` ×2 | `[512]` | latent (participant RTMP du MCU) |
 | `mp4player.cpp:89` | `buffer[1024]` | **supprimé** (phase 4) |
 | `jsr309/Recorder.cpp:188` | `pcm[4096]` + `pcmFifo` | **supprimés** (phase 4) |
 | `ffaudiocodec.cpp` (décodeur) | `conv[8192]` + `fifo<SWORD,8192>` | **supprimés** (phase 1) |
@@ -313,9 +312,12 @@ suivant, comme `VideoEncoder::EncodeFrame`.
    `AudioRecorderChain.OpusVersAacCadenceParLEncodeur` (mcu) rejoue la cadence
    du Recorder — 50 trames opus de 20 ms entrées, 46 trames AAC de 1024
    échantillons sorties, horodatages sans dérive.
-5. **RTMP et bridge** (`rtmpparticipant`, `rtmpmp4stream`,
-   `mediabridgesession`) — à évaluer : si ces chemins sont morts en production,
-   les geler plutôt que les migrer (décision à prendre avant la phase).
+5. **RTMP** (`rtmpparticipant`) — la question « migrer ou geler » a été tranchée
+   autrement : la passerelle média a été **supprimée**. `mediagateway`,
+   `mediabridgesession`, son API XML-RPC `/mediagateway` et `rtmpmp4stream`
+   n'existent plus, et avec eux quatre des six tampons qui restaient. Il ne
+   reste que les deux de `rtmpparticipant`, que le MCU utilise, à migrer comme
+   les autres.
 
 Chaque phase se termine build vert. Le critère de sortie de la phase 2 est le
 test du 14/08 rejoué : opus↔speex16, **50 paquets/s dans chaque sens**,

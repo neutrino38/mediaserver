@@ -199,7 +199,7 @@ pas revenir.
    `VideoEncoder`/`VideoDecoder`. Les constructeurs renseignaient le membre **dérivé**,
    celui de la base restait **non initialisé** — or tout le mcu lit `->type` via un
    pointeur de base (`videostream.cpp:810`, `jsr309/VideoDecoderWorker.cpp:190`,
-   `mediabridgesession.cpp:583/1122`, `rtmpparticipant.cpp:949/961/973`,
+   `rtmpparticipant.cpp:949/961/973`,
    `FLVEncoder.cpp:404`). Le prédicat « recréer le codec si le type a changé » était
    donc toujours vrai : **le décodeur H264 était détruit et recréé à chaque paquet
    RTP**, le tampon de dépaquetisation ne survivait jamais jusqu'à une trame complète

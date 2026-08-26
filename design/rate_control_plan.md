@@ -720,9 +720,8 @@ v1 et les interfaces :
   une patte lente ne dégrade pas les autres (§5.4).
 - **Prérequis pacing** : le témoin passe de 2,5× à 1,1× dès que l'estimation
   dépend des temps d'arrivée — nos rafales d'images fausseraient nos propres
-  mesures. Évaluer `RTPSmoother` (déjà dans `videostream.h:107` et
-  `mediabridgesession.h:159`) comme base du lissage d'émission avant d'écrire
-  quoi que ce soit d'autre.
+  mesures. Évaluer `RTPSmoother` (déjà dans `videostream.h:107`) comme base du
+  lissage d'émission avant d'écrire quoi que ce soit d'autre.
 
 ---
 
