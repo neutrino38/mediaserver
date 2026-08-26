@@ -2840,6 +2840,53 @@ xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, voi
 	}	
 }
 
+/**
+ * SetupDataChannel(sessionId, endpointId, media, remoteSctpPort)
+ *   -> [localSctpPort, maxMessageSize, streamId]
+ *
+ * Les paramètres SCTP d'une jambe texte-sur-data-channel. Le contrôleur nous
+ * donne le `a=sctp-port` du pair et repart avec les nôtres, qu'il publie dans
+ * son SDP : ce que le serveur sait de lui-même, c'est à lui qu'on le demande.
+ * `streamId` vaut -1 tant que le canal n'est pas ouvert — il ne sert qu'à un
+ * `a=dcmap`. À appeler APRÈS ConfigureMediaConnection avec proto = SCTP.
+ */
+xmlrpc_value* SetupDataChannel(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	std::shared_ptr<MediaSession> session;
+
+	int sessionId;
+	int endPointId;
+	int media;
+	int remoteSCTPPort;
+
+	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endPointId,&media,&remoteSCTPPort);
+
+	if(env->fault_occurred)
+		return 0;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	std::shared_ptr<Endpoint> endpoint = session->GetEndpoint(endPointId);
+
+	if (endpoint == NULL)
+		return xmlerror(env,"Could not retrieve endpoint.");
+
+	WORD  localSCTPPort  = 0;
+	DWORD maxMessageSize = 0;
+	int   streamId       = -1;
+
+	if (!endpoint->SetupDataChannel((MediaFrame::Type) media,(WORD) remoteSCTPPort,
+					localSCTPPort,maxMessageSize,streamId))
+		return xmlerror(env,"Could not setup data channel.");
+
+	xmlrpc_value* arr = xmlrpc_build_value(env,"(iii)",
+					       (int) localSCTPPort,(int) maxMessageSize,streamId);
+
+	return xmlok(env,arr);
+}
+
 xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
@@ -3002,6 +3049,7 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"VideoTranscoderDettach",		VideoTranscoderDettach},
 	{"GetMediaCandidates",			GetMediaCandidates},	
 	{"ConfigureMediaConnection",	ConfigureMediaConnection},
+	{"SetupDataChannel",		SetupDataChannel},
 	{NULL,NULL}
 };
 
