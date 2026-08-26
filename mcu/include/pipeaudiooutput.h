@@ -16,7 +16,7 @@ class PipeAudioOutput :
 public:
 	PipeAudioOutput(bool calcVAD);
 	virtual ~PipeAudioOutput();
-	virtual int PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime);
+	virtual int PlayFrame(SamplesPtr samples);
 	virtual int StartPlaying(DWORD samplerate);
 	virtual int StopPlaying();
 
@@ -38,6 +38,7 @@ private:
 	DWORD			acu;
 	bool			calcVAD;
 	SwrContext		*swr;
+	DWORD			swrInRate;	// fréquence d'entrée du resampler ouvert
 
 	DWORD	playRate;
 	DWORD	nativeRate;
