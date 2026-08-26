@@ -30,6 +30,17 @@ public:
 	virtual int SetAudioCodec(AudioCodec::Type codec,const Properties& properties);
 	virtual int SetTextCodec(TextCodec::Type codec);
 
+	//Transport du plan texte : RTP, ou data channel WebRTC. La session RTP de la
+	//jambe reste le porteur dans les deux cas — ICE, DTLS, socket, port : seul
+	//change ce qui voyage dedans (docs/conception/T140-DC/SPEC.md §7).
+	int SetTextTransport(MediaFrame::MediaProtocol proto) { return text.SetTransport(proto); }
+	//Paramètres SCTP à publier, et le `a=sctp-port` du pair.
+	int SetupTextDataChannel(WORD remoteSCTPPort,WORD& localSCTPPort,
+				 DWORD& maxMessageSize,int& streamId)
+	{
+		return text.SetupDataChannel(remoteSCTPPort,localSCTPPort,maxMessageSize,streamId);
+	}
+
 	virtual int SendVideoFPU(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	virtual int SendDTMF(DTMFMessage* dtmf);
 	

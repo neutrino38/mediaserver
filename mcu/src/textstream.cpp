@@ -17,12 +17,17 @@ static BYTE LOSTREPLACEMENT[]		= {0xEF,0xBF,0xBD};
 * TextStream
 *	Constructor
 ***********************************/
-TextStream::TextStream(RTPSession::Listener* listener) : rtp(MediaFrame::Text,listener)
+TextStream::TextStream(RTPSession::Listener* listener) :
+	rtp(MediaFrame::Text,listener),
+	//Le porteur du pont est CETTE session : elle est déjà ICE + DTLS + UDP.
+	bridge(rtp,*this)
 {
 	sendingText=TaskIdle;
 	receivingText=TaskIdle;
 	textCodec=TextCodec::T140;
 	muted = false;
+	transport = MediaFrame::RTP;
+	gettimeofday(&clock,NULL);
 }
 
 /*******************************
@@ -53,6 +58,92 @@ int TextStream::SetTextCodec(TextCodec::Type codec)
 
 	//Y salimos
 	return 1;	
+}
+
+/***************************************
+* SetTransport
+*	RTP ou data channel. La session RTP reste le porteur dans les deux cas ;
+*	seul change ce qui voyage dedans.
+***************************************/
+int TextStream::SetTransport(MediaFrame::MediaProtocol proto)
+{
+	if (proto != MediaFrame::RTP && proto != MediaFrame::SCTP)
+		return Error("-TextStream::SetTransport() | transport %s non supporte pour du texte\n",
+				MediaFrame::ProtocolToString(proto));
+
+	if (proto == transport)
+		return 1;
+
+	//Changer de dialecte sous les pieds des threads en cours n'aurait pas de sens.
+	if (sendingText != TaskIdle || receivingText != TaskIdle)
+		return Error("-TextStream::SetTransport() | a poser avant StartReceiving/StartSending\n");
+
+	transport = proto;
+
+	//En mode data channel, le pont se branche tout de suite : l'association
+	//s'ouvrira dès que le handshake DTLS sera terminé, sans attendre que le
+	//controleur ouvre le plan de reception.
+	if (transport == MediaFrame::SCTP)
+		bridge.Start();
+
+	Log("-SetTransport text [%s]\n",MediaFrame::ProtocolToString(transport));
+	return 1;
+}
+
+/***************************************
+* SetupDataChannel
+*	Ce que le serveur sait de lui-meme, c'est a lui qu'on le demande : le
+*	`a=sctp-port` et le `a=max-message-size` que le controleur publie sortent
+*	d'ici, pas d'une constante recopiee de son cote.
+***************************************/
+int TextStream::SetupDataChannel(WORD remoteSCTPPort,WORD& localSCTPPort,
+				 DWORD& maxMessageSize,int& streamId)
+{
+	if (transport != MediaFrame::SCTP)
+		return Error("-TextStream::SetupDataChannel() | le flux texte n'est pas un data channel,"
+			     " poser le transport SCTP d'abord\n");
+
+	bridge.SetRemoteSCTPPort(remoteSCTPPort);
+
+	localSCTPPort  = bridge.GetLocalSCTPPort();
+	maxMessageSize = bridge.GetMaxMessageSize();
+	streamId       = bridge.GetStreamId();
+
+	return 1;
+}
+
+/***************************************
+* onT140Block
+*	Un T140block recu du pair, a remettre au mixeur texte. On est sur le thread
+*	de la session, pas sur celui d'un thread de reception : il n'y en a pas en
+*	mode data channel.
+***************************************/
+void TextStream::onT140Block(const BYTE* data,DWORD size)
+{
+	if (!size || !textOutput)
+		return;
+
+	//Le constructeur analyse l'UTF-8 dans la chaine large de la trame — c'est
+	//elle que PipeTextOutput::SendFrame consomme (GetWChar/GetWLength). Des
+	//octets posés sans analyse nourriraient le mixeur d'une chaine vide.
+	TextFrame frame(getDifTime(&clock)/1000,data,size);
+
+	if (frame.GetWLength())
+		textOutput->SendFrame(frame);
+}
+
+void TextStream::onT140ChannelOpen()
+{
+	Log("-TextStream: canal t140 ouvert [%p]\n",this);
+}
+
+void TextStream::onT140ChannelLost()
+{
+	//T.140 §5.3 : le cote qui SURVIT — la conference — apprend la perte par un
+	//U+FFFD dans le flux. C'est la seule trace qu'un utilisateur ait qu'il
+	//manque du texte.
+	Log("-TextStream: canal t140 perdu, U+FFFD vers le mixeur [%p]\n",this);
+	onT140Block(LOSTREPLACEMENT,sizeof(LOSTREPLACEMENT));
 }
 
 /***************************************
@@ -158,6 +249,19 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 		//Error
 		return Error("Error en el SetRemotePort\n");
 
+	//Data channel : ni rtpMap d'emission, ni codec — rien de tout cela ne voyage
+	//dedans. La destination vient d'etre posee, ce qui suffit a ICE et au DTLS.
+	if (transport == MediaFrame::SCTP)
+	{
+		bridge.Start();
+
+		sendingText = TaskStarting;
+		createPriorityThread(&sendTextThread,startSendingText,this,1);
+
+		Log("<StartSending text sur data channel [%d]\n",sendingText);
+		return 1;
+	}
+
 	//Set sending map
 	rtp.SetSendingRTPMap(rtpMap);
 
@@ -206,6 +310,19 @@ int TextStream::StartReceiving(RTPMap& rtpMap)
 	//Get local rtp port
 	int recTextPort = rtp.GetLocalPort();
 
+	//Data channel : aucun payload type ne voyage dedans, la rtpMap ne dit rien de
+	//CE transport. Et pas de thread de reception : les blocs entrants arrivent sur
+	//le thread de la session et vont droit au pipe du mixeur.
+	if (transport == MediaFrame::SCTP)
+	{
+		bridge.Start();
+
+		receivingText = TaskRunning;
+
+		Log("<StartReceiving text sur data channel [%d]\n",recTextPort);
+		return recTextPort;
+	}
+
 	//Set receving map
 	rtp.SetReceivingRTPMap(rtpMap);
 
@@ -243,6 +360,11 @@ int TextStream::End()
 	//Cerramos la session de rtp
 	rtp.End();
 
+	//ORDRE : la boucle de la session bat la cadence de la pile SCTP et vide sa
+	//file de sortie. On ne demonte le pont qu'une fois cette boucle arretee —
+	//l'inverse est une course. No-op si le flux etait en RTP.
+	bridge.Stop();
+
 	return 1;
 }
 
@@ -254,6 +376,16 @@ int TextStream::End()
 int TextStream::StopReceiving()
 {
 	Log(">StopReceiving Text\n");
+
+	//Data channel : il n'y a pas de thread de reception a joindre. Le pont, lui,
+	//reste branche — une re-negociation ne doit pas fermer un canal que le
+	//navigateur tient toujours ouvert. C'est End() qui le demonte.
+	if (transport == MediaFrame::SCTP)
+	{
+		receivingText = TaskIdle;
+		Log("<StopReceiving Text (data channel)\n");
+		return 1;
+	}
 
 	//Y esperamos a que se cierren las threads de recepcion
 	if (receivingText  == TaskRunning || receivingText  ==TaskStarting)
@@ -389,8 +521,44 @@ int TextStream::RecText()
 * SendText
 *	Capturamos el text y lo mandamos
 *******************************************/
+/****************************************
+* SendTextOverDataChannel
+*	Le meme travail que SendText, sans RTP : on tire du pipe du mixeur et on
+*	pousse un T140block. Aucun keepalive a emettre — ni BOM, ni bloc vide : SCTP
+*	est fiable, et le texte est legitimement silencieux entre deux frappes.
+*****************************************/
+int TextStream::SendTextOverDataChannel()
+{
+	Log(">SendText sur data channel\n");
+
+	sendingText = TaskRunning;
+
+	while (sendingText == TaskRunning)
+	{
+		TextFrame* frame = textInput->GetFrame(25000);
+
+		//Expiration ou annulation : rien a dire.
+		if (!frame)
+			continue;
+
+		if (!muted && frame->GetLength())
+			bridge.SendText(frame->GetData(),frame->GetLength());
+
+		delete frame;
+	}
+
+	sendingText = TaskIdle;
+
+	Log("<SendText sur data channel\n");
+	return 1;
+}
+
 int TextStream::SendText()
 {
+    //Data channel : autre dialecte, autre boucle.
+    if (transport == MediaFrame::SCTP)
+        return SendTextOverDataChannel();
+
     RTPPacket packet(MediaFrame::Text,textCodec);
     bool idle = true;
     DWORD timeout = 25000;
