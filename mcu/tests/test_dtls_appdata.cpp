@@ -22,95 +22,17 @@
  *
  * Deux `DTLSConnection` dialoguent en mémoire, sans socket : `Read` vide le
  * write_bio de l'une, `Write` remplit le read_bio de l'autre. Le certificat est
- * généré à l'exécution — un certificat de test versionné n'apporterait rien et
- * ferait sonner les scanners de secrets.
+ * généré à l'exécution (tests/dtlsfixture.h).
  */
 #include <gtest/gtest.h>
 
-#include <openssl/pem.h>
-#include <openssl/x509.h>
-#include <stdio.h>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 #include "dtls.h"
+#include "dtlsfixture.h"
 
 namespace {
-
-// --- Certificat auto-signé jetable, écrit en PEM pour ClassInit.
-bool WriteSelfSignedCert(const std::string& crtPath, const std::string& keyPath)
-{
-	EVP_PKEY* pkey = EVP_RSA_gen(2048);
-	if (!pkey)
-		return false;
-
-	X509* cert = X509_new();
-	if (!cert)
-	{
-		EVP_PKEY_free(pkey);
-		return false;
-	}
-
-	X509_set_version(cert, 2);
-	ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
-	X509_gmtime_adj(X509_getm_notBefore(cert), 0);
-	X509_gmtime_adj(X509_getm_notAfter(cert), 3600);
-	X509_set_pubkey(cert, pkey);
-
-	X509_NAME* name = X509_get_subject_name(cert);
-	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-				   (const unsigned char*)"mcu-dtls-test", -1, -1, 0);
-	X509_set_issuer_name(cert, name);
-
-	bool ok = X509_sign(cert, pkey, EVP_sha256()) > 0;
-
-	if (ok)
-	{
-		FILE* f = fopen(crtPath.c_str(), "wb");
-		ok = f && PEM_write_X509(f, cert);
-		if (f) fclose(f);
-	}
-
-	if (ok)
-	{
-		FILE* f = fopen(keyPath.c_str(), "wb");
-		ok = f && PEM_write_PrivateKey(f, pkey, NULL, NULL, 0, NULL, NULL);
-		if (f) fclose(f);
-	}
-
-	X509_free(cert);
-	EVP_PKEY_free(pkey);
-	return ok;
-}
-
-// ClassInit installe un contexte SSL *statique* : une fois pour tout le binaire
-// de test, sur un certificat qui doit survivre à tous les tests.
-bool EnsureDTLSInited()
-{
-	static bool tried  = false;
-	static bool inited = false;
-
-	if (tried)
-		return inited;
-
-	tried = true;
-
-	char dir[] = "/tmp/mcu-dtls-test-XXXXXX";
-	if (!mkdtemp(dir))
-		return false;
-
-	// Statiques : ClassInit ne copie pas les chemins qu'il lit plus tard.
-	static std::string crt = std::string(dir) + "/test.crt";
-	static std::string key = std::string(dir) + "/test.key";
-
-	if (!WriteSelfSignedCert(crt, key))
-		return false;
-
-	DTLSConnection::SetCertificate(crt.c_str(), key.c_str());
-	inited = DTLSConnection::ClassInit() == 1;
-	return inited;
-}
 
 // --- Un pair DTLS : la connexion, ses clés SRTP reçues, ses blocs applicatifs.
 class Peer :
@@ -195,11 +117,10 @@ class DTLSPair
 public:
 	DTLSPair() : client(true), server(false)
 	{
-		if (!EnsureDTLSInited())
+		if (!DTLSTestCertificate::Ensure())
 			return;
 
-		const std::string fp =
-			DTLSConnection::GetCertificateFingerPrint(DTLSConnection::SHA256);
+		const std::string fp = DTLSTestCertificate::FingerPrint();
 
 		// Les deux pairs partagent le certificat du binaire : chacun attend donc
 		// l'empreinte de l'autre, qui est la même.
@@ -245,13 +166,12 @@ TEST(DTLSApplicationData, LeHandshakeAboutitEtLesClesSRTPSortent)
 // empreinte qui ne colle pas ne pose aucune clé, donc rien ne se déchiffrera.
 TEST(DTLSApplicationData, UneEmpreinteFausseNePoseAucuneCle)
 {
-	ASSERT_TRUE(EnsureDTLSInited());
+	ASSERT_TRUE(DTLSTestCertificate::Ensure());
 
 	Peer client(true);
 	Peer server(false);
 
-	const std::string good =
-		DTLSConnection::GetCertificateFingerPrint(DTLSConnection::SHA256);
+	const std::string good = DTLSTestCertificate::FingerPrint();
 	// Même forme, premier octet changé : le certificat sera bien lu, et refusé.
 	std::string bad = good;
 	bad[0] = (bad[0] == 'A') ? 'B' : 'A';
@@ -342,11 +262,10 @@ TEST(DTLSApplicationData, SansConsommateurLesDonneesSontJetees)
 // pas authentifié, et SSL_write pousserait dans le flight en cours.
 TEST(DTLSApplicationData, RienNePartAvantLaFinDuHandshake)
 {
-	ASSERT_TRUE(EnsureDTLSInited());
+	ASSERT_TRUE(DTLSTestCertificate::Ensure());
 
 	Peer client(true);
-	const std::string fp =
-		DTLSConnection::GetCertificateFingerPrint(DTLSConnection::SHA256);
+	const std::string fp = DTLSTestCertificate::FingerPrint();
 
 	ASSERT_TRUE(client.Start(fp));
 	ASSERT_FALSE(client.dtls.IsHandshakeCompleted());
