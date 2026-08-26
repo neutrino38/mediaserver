@@ -1,7 +1,7 @@
 # T.140 sur data channel WebRTC
 
-> Statut : **phases 0 et 1 faites** (build, couture DTLS). Branche
-> `feat/t140-over-data-channel`.
+> Statut : **phases 0, 1 et 2 faites** (build, couture DTLS, pile SCTP + DCEP +
+> T.140). Branche `feat/t140-over-data-channel`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par un
 > contrôleur externe (elixip), qui pilote le serveur par XML-RPC. « Contrôleur »
@@ -212,8 +212,8 @@ class RTPSession::ApplicationListener : public DTLSConnection::ApplicationListen
 - dans la boucle `poll` : la période déclarée borne l'attente, et le battement
   reçoit l'écoulement **réel** (le poll rend la main plus tôt sur un paquet
   entrant, plus tard sous charge). La pile SCTP y branche
-  `usrsctp_handle_timers`, et `rtpsession.cpp` ne mentionne jamais usrsctp.
-  La jambe texte d'un appel tourne alors à 100 Hz, et elle seule ;
+  `SCTPTransport::HandleTimers()`, et `rtpsession.cpp` ne mentionne jamais
+  usrsctp. La jambe texte d'un appel tourne alors à 100 Hz, et elle seule ;
 - **rien à couper du côté RTP.** Une jambe data channel n'émet pas de RTCP sans
   qu'on le lui demande : les trois émissions autonomes de `SendSenderReport`
   sont déclenchées par l'envoi ou la réception d'un paquet RTP, et il n'y en a
@@ -229,22 +229,30 @@ données applicatives.
 
 `mcu/include/sctptransport.h`, `mcu/src/sctp/sctptransport.cpp`.
 
-- initialisation globale une fois pour le binaire, par compteur de références :
-  `usrsctp_init_nothreads(0, OnOutput, OnDebug)`. `usrsctp_finish()` **à
-  l'arrêt du binaire seulement** : l'appeler alors qu'une socket vit est un
-  crash connu de la bibliothèque ;
-- une association = une `struct socket` + `usrsctp_register_address(this)`. Le
-  cookie d'adresse est le `this`, c'est lui qui route la sortie vers la bonne
-  session ;
-- entrée : `usrsctp_conninput(this, data, len, 0)` depuis
-  `onDTLSApplicationData` ;
-- sortie : callback → `RTPSession::SendDTLSApplicationData`. Appelée depuis
-  `conninput`, depuis `sendv` ou depuis `handle_timers` — les trois sur le
-  thread de la session ;
-- rôle : nous répondons `a=setup:passive`, donc le navigateur est client DTLS,
-  donc **il est aussi client SCTP** (RFC 8841). Nous faisons `bind` sur notre
-  `sctp-port` puis `listen`, et nous attendons son INIT. Le rôle client est
-  écrit mais inutilisé (§13.4) ;
+- initialisation globale une fois pour le binaire :
+  `usrsctp_init_nothreads(0, OnOutput, NULL)`. **`usrsctp_finish()` n'est jamais
+  appelé** — l'appeler alors qu'une socket vit est un crash connu, et il n'y a
+  rien à gagner : la pile tient dans quelques centaines de kilo-octets et le
+  processus s'arrête de toute façon. Un compteur de références n'aurait servi
+  qu'à décider d'un appel qu'on ne fait pas ;
+- une association = une `struct socket` + `usrsctp_register_address(token)`. Le
+  jeton est un **entier opaque**, jamais le `this` : la sortie est routée par une
+  table, et un datagramme en retard sur une destruction y trouve une entrée
+  disparue au lieu d'un objet libéré ;
+- entrée : `usrsctp_conninput(token, data, len, 0)`, depuis le porteur ;
+- sortie : **une file**, pas un appel direct. Le tour de timers d'une jambe fait
+  avancer les associations des autres, donc la pile peut produire les
+  datagrammes d'une jambe sur le thread d'une autre. Rien n'est chiffré dans le
+  callback ; le porteur vide la file depuis son thread (`GetOutbound`), réveillé
+  par `onSCTPOutboundReady`. C'est cela qui garde l'objet `SSL` mono-thread, et
+  c'est le contrat que les adaptateurs doivent respecter ;
+- `HandleTimers()` est **statique** et tient l'horloge : les timers d'usrsctp
+  sont globaux au processus, et deux jambes cadencées à 10 ms le feraient sinon
+  avancer deux fois trop vite ;
+- rôle : `bind` sur notre `sctp-port` puis `connect` vers celui du pair, **des
+  deux côtés et sans se soucier du rôle DTLS**. SCTP résout la collision d'INIT
+  (RFC 4960 §5.2.4), c'est ce que font les implémentations de référence, et cela
+  évite un `listen`/`accept` avec sa seconde socket à suivre ;
 - options de socket : `SCTP_NODELAY`, `SCTP_EXPLICIT_EOR`,
   `SCTP_ENABLE_STREAM_RESET`, et abonnement aux événements `SCTP_ASSOC_CHANGE`
   et `SCTP_STREAM_RESET_EVENT`. MTU du chemin bornée à 1200 octets, comme les
@@ -280,13 +288,14 @@ Les PPID (RFC 8831 §8) :
 |---|---|---|
 | 50 | DCEP | établissement du canal |
 | 51 | WebRTC String | **un T140block** |
+| 52 | WebRTC Binary Partial (obsolète) | jeté, avec trace |
 | 53 | WebRTC Binary | jeté, avec trace |
-| 55 | WebRTC String Empty | T140block vide |
-| 56 | WebRTC Binary Empty | jeté, avec trace |
+| 54 | WebRTC String Partial (obsolète) | jeté, avec trace |
+| 56 | WebRTC String Empty | T140block vide |
+| 57 | WebRTC Binary Empty | jeté, avec trace |
 
-Ce tableau est le seul de la conception à re-vérifier contre le registre IANA
-au moment du code : une inversion y est silencieuse et coûte une séance
-d'interop.
+Un message SCTP de longueur nulle n'existe pas : le T140block vide se dit par
+son PPID, avec un octet de bourrage que le pair ignore.
 
 ### 5.5 `T140DataChannel` — RFC 8865
 
@@ -300,13 +309,13 @@ La couche que les deux API partagent, et la seule qui connaisse T.140.
   pas : on est indulgent à l'entrée, exact à la sortie ;
 - **réception** : un message SCTP = un T140block. Livré tel quel en
   `TextFrame`, sans découpage, sans accumulation ;
-- **émission** : `SendText(TextFrame&)`. **Toujours** par une file interne, avec
-  réveil de la boucle de session par son `eventfd` (`Wait::Signal`) ; le vidage
-  se fait sur le thread de la session, qui seul touche l'objet `SSL`. C'est ce
-  qui rend l'appel sûr depuis n'importe quel thread — et il en vient d'au moins
-  deux : le thread du mixeur côté conférence, le thread de la jambe pontée côté
-  JSR-309 ;
-- **tampon d'avant-connexion** : la même file, quand le canal n'est pas encore
+- **émission** : `SendText(data, size)`, sûre depuis n'importe quel thread — et
+  il en vient d'au moins deux : le thread du mixeur côté conférence, celui de la
+  jambe pontée côté JSR-309. Rien n'est chiffré ici : la pile est verrouillée en
+  interne et le résultat atterrit dans la file de sortie du transport (§5.3).
+  **Le passage de thread est donc celui de cette file, et il n'en faut pas un
+  second** ;
+- **tampon d'avant-ouverture** : une file, quand le canal n'est pas encore
   ouvert, bornée à **32 trames et 5 secondes**. Entre le 200 OK et l'ouverture
   du canal il s'écoule un aller-retour SDP, un ICE et un handshake DTLS : sans
   tampon, la première phrase — celle où l'appelant se présente — est perdue. Une
@@ -501,9 +510,11 @@ Ce chantier ajoute quatre méthodes : elles y passent aussi.
 - **F. Tampon borné, 32 trames et 5 secondes**, dans `T140DataChannel` : ni
   perte silencieuse de la première phrase, ni file infinie.
 - **G. U+FFFD dans les deux sens** dès qu'un côté tombe.
-- **H. Le texte sortant passe par une file et le thread de session.** OpenSSL
-  n'est pas concurrent, et le mode sans thread d'usrsctp n'a d'intérêt que si on
-  ne réintroduit pas le problème par le haut.
+- **H. Le passage de thread est la file de sortie du transport.** OpenSSL n'est
+  pas concurrent, et les timers d'usrsctp sont globaux : la pile peut produire
+  les datagrammes d'une jambe sur le thread d'une autre. Rien ne chiffre donc
+  dans un callback de la pile ; le porteur vide la file depuis son thread. Une
+  seconde file, côté texte, serait redondante.
 - **I. Pas de BUNDLE dans cette phase**, et pas de `a=group` dans la réponse.
   §13.1 dit ce que ça coûte et ce que ça rapporterait.
 
@@ -554,7 +565,7 @@ a-t-il un transport de forme RTP ? », et non « ce port porte-t-il du RTP ? ».
 |---|---|---|---|
 | 0 | Build | ~~`usrsctp` : `pkg-config` dans `mcu/Makefile`, `install.ksh prereq`, `BuildRequires`/`Requires` du spec~~ **fait** | — |
 | 1 | Transport | ~~Données applicatives DTLS (§5.1, §10.1), couture `RTPSession` (§5.2), scission de `SetupSRTP` (§10.2)~~ **fait** | 0 |
-| 2 | Pile | `SCTPTransport`, `DataChannel`, `T140DataChannel` (§5.3-5.5), testés en boucle locale | 0 |
+| 2 | Pile | ~~`SCTPTransport`, `DCEP`, `T140DataChannel` (§5.3-5.5), testés en boucle locale~~ **fait** | 0 |
 | 3 | JSR-309 | `MediaFrame::SCTP`, `DCEndpoint`, les 4 coutures du §6, les 2 méthodes XML-RPC | 1, 2 |
 | 4 | Conférence | mode data channel de `TextStream` (§7), les 2 méthodes XML-RPC | 1, 2 |
 | 5 | Contrôleur | SDP `m=application`, réponse sans BUNDLE, protobuf MOTELI (§8.5) | 3, 4 |
@@ -591,6 +602,15 @@ Suite `mcu/tests/` (GoogleTest), `cd mcu && make check`.
 - **Intégration** : deux `RTPSession` sur la boucle locale, handshake DTLS réel,
   un T140block traversant les deux piles. Les tests IPv6 montrent que ce genre
   de test tient dans cette suite.
+- **Livrés en phase 2** : `tests/test_datachannel.cpp` (DCEP : aller-retour,
+  longueurs mensongères de label et de protocol, somme des deux qui déborderait
+  un WORD, toutes les troncatures, type inconnu, canal non fiable, et la preuve
+  par page de garde qu'une longueur mensongère ne fait pas lire hors du message)
+  et `tests/test_sctp_loopback.cpp` (deux piles dos à dos sans socket ni DTLS :
+  association, canal ouvert des deux côtés, T140block dans les deux sens, UTF-8
+  multi-octets intact, ordre des frappes, rejeu du tampon d'avant-ouverture,
+  T140block vide, message binaire écarté, canal sans sous-protocole accepté,
+  perte signalée).
 - **Livrés en phase 1** : `tests/test_dtls_appdata.cpp` (deux `DTLSConnection`
   dos à dos en mémoire, certificat généré à l'exécution : handshake et clés
   SRTP, empreinte fausse, bloc traversant, octets binaires, plusieurs blocs dans
@@ -628,17 +648,19 @@ plus lentement quand aucune donnée ne circule.
 
 ### 13.3 `usrsctp_finish` et la fin de vie
 
-Terminer la bibliothèque alors qu'une socket vit la fait crasher. Le compteur
-de références du §5.3 est là pour ça, et le seul appel légitime est à l'arrêt
-du binaire. À vérifier explicitement sous un test qui crée et détruit vingt
-associations.
+Terminer la bibliothèque alors qu'une socket vit la fait crasher. Le risque est
+écarté de la seule manière sûre : **on ne la termine jamais** (§5.3). Ce qui
+reste à surveiller est l'inverse — une association détruite alors qu'un
+datagramme lui arrive encore —, et c'est le rôle de la table de jetons. La suite
+de tests crée et détruit une paire d'associations par test.
 
-### 13.4 Rôle client SCTP non exercé
+### 13.4 Ce que la production ne joue pas
 
-Nous répondons toujours `passive`, donc nous n'initions jamais l'association.
-Le code du rôle client existera sans être joué — c'est du code mort, et le code
-mort ment. Le tester par la boucle locale du §12, où les deux rôles sont
-forcément représentés.
+Nous répondons toujours `a=setup:passive`, donc c'est le navigateur qui ouvre
+l'association et le canal. Deux chemins du code ne sont donc jamais empruntés en
+appel réel : l'initiative de l'association, et `OpenChannel`. Ils sont **joués
+par la boucle locale du §12**, qui les exerce à chaque `make check` — c'est la
+seule façon de ne pas laisser du code mort mentir.
 
 ### 13.5 Le canal peut ne jamais s'ouvrir
 
