@@ -123,10 +123,10 @@ Trois mécanismes distincts, non synchronisés, se partagent la vérité :
 | `audioencoder.cpp:154`, `audiodecoder.cpp:83` | `[512]` | **supprimés** (phase 3) |
 | `mediabridgesession.cpp` ×3 | `[512]` | latent (bridge RTP↔RTMP) |
 | `rtmpparticipant.cpp` ×2, `rtmpmp4stream.cpp:229` | `[512]` | latent |
-| `mp4player.cpp:89` | `buffer[1024]` | latent |
-| `jsr309/Recorder.cpp:188` | `pcm[4096]` | suffisant ≤ 85 ms @48k |
+| `mp4player.cpp:89` | `buffer[1024]` | **supprimé** (phase 4) |
+| `jsr309/Recorder.cpp:188` | `pcm[4096]` + `pcmFifo` | **supprimés** (phase 4) |
 | `ffaudiocodec.cpp` (décodeur) | `conv[8192]` + `fifo<SWORD,8192>` | **supprimés** (phase 1) |
-| `ffmp4reader.cpp:648` | `dpcm[8192]` + `pcmFifo` | latent (migré en phase 4) |
+| `ffmp4reader.cpp:648` | `dpcm[8192]` + `pcmFifo` + `audioSwr` | **supprimés** (phase 4) |
 
 La migration supprime ces tampons plutôt que de les redimensionner un à un.
 
@@ -293,8 +293,26 @@ suivant, comme `VideoEncoder::EncodeFrame`.
    `PipeAudioOutput::PlayFrame` à l'aller et dans `PipeAudioInput` au retour,
    piloté dans les deux cas par la fréquence de la trame (phase 2). VAD
    inchangé.
-4. **Player/Recorder/MP4** (`mp4player`, `jsr309/Recorder`, `ffmp4reader` —
-   ce dernier a déjà son resampler interne à absorber).
+4. **Player/Recorder/MP4** (`mp4player`, `jsr309/Recorder`, `ffmp4reader`) —
+   ✅ **FAIT**. Les trois portaient le même triptyque « tampon fixe + fifo à la
+   main + découpage à la main », et les trois le perdent :
+
+   - `mp4player` : `buffer[1024]` supprimé, boucle sur `GetFrame` ;
+   - `jsr309/Recorder` : `pcm[4096]` et le membre `pcmFifo` supprimés — c'est
+     l'encodeur AAC qui accumule jusqu'à ses 1024 échantillons. L'encodeur est
+     désormais ouvert à la fréquence que **porte** la première trame décodée,
+     plus à une fréquence demandée au décodeur avant qu'il ne la connaisse ;
+   - `ffmp4reader::TranscodeAudioPacket` : `dpcm[8192]`, `out[4096]`, le
+     `pcmFifo`, le membre `audioSwr` et `outFrameSamples` disparaissent tous.
+     Le rééchantillonnage source→cible vit maintenant dans l'encodeur, piloté
+     par la fréquence de la trame ; `OpenAudioTranscoded` n'ouvre plus de
+     `SwrContext`. La durée d'une trame émise est dérivée de `numFrameSamples`
+     plutôt que supposée valoir 20 ms.
+
+   Couverture : `Mp4Transcode` (libmedikit, AAC→AMR et AAC→Opus) reste vert, et
+   `AudioRecorderChain.OpusVersAacCadenceParLEncodeur` (mcu) rejoue la cadence
+   du Recorder — 50 trames opus de 20 ms entrées, 46 trames AAC de 1024
+   échantillons sorties, horodatages sans dérive.
 5. **RTMP et bridge** (`rtmpparticipant`, `rtmpmp4stream`,
    `mediabridgesession`) — à évaluer : si ces chemins sont morts en production,
    les geler plutôt que les migrer (décision à prendre avant la phase).

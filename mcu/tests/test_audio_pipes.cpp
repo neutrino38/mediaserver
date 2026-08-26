@@ -1,6 +1,6 @@
 /**
- * test_audio_pipes.cpp — PipeAudioInput / PipeAudioOutput après le passage au
- * transport AVFrame (design/audio-avframe.md, phase 2).
+ * test_audio_pipes.cpp — les pipes audio et les chaînes qui les traversent,
+ * après le passage au transport AVFrame (design/audio-avframe.md).
  *
  * Le pipe portait le troisième bug du 2026-08-14 : son rééchantillonneur était
  * ouvert par StartRecording, donc AVANT que le décodeur ne découvre sa vraie
@@ -353,4 +353,73 @@ TEST(AudioTranscodeChain, OpusQuaranteHuitVersSpeexSeize)
 	EXPECT_LE(produced, kFrames);
 
 	pipe.End();
+}
+
+/* ------------------------------------------------------------------------- *
+ *                    La chaîne d'enregistrement (Recorder)                  *
+ * ------------------------------------------------------------------------- */
+
+// RTP opus 48 kHz -> décodeur -> encodeur AAC -> sample MP4. L'AAC exige des
+// trames de 1024 échantillons, une taille qui ne correspond à aucune trame RTP :
+// c'est l'encodeur qui accumule, plus le Recorder avec sa fifo à la main.
+TEST(AudioRecorderChain, OpusVersAacCadenceParLEncodeur)
+{
+	if (!AudioCodec::IsSupported(AudioCodec::OPUS) ||
+	    !AudioCodec::IsSupported(AudioCodec::AAC))
+		GTEST_SKIP() << "OPUS ou AAC indisponible dans ffmpeg";
+
+	Properties props;
+	std::unique_ptr<AudioEncoder> opusEnc(AudioCodecFactory::CreateEncoder(AudioCodec::OPUS, props));
+	std::unique_ptr<AudioDecoder> opusDec(AudioCodecFactory::CreateDecoder(AudioCodec::OPUS));
+	ASSERT_TRUE(opusEnc && opusDec);
+	ASSERT_EQ(opusEnc->TrySetRate(48000), 48000u);
+
+	// L'encodeur AAC n'est créé qu'à la première trame décodée, à la fréquence
+	// qu'elle PORTE : c'est le point que la phase 4 change dans le Recorder.
+	std::unique_ptr<AudioEncoder> aacEnc;
+	DWORD audioRate = 0;
+	QWORD audioSamples = 0;
+	int emitted = 0;
+	DWORD lastTs = 0;
+
+	// 1 s : 50 trames opus de 20 ms.
+	for (int i = 0; i < 50; i++)
+	{
+		AudioFrame *rtp = opusEnc->EncodeFrame(Tone(960, 48000));
+		if (!rtp)
+			continue;
+
+		ASSERT_GT(opusDec->Decode(rtp->GetData(), (int)rtp->GetLength()), 0);
+
+		for (SamplesPtr s = opusDec->GetFrame(); s; s = opusDec->GetFrame())
+		{
+			if (!aacEnc)
+			{
+				audioRate = s->GetRate();
+				ASSERT_EQ(audioRate, 48000u);
+				char rate[16];
+				snprintf(rate, sizeof(rate), "%u", audioRate);
+				Properties aacProps;
+				aacProps.SetProperty("aac.samplerate", rate);
+				aacEnc.reset(AudioCodecFactory::CreateEncoder(AudioCodec::AAC, aacProps));
+				ASSERT_TRUE(aacEnc != nullptr);
+				EXPECT_EQ(aacEnc->numFrameSamples, 1024);
+			}
+
+			for (AudioFrame *f = aacEnc->EncodeFrame(s); f; f = aacEnc->EncodeFrame(NULL))
+			{
+				EXPECT_GT(f->GetLength(), 0u);
+				lastTs = (DWORD)(audioSamples * 1000 / audioRate);
+				audioSamples += aacEnc->numFrameSamples;
+				emitted++;
+			}
+		}
+	}
+
+	// 48000 échantillons / 1024 = 46 trames AAC, au délai d'amorçage près.
+	EXPECT_GE(emitted, 44);
+	EXPECT_LE(emitted, 47);
+	// Les horodatages couvrent bien près d'une seconde, sans dérive.
+	EXPECT_GE(lastTs, 900u);
+	EXPECT_LE(lastTs, 1000u);
 }
