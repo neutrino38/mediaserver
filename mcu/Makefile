@@ -79,6 +79,12 @@ DOCSHARINGOBJ= remoteratecontrol.o uploadhandler.o http.o appmixer.o
 MOTELIDIR=moteli
 MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 
+# Data channels WebRTC : la pile SCTP (usrsctp), DCEP et le T.140 par dessus.
+# Trois couches qui ne connaissent ni ICE, ni DTLS, ni UDP, ni RTP — le porteur
+# est une RTPSession, et c'est elle qui les branche (docs/conception/T140-DC).
+SCTPDIR=sctp
+SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o
+
 OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
@@ -91,7 +97,7 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
 OBJS+=ipaddress.o addressprofiles.o stunclient.o
 
-OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ)
+OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ)
 TARGETS=mcu rtmptest
 
 ifeq ($(FLASHSTREAMER),yes)
@@ -141,6 +147,7 @@ VPATH  =  %.o $(BUILD)/
 VPATH +=  %.c src/
 VPATH +=  %.cpp src/
 VPATH +=  %.cpp src/$(JSR309DIR)
+VPATH +=  %.cpp src/$(SCTPDIR)
 
 ifeq ($(MOTELI),yes)
     VPATH +=  %.cpp src/$(MOTELIDIR)
