@@ -343,7 +343,7 @@ int  RTMPParticipant::StopSendingAudio()
 		sendingAudio=0;
 
 		//Cancel grab audio
-		audioInput->CancelRecBuffer();
+		audioInput->CancelRecFrame();
 		
 		//Esperamos
 		pthread_join(sendAudioThread,NULL);
@@ -742,12 +742,12 @@ int RTMPParticipant::SendAudio()
 	while(sendingAudio)
 	{
 		RTMPAudioFrame	audio(0,MTU);
-		SWORD 		recBuffer[512];
-		//Capturamos
-		DWORD  recLen = audioInput->RecBuffer(recBuffer,encoder->numFrameSamples);
+		//Capturamos. La trame arrive a la taille que le mixeur a ecrite ;
+		//c'est l'encodeur qui la redecoupe a numFrameSamples.
+		SamplesPtr captured = audioInput->RecFrame(1000);
 
 		//Check len
-		if (!recLen)
+		if (!captured)
 		{
 			//Log
 			Debug("-cont\n");
@@ -759,16 +759,22 @@ int RTMPParticipant::SendAudio()
 			continue;
 		}
 
-		//Rencode it
-		DWORD len;
-
-		while((len=encoder->Encode(recBuffer,recLen,audio.GetMediaData(),audio.GetMaxMediaSize()))>0)
+		//Rencode it. Une trame d'entree peut en remplir plusieurs.
+		for (AudioFrame* encoded = encoder->EncodeFrame(captured);
+		     encoded; encoded = encoder->EncodeFrame(NULL))
 		{
-			//REset
-			recLen = 0;
+			//Check size
+			if (encoded->GetLength() > audio.GetMaxMediaSize())
+			{
+				Error("-RTMPParticipant: frame of %u bytes exceeds the RTMP payload\n",
+				      encoded->GetLength());
+				continue;
+			}
+
+			memcpy(audio.GetMediaData(),encoded->GetData(),encoded->GetLength());
 
 			//Set length
-			audio.SetMediaSize(len);
+			audio.SetMediaSize(encoded->GetLength());
 			
 			//Check if it is first frame
 			if (!ini)
@@ -1134,10 +1140,6 @@ int RTMPParticipant::RecAudio()
 				continue;
 		}
 
-		SWORD raw[512];
-		DWORD rawSize = 512;
-		DWORD rawLen = 0;
-
 		//Check if we have a decoder
 		if (!rtmpAudioDecoder || rtmpAudioDecoder->type!=rtmpAudioCodec)
 		{
@@ -1153,25 +1155,25 @@ int RTMPParticipant::RecAudio()
 				break;
 			}
 			
-			//Try to set native pipe rate
-			DWORD rate = rtmpAudioDecoder->TrySetRate(audioOutput->GetNativeRate());
-
-			//Start playing at codec rate
-			audioOutput->StartPlaying(rate);
+			//Le decodeur restitue a la frequence native du flux, que chaque
+			//trame porte ensuite : rien a annoncer d'autre au pipe.
+			audioOutput->StartPlaying(rtmpAudioDecoder->GetRate());
 		}
 
 		//Get data
 		BYTE *data = audio->GetMediaData();
 		//Get size
 		DWORD size = audio->GetMediaSize();
-		//Decode it until no frame is found
-		while ((rawLen = rtmpAudioDecoder->Decode(data,size,raw,rawSize))>0)
+		//Decode it. Un paquet peut donner plusieurs trames : les jouer TOUTES.
+		rtmpAudioDecoder->Decode(data,size);
+		for (SamplesPtr decoded = rtmpAudioDecoder->GetFrame(); decoded;
+		     decoded = rtmpAudioDecoder->GetFrame())
 		{
 			//Check size
-			if (rawLen>0 && !audioMuted)
+			if (!audioMuted)
 			{
 				//Enqeueue it
-				int ret = audioOutput->PlayBuffer(raw,rawLen,0);
+				int ret = audioOutput->PlayFrame(decoded);
                                 if (ret == -2)
                                 {
                                     // ret == -2 means that the mediaserver reveived a burst of
@@ -1200,10 +1202,8 @@ int RTMPParticipant::RecAudio()
 									}
 								}
 			}
-			//Remove size
-			size = 0;
 		}
-		
+
 		//Delete audio
 		delete(audio);
 	}

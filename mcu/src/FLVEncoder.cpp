@@ -286,7 +286,7 @@ int FLVEncoder::StopEncoding()
 		Log("-Stop Encoding FLV audio\n");
 		//Cancel grab audio
 		if ( audioInput != NULL)
-			audioInput->CancelRecBuffer();
+			audioInput->CancelRecFrame();
 		pthread_join(encodingAudioThread,NULL);
 	}
 
@@ -371,9 +371,6 @@ int FLVEncoder::EncodeAudio()
 	//Num of samples since ini
 	QWORD samples = 0;
 
-	//Allocate samlpes
-	SWORD* recBuffer = (SWORD*) malloc(encoder->numFrameSamples*sizeof(SWORD));
-
 	//Check codec
 	if (audioCodec==AudioCodec::AAC)
 	{
@@ -394,10 +391,11 @@ int FLVEncoder::EncodeAudio()
 		//Audio frame
 		RTMPAudioFrame	audio(0,65535);
 
-		//Capturamos
-		DWORD  recLen = audioInput->RecBuffer(recBuffer,encoder->numFrameSamples);
+		//Capturamos. La trame arrive à la taille que le mixeur a écrite ;
+		//c'est l'encodeur qui la redécoupe à numFrameSamples.
+		SamplesPtr captured = audioInput->RecFrame(1000);
 		//Check len
-		if (!recLen)
+		if (!captured)
 		{
 			//Log
 			Debug("-cont\n");
@@ -409,16 +407,22 @@ int FLVEncoder::EncodeAudio()
 			continue;
 		}
 		
-		//Rencode it
-		DWORD len;
-
-		while((len=encoder->Encode(recBuffer,recLen,audio.GetMediaData(),audio.GetMaxMediaSize()))>0)
+		//Rencode it. Une trame d'entrée peut en remplir plusieurs.
+		for (AudioFrame* encoded = encoder->EncodeFrame(captured);
+		     encoded; encoded = encoder->EncodeFrame(NULL))
 		{
-			//REset
-			recLen = 0;
+			//Check size
+			if (encoded->GetLength() > audio.GetMaxMediaSize())
+			{
+				Error("-FLVEncoder: frame of %u bytes exceeds the RTMP payload\n",
+				      encoded->GetLength());
+				continue;
+			}
+
+			memcpy(audio.GetMediaData(),encoded->GetData(),encoded->GetLength());
 
 			//Set length
-			audio.SetMediaSize(len);
+			audio.SetMediaSize(encoded->GetLength());
 
 			//Check if it is first frame
 			if (!ini)
@@ -513,7 +517,7 @@ int FLVEncoder::EncodeAudio()
 			//Clear rtp
 			frame.ClearRTPPacketizationInfo();
 			//Add rtp packet
-			frame.AddRtpPacket(0,len,NULL,0,false);
+			frame.AddRtpPacket(0,encoded->GetLength(),NULL,0,false);
 			//For each listere
 			//For each listener
 			for(MediaFrameListeners::iterator it = mediaListeners.begin(); it!=mediaListeners.end(); ++it)
@@ -526,11 +530,6 @@ int FLVEncoder::EncodeAudio()
 
 	//Stop recording
 	audioInput->StopRecording();
-
-	//Delete buffer
-	if (recBuffer)
-		//Delete
-		free(recBuffer);
 
 	//Check codec
 	if (encoder)
