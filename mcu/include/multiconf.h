@@ -175,7 +175,18 @@ public:
 	//jamais par le contrôleur). Chaîne vide en cas d'échec. Seul
 	//media=Text/proto=WS est accepté. Une re-configuration remplace le token
 	//du participant (l'ancien cesse de résoudre) et conserve le pont.
+	//
+	//proto=SCTP bascule le même plan texte vers un DATA CHANNEL WebRTC : là il
+	//n'y a ni token ni URL — la jambe garde son port, son ICE et son DTLS, seul
+	//change ce qui voyage dedans — et le retour est simplement « sctp ». Les
+	//paramètres à publier viennent de SetupParticipantDataChannel.
 	std::string ConfigureParticipantMediaConnection(int partId,MediaFrame::Type media,MediaFrame::MediaProtocol proto,const std::string &token);
+	//Paramètres SCTP de la jambe texte d'un participant : pose le `a=sctp-port`
+	//du pair et rend les nôtres, `a=max-message-size` compris. `streamId` vaut
+	//-1 tant que le canal n'est pas ouvert. À appeler APRÈS
+	//ConfigureParticipantMediaConnection avec proto=SCTP.
+	int SetupParticipantDataChannel(int partId,MediaFrame::Type media,WORD remoteSCTPPort,
+					WORD& localSCTPPort,DWORD& maxMessageSize,int& streamId);
 	//S5 : une connexion /mcu/<confId>/<token> acceptée par le handler du MCU.
 	//Résout le token vers le pont du participant, ou Reject(404).
 	void onNewMediaConnection(WebSocket *ws,const std::string &token);

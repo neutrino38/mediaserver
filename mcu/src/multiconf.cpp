@@ -1608,12 +1608,40 @@ std::string MultiConf::ConfigureParticipantMediaConnection(int partId,MediaFrame
 		return std::string();
 	}
 
-	//Périmètre exact de S5 : le texte, sur WebSocket. Tout le reste est RTP
-	//sur cette API.
-	if (media != MediaFrame::Text || proto != MediaFrame::WS)
+	//Deux transports possibles pour le texte d'un participant : le WebSocket (S5)
+	//et le data channel WebRTC. Tout le reste est RTP sur cette API.
+	if (media != MediaFrame::Text ||
+	    (proto != MediaFrame::WS && proto != MediaFrame::SCTP))
 	{
-		Error("ConfigureParticipantMediaConnection: only TEXT over WS is supported on the conference API.\n");
+		Error("ConfigureParticipantMediaConnection: only TEXT over WS or SCTP is supported"
+		      " on the conference API.\n");
 		return std::string();
+	}
+
+	//Data channel : rien à signer, donc pas de token ni d'URL. La jambe garde son
+	//port, son ICE et son DTLS — c'est ce qui voyage dedans qui change. Les
+	//paramètres SCTP que le contrôleur publie viennent de
+	//SetupParticipantDataChannel.
+	if (proto == MediaFrame::SCTP)
+	{
+		participantsLock.IncUse();
+		RTPParticipantPtr part = GetRTPParticipant(partId);
+		participantsLock.DecUse();
+
+		if (!part)
+		{
+			Error("ConfigureParticipantMediaConnection: participant %d not found.\n",partId);
+			return std::string();
+		}
+
+		if (!part->SetTextTransport(MediaFrame::SCTP))
+		{
+			Error("ConfigureParticipantMediaConnection: could not switch text to a data channel.\n");
+			return std::string();
+		}
+
+		Log("<ConfigureParticipantMediaConnection [partId:%d] --> data channel\n",partId);
+		return std::string(MediaFrame::ProtocolToString(MediaFrame::SCTP));
 	}
 
 	if (token.empty())
@@ -1692,6 +1720,31 @@ std::string MultiConf::ConfigureParticipantMediaConnection(int partId,MediaFrame
 
 	Log("<ConfigureParticipantMediaConnection [partId:%d] --> %s\n",partId,url);
 	return std::string(url);
+}
+
+/************************
+* SetupParticipantDataChannel
+*	Les paramètres SCTP de la jambe texte d'un participant : le contrôleur donne
+*	le `a=sctp-port` du pair et repart avec les nôtres, `a=max-message-size`
+*	compris. Ce que le serveur sait de lui-même, c'est à lui qu'on le demande.
+*************************/
+int MultiConf::SetupParticipantDataChannel(int partId,MediaFrame::Type media,WORD remoteSCTPPort,
+					   WORD& localSCTPPort,DWORD& maxMessageSize,int& streamId)
+{
+	if (!inited)
+		return Error("SetupParticipantDataChannel: not inited\n");
+
+	if (media != MediaFrame::Text)
+		return Error("SetupParticipantDataChannel: only TEXT is carried by a data channel.\n");
+
+	participantsLock.IncUse();
+	RTPParticipantPtr part = GetRTPParticipant(partId);
+	participantsLock.DecUse();
+
+	if (!part)
+		return Error("SetupParticipantDataChannel: participant %d not found.\n",partId);
+
+	return part->SetupTextDataChannel(remoteSCTPPort,localSCTPPort,maxMessageSize,streamId);
 }
 
 /************************
