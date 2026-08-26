@@ -396,6 +396,19 @@ int VideoStream::StopSending()
 	     return 1;
 	}
 
+	//Le thread d'envoi n'était ni Running ni Starting : il est sorti de lui-même
+	//(SendVideo rend la main sur une erreur d'initialisation ; il ne sort plus
+	//sur un mixeur à sec, cf. sa boucle). L'objet std::thread reste JOINABLE
+	//pour autant, et
+	//StartSending lui réaffecte un thread neuf : réaffecter un std::thread
+	//joinable appelle std::terminate(), donc abort(). C'est ce qui tuait le
+	//serveur à la reprise d'un appel mis en attente.
+	//
+	//La postcondition de StopSending est donc inconditionnelle : au retour,
+	//sendVideoThread n'est plus joignable. C'est déjà ce que StartSending
+	//suppose, lui qui exige TaskIdle juste après nous avoir appelés.
+	if (sendVideoThread.joinable()) sendVideoThread.join();
+
 	Log("<StopSending\n");
 
 	return 1;
@@ -440,6 +453,13 @@ int VideoStream::StopReceiving()
 	    if (recVideoThread.joinable()) recVideoThread.join();
 	    Log("<StopReceiving thread=[%s] joined after forced wait\n", threadID.c_str());
 	}
+
+	//Même postcondition inconditionnelle que StopSending, et pour la même raison :
+	//StartReceiving réaffecte recVideoThread, et un std::thread joinable réaffecté
+	//appelle std::terminate(). Le chemin n'a pas encore tué le serveur — RecVideo
+	//reste Running tant que la session RTP vit — mais rien ne le garantit, et
+	//chaque renégociation rappelle StartReceiving.
+	if (recVideoThread.joinable()) recVideoThread.join();
 
 	Log("<StopReceiving\n");
 
@@ -520,19 +540,28 @@ int VideoStream::SendVideo()
 		//Check picture
 		if (!pic)
 		{
-                    msleep(1000);
-			if ( intputErrCount++ > 10 )
-			{
-			    // If too many errors -> videoInput has been closed
-			    Log("-videostream: stop sending video because input is not active.\n");
-			    sendingVideo = TaskStopping;
-			    break;
-			}
-			else
-			{
-				continue;
-			}
+			//Mixeur à sec. C'est un transitoire NORMAL tant que la session RTP
+			//vit : reprise d'une mise en attente, décodeur du participant en
+			//resynchronisation, changement de résolution en cours de flux. La
+			//fin de l'émission est la décision de StopSending, qui pose
+			//sendingVideo, annule le grab et réveille la condition — le while
+			//ci-dessus est donc la seule sortie de cette boucle.
+			//
+			//Sortir sur un compteur gelait la vidéo pour tout le reste de
+			//l'appel, rien ne relançant SendVideo hors d'une renégociation.
+			//Capture du 2026-08-23 : sortie à 10:51:52.956, image clé du
+			//participant à 10:51:53.099 — perdu de 143 ms. Et la fenêtre se
+			//lisait « 10 × 1 s » alors que msleep prend des MICROsecondes : deux
+			//secondes en pratique, contre 1,6 à 2,6 s pour qu'un Linphone
+			//produise une image clé après un FPU. La course était imperdable.
+			msleep(1000);
+			if (intputErrCount++ == 10)
+				Log("-videostream: no frame from the mixer, holding the send loop\n");
+			continue;
 		}
+
+		if (intputErrCount > 10)
+			Log("-videostream: mixer feeding again after %d dry grab(s)\n", intputErrCount);
 
 		intputErrCount = 0;
 		//Check if we need to send intra

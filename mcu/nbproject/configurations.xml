@@ -136,7 +136,6 @@
       <in>videomixer.h</in>
       <in>videopipe.h</in>
       <in>videostream.h</in>
-      <in>videotranscoder.h</in>
       <in>wait.h</in>
       <in>waitqueue.h</in>
       <in>websocketconnection.h</in>

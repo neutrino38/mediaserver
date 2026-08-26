@@ -326,6 +326,13 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 	//Fenetre du plafond glissant (deque monotone : le front est le max).
 	while (!incomingMaxWindow.empty() && incomingMaxWindow.front().first + IncreaseLimitWindowMs < now)
 		incomingMaxWindow.pop_front();
+	//Fenetre videe par l'expiration ci-dessus, pas par une baisse mesuree : aucun
+	//paquet n'est arrive depuis plus de IncreaseLimitWindowMs (renegociation,
+	//coupure ICE...). Ce n'est pas un signal de congestion, juste une absence de
+	//mesure — mesure du 2026-08-26 (mcu-gris.log) : une reprise au meme debit
+	//qu'avant la coupure s'est vue plafonnee au plancher (16 kb/s) le temps
+	//d'une remontee AIMD de plusieurs dizaines de secondes, ecran gris a l'appui.
+	const bool windowWasEmpty = incomingMaxWindow.empty();
 	while (!incomingMaxWindow.empty() && incomingMaxWindow.back().second <= incomingBitRate)
 		incomingMaxWindow.pop_back();
 	incomingMaxWindow.emplace_back(now, incomingBitRate);
@@ -429,7 +436,7 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 	//d'oscillation mesures le 2026-08-22 sur un lien sain, sans un seul
 	//OverUsing. Une baisse DURABLE est toujours suivie (la fenetre se vide en
 	//IncreaseLimitWindowMs) et une congestion reelle passe par Decrease.
-	if (!recovery && (incomingBitRate > 100000 || current > 150000))
+	if (!recovery && !windowWasEmpty && (incomingBitRate > 100000 || current > 150000))
 	{
 		const DWORD increaseLimit = (DWORD)(1.5 * windowedIncomingBitRate) + 10000;
 		if (current > increaseLimit)
