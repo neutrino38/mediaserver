@@ -22,6 +22,8 @@
 #include "remoterateestimator.h"
 #include "rembthrottler.h"
 #include "dtls.h"
+#include <atomic>
+
 #include "ipaddress.h"
 #include "addressprofiles.h"
 
@@ -281,6 +283,37 @@ public:
 	int SetLocalCryptoSDES(const char* suite, const char* key64);
 	int SetRemoteCryptoSDES(const char* suite, const char* key64,int keyRank=0);
 	int SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint);
+
+	//Consommateur des données APPLICATIVES du DTLS, et sa cadence. C'est par là
+	//qu'un data channel WebRTC (RFC 8831) se greffe : la session reste le porteur
+	//— ICE, DTLS, socket, latch d'adresse, thread poll — et ne connaît ni SCTP ni
+	//T.140. Elle livre des octets et bat la mesure, rien de plus.
+	class ApplicationListener : public DTLSConnection::ApplicationListener
+	{
+	public:
+		//Période d'appel de onApplicationTick, en ms. 0 (défaut) = pas de
+		//cadence. Une pile SCTP en espace utilisateur n'a pas de thread : ses
+		//retransmissions et ses heartbeats sont battus par la boucle poll de la
+		//session, ce qui garde tout le chemin sur un seul thread — l'objet SSL
+		//n'est pas concurrent.
+		virtual DWORD GetApplicationTickMs() { return 0; }
+		//Écoulement RÉEL depuis le dernier appel : le poll rend la main plus tôt
+		//sur un paquet entrant, plus tard sous charge.
+		virtual void  onApplicationTick(DWORD elapsedMs) {}
+	};
+
+	//À poser AVANT Init, qui démarre la boucle. NULL retire le consommateur, qui
+	//doit alors le faire avant de mourir : la session ne le possède pas.
+	void SetDTLSApplicationListener(ApplicationListener* listener);
+	//Chiffre et émet un bloc applicatif vers le pair latché. À n'appeler QUE
+	//depuis le thread de la session : l'objet SSL n'est pas concurrent, et cette
+	//boucle le lit à chaque datagramme entrant.
+	int  SendDTLSApplicationData(const BYTE* data,DWORD size);
+	//Le canal applicatif est-il ouvert ? Une jambe sans RTP n'a pas de profil
+	//SRTP, donc onDTLSSetup ne lui dit jamais rien : c'est ainsi qu'un porteur de
+	//data channel sait qu'il peut commencer à écrire.
+	bool IsDTLSHandshakeCompleted() const { return dtls.IsHandshakeCompleted(); }
+
 	int SetLocalSTUNCredentials(const char* username, const char* pwd);
 	int SetRemoteSTUNCredentials(const char* username, const char* pwd);
 	int SetProperties(const Properties& properties);
@@ -487,6 +520,14 @@ private:
 	bool	dtlsClientStarted;
 	timeval	dtlsClientStart;
 	bool	dtlsClientFailed;
+	//Consommateur des données applicatives DTLS (data channel), et horodatage du
+	//dernier battement de sa cadence. ATOMIQUE : le consommateur se retire depuis
+	//le thread de contrôle pendant que la boucle le lit, et une lecture déchirée
+	//entre « il y a une cadence » et « appelle-le » déréférençait NULL.
+	//Contrat de durée de vie : le consommateur doit survivre à la boucle, ou
+	//l'arrêter avant de se retirer.
+	std::atomic<ApplicationListener*> appListener;
+	timeval	lastAppTick;
 	bool	encript;
 	bool	decript;
 	srtp_t	sendSRTPSession;

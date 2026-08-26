@@ -305,6 +305,10 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	dtlsClientStarted = false;
 	dtlsClientFailed  = false;
 	setZeroTime(&dtlsClientStart);
+	//Aucun consommateur de données applicatives DTLS : le DTLS ne sert alors qu'à
+	//dériver les clés SRTP, comme avant.
+	appListener = NULL;
+	setZeroTime(&lastAppTick);
 	sendSRTPSession = NULL;
 	recvSRTPSession = NULL;
 	recvSRTPSession_secondary = NULL;
@@ -1300,6 +1304,39 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 //sur le chemin d'erreur transport (onRTPTimeout -> EndpointDisconnectedEvent).
 //OpenSSL abandonne en général avant (HandleTimeout renvoie -1), c'est un filet.
 #define DTLS_CLIENT_HANDSHAKE_TIMEOUT 30000
+
+/************************
+* SetDTLSApplicationListener / SendDTLSApplicationData
+*	Greffe d'un consommateur de données applicatives DTLS — un data channel
+*	WebRTC. La session reste le porteur (ICE, DTLS, socket, latch, thread) et
+*	ne connaît ni SCTP ni T.140.
+*************************/
+void RTPSession::SetDTLSApplicationListener(ApplicationListener* listener)
+{
+	appListener = listener;
+	//Le DTLS livre directement au consommateur : la session ne recopie rien.
+	dtls.SetApplicationListener(listener);
+	//La cadence du consommateur borne l'attente du poll : réveiller la boucle
+	//pour qu'elle la relise sans attendre un paquet entrant.
+	setZeroTime(&lastAppTick);
+	wait.Signal();
+}
+
+int RTPSession::SendDTLSApplicationData(const BYTE* data,DWORD size)
+{
+	//Le chiffrement pousse dans write_bio ; c'est FlushDTLS qui met sur le fil,
+	//vers la destination latchée. Sans destination connue, rien ne part — et le
+	//consommateur n'a rien à faire de cette information : le handshake n'est pas
+	//terminé non plus, donc WriteApplicationData refuse déjà.
+	int len = dtls.WriteApplicationData(data,size);
+
+	if (len <= 0)
+		return 0;
+
+	FlushDTLS();
+
+	return len;
+}
 
 void RTPSession::FlushDTLS()
 {
@@ -3025,6 +3062,13 @@ int RTPSession::Run()
 		bool natPriming = natPrimingLeft > 0 && !encript
 				&& HasRemote();
 
+		//Le consommateur de données applicatives (data channel) peut avoir ses
+		//propres timers et pas de thread : c'est cette boucle qui les bat. UNE
+		//seule lecture du pointeur pour tout le tour : il peut être retiré entre
+		//deux, et lire « il y a une cadence » puis appeler NULL est un crash.
+		ApplicationListener* app = appListener.load();
+		DWORD appTickMs = app ? app->GetApplicationTickMs() : 0;
+
 		//Attente : infinie par défaut, bornée si watchdog armé et/ou handshake DTLS
 		//client / checks ICE en cours (on prend le plus court des seuils).
 		int waitMs = rtpTimeoutArmed ? pollTimeout : -1;
@@ -3041,6 +3085,10 @@ int RTPSession::Run()
 		if (useTransportCC && transportFeedback.HasPending())
 			waitMs = (waitMs < 0) ? TRANSPORT_FEEDBACK_POLL_MS
 					      : (waitMs < TRANSPORT_FEEDBACK_POLL_MS ? waitMs : TRANSPORT_FEEDBACK_POLL_MS);
+
+		if (appTickMs)
+			waitMs = (waitMs < 0) ? (int) appTickMs
+					      : (waitMs < (int) appTickMs ? waitMs : (int) appTickMs);
 
 		//Wait for events
 		int nready = poll(ufds,3,waitMs);
@@ -3108,6 +3156,22 @@ int RTPSession::Run()
 		//par la branche DTLS de ReadRTP) fassent d'abord progresser le handshake.
 		if (dtlsDriving)
 			DriveDTLSClientHandshake();
+
+		//Cadence du consommateur applicatif, avec l'écoulement RÉEL : le poll a pu
+		//rendre la main plus tôt (paquet entrant) ou plus tard (charge). Placé
+		//APRÈS ReadRTP, pour que les données arrivées à ce tour soient déjà
+		//entrées dans la pile quand ses timers tournent.
+		if (appTickMs)
+		{
+			DWORD elapsed = isZeroTime(&lastAppTick) ? appTickMs
+						: (DWORD)(getDifTime(&lastAppTick)/1000);
+
+			if (elapsed >= appTickMs)
+			{
+				gettimeofday(&lastAppTick,NULL);
+				app->onApplicationTick(elapsed);
+			}
+		}
 
 		//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
 		//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
