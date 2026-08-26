@@ -21,7 +21,11 @@ class RTPEndpoint :
 	public RTPSession::Listener
 {
 public:
-	RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//`proto` dit ce que la jambe TRANSPORTE, pas ce qu'elle est : ICE, DTLS,
+	//socket et boucle poll sont les mêmes pour un data channel (MediaFrame::SCTP),
+	//qui en dérive. Défaut RTP, le seul cas jusqu'ici.
+	RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN,
+		    MediaFrame::MediaProtocol proto = MediaFrame::RTP);
 	virtual ~RTPEndpoint();
 
 	virtual int Init();

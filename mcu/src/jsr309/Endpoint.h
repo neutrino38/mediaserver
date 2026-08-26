@@ -191,6 +191,15 @@ public:
 	int ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::MediaRole role, 
 				      MediaFrame::MediaProtocol proto, const char * expectedPayload );
 
+	//Paramètres SCTP d'une jambe data channel : pose le `a=sctp-port` du pair et
+	//rend les nôtres. Le contrôleur les PUBLIE dans son SDP, il ne doit donc pas
+	//les deviner — c'est la même règle que pour l'adresse annoncée. `streamId`
+	//vaut -1 tant que le canal n'est pas ouvert : il ne sert qu'à un `a=dcmap`.
+	//La jambe doit déjà être un data channel (ConfigureMediaConnection).
+	int SetupDataChannel(MediaFrame::Type media,WORD remoteSCTPPort,
+			     WORD& localSCTPPort,DWORD& maxMessageSize,int& streamId,
+			     MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+
 	int SetEventContextId( MediaFrame::Type media, MediaFrame::MediaRole role, int ctxId );
     int SetEventHandler( MediaFrame::Type media, MediaFrame::MediaRole role, int sessionId,	JSR309Manager* jsrManager);
 	

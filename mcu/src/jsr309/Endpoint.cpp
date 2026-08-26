@@ -9,6 +9,7 @@
 #include "ipaddress.h"
 #include "RTPEndpoint.h"
 #include "WSEndpoint.h"
+#include "DCEndpoint.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -94,16 +95,17 @@ int Endpoint::End()
 	return 0;
 }
 
+//La question est « ce port a-t-il un transport de forme RTP ? », et non « ce port
+//porte-t-il du RTP ? ». Un data channel (DCEndpoint) EST une jambe ICE + DTLS +
+//UDP : elle dérive de RTPEndpoint, et c'est ce qui fait marcher sans y toucher
+//SetRemoteCryptoDTLS, les credentials STUN, AddICECandidate, ArmRTPTimeout et
+//StartSending sur une jambe texte-sur-data-channel. Un test d'égalité sur le
+//transport rendait NULL et toute la configuration de sécurité tombait.
 RTPEndpoint* Endpoint::GetRTPEndpoint(MediaFrame::Type media, MediaFrame::MediaRole role)
 {
     std::shared_ptr<Port> p = GetPort(media, role);
 
-	if ( p && p->GetTransport() == MediaFrame::RTP )
-	{
-			return (RTPEndpoint*) p.get();
-	}
-	else
-			return NULL;
+    return p ? dynamic_cast<RTPEndpoint*>(p.get()) : NULL;
 }
 
 int Endpoint::StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap, MediaFrame::MediaRole role)
@@ -249,6 +251,31 @@ int Endpoint::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap, MediaFrame::
 			break;
 		}
 		
+		case MediaFrame::SCTP:
+		{
+			//Aucun payload type ne voyage sur un data channel : la rtpMap ne dit
+			//rien de CE transport. Elle dit en revanche ce que la jambe pontee
+			//attend, T140 ou T140RED, et c'est nous qui le produisons — meme
+			//lecture que le cas WS.
+			DCEndpoint* dcp = dynamic_cast<DCEndpoint*>(p.get());
+
+			if (!dcp)
+				return Error("Port declares SCTP but is not a data channel.\n");
+
+			Log("-StartReceiving data channel endpoint\n");
+
+			for (RTPMap::iterator it = rtpMap.begin(); it!=rtpMap.end(); ++it)
+			{
+				if (it->second == TextCodec::T140RED)
+					dcp->SetUseRed(true);
+
+				if (it->second == TextCodec::T140)
+					dcp->SetPrimaryPayloadType(it->first);
+			}
+
+			break;
+		}
+
 		default:
 			Error(" Protocol not supported. \n");
 			return -1;
@@ -427,6 +454,40 @@ int Endpoint::SetRemoteSTUNCredentials(MediaFrame::Type media,const char* userna
 	if (rtp) return rtp->SetRemoteSTUNCredentials(username,pwd);
 	
 	return Error("Unknown media [%d]\n",media);
+}
+
+/************************
+* SetupDataChannel
+*	Ce que le serveur sait de lui-même, c'est à lui qu'on le demande : le
+*	`a=sctp-port` et le `a=max-message-size` que le contrôleur publie sortent
+*	d'ici, pas d'une constante recopiée de son côté.
+*************************/
+int Endpoint::SetupDataChannel(MediaFrame::Type media,WORD remoteSCTPPort,
+			       WORD& localSCTPPort,DWORD& maxMessageSize,int& streamId,
+			       MediaFrame::MediaRole role)
+{
+	std::shared_ptr<Port> p = GetPort(media, role);
+
+	if (!p)
+		return Error("No media supported for data channel setup\n");
+
+	DCEndpoint* dcp = dynamic_cast<DCEndpoint*>(p.get());
+
+	if (!dcp)
+		return Error("Media %s is not carried by a data channel, "
+			     "call ConfigureMediaConnection with proto SCTP first\n",
+			     MediaFrame::TypeToString(media));
+
+	dcp->SetRemoteSCTPPort(remoteSCTPPort);
+
+	localSCTPPort  = dcp->GetLocalSCTPPort();
+	maxMessageSize = dcp->GetMaxMessageSize();
+	streamId       = dcp->GetStreamId();
+
+	Log("-SetupDataChannel [media:%s,remote sctp-port:%d] -> [local:%d,max:%u,stream:%d]\n",
+		MediaFrame::TypeToString(media),remoteSCTPPort,localSCTPPort,maxMessageSize,streamId);
+
+	return 1;
 }
 
 int Endpoint::onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole role,
@@ -650,10 +711,14 @@ int Endpoint::Port::GetLocalMediaPort()
 {
 	switch(proto)
 	{
+		//Un data channel a un port UDP comme n'importe quelle jambe RTP : c'est
+		//celui-la que StartReceiving rend au controleur, et que le `m=application`
+		//porte.
 		case MediaFrame::RTP:
+		case MediaFrame::SCTP:
 		{
-			RTPEndpoint* rtp = ( RTPEndpoint * ) (this);
-			return rtp->GetLocalPort();
+			RTPEndpoint* rtp = dynamic_cast<RTPEndpoint*>(this);
+			return rtp ? rtp->GetLocalPort() : -1;
 		}
 			
 		case MediaFrame::WS:
@@ -687,7 +752,9 @@ char* Endpoint::Port::GetLocalMediaHost()
 		//supported » sortait à CHAQUE GetMediaCandidates d'un média RTP, c'est-à-
 		//dire sur le chemin nominal de tout appel, pour une valeur de retour dont
 		//l'appelant n'attendait rien.
+		//Idem pour un data channel : son adresse annoncee est celle du serveur.
 		case MediaFrame::RTP:
+		case MediaFrame::SCTP:
 			return NULL;
 
 		default:
@@ -715,6 +782,15 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 					p2 = std::shared_ptr<Port>(new WSEndpoint(media));
 				    break;
 				
+				case MediaFrame::SCTP:
+					//Un data channel WebRTC : la jambe reste ICE + DTLS + UDP,
+					//seul change ce qui voyage dedans (docs/conception/T140-DC).
+					if (media != MediaFrame::Text)
+						return Error("Data channel only carries text.\n");
+					Log("Recreating DCEndpoint for media %s\n", MediaFrame::TypeToString(media) );
+					p2 = std::shared_ptr<Port>(new DCEndpoint(media));
+					break;
+
 				case MediaFrame::RTP:
 					Log("Recreating RTPEndpoint for media %s\n", MediaFrame::TypeToString(media) );
 					p2 = std::shared_ptr<Port>(new RTPEndpoint(media));

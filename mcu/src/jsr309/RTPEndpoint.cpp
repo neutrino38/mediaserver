@@ -12,7 +12,7 @@
 #include "rtpsession.h"
 #include "medkit/codecs.h"
 
-RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Port(type, MediaFrame::RTP), RTPSession(type,this,role)
+RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role, MediaFrame::MediaProtocol proto) : Port(type, proto), RTPSession(type,this,role)
 {
 	//Not reset
 	reseted = false;
