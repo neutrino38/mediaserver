@@ -1,7 +1,7 @@
 # T.140 sur data channel WebRTC
 
-> Statut : **phases 0, 1 et 2 faites** (build, couture DTLS, pile SCTP + DCEP +
-> T.140). Branche `feat/t140-over-data-channel`.
+> Statut : **phases 0 à 3 faites** (build, couture DTLS, pile SCTP + DCEP + T.140,
+> jambe JSR-309). Branche `feat/t140-over-data-channel`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par un
 > contrôleur externe (elixip), qui pilote le serveur par XML-RPC. « Contrôleur »
@@ -353,6 +353,19 @@ Ce qu'il ajoute :
   `WSEndpoint::onMessageEnd` ;
 - `onResetStream` / `onEndStream` / perte de canal → U+FFFD du bon côté.
 
+Deux choses qu'il faut savoir avant de lire le code :
+
+- **il n'y a pas de thread de démultiplexage.** `RTPEndpoint::StartReceiving`
+  démarre un thread qui lit le jitter buffer ; sur cette jambe il n'arrive aucun
+  RTP, ce thread n'aurait rien à faire. `DCEndpoint` l'écrase et se contente de
+  la boucle poll de la session, démarrée à `Init`, qui porte ICE, DTLS et la
+  cadence de la pile ;
+- **l'association SCTP attend la fin du handshake DTLS.** Une jambe sans RTP ne
+  négocie pas de profil SRTP, donc `onDTLSSetup` ne lui dit jamais rien : c'est
+  `IsDTLSHandshakeCompleted()`, lu à chaque battement, qui donne le feu vert.
+  Ouvrir l'association plus tôt jetterait son premier INIT et coûterait une
+  retransmission d'une seconde.
+
 Quatre points de couture dans l'existant, un par fichier :
 
 1. `Endpoint::ConfigureMediaConnection` (`Endpoint.cpp:700`) : un `case
@@ -417,9 +430,13 @@ Deux appels par API. Aucune méthode existante ne change de signature.
 ### 8.1 JSR-309
 
 ```
-EndpointConfigureMediaConnection(sess, ep, media=TEXT(2), role=0, proto=SCTP(5), token="", payload="t140")
-EndpointGetDataChannelParameters(sess, ep, media=TEXT(2))  -> {sctpPort, maxMessageSize, streamId}
+ConfigureMediaConnection(sess, ep, media=TEXT(2), role=0, proto=SCTP(5), token="", payload="t140")
+SetupDataChannel(sess, ep, media=TEXT(2), remoteSctpPort)  -> [sctpPort, maxMessageSize, streamId]
 ```
+
+`SetupDataChannel` fait les deux sens en un aller-retour : le contrôleur donne le
+`a=sctp-port` du pair et repart avec les nôtres. `streamId` vaut -1 tant que le
+canal n'est pas ouvert — il ne sert qu'à un `a=dcmap`.
 
 puis **la séquence habituelle d'une jambe chiffrée**, sans un appel de plus :
 
@@ -441,7 +458,7 @@ réception. Même contrainte que pour le WebSocket.
 
 ```
 ConfigureParticipantMediaConnection(conf, part, media=TEXT(2), proto=SCTP(5), token="")
-GetParticipantDataChannelParameters(conf, part, media=TEXT(2)) -> {sctpPort, maxMessageSize, streamId}
+SetupParticipantDataChannel(conf, part, media=TEXT(2), remoteSctpPort) -> [sctpPort, maxMessageSize, streamId]
 ```
 
 puis `SetRemoteCryptoDTLS`, `SetLocalSTUNCredentials`,
@@ -484,7 +501,7 @@ vrai média, que la `RTCPeerConnection` consomme.
 Toute modification de l'API XML-RPC `/mcu` ou `/jsr309` s'accompagne de la mise
 à jour des schémas protobuf MOTELI v2 du dépôt elixip
 (`apps/elixip2/priv/proto/moteli_*.proto`), dans le même jeu de changements.
-Ce chantier ajoute quatre méthodes : elles y passent aussi.
+Ce chantier ajoute deux méthodes par API : elles y passent aussi.
 
 ## 9. Décisions
 
@@ -551,7 +568,21 @@ aujourd'hui. Le garde-fou est un test : `DTLSApplicationData.
 LeHandshakeAboutitEtLesClesSRTPSortent` mène un vrai handshake et exige les
 clés. Le nom du profil retenu est de plus journalisé.
 
-### 10.3 `GetRTPEndpoint` filtre sur le transport
+### 10.3 Le consommateur applicatif se retirait sous les pieds de la boucle
+
+**Trouvé à l'implémentation de la phase 3, et c'était un crash.** La boucle
+lisait le pointeur du consommateur DEUX fois par tour : une pour connaître sa
+cadence, une pour l'appeler. Entre les deux, `End()` le retirait depuis le thread
+de contrôle — la boucle avait donc « il y a une cadence » et un pointeur nul à
+appeler. Segmentation fault à chaque `EndpointDelete` d'une jambe data channel.
+
+Correctif en deux temps : le pointeur devient `std::atomic` et n'est lu **qu'une
+fois par tour**, dans une variable locale ; et `DCEndpoint::End()` arrête la
+session AVANT de démonter la pile SCTP, au lieu de le faire sous ses pieds. Le
+contrat de durée de vie est écrit dans l'en-tête : le consommateur survit à la
+boucle, ou il l'arrête avant de se retirer.
+
+### 10.4 `GetRTPEndpoint` filtre sur le transport
 
 `Endpoint::GetRTPEndpoint` (`Endpoint.cpp:97`) teste
 `GetTransport() == MediaFrame::RTP`, donc rendrait `NULL` pour une jambe data
@@ -566,7 +597,7 @@ a-t-il un transport de forme RTP ? », et non « ce port porte-t-il du RTP ? ».
 | 0 | Build | ~~`usrsctp` : `pkg-config` dans `mcu/Makefile`, `install.ksh prereq`, `BuildRequires`/`Requires` du spec~~ **fait** | — |
 | 1 | Transport | ~~Données applicatives DTLS (§5.1, §10.1), couture `RTPSession` (§5.2), scission de `SetupSRTP` (§10.2)~~ **fait** | 0 |
 | 2 | Pile | ~~`SCTPTransport`, `DCEP`, `T140DataChannel` (§5.3-5.5), testés en boucle locale~~ **fait** | 0 |
-| 3 | JSR-309 | `MediaFrame::SCTP`, `DCEndpoint`, les 4 coutures du §6, les 2 méthodes XML-RPC | 1, 2 |
+| 3 | JSR-309 | ~~`MediaFrame::SCTP`, `DCEndpoint`, les 4 coutures du §6, les 2 méthodes XML-RPC~~ **fait** | 1, 2 |
 | 4 | Conférence | mode data channel de `TextStream` (§7), les 2 méthodes XML-RPC | 1, 2 |
 | 5 | Contrôleur | SDP `m=application`, réponse sans BUNDLE, protobuf MOTELI (§8.5) | 3, 4 |
 | 6 | Interop | Campagne navigateur, puis appel réel ponté vers une jambe T.140 sur RTP | 5 |
@@ -602,6 +633,13 @@ Suite `mcu/tests/` (GoogleTest), `cd mcu && make check`.
 - **Intégration** : deux `RTPSession` sur la boucle locale, handshake DTLS réel,
   un T140block traversant les deux piles. Les tests IPv6 montrent que ce genre
   de test tient dans cette suite.
+- **Livré en phase 3** : `tests/test_dcendpoint.cpp` — deux `DCEndpoint` sur la
+  boucle locale, avec de VRAIES sockets UDP et un VRAI handshake DTLS. La chaîne
+  entière y passe : jambe pontée → RED → T.140 → SCTP → DTLS → UDP et retour.
+  Couvre aussi la production de T140RED pour une jambe pontée qui l'a négociée,
+  l'UTF-8 multi-octets, le rejeu du tampon d'avant-ouverture et le U+FFFD à la
+  perte du canal. C'est le seul test qui prouve que le porteur tient, et c'est
+  lui qui a trouvé la course du §10.3.
 - **Livrés en phase 2** : `tests/test_datachannel.cpp` (DCEP : aller-retour,
   longueurs mensongères de label et de protocol, somme des deux qui déborderait
   un WORD, toutes les troncatures, type inconnu, canal non fiable, et la preuve
@@ -658,9 +696,15 @@ de tests crée et détruit une paire d'associations par test.
 
 Nous répondons toujours `a=setup:passive`, donc c'est le navigateur qui ouvre
 l'association et le canal. Deux chemins du code ne sont donc jamais empruntés en
-appel réel : l'initiative de l'association, et `OpenChannel`. Ils sont **joués
-par la boucle locale du §12**, qui les exerce à chaque `make check` — c'est la
-seule façon de ne pas laisser du code mort mentir.
+appel réel : l'initiative de l'association, et `OpenDataChannel`. Ils sont
+**joués par les deux tests en boucle locale du §12**, qui les exercent à chaque
+`make check` — c'est la seule façon de ne pas laisser du code mort mentir.
+
+`OpenDataChannel` est aussi la porte du jour où un client négociera son canal par
+le SDP (`a=dcmap`, RFC 8864, `negotiated: true` côté JavaScript) : ce client
+n'émet AUCUN DCEP, et il faudra alors se lier au flux qu'il annonce sans attendre
+d'`OPEN`. Non fait : aucun client déployé ne le demande, et le deviner sans en
+avoir un en face serait deviner.
 
 ### 13.5 Le canal peut ne jamais s'ouvrir
 
