@@ -371,7 +371,7 @@ case $1 in
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel ;;
+		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"

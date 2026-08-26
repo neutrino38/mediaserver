@@ -153,7 +153,22 @@ endif
 MAGICKCFLAGS    := $(shell pkg-config --cflags Magick++)
 MAGICKLIBS      := $(shell pkg-config --libs Magick++)
 
-INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(BFCPINCLUDE)
+# usrsctp : pile SCTP en espace utilisateur (paquet systeme, depot EPEL 9), pour
+# le texte T.140 sur data channel WebRTC. Elle ne touche aucune socket : on lui
+# injecte les datagrammes dechiffres par DTLS et elle en rend par callback, donc
+# SCTP sur DTLS sur UDP. usrsctp-devel fournit son pkg-config.
+SCTPCFLAGS      := $(shell pkg-config --cflags usrsctp)
+SCTPLIBS        := $(shell pkg-config --libs usrsctp)
+
+# Repli explicite et bruyant, comme pour libmedkit : des flags vides donneraient
+# une erreur — un en-tete introuvable — sans rapport visible avec sa cause.
+ifeq ($(strip $(SCTPLIBS)),)
+$(warning pkg-config n'a pas resolu usrsctp : repli sur -lusrsctp.)
+$(warning Installer la dependance : ./install.ksh prereq)
+SCTPLIBS := -lusrsctp
+endif
+
+INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCTPCFLAGS) -I$(BFCPINCLUDE)
 
 ###################################
 # libmedkit + ffmpeg, par pkg-config
@@ -205,7 +220,7 @@ endif
 # AlmaLinux 9. Les codecs que ces branches liaient en direct (-lx264, -lvpx,
 # -lspeex, -lfdk-aac, -lg722_1, -lopencore-amr*) arrivent tous par libavcodec,
 # via libmedkit.
-LDFLAGS += -lsrtp2 -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz
+LDFLAGS += -lsrtp2 -lmp4v2 $(MAGICKLIBS) $(SCTPLIBS) -lbz2 -ldl -lz
 
 # xmlrpc-c : paquet systeme (xmlrpc-c-devel, depot crb) lie dynamiquement, bati
 # avec le backend libxml2 — xmlParseChunk vient donc de la libxml2 systeme

@@ -10,11 +10,12 @@ La base de code est essentiellement du C++ (dans `mcu/`), plus trois projets Jav
 
 ## Compiler et lancer
 
-Le build est porté sur **AlmaLinux 9 / GCC 11** (chantier mené sur la branche `feat/alma_linux9` — voir `almalinux9_port_plan.md` pour l'état). La plupart des dépendances sont désormais **liées dynamiquement aux paquets système** (ffmpeg 5, OpenSSL 3, libsrtp2, x264, Magick++ 7, webrtc-audio-processing). Deux bibliothèques seulement sont encore bâties depuis les sources dans `./staticdeps` (mp4v2, g722_1) ; xmlrpc-c est le paquet système dynamique (dépôt CRB) et speex n'est plus bâti (le codec Speex passe par ffmpeg via libmedikit). L'essentiel du code codec/média vient maintenant du **sous-module `libmedikit`** (`third_party/fontventa/libmedikit`), qui porte lui-même le portage ffmpeg 5.
+Le build est porté sur **AlmaLinux 9 / GCC 11** (chantier mené sur la branche `feat/alma_linux9` — voir `almalinux9_port_plan.md` pour l'état). La plupart des dépendances sont désormais **liées dynamiquement aux paquets système** (ffmpeg 5, OpenSSL 3, libsrtp2, x264, Magick++ 7, webrtc-audio-processing, usrsctp). Deux bibliothèques seulement sont encore bâties depuis les sources dans `./staticdeps` (mp4v2, g722_1) ; xmlrpc-c est le paquet système dynamique (dépôt CRB) et speex n'est plus bâti (le codec Speex passe par ffmpeg via libmedikit). L'essentiel du code codec/média vient maintenant du **sous-module `libmedikit`** (`third_party/fontventa/libmedikit`), qui porte lui-même le portage ffmpeg 5.
 
 ```sh
 # 1. Installer les dépendances de build système :
-./install.ksh prereq       # dnf/yum: gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel
+./install.ksh prereq       # dnf/yum: gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel
+#                            usrsctp-devel vient du dépôt EPEL : il doit être activé sur la machine de build.
 
 # 2. Build complet en une commande : initialise les sous-modules (libmedikit +
 #    libbfcp), les bâtit in-tree, bâtit les dépendances source dans
