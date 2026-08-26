@@ -80,15 +80,12 @@ int  AudioDecoderWorker::Stop()
 
 int AudioDecoderWorker::Decode()
 {
-	SWORD		raw[512];
-	DWORD		rawSize=512;
 	AudioDecoder*	codec=NULL;
-	DWORD		frameTime=0;
-	DWORD		lastTime=0;
 
 	Log(">DecodeAudio\n");
 
-	//Empezamos a reproducir
+	//La fréquence réelle est celle que porte chaque trame décodée ; on
+	//n'annonce ici qu'un défaut, pour l'adaptateur plat.
 	output->StartPlaying(8000);
 
 	//Mientras tengamos que capturar
@@ -121,16 +118,11 @@ int AudioDecoderWorker::Decode()
 		}
 
 		//Lo decodificamos
-		int len = codec->Decode(packet->GetMediaData(),packet->GetMediaLength(),raw,rawSize);
+		codec->Decode(packet->GetMediaData(),packet->GetMediaLength());
 
-		//Obtenemos el tiempo del frame
-		frameTime = packet->GetTimestamp() - lastTime;
-
-		//Actualizamos el ultimo envio
-		lastTime = packet->GetTimestamp();
-
-		//Y lo reproducimos
-		output->PlayBuffer(raw,len,frameTime);
+		//Un paquet peut donner plusieurs trames : les jouer TOUTES.
+		for (SamplesPtr samples = codec->GetFrame(); samples; samples = codec->GetFrame())
+			output->PlayFrame(samples);
 
 		//Delete packet
 		delete(packet);

@@ -298,7 +298,7 @@ int AudioStream::StopSending()
 		sendingAudio=TaskStopping;
 
 		//Cancel
-		audioInput->CancelRecBuffer();
+		audioInput->CancelRecFrame();
 
 		//Y esperamos
 		pthread_join(sendAudioThread,NULL);
@@ -318,13 +318,10 @@ int AudioStream::RecAudio()
 {
 	int 		recBytes=0;
 	struct timeval 	before;
-	SWORD		playBuffer[1024];
-	const DWORD	playBufferSize = 1024;
 	AudioDecoder*	codec=NULL;
 	AudioCodec::Type type;
-	DWORD		frameTime=0;
 	DWORD		lastTime=0;
-	
+
 	Log(">RecAudio\n");
 	
 	//Inicializamos el tiempo
@@ -379,30 +376,25 @@ int AudioStream::RecAudio()
 				continue;
 			}
 
-			//Try to set native pipe rate
-			DWORD rate = codec->TrySetRate(audioOutput->GetNativeRate());
-
-			//Start playing at codec rate
-			audioOutput->StartPlaying(rate);
+			//Le décodeur restitue à la fréquence native du flux, que chaque
+			//trame porte ensuite : rien à annoncer d'autre au pipe.
+			audioOutput->StartPlaying(codec->GetRate());
 		}
 
 		//Lo decodificamos
-		int inLen = packet->GetMediaLength();
-		int len;
-		while ( (len = codec->Decode(packet->GetMediaData(),inLen ,playBuffer,playBufferSize) ) > 0)
-		{
-			//Obtenemos el tiempo del frame
-			frameTime = packet->GetTimestamp() - lastTime;
+		codec->Decode(packet->GetMediaData(),packet->GetMediaLength());
 
-			//Actualizamos el ultimo envio
-			lastTime = packet->GetTimestamp();
+		//Actualizamos el ultimo envio
+		lastTime = packet->GetTimestamp();
 
+		//Un paquet peut donner plusieurs trames : les jouer TOUTES, entières.
+		//L'ancien playBuffer de 1024 tronquait toute trame plus longue (5760
+		//échantillons pour 120 ms d'opus).
+		for (SamplesPtr samples = codec->GetFrame(); samples; samples = codec->GetFrame())
 			//Check muted
 			if (!muted)
 				//Y lo reproducimos
-				audioOutput->PlayBuffer(playBuffer,len,frameTime);
-			inLen = 0; /* loop over to pump all the sound from decoder buffer */
-		}
+				audioOutput->PlayFrame(samples);
 
 
 		//Aumentamos el numero de bytes recividos
@@ -434,7 +426,6 @@ int AudioStream::SendAudio()
 	RTPPacket	packet(MediaFrame::Audio,audioCodec,audioCodec);
 	
 	RTPPacket	dtmfpacket(MediaFrame::Audio,AudioCodec::TELEPHONE_EVENT,AudioCodec::TELEPHONE_EVENT);
-	SWORD 		recBuffer[512];
         int 		sendBytes=0;
         struct timeval 	before;
 	AudioEncoder* 	codec;
@@ -499,37 +490,43 @@ int AudioStream::SendAudio()
 	while(sendingAudio == TaskRunning)
 	{
 				
-		//Incrementamos el tiempo de envio
-		frameTime += codec->numFrameSamples*multiplier;
-
-		//Capturamos 
-		if (audioInput->RecBuffer(recBuffer,codec->numFrameSamples)==0)
+		//Capturamos. L'ancien tampon de 512 recevait numFrameSamples
+		//échantillons sans borne : 960 pour l'opus 48 kHz, soit un écrasement
+		//de pile à chaque trame. La trame arrive maintenant à sa taille.
+		SamplesPtr samples = audioInput->RecFrame(1000);
+		if (!samples)
 		{
 			Log("-sendingAudio cont\n");
-                        msleep(1000);
 			continue;
 		}
 
-		//Lo codificamos
-		int len = codec->Encode(recBuffer,codec->numFrameSamples,packet.GetMediaData(),packet.GetMaxMediaLength());
-
-		//Comprobamos que ha sido correcto
-		if(len<=0)
+		//Une trame d'entrée peut en remplir plusieurs : on purge à chaque fois.
+		for (AudioFrame* frame = codec->EncodeFrame(samples);
+		     frame; frame = codec->EncodeFrame(NULL))
 		{
-			Log("Error codificando el packete de audio\n");
-			continue;
+			if (frame->GetLength() > packet.GetMaxMediaLength())
+			{
+				Error("-AudioStream: frame of %u bytes exceeds the RTP payload\n",
+				      frame->GetLength());
+				continue;
+			}
+
+			memcpy(packet.GetMediaData(),frame->GetData(),frame->GetLength());
+
+			//Set length
+			packet.SetMediaLength(frame->GetLength());
+
+			//Set frametiem
+			packet.SetTimestamp(frameTime);
+
+			//Lo enviamos
+			rtp.SendPacket(packet,frameTime);
+
+			//L'horloge n'avance que sur ce qui est réellement émis.
+			frameTime += codec->numFrameSamples*multiplier;
 		}
 
-		//Set length
-		packet.SetMediaLength(len);
 
-		//Set frametiem
-		packet.SetTimestamp(frameTime);
-
-		//Lo enviamos
-		rtp.SendPacket(packet,frameTime);
-		
-		
 		//DTMF handling
 		std::unique_lock<std::mutex> mutexLock(mutex);
 		while (!dtmfBuffer.empty() )

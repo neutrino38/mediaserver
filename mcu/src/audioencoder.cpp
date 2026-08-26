@@ -132,7 +132,7 @@ int AudioEncoderWorker::StopEncoding()
 		encodingAudio=0;
 
 		//Cancel any pending audio
-		audioInput->CancelRecBuffer();
+		audioInput->CancelRecFrame();
 
 		//Y esperamos
 		StopThread();
@@ -151,7 +151,6 @@ int AudioEncoderWorker::StopEncoding()
 *******************************************/
 int AudioEncoderWorker::Encode()
 {
-	SWORD 		recBuffer[512];
         struct timeval 	before;
 	AudioEncoder* 	codec;
 	DWORD		frameTime=0;
@@ -180,29 +179,32 @@ int AudioEncoderWorker::Encode()
 	//Mientras tengamos que capturar
 	while(encodingAudio)
 	{
-		//Capturamos 20ms
-		if (audioInput->RecBuffer(recBuffer,160)==0)
+		//Capturamos. La trame arrive à la taille que le mixeur a écrite ;
+		//c'est l'encodeur qui la redécoupe. L'ancien tampon de 512 lisait
+		//numFrameSamples échantillons alors qu'on n'en avait demandé que 160.
+		SamplesPtr samples = audioInput->RecFrame(1000);
+		if (!samples)
 			//Skip and probably exit
 			continue;
 
-		//Incrementamos el tiempo de envio
-		frameTime += 160;
+		if (!codec)
+			continue;
 
-		//Check codec
-		if (codec)
+		//Une trame d'entrée peut en remplir plusieurs : on purge à chaque fois.
+		for (AudioFrame* encoded = codec->EncodeFrame(samples);
+		     encoded; encoded = codec->EncodeFrame(NULL))
 		{
-			//Lo codificamos
-			int len = codec->Encode(recBuffer,codec->numFrameSamples,frame.GetData(),frame.GetMaxMediaLength());
-
-			//Comprobamos que ha sido correcto
-			if(len<=0)
+			if (encoded->GetLength() > frame.GetMaxMediaLength())
 			{
-				Log("Error codificando el packete de audio\n");
+				Error("-AudioEncoder: frame of %u bytes exceeds the media buffer\n",
+				      encoded->GetLength());
 				continue;
 			}
 
+			memcpy(frame.GetData(),encoded->GetData(),encoded->GetLength());
+
 			//Set frame length
-			frame.SetLength(len);
+			frame.SetLength(encoded->GetLength());
 
 			//Set frame time
 			frame.SetTimestamp(frameTime);
@@ -212,10 +214,13 @@ int AudioEncoderWorker::Encode()
 
 			//Clear rtp
 			frame.ClearRTPPacketizationInfo();
-			
+
 			//Add rtp packet
-			frame.AddRtpPacket(0,len,NULL,0,false);
-		 
+			frame.AddRtpPacket(0,encoded->GetLength(),NULL,0,false);
+
+			//L'horloge n'avance que sur ce qui est réellement produit.
+			frameTime += codec->numFrameSamples;
+
 			//Lock
 			std::unique_lock<std::mutex> mutexLock(mutex);
 
@@ -233,7 +238,6 @@ int AudioEncoderWorker::Encode()
 			//unlock
 			mutexLock.unlock();
 		}
-		
 	}
 
 	Log("-Encode Audio cleanup[%d]\n",encodingAudio);
