@@ -270,6 +270,35 @@ TEST(RateControlEstimator, UneBaisseDurableDeLaSourceEstSuivie)
 		<< "l'anti-spirale est perdu : l'annonce ne suit plus une baisse durable";
 }
 
+// RÉGRESSION (mcu-gris.log, 2026-08-26) : une renégociation (ajout/retrait de
+// piste audio) a interrompu toute réception vidéo plus de 5 s (la fenêtre du
+// plafond glissant) ; à la reprise, au même débit qu'avant la coupure, le
+// plafond a annoncé le plancher (16 kb/s) au lieu de suivre la reprise —
+// l'image est restée grise le temps d'une remontée AIMD de plusieurs dizaines
+// de secondes. Une coupure TOTALE n'est pas un signal de congestion, à la
+// différence d'une baisse durable mais non nulle (test ci-dessus).
+TEST(RateControlEstimator, UneCoupureDePlusDe5sNeFaitPasChuterLAnnonce)
+{
+	RemoteRateEstimator estimator;
+	const DWORD ssrc = 0x1234;
+	const DWORD kHighFrameBytes = 8250; // ~2 Mb/s à 30 im/s
+
+	QWORD now = FeedRegular(estimator, ssrc, 100000, 65000, kHighFrameBytes);
+	DWORD before = estimator.GetEstimatedBitrate();
+	ASSERT_GT(before, 1000000u) << "prérequis : estimation établie sur le flux à 2 Mb/s";
+
+	// Coupure totale (aucun paquet), plus longue que la fenêtre de 5 s.
+	now += 5200;
+
+	// Reprise au même débit qu'avant la coupure.
+	estimator.Update(ssrc, now, /*ts=*/now, kHighFrameBytes, /*mark=*/true);
+	DWORD after = estimator.GetEstimatedBitrate();
+
+	EXPECT_GE(after, before / 2)
+		<< "une coupure de 5,2 s sans trafic a fait chuter l'annonce de " << before
+		<< " à " << after << " au lieu de suivre la reprise";
+}
+
 // ---------------------------------------------------------------------------
 // Suite RateControlDetector — le détecteur par flux, au niveau RemoteRateControl.
 // ---------------------------------------------------------------------------
