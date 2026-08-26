@@ -247,6 +247,54 @@ TEST(PipeAudioOutput, LAdaptateurPlatUtiliseLaFrequenceAnnoncee)
 }
 
 /* ------------------------------------------------------------------------- *
+ *                        La chaîne de la conférence                         *
+ * ------------------------------------------------------------------------- */
+
+// Le mixeur écrit des tranches de 10 ms calées sur SON horloge, jamais sur la
+// taille de trame du codec. L'encodeur les réassemble : c'est le seul à
+// connaître numFrameSamples. Avant, l'appelant demandait numFrameSamples dans
+// un tampon de 512 — 960 pour l'opus 48 kHz, soit un écrasement de pile à
+// chaque trame, toujours vivant dans audiostream.cpp avant cette phase.
+TEST(AudioConferenceChain, LeMixeurEcritDesTranchesDeDixMsEtLEncodeurLesReassemble)
+{
+	if (!AudioCodec::IsSupported(AudioCodec::OPUS))
+		GTEST_SKIP() << "OPUS indisponible dans ffmpeg";
+
+	Properties props;
+	std::unique_ptr<AudioEncoder> enc(AudioCodecFactory::CreateEncoder(AudioCodec::OPUS, props));
+	ASSERT_TRUE(enc != nullptr);
+	ASSERT_EQ(enc->TrySetRate(48000), 48000u);
+	ASSERT_EQ(enc->numFrameSamples, 960);	// 20 ms
+
+	PipeAudioInput pipe;
+	pipe.Init(8000);			// fréquence de mixage
+	pipe.StartRecording(enc->GetRate());	// l'encodeur veut du 48 kHz
+
+	// 100 tranches de 10 ms à 8 kHz = 1 s : le mixeur écrit à plat.
+	std::vector<SWORD> slice(80, 0);
+	int emitted = 0;
+
+	for (int i = 0; i < 100; i++)
+	{
+		ASSERT_TRUE(pipe.PutSamples(&slice[0], 80));
+
+		for (SamplesPtr s = pipe.RecFrame(0); s; s = pipe.RecFrame(0))
+		{
+			// La trame sort à la fréquence de l'encodeur, pas à celle du mixeur.
+			EXPECT_EQ(s->GetRate(), 48000u);
+			for (AudioFrame *f = enc->EncodeFrame(s); f; f = enc->EncodeFrame(NULL))
+				emitted++;
+		}
+	}
+
+	// 1 s de mixage = 50 trames de 20 ms, à l'amorçage du resampler près.
+	EXPECT_GE(emitted, 48);
+	EXPECT_LE(emitted, 50);
+
+	pipe.End();
+}
+
+/* ------------------------------------------------------------------------- *
  *                     La chaîne du 14/08, de bout en bout                   *
  * ------------------------------------------------------------------------- */
 

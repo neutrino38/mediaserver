@@ -119,8 +119,8 @@ Trois mécanismes distincts, non synchronisés, se partagent la vérité :
 | `jsr309/AudioDecoderWorker.cpp` | `raw[8192]` | **supprimé** (phase 2) |
 | `pipeaudioinput.cpp` | `resampled[4096]` + `fifo<SWORD,4096>` | **supprimés** (phase 2) |
 | `pipeaudiooutput.cpp` | `resampled[4096]` | **supprimé** (phase 2) |
-| `audiostream.cpp:321,437` | `playBuffer[1024]`, `recBuffer[512]` | latent (chaîne conférence SIP) |
-| `audioencoder.cpp:154`, `audiodecoder.cpp:83` | `[512]` | latent (streams du mixer) |
+| `audiostream.cpp:321,437` | `playBuffer[1024]`, `recBuffer[512]` | **supprimés** (phase 3) — le second n'était PAS latent |
+| `audioencoder.cpp:154`, `audiodecoder.cpp:83` | `[512]` | **supprimés** (phase 3) |
 | `mediabridgesession.cpp` ×3 | `[512]` | latent (bridge RTP↔RTMP) |
 | `rtmpparticipant.cpp` ×2, `rtmpmp4stream.cpp:229` | `[512]` | latent |
 | `mp4player.cpp:89` | `buffer[1024]` | latent |
@@ -267,9 +267,32 @@ suivant, comme `VideoEncoder::EncodeFrame`.
    `AudioTranscodeChain.OpusQuaranteHuitVersSpeexSeize`
    (`mcu/tests/test_audio_pipes.cpp`) : 50 trames opus 48 kHz entrées, 50 trames
    speex 16 kHz sorties. La recette en appel réel reste à faire.
-3. **Conférence** (`audiostream`, `audioencoder`/`audiodecoder`, `audiomixer`,
-   `PipeAudioOutput`) — le mixer consomme des `SamplesPtr` par participant,
-   `aresample` par entrée vers la fréquence de mixage ; VAD inchangé.
+3. **Conférence** (`audiostream`, `audioencoder`/`audiodecoder`) — ✅ **FAIT**.
+   Les quatre tampons latents du §1.3 sont supprimés. L'un d'eux n'était pas
+   latent : `audiostream.cpp` demandait `numFrameSamples` échantillons dans un
+   tampon de 512, soit **960 pour l'opus 48 kHz** — le bug n°1 du 14/08, mot
+   pour mot, encore vivant sur le chemin conférence SIP. Le décodage y publie
+   désormais toutes les trames d'un paquet, et l'horloge RTP n'avance que sur
+   ce qui est émis.
+
+   **Le mixeur ne migre pas, et c'est délibéré.** Le plan prévoyait qu'il
+   consomme des `SamplesPtr` par participant ; l'examen du code dit le
+   contraire. `AudioMixer::MixAudio` réclame à chaque tick N tampons de
+   **longueur identique**, alignés SSE, à une fréquence **unique** — la sienne —
+   et cette longueur suit son horloge, pas les bordures de trames des codecs.
+   Un `SamplesPtr` n'apporterait là ni fréquence utile (il n'y en a qu'une) ni
+   taille utile (elle vient de l'horloge), et forcerait un recollage à travers
+   les bordures de trames à chaque lecture : plus de code, une copie de plus,
+   et l'alignement perdu.
+
+   La frontière est donc **assumée** : `PipeAudioOutput::GetSamples` et
+   `PipeAudioInput::PutSamples`/`Init` sont l'adaptation d'impédance entre le
+   domaine des trames et celui des tranches d'horloge. Ce ne sont pas des
+   adaptateurs transitoires, ils restent. Le rééchantillonnage par entrée vers
+   la fréquence de mixage, lui, est bien en place : il vit dans
+   `PipeAudioOutput::PlayFrame` à l'aller et dans `PipeAudioInput` au retour,
+   piloté dans les deux cas par la fréquence de la trame (phase 2). VAD
+   inchangé.
 4. **Player/Recorder/MP4** (`mp4player`, `jsr309/Recorder`, `ffmp4reader` —
    ce dernier a déjà son resampler interne à absorber).
 5. **RTMP et bridge** (`rtmpparticipant`, `rtmpmp4stream`,
