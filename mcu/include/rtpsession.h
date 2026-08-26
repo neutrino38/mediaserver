@@ -309,6 +309,10 @@ public:
 	//depuis le thread de la session : l'objet SSL n'est pas concurrent, et cette
 	//boucle le lit à chaque datagramme entrant.
 	int  SendDTLSApplicationData(const BYTE* data,DWORD size);
+	//Réveille la boucle de la session sans attendre un paquet entrant. Un porteur
+	//de data channel en a besoin : la pile SCTP a produit des datagrammes, et
+	//c'est cette boucle — la seule qui ait le droit de chiffrer — qui les vide.
+	void WakeUp() { wait.Signal(); }
 	//Le canal applicatif est-il ouvert ? Une jambe sans RTP n'a pas de profil
 	//SRTP, donc onDTLSSetup ne lui dit jamais rien : c'est ainsi qu'un porteur de
 	//data channel sait qu'il peut commencer à écrire.

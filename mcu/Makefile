@@ -83,7 +83,7 @@ MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 # Trois couches qui ne connaissent ni ICE, ni DTLS, ni UDP, ni RTP — le porteur
 # est une RTPSession, et c'est elle qui les branche (docs/conception/T140-DC).
 SCTPDIR=sctp
-SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o
+SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o t140bridge.o
 
 OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre

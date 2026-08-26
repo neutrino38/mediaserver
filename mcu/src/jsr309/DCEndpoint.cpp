@@ -21,20 +21,14 @@ static bool IsLoneBOM(const BYTE* data,DWORD size)
 
 DCEndpoint::DCEndpoint(MediaFrame::Type type) :
 	RTPEndpoint(type,MediaFrame::VIDEO_MAIN,MediaFrame::SCTP),
-	sctp(*this),
-	t140(sctp,*this)
+	//Le porteur du pont est CETTE session : elle est déjà ICE + DTLS + UDP.
+	bridge(*this,*this)
 {
-	localSCTPPort	  = DefaultSCTPPort;
-	remoteSCTPPort	  = DefaultSCTPPort;
-	associationWanted = false;
-	useRed		  = false;
-	payloadType	  = TextCodec::T140;
-	pseudoSeqNum	  = 0;
-	pseudoSeqCycle	  = 0;
+	useRed		= false;
+	payloadType	= TextCodec::T140;
+	pseudoSeqNum	= 0;
+	pseudoSeqCycle	= 0;
 	gettimeofday(&clock,NULL);
-
-	//La session nous livre les données applicatives DTLS et nous prête sa cadence.
-	SetDTLSApplicationListener(this);
 }
 
 DCEndpoint::~DCEndpoint()
@@ -45,14 +39,14 @@ DCEndpoint::~DCEndpoint()
 int DCEndpoint::Init()
 {
 	//Le port, le socket, ICE, le DTLS et la boucle poll : tout vient de la jambe
-	//RTP dont on dérive. Rien de plus à ouvrir ici — l'association SCTP attend la
-	//fin du handshake DTLS.
+	//RTP dont on dérive. Rien de plus à ouvrir ici — le pont attend la fin du
+	//handshake DTLS pour monter son association.
 	const int res = RTPEndpoint::Init();
 
-	//Un data channel se demande dès l'Init : le contrôleur peut n'appeler
+	//Le canal se demande dès l'Init : le contrôleur peut n'appeler
 	//SetRemoteSCTPPort que plus tard, mais 5000 est le port de tous les
 	//navigateurs et l'attente ne coûte rien.
-	associationWanted = true;
+	bridge.Start();
 
 	return res;
 }
@@ -61,18 +55,12 @@ int DCEndpoint::End()
 {
 	//ORDRE. La boucle de la session bat la cadence de la pile SCTP et vide sa
 	//file de sortie : démonter la pile sous ses pieds est une course. On arrête
-	//donc la session D'ABORD — RTPEndpoint::End joint son thread — et on ne
-	//touche à la pile qu'ensuite.
+	//donc la session D'ABORD — RTPEndpoint::End joint son thread — et le pont
+	//qu'ensuite. Sa fermeture signale la perte du canal, et la jambe pontée
+	//reçoit son U+FFFD.
 	const int res = RTPEndpoint::End();
 
-	//Plus personne ne nous livre de données applicatives.
-	SetDTLSApplicationListener(NULL);
-
-	//Puis la pile : sa fermeture signale la perte du canal, et la jambe pontée
-	//reçoit son U+FFFD.
-	sctp.End();
-
-	associationWanted = false;
+	bridge.Stop();
 
 	return res;
 }
@@ -86,14 +74,13 @@ int DCEndpoint::StartReceiving()
 		return Error("-DCEndpoint::StartReceiving() | already receiving\n");
 
 	receiving = true;
-	associationWanted = true;
 
-	//Réveiller la boucle : elle relit la cadence et peut ouvrir l'association dès
-	//que le DTLS est prêt.
-	wait.Signal();
+	//Le pont se (re)branche : la boucle relit sa cadence et ouvrira l'association
+	//dès que le DTLS sera prêt.
+	bridge.Start();
 
-	Log("-DCEndpoint: reception ouverte [sctp local:%d,remote:%d] [%p]\n",
-		localSCTPPort,remoteSCTPPort,this);
+	Log("-DCEndpoint: reception ouverte [sctp local:%d] [%p]\n",
+		bridge.GetLocalSCTPPort(),this);
 	return 1;
 }
 
@@ -104,91 +91,6 @@ int DCEndpoint::StopReceiving()
 
 	receiving = false;
 	return 1;
-}
-
-void DCEndpoint::SetRemoteSCTPPort(WORD port)
-{
-	remoteSCTPPort = port ? port : DefaultSCTPPort;
-}
-
-int DCEndpoint::GetStreamId() const
-{
-	return t140.IsOpen() ? (int) t140.GetStreamId() : -1;
-}
-
-int DCEndpoint::OpenDataChannel(WORD streamId)
-{
-	if (!sctp.IsUp())
-		return Error("-DCEndpoint::OpenDataChannel() | association SCTP pas encore montee\n");
-
-	const int res = t140.OpenChannel(streamId);
-
-	//Le DATA_CHANNEL_OPEN attend dans la file de sortie : si on est sur le thread
-	//de la session on le pousse tout de suite, sinon on la reveille.
-	wait.Signal();
-
-	return res;
-}
-
-/************************
-* onDTLSApplicationData
-*	Un datagramme SCTP déchiffré. On est sur le thread de la session, donc on a
-*	le droit de chiffrer la réponse tout de suite : c'est ce qui garde le
-*	handshake SCTP à un aller-retour.
-*************************/
-void DCEndpoint::onDTLSApplicationData(const BYTE* data,DWORD size)
-{
-	sctp.OnPacket(data,size);
-	FlushSCTP();
-}
-
-void DCEndpoint::onApplicationTick(DWORD elapsedMs)
-{
-	//L'association attend la fin du handshake DTLS : avant, son INIT partirait
-	//dans le vide et il faudrait attendre une retransmission d'une seconde.
-	if (associationWanted && !sctp.IsUp() && IsDTLSHandshakeCompleted())
-	{
-		associationWanted = false;
-
-		if (!sctp.Init(localSCTPPort,remoteSCTPPort))
-			Error("-DCEndpoint: impossible d'ouvrir l'association SCTP [%p]\n",this);
-	}
-
-	//Les timers de la pile, et ce qu'ils ont produit.
-	SCTPTransport::HandleTimers();
-	FlushSCTP();
-}
-
-void DCEndpoint::FlushSCTP()
-{
-	std::string datagram;
-
-	//Seul endroit qui chiffre, et il est sur le thread de la session : c'est le
-	//contrat de SCTPTransport, et celui de SendDTLSApplicationData.
-	while (sctp.GetOutbound(datagram))
-		SendDTLSApplicationData((const BYTE*) datagram.data(),(DWORD) datagram.size());
-}
-
-void DCEndpoint::onSCTPOutboundReady()
-{
-	//Appelable depuis n'importe quel thread : on ne fait que réveiller la boucle,
-	//qui videra la file au tour suivant.
-	wait.Signal();
-}
-
-void DCEndpoint::onSCTPMessage(WORD streamId,DWORD ppid,const BYTE* data,DWORD size)
-{
-	t140.OnMessage(streamId,ppid,data,size);
-}
-
-void DCEndpoint::onSCTPAssociationUp()
-{
-	t140.OnAssociationUp();
-}
-
-void DCEndpoint::onSCTPAssociationDown()
-{
-	t140.OnAssociationDown();
 }
 
 void DCEndpoint::onT140ChannelOpen()
@@ -308,17 +210,17 @@ int DCEndpoint::SendFrame(TextFrame& frame)
 
 	//Sûr depuis ce thread, qui est celui de la jambe pontée : rien n'est chiffré
 	//ici, le datagramme finit dans la file de sortie du transport.
-	t140.SendText(frame.GetData(),frame.GetLength());
+	bridge.SendText(frame.GetData(),frame.GetLength());
 	return 1;
 }
 
 void DCEndpoint::onResetStream()
 {
 	//La source de la jambe pontée a disparu : le côté qui survit est le canal.
-	t140.SendText(REPLACEMENT_UTF8,sizeof(REPLACEMENT_UTF8));
+	bridge.SendText(REPLACEMENT_UTF8,sizeof(REPLACEMENT_UTF8));
 }
 
 void DCEndpoint::onEndStream()
 {
-	t140.SendText(REPLACEMENT_UTF8,sizeof(REPLACEMENT_UTF8));
+	bridge.SendText(REPLACEMENT_UTF8,sizeof(REPLACEMENT_UTF8));
 }
