@@ -11,7 +11,6 @@
  *
  *   videostream.cpp:810        (VideoStream::RecVideo)
  *   jsr309/VideoDecoderWorker.cpp:190
- *   mediabridgesession.cpp:583, 1122
  *   rtmpparticipant.cpp:949, 961, 973
  *   FLVEncoder.cpp:404
  *

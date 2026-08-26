@@ -107,7 +107,7 @@ public:
 	~RTPSession();
 	//M-6 : enregistrement différé d'un listener géré par shared_ptr
 	//(RTPParticipant). Une fois appelé, prend le pas sur le pointeur brut du
-	//constructeur (utilisé tel quel par MediaBridgeSession, non converti).
+	//constructeur.
 	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
 	int Init();
 	//Adresse à lier par les sockets média, AVANT Init : c'est elle qui décide de

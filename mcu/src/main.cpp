@@ -9,7 +9,6 @@
 #include "rtmpserver.h"
 #include "mcu.h"
 #include "broadcaster.h"
-#include "mediagateway.h"
 #include "jsr309/JSR309Manager.h"
 #include "websocketserver.h"
 #include "websockets.h"
@@ -41,7 +40,6 @@ extern "C" {
 }
 extern XmlHandlerCmd mcuCmdList[];
 extern XmlHandlerCmd broadcasterCmdList[];
-extern XmlHandlerCmd mediagatewayCmdList[];
 extern XmlHandlerCmd jsr309CmdList[];
 
 void log_ffmpeg(void* ptr, int level, const char* fmt, va_list vl)
@@ -111,12 +109,12 @@ static int MedkitErrorCb(const char *msg, va_list ap)
 }
 
 static XmlRpcServer * gserver = NULL;
-static XmlStreamingHandler * geventHandlers[4] = { NULL, NULL, NULL, NULL };
+static XmlStreamingHandler * geventHandlers[2] = { NULL, NULL };
 
 
 void signing_handler(int sig)
 {
-    for (int i=0; i<4; i++)
+    for (int i=0; i<2; i++)
     {
         if ( geventHandlers[i] != NULL) geventHandlers[i]->DestroyAllQueues();
     }
@@ -612,7 +610,6 @@ int main(int argc,char **argv)
 	//Create services
 	MCU		mcu;
 	Broadcaster	broadcaster;
-	MediaGateway	mediaGateway;
 	JSR309Manager	jsr309Manager;
 
 #ifdef MOTELI
@@ -623,7 +620,6 @@ int main(int argc,char **argv)
 	//Create xml cmd handlers for the mcu and broadcaster
 	XmlHandler xmlrpcmcu(mcuCmdList,(void*)&mcu);
 	XmlHandler xmlrpcbroadcaster(broadcasterCmdList,(void*)&broadcaster);
-	XmlHandler xmlrpcmediagateway(mediagatewayCmdList,(void*)&mediaGateway);
 	XmlHandler xmlrpcjsr309(jsr309CmdList,(void*)&jsr309Manager);
 
 	//Create upload handlers
@@ -634,11 +630,9 @@ int main(int argc,char **argv)
 	//Create http streaming for service events
 	XmlStreamingHandler xmleventjsr309;
 	XmlStreamingHandler xmleventmcu;
-	XmlStreamingHandler xmleventmediaGateway;
 
 	geventHandlers[0] = &xmleventjsr309;
 	geventHandlers[1] = &xmleventmcu;
-	geventHandlers[2] = &xmleventmediaGateway;
 	
 	//And default status hanlder
 	StatusHandler status;
@@ -647,9 +641,6 @@ int main(int argc,char **argv)
 	mcu.Init(&xmleventmcu,eventQueueExpires);
 	//Init the broadcaster
 	broadcaster.Init();
-	//Init the media gateway
-	mediaGateway.Init(&xmleventmediaGateway);
-	
 	//INit the jsr309
 	jsr309Manager.Init(&xmleventjsr309,eventQueueExpires);
 
@@ -659,19 +650,12 @@ int main(int argc,char **argv)
 	//Add the rtmp applications from the broadcaster to the rmtp server
 	rtmpServer.AddApplication(L"broadcaster/publish",&broadcaster);
 	rtmpServer.AddApplication(L"broadcaster",&broadcaster);
-	rtmpServer.AddApplication(L"streamer/mp4",&broadcaster);
-	rtmpServer.AddApplication(L"streamer/flv",&broadcaster);
-	//Add the rtmp applications from the media gateway
-	rtmpServer.AddApplication(L"bridge/",&mediaGateway);
-	
 	//Append mcu cmd handler to the http server
 	server.AddHandler("/mcu",&xmlrpcmcu);
 	server.AddHandler("/broadcaster",&xmlrpcbroadcaster);
-	server.AddHandler("/mediagateway",&xmlrpcmediagateway);
 	server.AddHandler("/jsr309",&xmlrpcjsr309);
 	server.AddHandler(JSR309_EVENTS_PREFIX,&xmleventjsr309);
 	server.AddHandler("/events/mcu",&xmleventmcu);
-	server.AddHandler("/events/mediagateway",&xmleventmediaGateway);
 
 	//Add uploaders
 	server.AddHandler("/upload/mcu/app/",&uploadermcu);
@@ -736,8 +720,6 @@ server_init_failed:
 	mcu.End();
 	//End the broadcaster
 	broadcaster.End();
-	//End the media gateway
-	mediaGateway.End();
 	//End the jsr309
 	jsr309Manager.End();
 }

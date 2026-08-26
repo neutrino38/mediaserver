@@ -19,10 +19,7 @@ public:
 	RTPSession& GetOwnSession() { return rtp; }
 	~TextStream();
 
-	//Surcharge brute conservée (appelant MediaBridgeSession, hors périmètre
-	//Phase 5) : construit un shared_ptr NON possédant en interne.
-	int Init(TextInput *input,TextOutput *output);
-	//Surcharge co-propriété (Point 1) : pipe du mixer, RTPParticipant.
+	//Co-propriété du pipe (Point 1) : pipe du mixer, RTPParticipant.
 	int Init(std::shared_ptr<TextInput> input,std::shared_ptr<TextOutput> output);
 	int SetTextCodec(TextCodec::Type codec);
 	int StartSending(char* sendTextIp,int sendTextPort,RTPMap& rtpMap);
@@ -65,8 +62,7 @@ public:
 
 private:
 	RTPSession	rtp;
-	//Co-propriété du pipe du mixer (Point 1 / C-4). Pour l'appelant
-	//MediaBridgeSession, ce sont des shared_ptr à deleter no-op (non possédants).
+	//Co-propriété du pipe du mixer (Point 1 / C-4).
 	std::shared_ptr<TextInput>	textInput;
 	std::shared_ptr<TextOutput>	textOutput;
 

@@ -83,8 +83,8 @@ OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o m
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
 # libmedkit tirent la classe Logo de l'archive).
-OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o mediagateway.o mediabridgesession.o 
-OBJS+=xmlrpcmediagateway.o textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o audiodecoder.o textencoder.o mp4recorder.o rtmpmp4stream.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
+OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o 
+OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o audiodecoder.o textencoder.o mp4recorder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
       vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o transportfeedback.o sentpackethistory.o trendlinedetector.o senderbwe.o
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
@@ -92,14 +92,7 @@ OBJS+=xmlrpcmediagateway.o textmixer.o textmixerworker.o textstream.o participan
 OBJS+=ipaddress.o addressprofiles.o stunclient.o
 
 OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ)
-TARGETS=mcu rtmptest mediagw
-
-OBJS2=mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o 
-OBJS2+=overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.omediagateway.o mediabridgesession.o mcustatushandler.o
-OBJS2+=xmlrpcmediagateway.o textstream.o pipetextinput.o pipetextoutput.o audioencoder.o audiodecoder.o textencoder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o vad.o 
-OBJS2+=remoterateestimator.o eventstreaminghandler.o VideoTranscoder.o videopipe.o redcodec.o
-OBJS2+=ipaddress.o addressprofiles.o stunclient.o
-OBJS2+= $(JSR309OBJ) $(DOCSHARINGOBJ)
+TARGETS=mcu rtmptest
 
 ifeq ($(FLASHSTREAMER),yes)
 	OBJS+= flash.o xmlrpcflash.o 
@@ -138,7 +131,6 @@ OBJSWSTEST = $(OBJS) wstest.o
 BUILDOBJSMCU = $(addprefix $(BUILD)/,$(OBJSMCU))
 BUILDOBJSRTMPTEST= $(addprefix $(BUILD)/,$(OBJSRTMPTEST))
 BUILDOBJSWSTEST= $(addprefix $(BUILD)/,$(OBJSWSTEST))
-BUILDOBJSMEDIAGW= $(addprefix $(BUILD)/,$(OBJS2))
 BUILDOBJSFS= $(addprefix $(BUILD)/,$(OBJSFS)) 
 BUILDOBJSFSCLIENT= $(addprefix $(BUILD)/,$(OBJSFSCLIENT))
 
@@ -299,9 +291,6 @@ rtmptest: $(OBJSRTMPTEST)
 wstest: mkdirs $(OBJSWSTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSWSTEST) $(LDFLAGS) $(VADLD)
 
-mediagw:  $(OBJS2) maingw.o
-	$(CXX) -o $(BIN)/$@ $(OBJSMEDIAGW) maingw.o $(LDFLAGS)
-	
 flashstreamer: $(OBJSFS) $(OBJS)
 	g++ $(GNASHLD) -o $(BIN)/$@ $(BUILDOBJSFS) $(BUILDOBJS) $(GNASHBASE)/backend/.libs/libgnashagg.a  /usr/lib/libagg.a  $(LDFLAGS)
 

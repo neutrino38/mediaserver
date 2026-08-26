@@ -59,28 +59,6 @@ int TextStream::SetTextCodec(TextCodec::Type codec)
 * Init
 *	Inicializa los devices 
 ***************************************/
-int TextStream::Init(TextInput *input, TextOutput *output)
-{
-	Log(">Init text stream\n");
-
-	//Iniciamos el rtp
-	if(!rtp.Init())
-		return Error("No hemos podido abrir el rtp\n");
-
-
-	//Chemin "emprunté" (MediaBridgeSession) : shared_ptr NON possédant.
-	textInput  = input  ? std::shared_ptr<TextInput>(input,   [](TextInput*){})  : nullptr;
-	textOutput = output ? std::shared_ptr<TextOutput>(output, [](TextOutput*){}) : nullptr;
-
-	//Y aun no estamos mandando nada
-	sendingText=TaskIdle;
-	receivingText=TaskIdle;
-
-	Log("<Init text stream\n");
-
-	return 1;
-}
-
 int TextStream::Init(std::shared_ptr<TextInput> input, std::shared_ptr<TextOutput> output)
 {
 	Log(">Init text stream (shared)\n");
@@ -89,7 +67,7 @@ int TextStream::Init(std::shared_ptr<TextInput> input, std::shared_ptr<TextOutpu
 	if(!rtp.Init())
 		return Error("No hemos podido abrir el rtp\n");
 
-	//Chemin "possédant" (co-propriété du pipe du mixer, Point 1 / C-4).
+	//Co-propriété du pipe du mixer (Point 1 / C-4).
 	textInput  = std::move(input);
 	textOutput = std::move(output);
 

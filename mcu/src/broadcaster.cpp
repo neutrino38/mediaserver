@@ -408,19 +408,7 @@ bool Broadcaster::GetBroadcastPublishedStreams(DWORD sessId,BroadcastSession::Pu
 std::shared_ptr<RTMPNetConnection> Broadcaster::Connect(const std::wstring& appName,RTMPNetConnection::Listener* listener)
 {
 	//Depending on the app nam
-	if (appName.compare(L"streamer")==0)
-	{
-		//Create new streamer connection
-		return nullptr;//new RTMPStreamerNetConnection();
-
-		/*//A receiver stream
-		return new RTMPFLVStream(streamId);
-		} else if (appName.compare(L"streamer/mp4")==0) {
-		Log("-Creating MP4 streamer stream\n");
-		//A receiver stream
-		return new RTMPMP4Stream(streamId);
-		 * */
-	} else if (appName.find(L"broadcaster")==0) {
+	if (appName.find(L"broadcaster")==0) {
 		std::shared_ptr<BroadcastSession> sess;
 		RTMPNetConnection* conn = NULL;
 		DWORD sessId = 0;
