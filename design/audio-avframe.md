@@ -50,15 +50,29 @@ construction :
 
 Mêmes conventions que la reprise manuelle vidéo (décisions du
 2026-07-16) : wrapper RAII partagé par `shared_ptr`, migration **remplaçante**
-(pas additive), build rouge tant que tous les implémenteurs n'ont pas basculé.
+(pas additive).
+
+**Ce qui est remplacé, c'est l'interface virtuelle.** Un implémenteur n'a plus
+qu'un seul contrat possible, celui en `SamplesPtr` : aucune classe ne peut
+rester sur l'ancien. Mais les anciennes signatures plates survivent le temps de
+la migration comme **adaptateurs non virtuels**, écrits une fois dans
+`AudioEncoder`/`AudioDecoder` (`audio.cpp`), qui reposent sur les nouvelles.
+C'est ce qui permet à chaque phase de finir **build vert** (§6) sans renoncer au
+remplacement : les chaînes du mcu non encore migrées continuent d'appeler
+`Encode`/`Decode` à plat, et l'adaptateur **borne l'écriture** qu'elles ne
+bornaient pas — la classe de bug du 14/08 disparaît donc chez elles avant même
+leur migration. Les deux adaptateurs partent avec leur dernier appelant, à la
+fin de la phase 5.
 
 # Travail demandé
 
-- définir le type de transport `SamplesPtr` (wrapper RAII d'`AVFrame*`, modèle
+- ✅ définir le type de transport `SamplesPtr` (wrapper RAII d'`AVFrame*`, modèle
   `PictPtr`) dans libmedikit ;
 - migrer les interfaces `AudioDecoder`/`AudioEncoder`/`AudioInput`/`AudioOutput`
   de `medkit/audio.h` (le `mcu/include/audio.h` n'est qu'une redirection — un
-  seul header canonique à toucher) ;
+  seul header canonique à toucher) — ✅ pour les deux premières,
+  `AudioInput`/`AudioOutput` suivent avec les pipes (phase 2) puisque leurs
+  seuls implémenteurs vivent dans le mcu ;
 - remplacer la fifo `SWORD` + resampler manuel de `PipeAudioInput`/`PipeAudioOutput`
   par une file de trames + `aresample` ;
 - migrer chaîne par chaîne : transcodeur JSR-309 d'abord (la chaîne du 14/08),
@@ -110,6 +124,8 @@ Trois mécanismes distincts, non synchronisés, se partagent la vérité :
 | `rtmpparticipant.cpp` ×2, `rtmpmp4stream.cpp:229` | `[512]` | latent |
 | `mp4player.cpp:89` | `buffer[1024]` | latent |
 | `jsr309/Recorder.cpp:188` | `pcm[4096]` | suffisant ≤ 85 ms @48k |
+| `ffaudiocodec.cpp` (décodeur) | `conv[8192]` + `fifo<SWORD,8192>` | **supprimés** (phase 1) |
+| `ffmp4reader.cpp:648` | `dpcm[8192]` + `pcmFifo` | latent (migré en phase 4) |
 
 La migration supprime ces tampons plutôt que de les redimensionner un à un.
 
@@ -174,6 +190,13 @@ AudioInput   :  SamplesPtr RecFrame(DWORD timeoutMs);     // remplace RecBuffer
 AudioOutput  :  int        PlayFrame(SamplesPtr);         // remplace PlayBuffer
 ```
 
+`EncodeFrame` est **symétrique de `GetFrame`** : une trame d'entrée peut en
+remplir plusieurs, l'appelant boucle en repassant `nullptr` pour purger.
+Concaténer les trames excédentaires dans une seule `AudioFrame` serait un bug —
+une trame codée d'un codec « frame-based » (Opus, AMR…) doit tenir dans UN
+paquet RTP. La trame rendue appartient à l'encodeur et vaut jusqu'à l'appel
+suivant, comme `VideoEncoder::EncodeFrame`.
+
 - `Decode`/`GetFrame` : calqué sur `VideoDecoder::GetFrame()→PictPtr` — chaque
   trame dans un `AVFrame` NEUF, jamais de re-référence du frame interne
   (le piège `avcodec_receive_frame` déjà évité côté vidéo).
@@ -202,11 +225,26 @@ AudioOutput  :  int        PlayFrame(SamplesPtr);         // remplace PlayBuffer
 
 ## 6. Chaînes migrées, dans l'ordre
 
-1. **Codecs libmedikit** — `ffaudiocodec` cesse d'aplatir (sa fifo interne
-   `SWORD` disparaît, `GetFrame` rend l'`AVFrame` du décodeur) ; `FfAudioEncoder`
-   gagne l'`av_audio_fifo` ; G.711/GSM/G.722/AAC/AMR adaptés (ou retirés au
-   profit de leurs équivalents ffmpeg — à trancher en phase 1, ffmpeg les a
-   tous).
+1. **Codecs libmedikit** — ✅ **FAIT**. `ffaudiocodec` a cessé d'aplatir : la
+   fifo `fifo<SWORD,8192>` du décodeur est remplacée par une file de
+   `SamplesPtr`, chaque trame décodée étant publiée telle quelle par
+   `av_frame_move_ref` (zéro recopie). `FfAudioEncoder` porte l'`av_audio_fifo`
+   et rééchantillonne d'après la fréquence **portée par la trame**, qu'il
+   reconfigure à chaud — après avoir vidé l'ancien resampler, sinon le
+   changement de fréquence ferait un trou. Les deux files sont **bornées à une
+   seconde**, avec journalisation du rejet : plus aucun tampon sans limite.
+
+   G.711 est **passé par ffmpeg** (`AV_CODEC_ID_PCM_ALAW`/`PCM_MULAW`) : les
+   quatre classes écrites à la main et les tables `g711.c` ont disparu, PCMA/PCMU
+   dérivent de `FfAudio{En,De}coder` comme tous les autres. Les encodeurs PCM
+   n'annonçant aucun `frame_size`, `Open()` impose la tranche de 20 ms — c'est
+   ce qui garde `numFrameSamples = 160`, valeur sur laquelle le mcu dimensionne
+   ses lectures. Aucun autre codec n'avait de code propre à adapter : tous
+   dérivaient déjà de la base ffmpeg.
+
+   Suite de tests créée : `tests/test_audio_codecs.cpp` (15 tests), avec un test
+   par bug du 14/08 — tampon de sortie trop court, trame tronquée au décodage,
+   changement de fréquence en cours de flux.
 2. **Transcodeur JSR-309** (`AudioDecoderWorker`, `AudioEncoderWorker`,
    `PipeAudioInput`) — la chaîne du 14/08. Les tampons 8192 et le garde-fou
    `numFrameSamples` disparaissent avec `RecBuffer`.
