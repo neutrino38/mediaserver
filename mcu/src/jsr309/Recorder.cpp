@@ -185,52 +185,44 @@ void Recorder::onAudioPacket(RTPPacket &packet)
 			return;
 	}
 
-	SWORD pcm[4096];
-	int len = audioDecoder->Decode(packet.GetMediaData(),packet.GetMediaLength(),pcm,sizeof(pcm)/sizeof(SWORD));
-	if (len<=0)
-		return;
+	audioDecoder->Decode(packet.GetMediaData(),packet.GetMediaLength());
 
-	if (!audioEncoder)
+	//Un paquet peut donner plusieurs trames : les transcoder TOUTES.
+	for (SamplesPtr samples = audioDecoder->GetFrame(); samples;
+	     samples = audioDecoder->GetFrame())
 	{
-		//L'encodeur AAC travaille à la fréquence native du décodeur (Opus : 48 kHz),
-		//son resampler interne ne convertit que le format S16 -> FLTP.
-		audioRate = audioDecoder->GetRate();
-		if (!audioRate)
-			audioRate = 8000;
-		Properties props;
-		char rate[16];
-		snprintf(rate,sizeof(rate),"%u",audioRate);
-		props.SetProperty("aac.samplerate",rate);
-		audioEncoder = AudioCodecFactory::CreateEncoder(AudioCodec::AAC,props);
 		if (!audioEncoder)
-			return;
-		audioSamples = 0;
-		Log("-Recorder audio transcoding [%s -> AAC, %u Hz]\n",AudioCodec::GetNameFor(codec),audioRate);
-	}
+		{
+			//L'encodeur AAC travaille à la fréquence que porte la trame
+			//(Opus : 48 kHz), et non à une fréquence annoncée d'avance.
+			audioRate = samples->GetRate();
+			if (!audioRate)
+				continue;
+			Properties props;
+			char rate[16];
+			snprintf(rate,sizeof(rate),"%u",audioRate);
+			props.SetProperty("aac.samplerate",rate);
+			audioEncoder = AudioCodecFactory::CreateEncoder(AudioCodec::AAC,props);
+			if (!audioEncoder)
+				return;
+			audioSamples = 0;
+			Log("-Recorder audio transcoding [%s -> AAC, %u Hz]\n",AudioCodec::GetNameFor(codec),audioRate);
+		}
 
-	//L'encodeur ffmpeg exige une trame complète par appel (1024 échantillons
-	//pour l'AAC) : on accumule le PCM décodé et on encode trame par trame,
-	//soit un sample MP4 par trame AAC.
-	const int frameSamples = audioEncoder->numFrameSamples>0 ? audioEncoder->numFrameSamples : 1024;
-	pcmFifo.insert(pcmFifo.end(),pcm,pcm+len);
-	size_t pos = 0;
-	while (pcmFifo.size()-pos>=(size_t)frameSamples)
-	{
-		BYTE aac[2048];
-		int encoded = audioEncoder->Encode(pcmFifo.data()+pos,frameSamples,aac,sizeof(aac));
-		pos += frameSamples;
-		if (encoded>0)
+		//L'encodeur accumule lui-même jusqu'à sa trame complète (1024
+		//échantillons pour l'AAC) : plus de fifo ni de découpage ici.
+		for (AudioFrame* encoded = audioEncoder->EncodeFrame(samples);
+		     encoded; encoded = audioEncoder->EncodeFrame(NULL))
 		{
 			AudioFrame frame(AudioCodec::AAC,audioRate);
-			frame.SetMedia(aac,encoded);
+			frame.SetMedia(encoded->GetData(),encoded->GetLength());
 			//Timestamps en ms, dérivés du nombre de trames produites (cadence
 			//exacte de 1024 échantillons, pas de dérive cumulée)
 			frame.SetTimestamp((DWORD)(audioSamples*1000/audioRate));
-			audioSamples += frameSamples;
+			audioSamples += audioEncoder->numFrameSamples;
 			onMediaFrame(frame);
 		}
 	}
-	pcmFifo.erase(pcmFifo.begin(),pcmFifo.begin()+pos);
 }
 
 void Recorder::onTextPacket(RTPPacket &packet)
