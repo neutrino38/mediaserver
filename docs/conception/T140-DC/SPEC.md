@@ -438,6 +438,12 @@ dedans.
   silencieux entre deux frappes ;
 - `End()` arrête la session AVANT de démonter le pont, jamais l'inverse.
 
+**Les deux transports cohabitent dans une même conférence**, et c'est structurel :
+le choix est par PARTICIPANT — la garde `TextOnWebSocket(partId)` interroge une
+map indexée par participant, et chaque participant a sa propre `TextStream` — et
+ce qui les réunit est le mixeur texte, où tous sont câblés dès
+`CreateParticipant`. Prouvé par `tests/test_conference_mixed_text.cpp` (§12).
+
 Aucune classe nouvelle côté conférence, aucun thread de plus, aucun token,
 aucune URL. Tout le reste de `RTPParticipant` — codec, mute, statistiques,
 crypto, profil d'adressage — continue de fonctionner par les mêmes chemins. Le
@@ -665,6 +671,15 @@ Suite `mcu/tests/` (GoogleTest), `cd mcu && make check`.
 - **Intégration** : deux `RTPSession` sur la boucle locale, handshake DTLS réel,
   un T140block traversant les deux piles. Les tests IPv6 montrent que ce genre
   de test tient dans cette suite.
+- **Les deux transports dans UNE conférence** :
+  `tests/test_conference_mixed_text.cpp` — une vraie conférence, un participant
+  dont le texte passe sur WebSocket et un autre sur data channel, et le texte
+  qui se croise dans les deux sens. Les deux navigateurs sont réels : un client
+  WebSocket (poignée de main HTTP Upgrade, trames masquées) et un `TextStream`
+  en mode data channel qui mène un vrai handshake DTLS et une vraie association
+  SCTP contre la jambe du participant. C'est le test qui répond à « les deux
+  sont-ils acceptés, et le texte traité ? » — et il échoue bien quand on lui
+  fait chercher un mot que personne n'a tapé.
 - **Livré en phase 4** : `tests/test_textstream_datachannel.cpp` — deux
   `TextStream` en mode data channel sur la boucle locale, avec les VRAIS pipes du
   mixeur : le texte écrit dans le pipe d'un participant ressort dans celui de
