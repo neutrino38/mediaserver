@@ -51,6 +51,10 @@ public:
 	//GetMediaSessionRef/ReleaseMediaSessionRef à refcount manuel).
 	int GetMediaSessionRef(int id,std::shared_ptr<MediaSession> &sess);
 	int DeleteMediaSession(int id);
+	//Nombre de sessions vivantes. Pour /status/general : le contrôleur y lit la
+	//charge du service, sans avoir à tenir son propre compteur — le seul qui
+	//puisse dériver du nettoyage par expiration de file d'événements.
+	int GetMediaSessionCount();
 
 	//Publication d'un événement à remplir : résout le contexte via la session (prend
 	//son mutex) — réservé aux appelants qui NE tiennent PAS ce mutex (Joinable,

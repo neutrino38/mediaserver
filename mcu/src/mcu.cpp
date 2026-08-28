@@ -389,6 +389,21 @@ int MCU::GetConferenceList(ConferencesInfo& lst)
 }
 
 /**************************************
+* GetLoad
+*	Nombre de conférences et de participants, sans journalisation
+**************************************/
+void MCU::GetLoad(int& conferences,int& participants)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+
+	conferences  = this->conferences.size();
+	participants = 0;
+
+	for (Conferences::iterator it = this->conferences.begin(); it!=this->conferences.end(); ++it)
+		participants += it->second.conf->GetNumParticipants();
+}
+
+/**************************************
 * onWebSocketConnection (S5)
 *	La porte WebSocket de l'API conférence : /mcu/<confId>/<token>. Résout la
 *	conférence (GetConferenceRef) puis délègue la résolution du token au

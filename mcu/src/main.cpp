@@ -130,6 +130,11 @@ void signing_handler(int sig)
 
 int main(int argc,char **argv)
 {
+	//Instant de demarrage : la SEULE source de l'uptime publie par
+	///status/general. Pris avant tout le reste, pour que l'uptime soit celui du
+	//processus et non celui d'un objet cree plus tard.
+	const time_t startedAt = time(NULL);
+
 	//Brancher les logs de libmedikit sur ceux du mcu (stdout -> --mcu-log)
 	SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitErrorCb);
 
@@ -635,7 +640,7 @@ int main(int argc,char **argv)
 	geventHandlers[1] = &xmleventmcu;
 	
 	//And default status hanlder
-	StatusHandler status;
+	StatusHandler status(&mcu,&jsr309Manager,startedAt,eventQueueExpires);
 
 	//Init de mcu
 	mcu.Init(&xmleventmcu,eventQueueExpires);

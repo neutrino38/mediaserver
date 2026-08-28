@@ -80,6 +80,10 @@ public:
 	static void SetCertificate(const char* cert,const char* key);
 	static int ClassInit();
 	static std::string GetCertificateFingerPrint(Hash hash);
+	//Vrai si ClassInit() a abouti : certificat et cle lisibles, contexte SSL
+	//pret. Faux => aucune patte DTLS ne peut s'etablir, donc ni SRTP derive du
+	//DTLS ni data channel. C'est ce que /status/general publie.
+	static bool IsAvailable()			{ return hasDTLS; }
 	static bool IsDTLS(BYTE* buffer,int size)		{ return buffer[0]>=20 && buffer[0]<=64; }
 
 private:
