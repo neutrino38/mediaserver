@@ -990,4 +990,96 @@ TEST(WaitQueuePrimitive, MultipleProducersLoseNothing)
 		producers[t].join();
 }
 
+// =============================================================================
+// RTPBuffer — borne de profondeur (lot 0 de jsr309_transcode_sans_thread.md)
+// =============================================================================
+//
+// La file n'était bornée par RIEN : `Add` empilait sans limite. Tant que le
+// consommateur suivait, personne ne le voyait ; le chantier « transcodeurs sans
+// thread » met décodage et encodage sur le thread qui consomme cette file, donc
+// le retard s'y accumulera. La borne est en DURÉE d'arrivées (MaxQueuedMs), pas
+// en nombre de paquets : c'est la latence qui compte, pas la mémoire.
+//
+// `SetTime` permet de dater les arrivées à la main : les tests ne dorment pas.
+
+static RTPTimedPacket* MakePacketAt(WORD seq, QWORD arrivalMs, DWORD ssrc = 0x11111111)
+{
+	RTPTimedPacket* rtp = MakePacket(seq, ssrc);
+	rtp->SetTime(arrivalMs);
+	return rtp;
+}
+
+// Un consommateur à l'arrêt : 200 paquets à 20 ms d'intervalle couvrent 4 s.
+// Seuls les 500 dernières millisecondes doivent rester.
+TEST(RtpBufferPrimitive, DeepQueueDropsTheOldest)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(0);
+
+	const QWORD t0 = 1000000;
+	for (WORD seq = 1; seq <= 200; ++seq)
+		ASSERT_TRUE(buf.Add(MakePacketAt(seq, t0 + (QWORD)(seq - 1) * 20)));
+
+	// 500 ms à 20 ms par paquet : au plus 26 paquets (la borne est stricte sur
+	// l'âge, pas sur le compte).
+	EXPECT_LE(buf.Length(), (DWORD)26)
+		<< "la file doit rester bornee a " << RTPBuffer::MaxQueuedMs << " ms d'arrivees";
+	EXPECT_GT(buf.Length(), (DWORD)0);
+
+	// Ce qui reste est bien la FIN du flux, pas son début.
+	RTPPacket* p = buf.Wait();
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_GT(p->GetSeqNum(), 170)
+		<< "ce sont les plus ANCIENS qui partent, la tete de file";
+	delete p;
+}
+
+// Un flux normalement consommé ne perd rien : la borne ne doit pas se
+// déclencher sur une file peu profonde.
+TEST(RtpBufferPrimitive, ShallowQueueLosesNothing)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(0);
+
+	const QWORD t0 = 1000000;
+	for (WORD seq = 1; seq <= 10; ++seq)
+		ASSERT_TRUE(buf.Add(MakePacketAt(seq, t0 + (QWORD)(seq - 1) * 20)));
+
+	EXPECT_EQ(buf.Length(), (DWORD)10);
+	for (WORD expected = 1; expected <= 10; ++expected)
+	{
+		RTPPacket* p = buf.Wait();
+		ASSERT_NE(p, (RTPPacket*)NULL);
+		EXPECT_EQ(p->GetSeqNum(), expected);
+		delete p;
+	}
+}
+
+// Jeter la tête resynchronise : sans cela, `next` désignerait un paquet détruit
+// et le Wait suivant patienterait maxWaitTime sur un trou que rien ne comblera.
+TEST(RtpBufferPrimitive, DroppingTheHeadResyncsInsteadOfWaitingForIt)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(5000);
+
+	const QWORD t0 = 1000000;
+	ASSERT_TRUE(buf.Add(MakePacketAt(1, t0)));
+	RTPPacket* p = buf.Wait();	// next = 2
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	delete p;
+
+	// Le 2 arrive et reste bloqué (personne ne consomme), puis le temps passe.
+	ASSERT_TRUE(buf.Add(MakePacketAt(2, t0)));
+	ASSERT_TRUE(buf.Add(MakePacketAt(3, t0 + RTPBuffer::MaxQueuedMs + 1)));
+
+	EXPECT_EQ(buf.Length(), (DWORD)1) << "le 2 est trop vieux, il part";
+
+	Clock::time_point start = Clock::now();
+	p = buf.Wait();
+	ASSERT_NE(p, (RTPPacket*)NULL);
+	EXPECT_EQ(p->GetSeqNum(), 3);
+	EXPECT_LT(ElapsedMs(start), 1000) << "aucune attente : la file s'est resynchronisee";
+	delete p;
+}
+
 } // namespace

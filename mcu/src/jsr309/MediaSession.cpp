@@ -116,7 +116,6 @@ void MediaSession::SetEventHandler(int sessionId, JSR309Manager* mngr)
 
 int MediaSession::PostEvent(int eventContextId, JSR309Event* ev)
 {
-	//NB : suppose le mutex de session tenu par l'appelant.
 	//Sans manager câblé, on ne peut rien publier : on libère l'événement pour
 	//éviter une fuite mémoire.
 	if (!eventMngr || sessionId <= 0)
@@ -125,18 +124,24 @@ int MediaSession::PostEvent(int eventContextId, JSR309Event* ev)
 		return 0;
 	}
 
-	//Résout le contexte localement (pas via GetEventContext, qui prendrait le
-	//mutex déjà tenu)
-	EventContexts::iterator it = eventContexts.find(eventContextId);
-	if (it == eventContexts.end())
+	std::shared_ptr<JSR309EventContext> ctx;
 	{
-		delete ev;
-		return Error("event context [%d] not found\n", eventContextId);
+		//Verrou fin : les appelants tiennent souvent déjà le mutex de session,
+		//et celui-ci n'est jamais pris avant lui.
+		std::lock_guard<std::mutex> lock(eventContextsMutex);
+
+		EventContexts::iterator it = eventContexts.find(eventContextId);
+		if (it == eventContexts.end())
+		{
+			delete ev;
+			return Error("event context [%d] not found\n", eventContextId);
+		}
+		ctx = it->second;
 	}
 
-	//Remplit l'événement sous verrou puis le remet au manager : DeliverEvent ne
-	//rappelle jamais la session, donc pas d'interblocage (C-3).
-	ev->FillEvent(*(it->second));
+	//Remplit l'événement puis le remet au manager : DeliverEvent ne rappelle
+	//jamais la session, donc pas d'interblocage (C-3).
+	ev->FillEvent(*ctx);
 	return eventMngr->DeliverEvent(sessionId, ev);
 }
 
@@ -186,7 +191,10 @@ int MediaSession::End()
 		endedAudioTranscoders.swap(audioTranscoders);
 		endedAudioMixers.swap(audioMixers);
 		endedVideoMixers.swap(videoMixers);
-		eventContexts.clear();
+		{
+			std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+			eventContexts.clear();
+		}
 		playerEventCtx.clear();
 		recorderEventCtx.clear();
 		tokens.clear();
@@ -254,8 +262,12 @@ int MediaSession::PlayerCreate(std::wstring tag)
 	//Append the player
 	players[playerId] = player;
 
-	int eventContextId = maxEventContextId++;
-	eventContexts[eventContextId] = std::make_shared<JSR309EventContext>( playerId, MediaFrame::Video, MediaFrame::VIDEO_MAIN);
+	int eventContextId;
+	{
+		std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+		eventContextId = maxEventContextId++;
+		eventContexts[eventContextId] = std::make_shared<JSR309EventContext>( playerId, MediaFrame::Video, MediaFrame::VIDEO_MAIN);
+	}
 	player->SetEventContextId(MediaFrame::Video,eventContextId);
 	//Mémorise le contexte pour publier les événements de cycle de vie du player
 	playerEventCtx[playerId] = eventContextId;
@@ -392,7 +404,10 @@ int MediaSession::PlayerDelete(int playerId)
                 EventCtxMap::iterator ctx = playerEventCtx.find(playerId);
                 if (ctx != playerEventCtx.end())
                 {
-                        eventContexts.erase(ctx->second);
+                        {
+                                std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+                                eventContexts.erase(ctx->second);
+                        }
                         playerEventCtx.erase(ctx);
                 }
         }
@@ -413,8 +428,12 @@ int MediaSession::RecorderCreate(std::wstring tag)
 	recorders[recorderId] = recorder;
 
 	//Contexte d'événement du recorder, symétrique à celui des players
-	int eventContextId = maxEventContextId++;
-	eventContexts[eventContextId] = std::make_shared<JSR309EventContext>( recorderId, MediaFrame::Video, MediaFrame::VIDEO_MAIN);
+	int eventContextId;
+	{
+		std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+		eventContextId = maxEventContextId++;
+		eventContexts[eventContextId] = std::make_shared<JSR309EventContext>( recorderId, MediaFrame::Video, MediaFrame::VIDEO_MAIN);
+	}
 	recorderEventCtx[recorderId] = eventContextId;
 
 	//Return it
@@ -564,7 +583,10 @@ int MediaSession::RecorderDelete(int recorderId)
 		EventCtxMap::iterator ctx = recorderEventCtx.find(recorderId);
 		if (ctx != recorderEventCtx.end())
 		{
-			eventContexts.erase(ctx->second);
+			{
+				std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+				eventContexts.erase(ctx->second);
+			}
 			recorderEventCtx.erase(ctx);
 		}
 	}
@@ -740,7 +762,10 @@ std::shared_ptr<Player> MediaSession::GetPlayer(int playerId)
 
 std::shared_ptr<JSR309EventContext> MediaSession::GetEventContext(int EventContextId)
 {
-	std::lock_guard<std::mutex> lock(mutex);
+	//Verrou fin, PAS celui de la session : cet appel vient du chemin des
+	//paquets, sous le mutex du port source, que le thread XML-RPC attend en
+	//tenant le mutex de session (cf. MediaSession.h).
+	std::lock_guard<std::mutex> lock(eventContextsMutex);
 
 	EventContexts::iterator it = eventContexts.find(EventContextId);
 
@@ -775,6 +800,8 @@ int MediaSession::EndpointCreate(std::wstring name,bool audioSupported,bool vide
 
 	//Append
 	endpoints[endpointId] = endpoint;
+
+	std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
 
 	if (audioSupported)
 	{

@@ -56,9 +56,10 @@ public:
 	//puisse dériver du nettoyage par expiration de file d'événements.
 	int GetMediaSessionCount();
 
-	//Publication d'un événement à remplir : résout le contexte via la session (prend
-	//son mutex) — réservé aux appelants qui NE tiennent PAS ce mutex (Joinable,
-	//threads RTP). Prend possession de l'événement.
+	//Publication d'un événement à remplir : résout le contexte via la session,
+	//SANS prendre son mutex (verrou dédié aux contextes, cf. MediaSession.h) —
+	//c'est ce qui rend l'appel sûr depuis le chemin des paquets, sous le mutex
+	//du port source. Prend possession de l'événement.
 	int PostEvent(int sessionId,int eventContextId , JSR309Event *event);
 	//Remise d'un événement déjà rempli : ne touche que l'état du manager, donc
 	//appelable sous le mutex d'une session (C-3). Prend possession de l'événement.

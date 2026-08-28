@@ -23,6 +23,8 @@
  *     file vide passait par le drop « tardif ») ;
  *   - le destructeur annule puis DRAINE un éventuel Wait avant de libérer
  *     quoi que ce soit ; Length() et HurryUp() sont verrouillés.
+ *   - la file est BORNÉE EN DURÉE (MaxQueuedMs) : elle ne l'était par rien, et
+ *     un consommateur en retard la faisait grossir sans fin.
  */
 
 #ifndef RTPBUFFER_H
@@ -37,6 +39,13 @@
 class RTPBuffer
 {
 public:
+	//Profondeur maximale de la file, en millisecondes d'ARRIVÉES : au-delà, les
+	//plus anciens sont jetés. Même politique que PipeAudioInput::MaxQueuedMs —
+	//la latence prime sur l'intégrité du flux — et très au-dessus du plus grand
+	//maxWaitTime posé par RTPSession (300 ms), qui est un délai de comblement
+	//de trou, pas une profondeur de file.
+	static constexpr DWORD MaxQueuedMs = 500;
+
 	RTPBuffer() = default;
 	RTPBuffer(const RTPBuffer&) = delete;
 	RTPBuffer& operator=(const RTPBuffer&) = delete;
@@ -105,6 +114,11 @@ public:
 			delete rtp;
 			return true;
 		}
+
+		//Rien ne bornait cette file. Le consommateur (thread de démultiplexage)
+		//peut prendre du retard — d'autant plus quand décodage et encodage
+		//passeront sur ce thread : on jette la tête plutôt que d'accumuler.
+		DropOverflow(rtp->GetTime());
 
 		//Signal
 		cond.notify_one();
@@ -222,6 +236,43 @@ public:
 	}
 
 private:
+	//Appelé sous le verrou. `now` est l'instant d'arrivée du paquet qui vient
+	//d'entrer : c'est lui qui date la file, personne ne prune sans arrivée.
+	void DropOverflow(QWORD now)
+	{
+		DWORD dropped = 0;
+
+		//La tête porte le plus petit numéro de séquence : c'est elle qui bloque
+		//Wait, et c'est donc elle qu'il faut lâcher.
+		while (!packets.empty())
+		{
+			RTPOrderedPackets::iterator oldest = packets.begin();
+			if (now < oldest->second->GetTime() + MaxQueuedMs)
+				break;
+			delete oldest->second;
+			packets.erase(oldest);
+			dropped++;
+		}
+
+		if (!dropped)
+			return;
+
+		//Le paquet attendu vient peut-être d'être jeté : sans resynchro, Wait
+		//patienterait maxWaitTime sur un trou que rien ne comblera.
+		next = (DWORD)-1;
+
+		//Un débordement durable jette un paquet par arrivée : log à 1/s avec le
+		//cumul, comme RTPMultiplexer pour son « no listener ».
+		droppedSinceLog += dropped;
+		if (now >= lastDropLogMs + 1000)
+		{
+			Log("-RTPBuffer: file trop profonde (>%u ms), %u paquet(s) jete(s)\n",
+			    MaxQueuedMs, droppedSinceLog);
+			lastDropLogMs = now;
+			droppedSinceLog = 0;
+		}
+	}
+
 	//Appelé sous le verrou
 	void ClearPackets()
 	{
@@ -261,6 +312,8 @@ private:
 	int			bigJumps = 0;
 	DWORD			lastSsrc = 0;
 	bool			hasSsrc	 = false;
+	QWORD			lastDropLogMs = 0;	// 0 = jamais loggé
+	DWORD			droppedSinceLog = 0;
 };
 
 #endif	/* RTPBUFFER_H */

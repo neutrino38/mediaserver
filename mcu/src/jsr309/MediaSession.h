@@ -272,9 +272,10 @@ private:
 	typedef std::map<int, std::shared_ptr<JSR309EventContext>> EventContexts;
 	typedef std::map<int, int> EventCtxMap;
 private:
-	//Publication d'événements interne. Suppose le mutex de session tenu : remplit
-	//l'événement à partir du contexte puis le remet au manager (DeliverEvent), qui
-	//ne rappelle jamais la session — pas d'inversion de verrous (C-3).
+	//Publication d'événements interne. Appelable avec ou sans le mutex de session
+	//tenu : le contexte est résolu sous eventContextsMutex. Remplit l'événement
+	//à partir du contexte puis le remet au manager (DeliverEvent), qui ne
+	//rappelle jamais la session — pas d'inversion de verrous (C-3).
 	int PostEvent(int eventContextId, JSR309Event* ev);
 
 private:
@@ -306,6 +307,15 @@ private:
 	
 	Tokens		tokens;
 	
+	//Les contextes d'événement ont un verrou À EUX, plus fin que celui de la
+	//session : GetEventContext est appelé depuis le CHEMIN DES PAQUETS
+	//(Joinable::Update → JSR309Manager::PostEvent), sous le mutex du port
+	//source, pendant que le thread XML-RPC tient déjà le mutex de session et
+	//attend ce même mutex de port. Prendre le mutex de session ici fermerait le
+	//cycle. Ordre de verrouillage : mutex → eventContextsMutex, jamais
+	//l'inverse ; eventContextsMutex ne protège que des lectures/écritures de
+	//map, on n'appelle rien sous lui.
+	std::mutex eventContextsMutex;
 	EventContexts eventContexts;
 	int maxEventContextId;
 

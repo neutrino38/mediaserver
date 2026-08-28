@@ -215,10 +215,12 @@ int AudioDecoderJoinableWorker::Attach(const std::shared_ptr<Joinable> & join)
 	//Detach if joined — lock() : source encore vivante ?
 	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
+		//Retrait AVANT arrêt : c'est RemoveListener qui est la barrière. Il ne
+		//rend la main que le Multiplex en cours terminé, donc plus aucun
+		//onRTPPacket n'est en vol quand Stop() touche au décodeur.
+		j->RemoveListener(this);
 		//Stop
 		Stop();
-		//Remove ourself as listeners
-		j->RemoveListener(this);
 	}
 	//Store new one (lien retour non possédant)
 	joined = join;
