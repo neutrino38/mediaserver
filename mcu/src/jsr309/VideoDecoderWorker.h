@@ -10,16 +10,13 @@
 
 #include "medkit/codecs.h"
 #include "video.h"
-#include "worker.h"
-#include "waitqueue.h"
 #include "Joinable.h"
 
 class VideoDecoderJoinableWorker:
-	public Joinable::Listener,
-	public Worker
+	public Joinable::Listener
 {
 public:
-	VideoDecoderJoinableWorker(bool useThread = true);
+	VideoDecoderJoinableWorker();
 	virtual ~VideoDecoderJoinableWorker();
 
 	int Init(VideoOutput *output);
@@ -47,18 +44,13 @@ public:
 	//décodeur que quand l'arbitrage retombe sur le transcodage).
 	int Start();
 	int Stop();
-protected:
-	int Decode();
-	//Corps du Worker
-	virtual int Run() { return Decode(); }
 
 private:
-        void DecodePacket(RTPPacket* pkt);
+        void DecodePacket(RTPPacket &packet);
 
 private:
 	VideoOutput *output;
         VideoInput  *input;
-	WaitQueue<RTPPacket*> packets;
 	bool decoding;
 
         /* decoding variables */
@@ -73,8 +65,6 @@ private:
 	// Lien retour NON possédant vers la source (weak_ptr → lock() au site d'usage) :
 	// une source détruite fait échouer le lock() (C-13, lien A).
 	std::weak_ptr<Joinable> joined;
-        bool useThread;
 };
 
 #endif	/* VIDEODECODERWORKER_H */
-

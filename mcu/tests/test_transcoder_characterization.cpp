@@ -306,20 +306,26 @@ public:
 
 	~Vp8Source() { delete encoder; }
 
-	// Encode une image unie et rend ses paquets RTP, seq/ts continus.
-	std::vector<RTPPacket> NextFrame(BYTE luma, DWORD timestamp)
+	// Livre les paquets d'une image un par un, seq/ts continus, SANS jamais en
+	// copier : `RTPPacket` porte un `header` qui pointe dans son propre
+	// `buffer` et n'a pas de constructeur de copie — une copie garde le
+	// pointeur de l'original, et le lire après la mort de l'original est un
+	// accès à de la mémoire libérée. Le bit de marque s'y perdait, donc aucune
+	// image n'était jamais complète pour le décodeur. D'où le rappel plutôt
+	// qu'un `std::vector<RTPPacket>`.
+	template <typename Sink>
+	int NextFrame(BYTE luma, DWORD timestamp, Sink sink)
 	{
-		std::vector<RTPPacket> out;
-
 		PictPtr pic = Pict::CreateColor(width, height, luma, 128, 128);
 		if (!pic)
-			return out;
+			return 0;
 
 		VideoFrame* frame = encoder->EncodeFrame(pic);
 		if (!frame || !frame->HasRtpPacketizationInfo())
-			return out;
+			return 0;
 
 		MediaFrame::RtpPacketizationInfo& info = frame->GetRtpPacketizationInfo();
+		int sent = 0;
 		for (int i = 0; i < (int)info.size(); ++i)
 		{
 			MediaFrame::RtpPacketization* rtp = info[i];
@@ -335,9 +341,10 @@ public:
 			packet.SetSeqNum(seq++);
 			packet.SetTimestamp(timestamp);
 			packet.SetMark(i + 1 == (int)info.size());
-			out.push_back(packet);
+			sink(packet);
+			sent++;
 		}
-		return out;
+		return sent;
 	}
 
 	WORD NextSeq() const { return seq; }
@@ -373,10 +380,9 @@ TEST(TranscoderCharacterization, Vp8ToH264Output)
 	// produire. Le NOMBRE d'images sortantes n'est pas figé ici (§3.3).
 	for (int n = 0; n < 10; ++n)
 	{
-		std::vector<RTPPacket> packets = vp8.NextFrame((BYTE)(16 + n * 8), (DWORD)n * 9000);
-		ASSERT_FALSE(packets.empty()) << "l'encodeur VP8 n'a rien produit a l'image " << n;
-		for (RTPPacket& p : packets)
-			source->Multiplex(p);
+		int sent = vp8.NextFrame((BYTE)(16 + n * 8), (DWORD)n * 9000,
+					 [&](RTPPacket& p){ source->Multiplex(p); });
+		ASSERT_GT(sent, 0) << "l'encodeur VP8 n'a rien produit a l'image " << n;
 		std::this_thread::sleep_for(Ms(100));
 	}
 
@@ -428,17 +434,11 @@ TEST(TranscoderCharacterization, VideoLossRequestsAnIntraFromTheSource)
 	ASSERT_EQ(1, transcoder.Attach(source));
 
 	// Première image complète : elle pose `lastSeq`, sans quoi rien n'est perdu.
-	std::vector<RTPPacket> first = vp8.NextFrame(16, 0);
-	ASSERT_FALSE(first.empty());
-	for (RTPPacket& p : first)
-		source->Multiplex(p);
+	ASSERT_GT(vp8.NextFrame(16, 0, [&](RTPPacket& p){ source->Multiplex(p); }), 0);
 
 	// Trou franc dans la numérotation : plus d'un paquet manquant.
 	vp8.SkipSeq(10);
-	std::vector<RTPPacket> second = vp8.NextFrame(200, 9000);
-	ASSERT_FALSE(second.empty());
-	for (RTPPacket& p : second)
-		source->Multiplex(p);
+	ASSERT_GT(vp8.NextFrame(200, 9000, [&](RTPPacket& p){ source->Multiplex(p); }), 0);
 
 	// Le worker porte encore un thread : borner l'attente, pas la fixer.
 	for (int waited = 0; waited < 3000 && source->updates == 0; waited += 25)

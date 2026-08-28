@@ -9,12 +9,12 @@
 #include "rtp.h"
 #include "log.h"
 
-VideoDecoderJoinableWorker::VideoDecoderJoinableWorker(bool useThread)
+VideoDecoderJoinableWorker::VideoDecoderJoinableWorker()
 {
 	//Nothing
 	output = NULL;
+	input = NULL;
 	decoding = false;
-        this->useThread = useThread;
         videoDecoder = NULL;
 }
 
@@ -34,11 +34,6 @@ int VideoDecoderJoinableWorker::End()
 {
 	//Dettach
 	Dettach();
-
-	//Check if already decoding
-	if (decoding)
-		//Stop
-		Stop();
 
 	//Set null
 	output = NULL;
@@ -65,14 +60,9 @@ int VideoDecoderJoinableWorker::Start()
 	lastSeq = RTPPacket::MaxExtSeqNum;
 	waitIntra = false;
 
-	//Start decoding
+	//Ouvrir le chemin : desormais onRTPPacket decode lui-meme, sur le thread
+	//de la source.
 	decoding = 1;
-
-	//Rearmer la file apres un eventuel Stop (Cancel collant)
-	packets.Reset();
-
-	//launc thread
-	if (useThread) StartThread();
 
 	return 1;
 }
@@ -88,20 +78,12 @@ int  VideoDecoderJoinableWorker::Stop()
 		//Stop
 		decoding=0;
 
-		//Cancel any pending wait
-                if (useThread)
-                {
-                    packets.Cancel();
-                    StopThread();
-                }
-                else
-                {
-                    if (videoDecoder)
-                    {
-                        delete videoDecoder;
-                        videoDecoder = NULL;
-                    }
-                }
+		//Borramos el decoder
+		if (videoDecoder)
+		{
+			delete videoDecoder;
+			videoDecoder = NULL;
+		}
 	}
 
 	Log("<StopVideoDecoderJoinableWorker\n");
@@ -109,17 +91,17 @@ int  VideoDecoderJoinableWorker::Stop()
 	return 1;
 }
 
-void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
+void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
 {
         //Get extended sequence number
-        DWORD seq = packet->GetExtSeqNum();
+        DWORD seq = packet.GetExtSeqNum();
 
         //Get packet data
-        BYTE* buffer = packet->GetMediaData();
-        DWORD size = packet->GetMediaLength();
+        BYTE* buffer = packet.GetMediaData();
+        DWORD size = packet.GetMediaLength();
 
         //Get type
-        type = (VideoCodec::Type)packet->GetCodec();
+        type = (VideoCodec::Type)packet.GetCodec();
 
         //Lost packets since last
         DWORD lost = 0;
@@ -161,17 +143,13 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
         if (type==VideoCodec::RED)
         {
                 //Get redundant packet
-                RTPRedundantPacket* red = (RTPRedundantPacket*)packet;
+                RTPRedundantPacket* red = (RTPRedundantPacket*)&packet;
                 //Get primary codec
                 type = (VideoCodec::Type)red->GetPrimaryCodec();
                 //Check it is not ULPFEC redundant packet
                 if (type==VideoCodec::ULPFEC)
-                {
-                        //Delete packet
-                        delete(packet);
                         //Skip
                         return;
-                }
                 //Update primary redundant payload
                 buffer = red->GetPrimaryPayloadData();
                 size = red->GetPrimaryPayloadSize();
@@ -191,8 +169,6 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
                 if (videoDecoder==NULL)
                 {
                         Error("Error creando nuevo decodificador de video [%p,%d]\n",this,type);
-                        //Delete packet
-                        if (useThread) delete(packet);
                         //Next
                         return;
                 }
@@ -219,7 +195,7 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
 
 
         //Lo decodificamos
-        if(!videoDecoder->DecodePacket(buffer,size,lost,packet->GetMark()))
+        if(!videoDecoder->DecodePacket(buffer,size,lost,packet.GetMark()))
         {
                 //Check if we got listener and more than two seconds have elapsed from last request
                 if (getDifTime(&lastFPURequest)>1000000)
@@ -238,15 +214,13 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
                         waitIntra = true;
                     }
                 }
-                //Delete packet
-                delete(packet);
                 //Next frame
                 return;
         }
 
 	//if ( (lastSeq % 20) == 0 ) Log("VideoDecoder: decoded frame codec %d.\n", videoDecoder->type );
         //Si es el ultimo
-        if(packet->GetMark())
+        if(packet.GetMark())
         {
                 if (videoDecoder->IsKeyFrame())
                         Debug("-Got Intra\n");
@@ -272,63 +246,20 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket* packet)
                         //Do not wait anymore
                         waitIntra = false;
         }
-
-        //Delete packet
-        if (useThread) delete(packet);
-}
-
-int VideoDecoderJoinableWorker::Decode()
-{
-	VideoDecoder*	videoDecoder = NULL;
-	VideoCodec::Type type;
-
-	Log(">DecodeVideo\n");
-
-	//Mientras tengamos que capturar
-	while(decoding)
-	{
-		//Obtenemos el paquete
-		if (!packets.Wait(0))
-			//Check condition again
-			continue;
-
-		//Get packet in queue
-		RTPPacket* packet = packets.Pop();
-		
-		//Check
-		if (!packet)
-			//Check condition again
-			continue;
-
-                DecodePacket(packet);
-	}
-
-	//Borramos el encoder
-	delete videoDecoder;
-        videoDecoder = NULL;
-
-	Log("<DecodeVideo\n");
-
-	//Exit
-	return 0;
 }
 
 void VideoDecoderJoinableWorker::onRTPPacket(RTPPacket &packet)
 {
-	//Put it on the queue
+	//Décoder ici même : on est sur le thread de la source, sous son verrou de
+	//multiplexage. Plus de copie du paquet, plus de file, plus de thread.
 	if (decoding)
-        {
-            if (useThread) 
-                packets.Add(packet.Clone());
-            else
-                DecodePacket(&packet);
-        }
+		DecodePacket(packet);
 }
 
 void VideoDecoderJoinableWorker::onResetStream()
 {
-	//Clean all packets
-	packets.Clear();
+	//Plus rien en attente à jeter : le paquet est consommé au retour de
+	//onRTPPacket.
 }
 
 void VideoDecoderJoinableWorker::onEndStream()
@@ -370,10 +301,14 @@ int VideoDecoderJoinableWorker::Dettach()
         //Detach if joined — lock() : ne déréférence pas si la source a disparu
 	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
+		//Même barrière qu'Attach : le retrait précède l'arrêt, sinon Stop()
+		//détruirait le décodeur pendant qu'un onRTPPacket en vol l'utilise.
+		//En mode pont le décodeur n'est pas inscrit (SetSource seul) : le
+		//retrait ne fait rien, mais prendre le verrou de la source reste la
+		//barrière — c'est UnlistenSource du transcodeur qui a déjà coupé.
+		j->RemoveListener(this);
 		//Stop decoding
 		Stop();
-		//Remove ourself as listeners
-		j->RemoveListener(this);
 	}
 	else
 		//Stop decoding même si la source est déjà partie
