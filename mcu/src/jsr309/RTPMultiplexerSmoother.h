@@ -32,6 +32,13 @@ protected:
 	//Corps du Worker
 	virtual int Run();
 
+	//Nouveau run d'encodage SANS redémarrer le lisseur : la base de temps de
+	//l'encodeur repart de zéro, donc la RFC 3550 veut une nouvelle identité de
+	//source. Depuis le lot 4, une renégociation ne passe plus par Stop/Start —
+	//c'est le chemin des paquets qui rouvre l'encodeur, et c'est lui qui doit
+	//annoncer le nouveau run.
+	void RenewSSRC() { ssrc = random(); }
+
 private:
 	//Pacer a budget, meme mecanique que RTPSmoother (cf. son en-tete) : chaque
 	//paquet porte son temps de passage sur le fil et `nextSendUs` les enchaine,

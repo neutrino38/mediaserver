@@ -95,7 +95,7 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
-OBJS+=ipaddress.o addressprofiles.o stunclient.o
+OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o
 
 OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ)
 TARGETS=mcu rtmptest

@@ -4,10 +4,7 @@
 #include <condition_variable>
 #include <deque>
 #include <audio.h>
-
-// Rééchantillonnage via libswresample. Pointeur opaque : l'en-tête ffmpeg
-// n'est inclus que dans le .cpp.
-struct SwrContext;
+#include "audioresampler.h"
 
 
 class PipeAudioInput :
@@ -15,7 +12,7 @@ class PipeAudioInput :
 {
 public:
 	PipeAudioInput();
-	virtual ~PipeAudioInput();
+	virtual ~PipeAudioInput() = default;
 
 	virtual SamplesPtr RecFrame(DWORD timeoutMs);
 	virtual void CancelRecFrame();
@@ -40,11 +37,6 @@ private:
 	// 120 ms, la borner en nombre de trames ne bornerait pas la latence.
 	static const DWORD MaxQueuedMs = 500;
 
-	// Rééchantillonne `samples` vers recordRate. Reconfigure le resampler si
-	// la fréquence d'entrée a changé. Rend la trame telle quelle si les
-	// fréquences coïncident, nullptr en cas d'échec. À appeler sous mutex.
-	SamplesPtr Resample(SamplesPtr samples);
-
 	// Durée totale en file, en millisecondes. À appeler sous mutex.
 	DWORD QueuedMs() const;
 
@@ -56,8 +48,9 @@ private:
 	bool 		inited;
 	bool		canceled;
 
-	SwrContext		*swr;
-	DWORD			swrInRate;	// fréquence d'entrée du resampler ouvert
+	// Conversion vers recordRate ; utilisé sous `mutex`. Objet partagé avec
+	// l'encodeur audio JSR-309, qui en a besoin sans la file (lot 3).
+	AudioResampler		resampler;
 	DWORD			recordRate;
 	DWORD			nativeRate;
 };

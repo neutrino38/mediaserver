@@ -188,6 +188,11 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
                 {
                         //Set frame size
                         output->SetVideoSize(width,height);
+                        //Horodatage RTP de la source porte par l'image : c'est sur
+                        //lui, et non sur l'heure d'arrivee, que le transcodeur mesure
+                        //la cadence reelle (§3.6). FfVideoDecoder::GetFrame ne le
+                        //renseigne pas.
+                        frame->GetAVFrame()->pts = packet.GetTimestamp();
                         //Send it
                         output->NextFrame(frame);
                 }
@@ -237,6 +242,9 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
                 {
                         //Set frame size
                         output->SetVideoSize(width,height);
+
+                        //Horodatage RTP de la source (cf. plus haut)
+                        frame->GetAVFrame()->pts = packet.GetTimestamp();
 
                         //Send it
                         output->NextFrame(frame);

@@ -811,6 +811,18 @@ de l'endpoint.
 `VideoTranscoderFPU` = Fast Picture Update (force une image clé), typiquement en
 réponse à un `ExternalFIRRequestedEvent`.
 
+`fps` et `intraPeriod` sont des **bornes**, pas des garanties. Un transcodeur
+n'invente pas d'image : il encode ce que sa source lui donne. Si la source est
+plus lente que `fps`, le transcodeur mesure sa cadence réelle et **rouvre son
+encodeur à cette cadence** — sans quoi le budget par image serait calculé pour
+`fps` et le débit réel tomberait d'autant. Il met alors `intraPeriod` à la même
+échelle, de sorte que la durée `intraPeriod / fps` **en secondes** reste celle
+que le contrôleur a demandée. Aucun paramètre ne change : le contrôleur continue
+d'exprimer `intraPeriod` en nombre d'images pour la cadence `fps` qu'il négocie.
+
+Une pause de la source (mute vidéo) n'est jamais lue comme une cadence : rien ne
+sort tant que rien n'entre, et l'encodeur garde la cadence d'avant la pause.
+
 ### 6.12 Connexions média génériques (WebRTC / ICE)
 
 | Méthode | Paramètres | `returnVal` |

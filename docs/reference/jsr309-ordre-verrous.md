@@ -21,8 +21,27 @@ Du plus extérieur au plus intérieur :
 JSR309Manager::mutex
   → MediaSession::mutex
       → RTPMultiplexer::mutex   (le port : source ou puits)
-          → verrous d'émission de RTPSession
+          → transcodeur : encodeLock  →  configLock
+              → verrous d'émission de RTPSession
 ```
+
+`encodeLock` et `configLock` sont les deux verrous d'un transcodeur, audio comme
+vidéo. Ils sont apparus quand les décodeurs et les encodeurs ont perdu leur
+thread : c'est l'arrêt de ce thread qui séparait jusque-là le plan de contrôle du
+chemin des paquets.
+
+- `encodeLock` protège le codec ouvert. Le chemin des paquets le tient pendant
+  toute la traversée ; `Stop()` le prend pour détruire le codec, et attend donc
+  la fin de l'image ou de la trame en cours.
+- `configLock` protège la configuration écrite par le plan de contrôle (`SetCodec`,
+  bornes négociées). Il est **feuille** : rien n'est appelé pendant qu'il est
+  tenu, et le chemin des paquets ne le prend que sous `encodeLock`.
+
+Le plan de contrôle ne prend jamais `encodeLock` en tenant le verrou d'un port :
+`RTPMultiplexer::RemoveListener` a relâché le sien avant d'appeler `Stop()`.
+Symétriquement, l'encodeur audio prend le verrou du port **sous** `encodeLock`
+(`Multiplex`), et l'encodeur vidéo ne le prend pas du tout — il dépose dans la
+file du lisseur, que le thread du lisseur vide.
 
 Et, en dehors de cette chaîne :
 
@@ -74,3 +93,8 @@ rend la main, plus aucun `onRTPPacket` de cette source n'est en vol.
 C'est une **barrière**, et le code s'appuie dessus. Règle qui en découle :
 retirer l'écouteur de la source **avant** de détruire ce dont il se sert (un
 codec, par exemple), jamais après.
+
+Cette barrière ne couvre PAS le puits. Un `RemoveListener` sur l'encodeur d'un
+transcodeur arrive du thread XML-RPC pendant que la source, elle, publie
+toujours : rien ne les sépare, puisque le thread d'encodage a disparu. C'est
+`encodeLock` qui tient ce rôle-là.
