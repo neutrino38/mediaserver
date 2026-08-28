@@ -10,13 +10,10 @@
 #include "medkit/codecs.h"
 #include "audio.h"
 #include "pipeaudioinput.h"
-#include "worker.h"
-#include "waitqueue.h"
 #include "Joinable.h"
 
 class AudioDecoderJoinableWorker:
-	public Joinable::Listener,
-	public Worker
+	public Joinable::Listener
 {
 public:
 	AudioDecoderJoinableWorker();
@@ -37,15 +34,14 @@ public:
 	int Start();
 	int Stop();
 
-protected:
-	int Decode();
-	//Corps du Worker
-	virtual int Run() { return Decode(); }
+private:
+	void DecodePacket(RTPPacket &packet);
 
 private:
 	AudioOutput *output;
         PipeAudioInput  *input;
-	WaitQueue<RTPPacket*> packets;
+	AudioDecoder	*codec;
+	bool		decoding;
 	// Lien retour NON possédant vers la source (weak_ptr → lock() au site d'usage) :
 	// une source détruite fait échouer le lock() (C-13, lien A).
 	std::weak_ptr<Joinable> joined;
@@ -53,4 +49,3 @@ private:
 };
 
 #endif	/* AUDIODECODERWORKER_H */
-

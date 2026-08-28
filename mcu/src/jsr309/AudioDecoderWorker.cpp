@@ -13,6 +13,8 @@ AudioDecoderJoinableWorker::AudioDecoderJoinableWorker()
 	//Nothing
 	output = NULL;
     input = NULL;
+	codec = NULL;
+	decoding = false;
 }
 
 AudioDecoderJoinableWorker::~AudioDecoderJoinableWorker()
@@ -63,9 +65,6 @@ int AudioDecoderJoinableWorker::End()
 	//Dettach
 	Dettach();
 
-	//Check if already decoding
-	if (IsThreadRunning()) Stop();
-
 	//Set null
 	output = NULL;
 	return 0;
@@ -84,12 +83,9 @@ int AudioDecoderJoinableWorker::Start()
 	//Stop first
 	Stop();
 
-
-	//Rearmer la file apres un eventuel Stop (Cancel collant)
-	packets.Reset();
-
-	//launc thread
-	StartThread();
+	//Ouvrir le chemin : desormais onRTPPacket decode lui-meme, sur le thread
+	//de la source.
+	decoding = true;
 
 	return 1;
 }
@@ -99,13 +95,21 @@ int  AudioDecoderJoinableWorker::Stop()
 	Log(">StopAudioDecoderJoinableWorker\n");
 
 	//If we were started
-	if (IsThreadRunning())
+	if (decoding)
 	{
-		//Cancel any pending wait
-		packets.Cancel();
+		//Close the path
+		decoding = false;
 
-		//Esperamos
-		StopThread();
+		//End reproducing
+		if (output != NULL) output->StopPlaying();
+		if (input != NULL) input->End();
+
+		//If a decoder is created, delete it
+		if (codec != NULL)
+		{
+			delete codec;
+			codec = NULL;
+		}
 	}
 
 	Log("<StopAudioDecoderJoinableWorker\n");
@@ -114,92 +118,63 @@ int  AudioDecoderJoinableWorker::Stop()
 }
 
 
-int AudioDecoderJoinableWorker::Decode()
+void AudioDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
 {
-	AudioDecoder*	codec=NULL;
-
-	Log(">JSR309 DecodeAudio\n");
-
-
-	//Mientras tengamos que capturar
-	while (IsThreadRunning())
+	//Comprobamos el tipo
+	if ( codec==NULL  || packet.GetCodec()!= codec->type )
 	{
-		//Get packet in queue
-		RTPPacket* packet = packets.Pop(5000);
-		
-		//Check
-		if (!packet)
-        {
-			if (packets.IsCanceled()) break;
-			//Timeout : continue
-			continue;
-		}
-
-		//Comprobamos el tipo
-		if ( codec==NULL  || packet->GetCodec()!= codec->type )
+		//Si habia uno nos lo cargamos
+		if (codec!=NULL)
 		{
-			//Si habia uno nos lo cargamos
-			if (codec!=NULL)
-            {
-                if (input) input->StopRecording();
-                if (output) output->StopPlaying();
-			    delete codec;
-            }
-
-			//Creamos uno dependiendo del tipo
-            codec = AudioCodecFactory::CreateDecoder((AudioCodec::Type)packet->GetCodec());
-			if ( codec != NULL )
-            {
-                //Le décodeur restitue à la fréquence native du flux, qu'il ne
-                //connaît qu'après son premier paquet. Personne n'a plus à
-                //l'annoncer : chaque trame décodée porte la sienne.
-                if (output) output->StartPlaying(codec->GetRate());
-            }
-            else
-            {
-				Error("Failed to open %s audio decoder\n", AudioCodec::GetNameFor((AudioCodec::Type)packet->GetCodec()));
-				delete packet;
-				break;
-            }
-			
+			if (input) input->StopRecording();
+			if (output) output->StopPlaying();
+			delete codec;
+			codec = NULL;
 		}
 
-		//Lo decodificamos
-		codec->Decode(packet->GetMediaData(),packet->GetMediaLength());
-
-		//Un paquet peut donner plusieurs trames : les publier TOUTES. L'ancien
-		//appel unique en perdait — 53 % du débit utile mesuré le 2026-08-14.
-		for (SamplesPtr samples = codec->GetFrame(); samples; samples = codec->GetFrame())
+		//Creamos uno dependiendo del tipo
+		codec = AudioCodecFactory::CreateDecoder((AudioCodec::Type)packet.GetCodec());
+		if ( codec != NULL )
 		{
-			if (output != NULL) output->PlayFrame(samples);
-			if (input  != NULL) input->PutFrame(samples);
+			//Le décodeur restitue à la fréquence native du flux, qu'il ne
+			//connaît qu'après son premier paquet. Personne n'a plus à
+			//l'annoncer : chaque trame décodée porte la sienne.
+			if (output) output->StartPlaying(codec->GetRate());
 		}
-
-		//Delete packet
-		delete(packet);
+		else
+		{
+			Error("Failed to open %s audio decoder\n", AudioCodec::GetNameFor((AudioCodec::Type)packet.GetCodec()));
+			//Refermer le chemin plutot que de rejouer l'echec a chaque paquet :
+			//c'est ce que faisait la sortie de boucle du thread.
+			Stop();
+			return;
+		}
 	}
 
-	//End reproducing
-	if (output != NULL) output->StopPlaying();
-    if (input != NULL) input->End();
+	//Lo decodificamos
+	codec->Decode(packet.GetMediaData(),packet.GetMediaLength());
 
-	//If a decoder is created, delete it
-	if (codec!=NULL) delete codec;		
-	
-	Log("<DecodeAudio\n");
-	return 0;
+	//Un paquet peut donner plusieurs trames : les publier TOUTES. L'ancien
+	//appel unique en perdait — 53 % du débit utile mesuré le 2026-08-14.
+	for (SamplesPtr samples = codec->GetFrame(); samples; samples = codec->GetFrame())
+	{
+		if (output != NULL) output->PlayFrame(samples);
+		if (input  != NULL) input->PutFrame(samples);
+	}
 }
 
 void AudioDecoderJoinableWorker::onRTPPacket(RTPPacket &packet)
 {
-	//Put it on the queue
-	packets.Add(packet.Clone());
+	//Décoder ici même : on est sur le thread de la source, sous son verrou de
+	//multiplexage. Plus de copie du paquet, plus de file, plus de thread.
+	if (decoding)
+		DecodePacket(packet);
 }
 
 void AudioDecoderJoinableWorker::onResetStream()
 {
-	//Clean all packets
-	packets.Clear();
+	//Plus rien en attente à jeter : le paquet est consommé au retour de
+	//onRTPPacket.
 }
 
 void AudioDecoderJoinableWorker::onEndStream()
@@ -241,10 +216,11 @@ int AudioDecoderJoinableWorker::Dettach()
         //Detach if joined — lock() : ne déréférence pas si la source a disparu
 	if (std::shared_ptr<Joinable> j = joined.lock())
 	{
+		//Même barrière qu'Attach : le retrait précède l'arrêt, sinon Stop()
+		//détruirait le décodeur pendant qu'un onRTPPacket en vol l'utilise.
+		j->RemoveListener(this);
 		//Stop decoding
 		Stop();
-		//Remove ourself as listeners
-		j->RemoveListener(this);
 	}
 	else
 		//Stop decoding même si la source est déjà partie
