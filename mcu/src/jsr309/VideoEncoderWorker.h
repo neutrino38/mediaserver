@@ -88,6 +88,10 @@ public:
 	//Cadence et période intra RÉELLEMENT appliquées à l'encodeur (§3.6) : ce
 	//qu'un exploitant veut voir, et ce que la recette vérifie. 0 avant Start().
 	int GetEffectiveFps();
+	//Géométrie réellement appliquée à l'encodeur : le `mode` du contrôleur, ou la
+	//taille de la source quand useInputSize est armé.
+	int GetEffectiveWidth();
+	int GetEffectiveHeight();
 	int GetEffectiveIntraPeriod();
 
 	int Start();
@@ -199,7 +203,6 @@ private:
 	//Taille native relayée par le transcodeur (mode poussé).
 	std::atomic<DWORD> pushedWidth;
 	std::atomic<DWORD> pushedHeight;
-	std::atomic<bool>  pushedSizeChanged;
 
 	std::atomic<bool> encoding;
 	std::atomic<bool> sendFPU;

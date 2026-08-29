@@ -9,6 +9,7 @@
 #define	VIDEOTRANSCODER_H
 #include "VideoEncoderWorker.h"
 #include "VideoDecoderWorker.h"
+#include "FrameDecimator.h"
 #include <string>
 
 //Transcodeur vidéo d'une jambe JSR-309. Depuis le lot 4 de
@@ -62,6 +63,12 @@ public:
 	//Cadence et période intra réellement appliquées à l'encodeur (§3.6).
 	int GetEffectiveFps()		{ return encoder.GetEffectiveFps();		}
 	int GetEffectiveIntraPeriod()	{ return encoder.GetEffectiveIntraPeriod();	}
+	//Géométrie appliquée à l'encodeur (celle de la source si adaptatif).
+	int GetEffectiveWidth()		{ return encoder.GetEffectiveWidth();		}
+	int GetEffectiveHeight()	{ return encoder.GetEffectiveHeight();		}
+	//Pas de décimation en vigueur : 1 = toutes les images sont encodées, k = une
+	//sur k (encodeur trop lent pour la cadence de la source, cf. FrameDecimator).
+	int GetDecimationStep()		{ return decimator.GetStep();			}
 
 private:
 	//Retire le transcodeur des listeners de la source courante, s'il y est.
@@ -84,6 +91,16 @@ private:
 	//L'image est-elle due ? Borne la cadence de SORTIE à la consigne — c'est ce
 	//que faisait le GrabFrame(1/fps) du thread supprimé.
 	bool DueForEncoding();
+	//Écart moyen entre deux images de la source (µs) sur la fenêtre de mesure,
+	//0 tant qu'elle est trop courte. C'est le budget d'une image.
+	QWORD SourceFrameBudgetUs() const;
+	//Trace du pas de décimation : à chaque changement, et rappel périodique
+	//tant que des images sont sautées.
+	void LogDecimation(bool changed);
+	//Le pas vient de changer : l'encodeur reçoit désormais source/k images par
+	//seconde, il doit le savoir TOUT DE SUITE — son budget de débit par image
+	//en dépend. Sans attendre l'hystérésis de MeasureFrameRate.
+	void ApplyDecimatedFrameRate();
 
 	//Pousse la consigne négociée de la patte émettrice (SetCodec, kbps) vers la
 	//source en TMMBR. Appelé au basculement en mode pont et quand SetCodec
@@ -129,6 +146,18 @@ private:
 	timeval		lastFpsApply;
 	//Instant du dernier encodage (µs) : borne la cadence de sortie à la consigne.
 	QWORD		lastEncodedUs;
+
+	//── Décimation (encodeur trop lent pour la source) ───────────────────────
+	FrameDecimator	decimator;
+	//Compteur d'images reçues du décodeur : l'image n est encodée si n % pas == 0.
+	DWORD		frameIndex;
+	//Dernier rappel dans le log pendant une décimation (µs, 0 = jamais).
+	QWORD		lastDecimationLogUs;
+	//Fenêtre de mesure trop courte pour un budget : 5 écarts suffisent pour une
+	//moyenne, la décision de réouverture (FpsWindow) reste à 30.
+	static const int	BudgetMinGaps = 5;
+	//Rappel dans le log toutes les 30 s tant que des images sont sautées.
+	static const QWORD	DecimationLogPeriodUs = 30000000;
 };
 
 #endif	/* VIDEOTRANSCODER_H */

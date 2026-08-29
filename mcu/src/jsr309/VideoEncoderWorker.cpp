@@ -46,7 +46,6 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() :
 	setZeroTime(&encodeStart);
 	pushedWidth = 0;
 	pushedHeight = 0;
-	pushedSizeChanged = false;
 }
 
 VideoEncoderMultiplexerWorker::~VideoEncoderMultiplexerWorker()
@@ -166,6 +165,24 @@ void VideoEncoderMultiplexerWorker::ComputeEffective()
 
 		width  = GetWidth(mode);
 		height = GetHeight(mode);
+
+		//useInputSize : la géométrie de la SOURCE prime sur le `mode` du
+		//contrôleur. La poser AVANT la création de l'encodeur, et pas seulement
+		//par ApplyNativeSize après coup : sinon chaque réouverture crée l'encodeur
+		//au `mode` pour le redimensionner à l'image suivante, et la trace
+		//« Created ... video encoder [WxH] » annonce une taille qui n'est pas
+		//celle qui sort.
+		if (useInputSize && !input)
+		{
+			const DWORD nativeWidth  = pushedWidth.load();
+			const DWORD nativeHeight = pushedHeight.load();
+			if (nativeWidth && nativeHeight)
+			{
+				width  = (int)nativeWidth;
+				height = (int)nativeHeight;
+			}
+		}
+
 		ceilingFps = configuredFps;
 	}
 
@@ -224,6 +241,18 @@ int VideoEncoderMultiplexerWorker::GetEffectiveFps()
 	return fps;
 }
 
+int VideoEncoderMultiplexerWorker::GetEffectiveWidth()
+{
+	std::lock_guard<std::mutex> lock(encodeLock);
+	return width;
+}
+
+int VideoEncoderMultiplexerWorker::GetEffectiveHeight()
+{
+	std::lock_guard<std::mutex> lock(encodeLock);
+	return height;
+}
+
 int VideoEncoderMultiplexerWorker::GetEffectiveIntraPeriod()
 {
 	std::lock_guard<std::mutex> lock(encodeLock);
@@ -246,7 +275,12 @@ void VideoEncoderMultiplexerWorker::SetNativeSize(DWORD w,DWORD h)
 
 	pushedWidth = w;
 	pushedHeight = h;
-	pushedSizeChanged = true;
+
+	//Journalisé même quand useInputSize est éteint : c'est la seule trace qui dit
+	//quelle FORME la source envoie. Sans elle, une image écrasée par une géométrie
+	//de sortie imposée ne se diagnostique pas dans le log (appel du 2026-08-28).
+	Log("-VideoEncoder: taille native de la source %u x %u [useInputSize %d]\n",
+	    w, h, useInputSize ? 1 : 0);
 }
 
 int VideoEncoderMultiplexerWorker::Start()
@@ -476,8 +510,11 @@ void VideoEncoderMultiplexerWorker::ApplyNativeSize()
 	}
 	else
 	{
-		if (!pushedSizeChanged.exchange(false))
-			return;
+		//Pas de drapeau « la taille a changé » : la comparaison à la géométrie
+		//COURANTE ci-dessous suffit, et elle est la seule correcte après une
+		//réouverture. ComputeEffective() y remet `width`/`height` au `mode`
+		//configuré ; un drapeau déjà consommé laissait alors l'encodeur à cette
+		//géométrie-là jusqu'au prochain changement de résolution de la source.
 		nativeWidth  = pushedWidth.load();
 		nativeHeight = pushedHeight.load();
 	}

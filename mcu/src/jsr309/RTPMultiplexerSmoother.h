@@ -8,6 +8,8 @@
 #ifndef RTPMULTIPLEXERSMOOTHER_H
 #define	RTPMULTIPLEXERSMOOTHER_H
 
+#include <atomic>
+
 #include "config.h"
 #include "worker.h"
 #include "waitqueue.h"
@@ -47,7 +49,11 @@ private:
 	//Etalement maximal d'UNE image : borne de LATENCE (cf. RTPSmoother)
 	static const QWORD MaxSpreadUs = 200000;
 
-	bool		inited;
+	//Lu par le thread du lisseur (condition de boucle) et ecrit par le plan de
+	//controle : atomique, sinon -O3 est libre de hisser la lecture hors de la
+	//boucle et le join de Stop() n'en revient jamais. Meme motif que
+	//Worker::running.
+	std::atomic<bool> inited;
 	QWORD		nextSendUs;
 	WaitQueue<RTPPacketSched*> queue;
 	//SSRC du run d'encodage courant, posé sur chaque paquet produit. Tiré à

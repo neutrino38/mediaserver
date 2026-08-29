@@ -90,7 +90,7 @@ OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o m
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
 # libmedkit tirent la classe Logo de l'archive).
 OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o 
-OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o audiodecoder.o textencoder.o mp4recorder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
+OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o textencoder.o mp4recorder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
       vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o transportfeedback.o sentpackethistory.o trendlinedetector.o senderbwe.o
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
@@ -128,6 +128,15 @@ endif
 ifeq ($(ASAN),yes)
 	OPTS    += -fsanitize=address -fno-omit-frame-pointer
 	LDFLAGS += -fsanitize=address
+endif
+
+# TSAN=yes : detecteur de courses (ThreadSanitizer). Meme usage qu'ASAN, meme
+# piege sur le melange d'objets : passer TAG=tsan pour les isoler du build
+# normal (make tests TSAN=yes TAG=tsan). libmedkit et libbfcp ne sont pas
+# instrumentes : une course INTERNE a ces bibliotheques ne sera pas vue.
+ifeq ($(TSAN),yes)
+	OPTS    += -fsanitize=thread -fno-omit-frame-pointer
+	LDFLAGS += -fsanitize=thread
 endif
 
 OBJSMCU = $(OBJS) main.o
@@ -369,7 +378,13 @@ check-ratecontrol: tests/runtests
 check-senderbwe: tests/runtests
 	./tests/runtests --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:TransportFeedbackGenerator*:TransportCCWiring*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
 
-.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe
+# Suite « transcodeurs sans thread » (jsr309_transcode_sans_thread.md).
+# Tableau de bord du chantier : caracterisation, chemins inline audio/video,
+# pont, et les scenarios de recette jouables sans appel reel.
+check-transcoder: tests/runtests
+	./tests/runtests --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
+
+.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe check-transcoder
 
 ############################################
 # Dependances generees automatiquement (headers -> objets)

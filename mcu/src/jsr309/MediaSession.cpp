@@ -1920,7 +1920,13 @@ int MediaSession::VideoTranscoderCreate(std::wstring tag)
 	//Init : mode pont autorisé, comme AudioTranscoderCreate. Un transcodeur vidéo
 	//qui ré-encode alors que les deux pattes portent le même codec coûte un
 	//décodage, un scale et un encodage par appel, pour un flux identique.
-	videoTranscoder->Init(false, true);
+	//`adaptative` : l'encodeur suit la géométrie de la SOURCE. Une jambe de B2BUA
+	//relaie la forme de l'image, elle ne l'impose pas — sans cela, un `mode` 4:3
+	//demandé par le contrôleur écrase une source 16:9, et le pair reçoit une image
+	//déformée sans que rien ne le signale. Le contrôleur garde la main : la
+	//propriété `useInputSize=0` de VideoTranscoderSetCodec impose de nouveau une
+	//taille fixe.
+	videoTranscoder->Init(true, true);
 
 	std::lock_guard<std::mutex> lock(mutex);
 

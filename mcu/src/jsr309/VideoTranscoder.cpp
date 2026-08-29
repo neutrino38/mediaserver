@@ -32,6 +32,9 @@ VideoTranscoder::VideoTranscoder(std::wstring &name)
 	appliedFps = 0;
 	setZeroTime(&lastFpsApply);
 	lastEncodedUs = 0;
+	decimator.Reset();
+	frameIndex = 0;
+	lastDecimationLogUs = 0;
 }
 
 VideoTranscoder::~VideoTranscoder()
@@ -81,6 +84,9 @@ int VideoTranscoder::SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrat
 		ResetFrameRateWindow();
 		appliedFps = 0;
 		encoder.SetMeasuredFrameRate(0);
+		//Autre codec, autre coût par image : le pas repart de 1.
+		decimator.Reset();
+		frameIndex = 0;
 	}
 	//Consigne changée alors que le pont est établi : l'encodeur qui l'aurait
 	//appliquée n'est pas dans le chemin, la re-pousser à la source.
@@ -247,13 +253,96 @@ int VideoTranscoder::NextFrame(PictPtr pic)
 	//l'image — pas sur son heure d'arrivée (§3.6).
 	MeasureFrameRate((DWORD)pic->GetAVFrame()->pts);
 
+	//Décimation : une image sur k quand l'encodeur ne tient pas la cadence de
+	//la source. Comptée sur TOUTES les images reçues, pour que les images
+	//gardées soient régulièrement espacées.
+	frameIndex++;
+	const int step = decimator.GetStep();
+	if (step > 1 && (frameIndex % (DWORD)step) != 0)
+		return 1;
+
 	//Cadence de SORTIE bornée par la consigne : c'est ce que faisait le
 	//GrabFrame(1/fps) du thread supprimé.
 	if (!DueForEncoding())
 		return 1;
 
-	encoder.EncodePicture(pic);
+	//Coût de l'encodage, mesuré sur le thread qui le paie : c'est ce que ce
+	//transcodeur ajoute au thread de démux de la source, et ce qu'il peut sauter.
+	const QWORD before = getTime();
+	const int encoded = encoder.EncodePicture(pic);
+	const QWORD after = getTime();
+
+	if (encoded)
+	{
+		const QWORD budget = SourceFrameBudgetUs();
+		if (budget)
+		{
+			const bool changed = decimator.Observe(after - before, budget, after);
+			if (changed)
+				ApplyDecimatedFrameRate();
+			LogDecimation(changed);
+		}
+	}
 	return 1;
+}
+
+void VideoTranscoder::ApplyDecimatedFrameRate()
+{
+	const QWORD budget = decimator.GetBudgetUs();
+	if (!budget)
+		return;
+
+	//Cadence réellement livrée à l'encodeur : celle de la source, divisée par
+	//le pas. Un encodeur réglé à 20 im/s qui n'en reçoit que 7 émet 7/20 de son
+	//débit : c'est le débit par image qu'il faut recaler, donc la cadence.
+	int output = (int)(1000000ULL/budget) / decimator.GetStep();
+	if (output < 1)
+		output = 1;
+
+	if (output == appliedFps)
+		return;
+
+	appliedFps = output;
+	getUpdDifTime(&lastFpsApply);
+	encoder.SetMeasuredFrameRate(output);
+}
+
+QWORD VideoTranscoder::SourceFrameBudgetUs() const
+{
+	if (gapCount < BudgetMinGaps || !gapSum)
+		return 0;
+	//Écart moyen en ticks 90 kHz → µs.
+	return gapSum*1000000ULL/(90000ULL*(QWORD)gapCount);
+}
+
+void VideoTranscoder::LogDecimation(bool changed)
+{
+	const int step = decimator.GetStep();
+	const QWORD now = getTime();
+
+	if (!changed)
+	{
+		//Rappel périodique tant que des images sont sautées : un appel long
+		//doit le montrer dans le log, pas seulement à l'instant du changement.
+		if (step == 1 || !lastDecimationLogUs || now - lastDecimationLogUs < DecimationLogPeriodUs)
+			return;
+	}
+	lastDecimationLogUs = now;
+
+	const unsigned costMs = (unsigned)(decimator.GetCostUs()/1000);
+	const unsigned budgetMs = (unsigned)(decimator.GetBudgetUs()/1000);
+	const int sourceFps = decimator.GetBudgetUs() ? (int)(1000000ULL/decimator.GetBudgetUs()) : 0;
+
+	if (step == 1)
+	{
+		Log("-VideoTranscoder: encodeur de nouveau dans les temps [%ls] : %u ms par image pour un budget de %u ms (source %d im/s) -> toutes les images encodees\n",
+		    tag.c_str(), costMs, budgetMs, sourceFps);
+		return;
+	}
+
+	Log("-VideoTranscoder: encodeur trop lent [%ls] : %u ms par image pour un budget de %u ms (source %d im/s) -> 1 image sur %d encodee, encodeur recale a %d im/s%s\n",
+	    tag.c_str(), costMs, budgetMs, sourceFps, step, appliedFps ? appliedFps : sourceFps/step,
+	    decimator.IsSaturated() ? " (PAS MAXIMAL : l'encodeur lui-meme est trop lent)" : "");
 }
 
 //Taille native du flux entrant : l'encodeur la suit quand useInputSize est armé.
@@ -317,6 +406,10 @@ void VideoTranscoder::MeasureFrameRate(DWORD pts)
 		return;
 
 	int measured = (int)((90000ULL*(QWORD)FpsWindow + gapSum/2) / gapSum);
+	//Ce que l'encodeur reçoit vraiment : la cadence de la source divisée par
+	//le pas de décimation. C'est sur cette cadence-là que son débit par image
+	//et sa période intra doivent être calés.
+	measured /= decimator.GetStep();
 	if (measured < 1)
 		measured = 1;
 
@@ -463,6 +556,9 @@ int VideoTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 	appliedFps = 0;
 	setZeroTime(&lastFpsApply);
 	lastEncodedUs = 0;
+	decimator.Reset();
+	frameIndex = 0;
+	lastDecimationLogUs = 0;
 	encoder.SetMeasuredFrameRate(0);
 
 	//Le décodeur n'est plus alimenté par la source mais à la main, depuis

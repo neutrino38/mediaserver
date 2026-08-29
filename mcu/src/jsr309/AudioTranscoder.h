@@ -13,7 +13,6 @@
 #define	AUDIOTRANSCODER_H
 
 class AudioEncoderWorker;
-class AudioDecoderWorker;
 
 //Transcodeur audio d'une jambe JSR-309. Depuis le lot 3 de
 //`jsr309_transcode_sans_thread.md`, il est LUI-MÊME l'AudioOutput de son
