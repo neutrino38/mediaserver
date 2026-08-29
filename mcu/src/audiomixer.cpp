@@ -20,7 +20,7 @@
 AudioMixer::AudioMixer()
 {
 	//Not mixing
-	mixingAudio = 0;
+	mixingAudio = false;
 	//No sidebars
 	numSidebars = 0;
 	//No default sidebar until Init
@@ -143,7 +143,7 @@ int AudioMixer::Run()
 		for(Audios::iterator it = audios.begin(); it != audios.end(); ++it)
 		{
 			//Get the source
-			AudioSource *audio = it->second;
+			AudioSource *audio = it->second.get();
 			//Get the samples from the fifo
 			audio->len = audio->output->GetSamples(audio->buffer,numSamples);
 			//Clean rest
@@ -155,7 +155,7 @@ int AudioMixer::Run()
 		for(Audios::iterator it = audios.begin(); it != audios.end(); ++it)
 		{
 			//Get the source
-			AudioSource *audio = it->second;
+			AudioSource *audio = it->second.get();
 			//Get id
 			DWORD id = it->first;
 
@@ -169,7 +169,7 @@ int AudioMixer::Run()
 		for(Audios::iterator it = audios.begin(); it != audios.end(); it++)
 		{
 			//Get the source
-			AudioSource *audio = it->second;
+			AudioSource *audio = it->second.get();
 			//Get id
 			DWORD id = it->first;
 			//Check audio
@@ -268,7 +268,7 @@ int AudioMixer::Init(bool vad,DWORD rate)
 	int id = CreateSidebar();
 
 	//Set default
-	defaultSidebar = sidebars[id];
+	defaultSidebar = sidebars[id].get();
 
 	//Y arrancamoe el thread
 	StartThread();
@@ -290,7 +290,7 @@ int AudioMixer::End()
 	if (mixingAudio)
 	{
 		//Terminamos la mezcla
-		mixingAudio = 0;
+		mixingAudio = false;
 
 		//Y esperamos (reveille aussi le tick via le Wait du Worker)
 		StopThread();
@@ -303,31 +303,20 @@ int AudioMixer::End()
 	for (Audios::iterator it =audios.begin();it!=audios.end();++it)
 	{
 		//Obtenemos el audio source
-		AudioSource *audio = it->second;
+		AudioSource *audio = it->second.get();
 
 		//Terminamos
 		audio->input->End();
 		audio->output->End();
-
-		//Les pipes sont des shared_ptr : la mémoire n'est rendue que quand le
-		//dernier détenteur (stream participant) les relâche (Point 1 / C-4).
-		delete audio;
 	}
 
-	//Clear list
+	//Clear list : les pipes sont des shared_ptr, la mémoire n'est rendue que
+	//quand le dernier détenteur (stream participant) les relâche (Point 1 / C-4).
 	audios.clear();
-
-	//For each sidebar
-	for (Sidebars::iterator it=sidebars.begin(); it!=sidebars.end();++it)
-	{
-		//Get sidebar
-		Sidebar *sidebar = it->second;
-		//Delete the sidebar
-		delete(sidebar);
-	}
 
 	//Clear list
 	sidebars.clear();
+	defaultSidebar = NULL;
 
 	//Unlock
 	lstAudiosUse.Unlock();
@@ -357,7 +346,7 @@ int AudioMixer::CreateMixer(int id)
 	}
 
 	//Creamos el source
-	AudioSource *audio = new AudioSource();
+	std::unique_ptr<AudioSource> audio = std::make_unique<AudioSource>();
 
 	//POnemos el input y el output
 	audio->input  = std::make_shared<PipeAudioInput>();
@@ -370,7 +359,7 @@ int AudioMixer::CreateMixer(int id)
 	audio->vad = 0;
 
 	//Y lo a�adimos a la lista
-	audios[id] = audio;
+	audios[id] = std::move(audio);
 
 	//Desprotegemos la lista
 	lstAudiosUse.Unlock();
@@ -407,7 +396,7 @@ int AudioMixer::InitMixer(int id,int sidebarId)
 	}
 
 	//Obtenemos el audio source
-	AudioSource *audio = it->second;
+	AudioSource *audio = it->second.get();
 
 	//Get the sidebar for the user
 	Sidebars::iterator itSidebar = sidebars.find(sidebarId);
@@ -415,7 +404,7 @@ int AudioMixer::InitMixer(int id,int sidebarId)
 	//If found
 	if (itSidebar!=sidebars.end())
 		//Set it
-		audio->sidebar = itSidebar->second;
+		audio->sidebar = itSidebar->second.get();
 	else
 		//Send only participant
 		Log("-No sidebar %d for participant found, will be send only.\n", sidebarId);
@@ -464,7 +453,7 @@ int AudioMixer::EndMixer(int id)
 	defaultSidebar->RemoveParticipant(id);
 
 	//Obtenemos el audio source
-	AudioSource *audio = it->second;
+	AudioSource *audio = it->second.get();
 
 	//Terminamos
 	audio->input->End();
@@ -509,18 +498,16 @@ int AudioMixer::DeleteMixer(int id)
 	}
 
 	//Obtenemos el audio source
-	AudioSource *audio = it->second;
+	//Les pipes sont des shared_ptr : la destruction de la struct conteneur ne
+	//libère le pipe que si aucun stream participant n'en détient encore une
+	//copie (Point 1 / C-4). Elle a lieu à la sortie, donc hors verrou.
+	std::unique_ptr<AudioSource> audio = std::move(it->second);
 
 	//Lo quitamos de la lista
 	audios.erase(it);
 
 	//Desprotegemos la lista
 	lstAudiosUse.Unlock();
-
-	//Les pipes sont des shared_ptr : ce delete ne libère la struct conteneur
-	//que si aucun stream participant ne détient encore une copie du pipe
-	//(Point 1 / C-4 : le pipe reste vivant jusqu'à ce que le stream le relâche).
-	delete audio;
 
 	return 0;
 }
@@ -631,7 +618,7 @@ int AudioMixer::SetMixerSidebar(int id,int sidebarId)
 	}
 
 	//Obtenemos el audio source
-	AudioSource *audio = it->second;
+	AudioSource *audio = it->second.get();
 
 	//Get the sidebar for the user
 	Sidebars::iterator itSidebar = sidebars.find(sidebarId);
@@ -639,7 +626,7 @@ int AudioMixer::SetMixerSidebar(int id,int sidebarId)
 	//If found
 	if (itSidebar!=sidebars.end())
 		//Set sidebar
-		audio->sidebar = itSidebar->second;
+		audio->sidebar = itSidebar->second.get();
 	else
 		//Send only participant
 		Log("-No sidebar %d for participant found, will be send only.\n",
@@ -676,13 +663,13 @@ int AudioMixer::GetMixerSidebar(int id)
 	}
 
 	//Obtenemos el audio source
-	AudioSource *audio = it->second;
+	AudioSource *audio = it->second.get();
 
         for ( Sidebars::iterator it = sidebars.begin();
               it != sidebars.end();
               it++ )
         {
-            if (audio->sidebar ==  it->second)
+            if (audio->sidebar ==  it->second.get())
             {
                 lstAudiosUse.DecUse();
                 return it->first;
@@ -752,7 +739,7 @@ int AudioMixer::RemoveSidebarParticipant(int sidebarId, int partId)
 	}
 
 	//Get sidebar
-	Sidebar* sidebar = itSidebar->second;
+	Sidebar* sidebar = itSidebar->second.get();
 
 	//Remove participant to the sidebar
 	sidebar->RemoveParticipant(partId);
@@ -773,7 +760,7 @@ int AudioMixer::CreateSidebar()
 	int id = numSidebars++;
 
 	//add it
-	sidebars[id] = new Sidebar();
+	sidebars[id] = std::make_unique<Sidebar>();
 
 	//UnBlock
 	lstAudiosUse.Unlock();
@@ -800,7 +787,7 @@ int AudioMixer::DeleteSidebar(int sidebarId)
 	}
 
 	//Get the old sidebar
-	Sidebar *sidebar = it->second;
+	Sidebar *sidebar = it->second.get();
 
 	//Le sidebar par défaut ne doit jamais être détruit : InitMixer/EndMixer
 	//écrivent dans defaultSidebar sans re-vérifier son existence.
@@ -821,14 +808,12 @@ int AudioMixer::DeleteSidebar(int sidebarId)
 			ita->second->sidebar = NULL;
 	}
 
-	//Remove sidebar
+	//Remove sidebar (la destruction a lieu à la sortie, donc hors verrou)
+	std::unique_ptr<Sidebar> owned = std::move(it->second);
 	sidebars.erase(it);
 
 	//UnBlock
 	lstAudiosUse.Unlock();
-
-	//Delete sidebar
-	delete(sidebar);
 
 	//Exit
 	return 1;
