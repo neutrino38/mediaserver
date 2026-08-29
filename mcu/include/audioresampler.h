@@ -22,6 +22,8 @@ public:
 
 	// Rend `samples` converti à `outRate`. La trame telle quelle si les
 	// fréquences coïncident ou si `outRate` vaut 0 ; nullptr en cas d'échec.
+	// Une trame VIDE (0 échantillon) est un résultat normal : le convertisseur
+	// a gardé l'entrée en tampon, la sortie viendra avec la trame suivante.
 	// La trame fait foi : si SA fréquence change, le contexte est rouvert.
 	SamplesPtr Resample(SamplesPtr samples, DWORD outRate);
 

@@ -281,6 +281,10 @@ int AudioEncoderMultiplexerWorker::EncodeSamples(SamplesPtr samples)
 
 	int sent = 0;
 
+	//Entrée mise en tampon par le convertisseur : rien à encoder cette fois.
+	if (in->GetNbSamples() == 0)
+		return sent;
+
 	//La trame arrive à la taille que le producteur a écrite ; c'est l'encodeur
 	//qui la redécoupe à numFrameSamples, personne d'autre. Une trame d'entrée
 	//peut en remplir plusieurs : on purge à chaque fois.

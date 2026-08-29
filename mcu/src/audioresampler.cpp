@@ -98,9 +98,19 @@ SamplesPtr AudioResampler::Resample(SamplesPtr samples, DWORD outputRate)
 	AVFrame *dst = out->GetAVFrame();
 	const uint8_t *src = (const uint8_t*)samples->GetData();
 	int produced = swr_convert(swr, dst->data, cap, &src, (int)samples->GetNbSamples());
-	if (produced <= 0)
+	if (produced < 0)
+	{
+		Error("-AudioResampler: swr_convert a echoue (%d) sur %u echantillons %u -> %u Hz\n",
+		      produced, samples->GetNbSamples(), inputRate, outputRate);
 		return nullptr;
+	}
 
+	//0 échantillon produit n'est PAS un échec : le convertisseur a mis
+	//l'entrée en tampon parce qu'elle ne suffisait pas encore à une sortie.
+	//C'est le cas d'une trame de quelques échantillons — le mixeur en écrit
+	//quand deux ticks se suivent de près après un réveil tardif — et c'était
+	//la source des « could not transrate » du journal (59 en 20 min le
+	//2026-08-29). La trame vide dit à l'appelant « rien à faire cette fois ».
 	dst->nb_samples = produced;
 	dst->pts = samples->GetPTS();
 	return out;

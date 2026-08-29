@@ -92,6 +92,10 @@ int PipeAudioInput::PutFrame(SamplesPtr samples)
 	if (!out)
 		return Error("-PipeAudioInput could not transrate\n");
 
+	//Entrée mise en tampon par le convertisseur : rien à mettre en file.
+	if (out->GetNbSamples() == 0)
+		return true;
+
 	//Débordement : on vide plutôt que de bloquer le producteur (politique
 	//historique), la latence primant sur l'intégrité du flux.
 	if (QueuedMs() + out->GetNbSamples()*1000/out->GetRate() > MaxQueuedMs)

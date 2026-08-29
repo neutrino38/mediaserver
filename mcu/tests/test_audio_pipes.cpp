@@ -12,6 +12,7 @@
 #include "log.h"
 #include "pipeaudioinput.h"
 #include "pipeaudiooutput.h"
+#include "audioresampler.h"
 #include <vector>
 #include <cmath>
 #include <thread>
@@ -31,8 +32,52 @@ SamplesPtr Tone(int nb, int rate)
 } // namespace
 
 /* ------------------------------------------------------------------------- *
+ *                              AudioResampler                               *
+ * ------------------------------------------------------------------------- */
+
+// « PipeAudioInput could not transrate », 59 fois en 20 min le 2026-08-29. Le
+// mixeur écrit des tranches dont la taille suit l'horloge réelle : après un
+// réveil tardif, deux ticks se suivent de près et la tranche ne fait que
+// quelques échantillons. swr_convert n'a alors pas assez d'entrée pour une
+// sortie et rend 0 — ce n'est pas un échec, c'est du tampon. Le resampler doit
+// rendre une trame vide, pas nullptr.
+TEST(AudioResampler, UneTrameMinusculeDonneUneSortieVidePasUneErreur)
+{
+	AudioResampler r;
+
+	SamplesPtr out = r.Resample(Tone(3, 32000), 8000);
+	ASSERT_TRUE(out) << "3 echantillons a convertir ne sont pas une erreur";
+	EXPECT_EQ((DWORD)0, out->GetNbSamples());
+	EXPECT_EQ((DWORD)8000, out->GetRate());
+
+	// Et l'entrée n'est pas perdue : la tranche suivante la rend avec la sienne.
+	SamplesPtr next = r.Resample(Tone(320, 32000), 8000);
+	ASSERT_TRUE(next);
+	EXPECT_GE(next->GetNbSamples(), (DWORD)60) << "≈ (3+320)/4 moins le retard du filtre (~16)";
+	EXPECT_LE(next->GetNbSamples(), (DWORD)81);
+}
+
+/* ------------------------------------------------------------------------- *
  *                              PipeAudioInput                               *
  * ------------------------------------------------------------------------- */
+
+// Le même cas vu du pipe : la tranche minuscule est acceptée sans erreur et ne
+// met rien en file.
+TEST(PipeAudioInput, UneTrameMinusculeNEstNiUneErreurNiUneTrameEnFile)
+{
+	PipeAudioInput pipe;
+	pipe.StartRecording(8000);
+
+	EXPECT_EQ(1, pipe.PutFrame(Tone(3, 32000)))
+		<< "avant : Error() rendait 0 et journalisait « could not transrate »";
+	EXPECT_FALSE(pipe.RecFrame(0)) << "rien n'a ete produit, rien en file";
+
+	// La tranche normale qui suit sort, avec ce qui etait en tampon.
+	EXPECT_EQ(1, pipe.PutFrame(Tone(320, 32000)));
+	SamplesPtr out = pipe.RecFrame(0);
+	ASSERT_TRUE(out);
+	EXPECT_GE(out->GetNbSamples(), (DWORD)60);
+}
 
 TEST(PipeAudioInput, UneTrameTraverseSansConversionQuandLesFrequencesCoincident)
 {
