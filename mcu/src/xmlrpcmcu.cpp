@@ -1351,7 +1351,7 @@ xmlrpc_value* SetMute(xmlrpc_env *env, xmlrpc_value *param_array, void *user_dat
 
 	//Salimos
 	if(!res)
-		return xmlerror(env,"Could not start playback");
+		return xmlerror(env,"Could not set mute: participant not found");
 
 	//Devolvemos el resultado
 	return xmlok(env);
