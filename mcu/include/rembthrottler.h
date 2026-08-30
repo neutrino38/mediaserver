@@ -11,11 +11,14 @@
  *   - une BAISSE de plus de 3 % part TOUT DE SUITE — c'est le message urgent,
  *     le lien sature et le pair doit ralentir ;
  *   - tout le reste (hausse, ou variation dans le bruit) attend la période de
- *     hausse depuis la dernière annonce — 200 ms par défaut, mais le dialecte
- *     peut l'allonger (SetRaisePolicy) : Linphone reconfigure son encodeur à
- *     CHAQUE TMMBR reçu (msvideoqualitycontroller.c, aucune hystérésis), donc
- *     une hausse par seconde le fait rouvrir en boucle — mesure du 2026-08-22 ;
- *     un pas franc (raiseStepPercent) devance la période ;
+ *     hausse depuis la dernière annonce — 200 ms en REMB, que Chrome attend
+ *     périodique. En TMMBR il n'y a PAS de période : la limite est collante
+ *     (RFC 5104), redire une valeur voisine n'apprend rien au pair, et Linphone
+ *     détruit et recrée son encodeur VP8 à chaque TMMBR de valeur différente
+ *     (msvideoqualitycontroller.c, vp8.c enc_set_configuration) — une trame clé
+ *     toutes les 2,6 s mesurée le 2026-08-30 avec la période de 5 s. Seul un pas
+ *     franc de hausse part, et la baisse n'est « franche » qu'à 10 % (un pas
+ *     d'AIMD vaut 15 %, le bruit du plafond glissant 3 %) ;
  *   - un plafond venu d'AILLEURS (l'autre patte d'un relais, lot 5) se compose
  *     par min() avec la mesure locale : on annonce le plus contraint des deux.
  *
@@ -39,10 +42,20 @@ public:
 	static constexpr QWORD SendIntervalMs = 200;
 	//Une annonce ne devance sa période que si elle descend de plus de 3 %.
 	static constexpr QWORD SendThresholdPercent = 103;
-	//Politique de hausse du dialecte TMMBR : au plus une hausse toutes les 5 s,
-	//sauf pas franc de 20 % qui devance la période.
-	static constexpr QWORD TmmbrRaiseIntervalMs  = 5000;
-	static constexpr DWORD TmmbrRaiseStepPercent = 20;
+
+	//Ce qui mérite une annonce, par dialecte.
+	struct Policy
+	{
+		//Période après laquelle une hausse (ou du bruit) part quand même ;
+		//0 = jamais par le temps.
+		QWORD raiseIntervalMs;
+		//Pas de hausse qui part sans attendre ; 0 = aucun.
+		DWORD raiseStepPercent;
+		//Seuil de la baisse franche : lastSent >= bitrate * seuil / 100.
+		DWORD dropThresholdPercent;
+	};
+	static constexpr Policy RembPolicy  = { SendIntervalMs, 0, (DWORD)SendThresholdPercent };
+	static constexpr Policy TmmbrPolicy = { 0, 20, 110 };
 	//Valeur d'« aucun plafond externe » et de « rien encore annoncé ».
 	static constexpr DWORD NoLimit = 0xFFFFFFFF;
 
@@ -51,13 +64,11 @@ public:
 		Reset();
 	}
 
-	//La cadence de hausse du dialecte : REMB garde le défaut (200 ms, pas de
-	//pas franc), TMMBR passe à (TmmbrRaiseIntervalMs, TmmbrRaiseStepPercent).
-	//Survit à Reset() : c'est une propriété de la négociation, pas de l'état.
-	void SetRaisePolicy(QWORD intervalMs, DWORD stepPercent)
+	//Le dialecte négocié choisit sa politique. Survit à Reset() : c'est une
+	//propriété de la négociation, pas de l'état.
+	void SetPolicy(const Policy& p)
 	{
-		raiseIntervalMs  = intervalMs;
-		raiseStepPercent = stepPercent;
+		policy = p;
 	}
 
 	//Remet l'amortisseur à l'état neuf : la prochaine annonce part sans attendre.
@@ -78,15 +89,16 @@ public:
 	 */
 	bool OnEstimateChanged(DWORD bitrate, QWORD now, DWORD& out)
 	{
-		//Une hausse — ou une variation dans le bruit — attend son tour ; seule
-		//une baisse de plus de 3 % devance la période, et un pas franc quand la
-		//politique du dialecte en définit un.
-		if (hasSent
-		    && (QWORD)bitrate * SendThresholdPercent / 100 > (QWORD)lastSent
-		    && now < lastSendTime + raiseIntervalMs
-		    && !(raiseStepPercent
-			 && (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + raiseStepPercent)))
-			return false;
+		if (hasSent)
+		{
+			const bool drop = (QWORD)bitrate * policy.dropThresholdPercent / 100 <= (QWORD)lastSent;
+			const bool step = policy.raiseStepPercent
+				&& (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + policy.raiseStepPercent);
+			const bool period = policy.raiseIntervalMs
+				&& now >= lastSendTime + policy.raiseIntervalMs;
+			if (!drop && !step && !period)
+				return false;
+		}
 
 		//C'est la mesure qui est mémorisée, pas la valeur émise : le plafond
 		//externe est une composition, il ne doit pas faire oublier ce que la
@@ -138,8 +150,7 @@ private:
 	QWORD	lastSendTime;
 	bool	hasSent;
 	DWORD	maxBitrate;
-	QWORD	raiseIntervalMs  = SendIntervalMs;
-	DWORD	raiseStepPercent = 0;
+	Policy	policy = RembPolicy;
 };
 
 #endif	/* REMBTHROTTLER_H */

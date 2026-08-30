@@ -923,6 +923,190 @@ interprétables.
 
 ---
 
+### 7.9 Point du 2026-08-30 — une trame clé toutes les 2,6 s sous TMMBR (Linphone)
+
+Constaté sur un appel de 20 min en conférence (Alice = Linphone 6, VP8 720p ;
+Bob = baresip, H.264), lien propre, aucun `OverUsing`, aucune perte durable :
+
+| grandeur | valeur | source |
+|---|---|---|
+| trames clés reçues de Linphone | **455 en 20 min**, période 2,0 à 3,0 s, régulière | `Got Intra` |
+| FIR émis par nous | 8 | `SendFIR` |
+| TMMBR émis par nous vers Linphone | **274**, un toutes les 4,4 s | `SendTempMaxMediaStreamBitrateRequest` |
+| valeur annoncée | 4,4 à 4,6 Mb/s, **bruitée de ±3 %** d'une annonce à l'autre | idem |
+| débit reçu de Linphone | 2,9 Mb/s, stable | `BWE: … incoming=` |
+| état de l'estimateur | `Increase`, `MaxUnknown`, `Normal` en permanence | `BWE: estimation` |
+| TMMBN reçus | 317 (Linphone répond à chaque TMMBR) | `TempMaxMediaStreamBitrateNotification` |
+
+L'intervalle entre un TMMBR émis et la trame clé suivante est réparti
+uniformément entre 0 et 1,1 s : les trames clés ne suivent pas nos TMMBR une à
+une, elles viennent d'un mécanisme que nos TMMBR **entretiennent**.
+
+**Mécanisme, lu dans le SDK Linphone 5.5.9 (`~/linphone-sdk`)** :
+
+1. `mediastream.c` → `ms_video_quality_controller_update_from_tmmbr` : tout TMMBR
+   dont la valeur **diffère** de la précédente (`tmmbr > last_tmmbr` ou `<`)
+   appelle `update_video_quality_from_bitrate`, qui se termine **toujours** par
+   `MS_VIDEO_ENCODER_SET_CONFIGURATION`. Une valeur égale ne fait rien.
+2. `vp8.c`, `enc_set_configuration` : « *The VP8 implementation is unreliable for
+   dynamic fps or bitrate change … Simply destroy the encoder and re-create a new
+   one* ». Chaque reconfiguration = `vpx_codec_destroy` + réinit = **une trame
+   clé**, même si le débit demandé est identique au précédent (la comparaison n'y
+   est pas faite).
+3. Une hausse arme en plus un **timer de 10 s** (`INCREASE_TIMER_DELAY`) qui
+   rejoue `update_video_quality_from_bitrate(last_tmmbr, 1.1)` → encore une
+   reconfiguration, encore une trame clé. 274 TMMBR + ~120 tics de timer ≈ 400
+   trames clés : c'est le compte observé.
+
+**Notre part** : l'amortisseur TMMBR (`rembthrottler.h`, commit `0bd6d07`) laisse
+passer une hausse dès que 5 s sont écoulées, **quelle que soit sa taille**. Or
+l'estimateur est plafonné à 1,5 × l'entrant fenêtré (`remoterateestimator.cpp`,
+commit `56bd40a`) : l'entrant de Linphone bouge de ±3 % (trames clés comprises),
+donc l'annonce bouge de ±3 %, et une valeur différente part toutes les 5 s. Le
+TMMBR étant **collant** (RFC 5104 : la limite tient jusqu'au prochain TMMBR), la
+clause « 5 s » n'apporte rien : redire une valeur voisine n'informe pas le pair,
+elle le fait seulement se reconfigurer.
+
+Le fond : Linphone est **auto-limité** — il envoie 2,9 Mb/s alors qu'on lui en
+autorise 4,5 depuis vingt minutes. Son plafond est ailleurs (`bitrate_limit` de
+sa configuration 720p ou `b=AS`). Lui annoncer plus haut ne change pas ce qu'il
+envoie ; lui annoncer une valeur *différente* lui coûte une trame clé.
+
+**Correctif retenu — un seul, dans l'amortisseur** (fait le 2026-08-30 : `RembThrottler::Policy`, `TmmbrPolicy = {0, 20, 110}`, `RembPolicy = {200, 0, 103}`, 5 tests `RateControlThrottler` TMMBR/REMB ; **recette du soir : 11 TMMBR en 34 min au lieu de 274 en 20 — l'amortisseur fait son travail, mais les trames clés n'ont pas bougé, cf. §7.10**) (`RembThrottler`, dialecte
+TMMBR uniquement, REMB inchangé : Chrome attend un REMB périodique et n'a pas ce
+défaut) :
+
+- la hausse n'est annoncée que sur un **pas franc** (`TmmbrRaiseStepPercent`,
+  20 %) ; la clause temporelle disparaît (`TmmbrRaiseIntervalMs` n'a plus
+  d'usage : une hausse de 2 % n'a **jamais** de raison de partir, à 5 s comme à
+  50) ;
+- une baisse n'est « franche » qu'à partir de 10 % en dialecte TMMBR (au lieu de
+  3 %) : un vrai épisode de congestion produit −15 % (`beta`), le bruit du plafond
+  ±3 %. Le seuil de 3 % reste celui du REMB.
+
+Effet attendu sur le cas mesuré : annonce figée à ~4,5 Mb/s, **zéro** TMMBR tant
+que l'entrant ne varie pas de 20 %, plus de timer Linphone réarmé, trames clés
+ramenées à celles que Linphone décide seul.
+
+**Option écartée pour l'instant** : détecter le pair auto-limité (entrant < 70 %
+de l'annonce pendant > 5 s → ne plus annoncer de hausse), symétrique de
+`SenderBWE::IsSelfLimited`. Plus juste, mais un état de plus dans l'amortisseur ;
+à reprendre seulement si le pas de 20 % laisse encore passer des annonces
+inutiles (mesure, pas supposition).
+
+**Tests** (`RateControlThrottler`, `make check-ratecontrol`) :
+
+- `EnDialecteTMMBRLeBruitNEmetJamais` : 60 s d'estimations à ±5 % autour de
+  4,5 Mb/s, aucune annonce ;
+- `EnDialecteTMMBRSeulUnPasFrancDeHaussePart` : +19 % ne part jamais, même
+  après 10 s ; +20 % part ;
+- `EnDialecteTMMBRUneBaisseDansLeBruitNEmetPas` : −5 % ne part pas, −10 % part ;
+- `EnDialecteTMMBRUneBaisseFranchePartToujoursImmediatement` : −15 % immédiat ;
+- `LeDialecteREMBGardeSesSeuils` : −5 % immédiat, hausse après 200 ms.
+
+**Recette** : même appel (Linphone VP8 + baresip, 20 min, lien propre). Critères :
+`Got Intra` côté Linphone **< 2 par minute** hors FIR ; `SendTempMaxMediaStreamBitrateRequest`
+< 5 sur l'appel ; l'image ne « respire » plus. Vérifier aussi qu'une vraie
+congestion (scénario `loss` de `netem_scenario.sh`) fait toujours partir le
+TMMBR de baisse en moins de 2 s (critère de l'annexe D inchangé).
+
+À signaler à Linphone (hors de notre périmètre) : `enc_set_configuration` recrée
+l'encodeur même quand la configuration demandée est identique à la courante.
+
+**Perte d'un TMMBR — inchangé par ce correctif.** La fiabilité est celle de la
+RFC 5104 §4.2.1.2 : `SendTempMaxMediaStreamBitrateRequest` pose `pendingTMBR` et
+`pendingTMBBitrate` ; `SendSenderReport` rejoint ce même TMMBR à chaque rapport
+périodique (2 s en réception, `Run`, 4 s sur le chemin d'émission) tant que le
+TMMBN n'est pas arrivé ; le TMMBN reçu (`rtpsession.cpp`, case
+`TempMaxMediaStreamBitrateNotification`) arrête la répétition. Une répétition
+porte la valeur identique, donc ne reconfigure pas Linphone. Mesuré sur l'appel
+du 2026-08-30 : 274 TMMBR, 317 TMMBN — la différence est faite de répétitions
+acquittées. Deux limites préexistantes, hors de ce point : la reprise sur perte
+attend le SR suivant (jusqu'à 2 s, pas de RTO propre) ; un TMMBN ne porte pas
+l'identité du TMMBR, donc l'accusé d'une demande ancienne peut lever
+`pendingTMBR` alors qu'une demande plus récente est en vol (rare avec le pas
+franc : deux TMMBR à moins de 2 s ne surviennent que sur deux baisses franches
+consécutives).
+
+### 7.10 Point du 2026-08-30 (soir) — la vraie cause des trames clés : pas de RPSI
+
+Recette du §7.9 : appel de 34 min (Linphone VP8 = 504, baresip H.264 = 503, fin
+par mise en veille du PC Linphone → `onRTPTimeout` 10 s → `DeleteParticipant`,
+comportement attendu).
+
+| grandeur | §7.9 (20 min) | ce soir (34 min) |
+|---|---|---|
+| TMMBR émis vers Linphone | 274 | **11** |
+| TMMBN reçus | 317 | 18 |
+| trames clés reçues de Linphone | 455 (1 / 2,6 s) | **930 (1 / 2,9 s)** |
+| FIR émis / erreurs de décodage VP8 | 8 / 7 | 23 / 17 |
+| `hurrying up` / `resync` (mixeur audio) | 0 | 0 |
+
+Le correctif de l'amortisseur est validé pour ce qu'il visait. Mais la
+distribution des intervalles entre trames clés est piquée à **2,8–3,0 s** et ne
+dépend d'aucune de nos annonces. L'hypothèse du §7.9 (« nos TMMBR entretiennent
+les trames clés ») était fausse sur la cause dominante ; le mécanisme réel est
+dans `vp8.c` de mediastreamer2, mode AVPF :
+
+1. `enc_get_ref_frames_interval` = `fps × 3` images : toutes les **3 s**,
+   l'encodeur produit une trame de référence (`enc_should_generate_reference_frame`).
+2. `enc_get_type_of_reference_frame_to_generate` : si **ni la golden ni
+   l'altref n'a été acquittée** par un RPSI du récepteur, la trame de référence
+   est une **trame clé** (`VP8_GOLD_FRAME | VP8_ALTR_FRAME` → `VPX_EFLAG_FORCE_KF`).
+   Si l'une est acquittée, il ne renvoie que l'autre (golden ou altref, des
+   trames inter) ; si les deux le sont, il alterne golden/altref.
+3. L'acquittement est un **RPSI** (RFC 4585 §6.3.3, PSFB fmt 3) dont la chaîne
+   de bits est le **PictureID** VP8 (7 ou 15 bits, RFC 7741) de la trame
+   décodée qui a mis à jour golden ou altref. Côté Linphone récepteur, c'est
+   `vpx_codec_control(VP8D_GET_LAST_REF_UPDATES)` après décodage qui le décide
+   (`vp8.c:1076`, `vp8rtpfmt_send_rpsi`).
+
+Le mediaserver **n'émet jamais de RPSI**. Résultat : une trame clé 720p toutes
+les 3 s, soit ~30 % du débit vidéo de Linphone dépensé en trames clés, et
+l'image qui « respire » à chaque fois. Le §7.9 (TMMBR bruités) était un facteur
+aggravant réel — chaque reconfiguration ajoutait une trame clé — mais pas le
+fond.
+
+**Ce qu'il faut pour émettre un RPSI utile** (à l'état des lieux, rien n'est
+fait) :
+
+- **Savoir quelles trames mettent à jour golden/altref.** Notre décodeur est
+  ffmpeg (`FfVideoDecoder`, `AV_CODEC_ID_VP8`) : aucune API n'expose les mises à
+  jour de référence. Il faut **parser l'en-tête de trame VP8** (RFC 6386 §9 et
+  §19.2) : la trame clé se lit sur le premier octet ; pour une trame inter,
+  `refresh_golden_frame` et `refresh_alternate_frame` sont dans la première
+  partition, après quantification — un décodeur booléen (§7.3 de la RFC) sur une
+  cinquantaine de champs à probabilité fixe, sans dépendance au reste du flux.
+  ~100 lignes dans libmedikit, à côté du dépaquetiseur. `vpx-devel` n'est pas
+  installé : pour un test de vérité (`VP8D_GET_LAST_REF_UPDATES` sur les mêmes
+  trames), l'installer ou se contenter des trames clés + de la cohérence
+  golden/altref sur un flux libvpx connu.
+- **Exposer le PictureID** : `VP8Depacketizer` le lit (`vp8depacketizer.cpp:41`)
+  mais ne le rend pas ; la `VideoFrame` produite doit le porter.
+- **Construire et envoyer le RPSI** : `RTCPPayloadFeedback::ReferencePictureSelectionIndication`
+  et `ReferencePictureSelectionField` existent pour le **parsing** (`rtp.h:1233`,
+  `rtp.cpp:1038`) ; il manque la construction (PB, payload type dynamique du
+  VP8, chaîne de bits alignée) et un `RTPSession::SendRPSI(pictureId)` sur le
+  modèle de `SendFIR`.
+- **Deux chemins de décodage** à brancher : conférence (`VideoStream::RecVideo`,
+  `videostream.cpp:907`) et JSR-309 (`VideoDecoderJoinableWorker::DecodePacket`,
+  `VideoDecoderWorker.cpp:203`). En **pont** (transcodeur state 2, relais sans
+  décodage), le RPSI du récepteur aval doit être **relayé** à la source amont,
+  comme le FIR l'est déjà (cf. [[jsr309-transcoder-feedback]]) — et son
+  PictureID est celui du flux relayé, donc valable tel quel.
+- Ne concerne que VP8 (H.264 et AV1 n'ont pas cette mécanique chez Linphone).
+
+**Critère de recette** : sur le même appel, `Got Intra` côté Linphone tombe de
+~30/min à quelques-unes (celles des FIR), et le débit utile de Linphone
+augmente d'autant à consigne égale. Vérifier au passage qu'un RPSI d'une trame
+que nous avons **mal** décodée n'est jamais émis (sinon Linphone référence une
+image que nous n'avons pas) : émettre après un décodage réussi seulement, et
+demander une FPU sinon — c'est déjà le comportement sur erreur.
+
+Option de contournement, écartée : négocier RTP/AVP (sans AVPF) avec Linphone
+supprime les trames de référence périodiques (chemin `ms_video_starter`), mais
+aussi TMMBR, FIR et NACK. Non.
+
 ## Hors périmètre de ce plan (chantiers ultérieurs, dans cet ordre)
 
 - **Arbitrage NACK/FEC et budget de protection** (§5.3) : n'a de sens qu'avec une
@@ -1011,6 +1195,13 @@ interprétables.
       **Les deux boucles, ouverte et fermée, sont déclarées satisfaisantes par le
       mainteneur** (2026-08-20 : qualité d'image et latence tenues en appel réel)
 - [ ] Lot 7 — interopérabilité de la propagation : WebRTC ↔ WebRTC,
-      WebRTC → Linphone, Linphone → WebRTC. Gated par 6.6 et 6.7 (sans eux la
+      WebRTC → Linphone, Linphone → WebRTC. **7.9 ouvert le 2026-08-30**
+      (branche `fix/bitrate-regulation`) : trame clé toutes les 2,6 s chez
+      Linphone, entretenue par nos TMMBR de hausse bruités ; correctif dans
+      l'amortisseur (pas franc seul, baisse franche à 10 %) FAIT et validé en
+      recette (11 TMMBR/34 min). **7.10 ouvert le 2026-08-30 soir** : les trames
+      clés (1 / 3 s) viennent de l'absence de RPSI côté mediaserver (msvp8 en
+      AVPF régénère une trame clé tant que golden/altref ne sont pas acquittées) ;
+      chantier RPSI décrit au §7.10, non commencé. Gated par 6.6 et 6.7 (sans eux la
       consigne d'émission ne descend nulle part en 1:1, et elle n'existe même pas
       face à un pair sans transport-cc). Livrable : annexe E de `rate-control.md`

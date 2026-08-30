@@ -569,59 +569,90 @@ TEST(RateControlThrottler, LePlafondSurvitAUneMesureBasse)
 	EXPECT_EQ(2000000u, out);
 }
 
-// ─── Politique de hausse du dialecte TMMBR (mesure alice_bob_1, 2026-08-22) ───
-// Linphone reconfigure son encodeur à CHAQUE TMMBR reçu (msvideoqualitycontroller.c,
-// aucune hystérésis d'amplitude) : nos hausses AIMD à une par seconde le
-// faisaient rouvrir en boucle. En dialecte TMMBR, une hausse attend 5 s — sauf
-// pas franc de 20 % — et une baisse franche part toujours immédiatement.
+// ─── Politique du dialecte TMMBR (mesures alice_bob_1 2026-08-22, §7.9 2026-08-30) ──
+// Linphone détruit et recrée son encodeur VP8 à CHAQUE TMMBR de valeur différente
+// (msvideoqualitycontroller.c → vp8.c enc_set_configuration) : une trame clé par
+// annonce. Le TMMBR est collant (RFC 5104), donc aucune raison de redire une valeur
+// voisine, jamais : seul un pas franc de hausse part, et une baisse n'est franche
+// qu'à 10 % (un pas d'AIMD vaut 15 %, le bruit du plafond glissant 3 %).
 
-TEST(RateControlThrottler, EnDialecteTMMBRUneHausseAttendCinqSecondes)
+TEST(RateControlThrottler, EnDialecteTMMBRLeBruitNEmetJamais)
 {
 	RembThrottler throttler;
-	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-				 RembThrottler::TmmbrRaiseStepPercent);
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
 	DWORD out = 0;
 
-	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+	ASSERT_TRUE(throttler.OnEstimateChanged(4500000, 1000, out));
 
-	// La rampe AIMD réelle : ~+8 % par seconde. Aucune ne doit partir avant 5 s.
-	EXPECT_FALSE(throttler.OnEstimateChanged(1080000, 2000, out));
-	EXPECT_FALSE(throttler.OnEstimateChanged(1166000, 3000, out));
-	EXPECT_FALSE(throttler.OnEstimateChanged(1160000, 4000, out))
-		<< "une variation dans le bruit a devancé la période de hausse";
-
-	EXPECT_TRUE(throttler.OnEstimateChanged(1259000, 6001, out));
-	EXPECT_EQ(1259000u, out);
+	// 60 s d'estimations qui oscillent de ±5 % autour de 4,5 Mb/s, une par
+	// seconde : c'est le régime mesuré le 2026-08-30 (pair auto-limité, plafond
+	// à 1,5 x l'entrant). Avec la période de 5 s, une annonce partait toutes les
+	// 5 s et Linphone produisait une trame clé toutes les 2,6 s.
+	const DWORD values[] = { 4600000, 4400000, 4550000, 4290000, 4700000, 4450000 };
+	for (int i = 0; i < 60; i++)
+		EXPECT_FALSE(throttler.OnEstimateChanged(values[i % 6], 2000 + i * 1000, out))
+			<< "annonce partie à t=" << 2000 + i * 1000 << " pour " << values[i % 6];
 }
 
-TEST(RateControlThrottler, EnDialecteTMMBRUnPasFrancDevanceLaPeriode)
+TEST(RateControlThrottler, EnDialecteTMMBRSeulUnPasFrancDeHaussePart)
 {
 	RembThrottler throttler;
-	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-				 RembThrottler::TmmbrRaiseStepPercent);
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
 	DWORD out = 0;
 
 	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
 
-	// +19 % : sous le pas franc, attend la période.
+	// +19 % : sous le pas franc, ne part pas — même après 10 s.
 	EXPECT_FALSE(throttler.OnEstimateChanged(1190000, 2000, out));
-	// +20 % : le pas franc part sans attendre.
-	EXPECT_TRUE(throttler.OnEstimateChanged(1200000, 2100, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(1190000, 12000, out))
+		<< "le temps seul a fait partir une hausse en TMMBR";
+	// +20 % : part sans attendre.
+	EXPECT_TRUE(throttler.OnEstimateChanged(1200000, 12100, out));
 	EXPECT_EQ(1200000u, out);
+}
+
+TEST(RateControlThrottler, EnDialecteTMMBRUneBaisseDansLeBruitNEmetPas)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+
+	// -5 % : bruit du plafond glissant, pas une congestion.
+	EXPECT_FALSE(throttler.OnEstimateChanged(950000, 1200, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(950000, 9000, out));
+	// -10 % : franche, part tout de suite.
+	EXPECT_TRUE(throttler.OnEstimateChanged(900000, 9100, out));
+	EXPECT_EQ(900000u, out);
 }
 
 TEST(RateControlThrottler, EnDialecteTMMBRUneBaisseFranchePartToujoursImmediatement)
 {
 	RembThrottler throttler;
-	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-				 RembThrottler::TmmbrRaiseStepPercent);
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
 	DWORD out = 0;
 
 	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
 
 	EXPECT_TRUE(throttler.OnEstimateChanged(850000, 1200, out))
-		<< "une baisse de 15 % (un pas d'AIMD) retenue par la période de hausse";
+		<< "une baisse de 15 % (un pas d'AIMD) retenue";
 	EXPECT_EQ(850000u, out);
+}
+
+// Le dialecte REMB garde ses seuils : une baisse de 5 % part, une hausse attend
+// 200 ms puis part. Chrome attend des annonces périodiques et n'a pas le défaut
+// de Linphone.
+TEST(RateControlThrottler, LeDialecteREMBGardeSesSeuils)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::RembPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+	EXPECT_TRUE(throttler.OnEstimateChanged(950000, 1010, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(960000, 1100, out));
+	EXPECT_TRUE(throttler.OnEstimateChanged(960000, 1211, out));
 }
 
 // Le champ REMB annonce le NOMBRE de SSRC qu'il porte : la valeur était écrite
