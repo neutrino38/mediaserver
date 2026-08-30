@@ -634,7 +634,7 @@ int VideoEncoderMultiplexerWorker::EncodePicture(PictPtr pic)
 		return 0;
 
 	//Procesamos el frame
-	VideoFrame *videoFrame = videoEncoder->EncodeFrame(scaled);
+	VideoFramePtr videoFrame = videoEncoder->EncodeFrame(scaled);
 
 	//If was failed
 	if (!videoFrame)
@@ -663,7 +663,7 @@ int VideoEncoderMultiplexerWorker::EncodePicture(PictPtr pic)
 	//reporte le depassement sur l'image suivante, borne par MaxAheadUs.
 
 	//Send it smoothly
-	SmoothFrame(videoFrame,sendingTime);
+	SmoothFrame(videoFrame.get(),sendingTime);
 
 	//Dump statistics
 	if (num && ((num%fps*10)==0))

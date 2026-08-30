@@ -211,7 +211,7 @@ void Recorder::onAudioPacket(RTPPacket &packet)
 
 		//L'encodeur accumule lui-même jusqu'à sa trame complète (1024
 		//échantillons pour l'AAC) : plus de fifo ni de découpage ici.
-		for (AudioFrame* encoded = audioEncoder->EncodeFrame(samples);
+		for (AudioFramePtr encoded = audioEncoder->EncodeFrame(samples);
 		     encoded; encoded = audioEncoder->EncodeFrame(NULL))
 		{
 			AudioFrame frame(AudioCodec::AAC,audioRate);

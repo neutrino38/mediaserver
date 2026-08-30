@@ -603,7 +603,7 @@ int RTMPParticipant::SendVideo()
                 }
 		//Encode next frame
 		//Log(">Encoding frame [%lld]\n",getUpdDifTime(&t));
-		VideoFrame *encoded = encoder->EncodeFrame(pic);
+		VideoFramePtr encoded = encoder->EncodeFrame(pic);
 		//Log("<Encoding frame [%lld]\n",getUpdDifTime(&t));
 		
 		//Check
@@ -760,7 +760,7 @@ int RTMPParticipant::SendAudio()
 		}
 
 		//Rencode it. Une trame d'entree peut en remplir plusieurs.
-		for (AudioFrame* encoded = encoder->EncodeFrame(captured);
+		for (AudioFramePtr encoded = encoder->EncodeFrame(captured);
 		     encoded; encoded = encoder->EncodeFrame(NULL))
 		{
 			//Check size

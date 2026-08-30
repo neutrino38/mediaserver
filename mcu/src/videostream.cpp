@@ -622,7 +622,7 @@ int VideoStream::SendVideo()
 		}
 		
 		//Procesamos el frame
-		VideoFrame *videoFrame = videoEncoder->EncodeFrame(pic);
+		VideoFramePtr videoFrame = videoEncoder->EncodeFrame(pic);
 
 		//If was failed
 		if (!videoFrame)
@@ -673,15 +673,11 @@ int VideoStream::SendVideo()
 
 		//If first
 		if (!frameTime)
-		{
 			//Set frame time, slower
 			frameTime = 5*1000000/videoFPS;
-			//Restore bitrate
-			videoEncoder->SetFrameRate(videoFPS,current,videoIntraPeriod);
-		} else {
+		else
 			//Set frame time
 			frameTime = 1000000/videoFPS;
-		}
 
 		//Add frame size in bits to bitrate calculator
 		bitrateAcu.Update(getDifTime(&first)/1000,videoFrame->GetLength()*8);
@@ -710,7 +706,12 @@ int VideoStream::SendVideo()
 		//reporte le depassement sur l'image suivante, borne par MaxAheadUs.
 
 		//Send it smoothly
-		smoother.SendFrame(videoFrame,sendingTime);
+		smoother.SendFrame(videoFrame.get(),sendingTime);
+
+		//Restore bitrate after the first frame, once it is on its way: a
+		//SetFrameRate may reopen the codec, better not while an image waits.
+		if (!num)
+			videoEncoder->SetFrameRate(videoFPS,current,videoIntraPeriod);
 
 		//Dump statistics
 		DWORD statstime2 = (DWORD) (getDifTime(&statstimer) / 1000);

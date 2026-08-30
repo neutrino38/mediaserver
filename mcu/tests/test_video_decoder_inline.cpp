@@ -85,7 +85,7 @@ public:
 		if (!pic)
 			return 0;
 
-		VideoFrame* frame = encoder->EncodeFrame(pic);
+		VideoFramePtr frame = encoder->EncodeFrame(pic);
 		if (!frame || !frame->HasRtpPacketizationInfo())
 			return 0;
 

@@ -408,7 +408,7 @@ int FLVEncoder::EncodeAudio()
 		}
 		
 		//Rencode it. Une trame d'entrée peut en remplir plusieurs.
-		for (AudioFrame* encoded = encoder->EncodeFrame(captured);
+		for (AudioFramePtr encoded = encoder->EncodeFrame(captured);
 		     encoded; encoded = encoder->EncodeFrame(NULL))
 		{
 			//Check size
@@ -605,7 +605,7 @@ int FLVEncoder::EncodeVideo()
 		}
 
 		//Encode next frame
-		VideoFrame *encoded = encoder->EncodeFrame(pic);
+		VideoFramePtr encoded = encoder->EncodeFrame(pic);
 
 		//Check
 		if (!encoded)

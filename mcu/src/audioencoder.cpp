@@ -191,7 +191,7 @@ int AudioEncoderWorker::Encode()
 			continue;
 
 		//Une trame d'entrée peut en remplir plusieurs : on purge à chaque fois.
-		for (AudioFrame* encoded = codec->EncodeFrame(samples);
+		for (AudioFramePtr encoded = codec->EncodeFrame(samples);
 		     encoded; encoded = codec->EncodeFrame(NULL))
 		{
 			if (encoded->GetLength() > frame.GetMaxMediaLength())

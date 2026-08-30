@@ -298,7 +298,7 @@ TEST(AudioConferenceChain, LeMixeurEcritDesTranchesDeDixMsEtLEncodeurLesReassemb
 		{
 			// La trame sort à la fréquence de l'encodeur, pas à celle du mixeur.
 			EXPECT_EQ(s->GetRate(), 48000u);
-			for (AudioFrame *f = enc->EncodeFrame(s); f; f = enc->EncodeFrame(NULL))
+			for (AudioFramePtr f = enc->EncodeFrame(s); f; f = enc->EncodeFrame(NULL))
 				emitted++;
 		}
 	}
@@ -343,7 +343,7 @@ TEST(AudioTranscodeChain, OpusQuaranteHuitVersSpeexSeize)
 
 	for (int i = 0; i < kFrames; i++)
 	{
-		AudioFrame *rtp = opusEnc->EncodeFrame(Tone(960, 48000));
+		AudioFramePtr rtp = opusEnc->EncodeFrame(Tone(960, 48000));
 		if (!rtp)
 			continue;
 		sent++;
@@ -355,7 +355,7 @@ TEST(AudioTranscodeChain, OpusQuaranteHuitVersSpeexSeize)
 
 		// Côté émetteur : lire et réencoder.
 		for (SamplesPtr s = pipe.RecFrame(0); s; s = pipe.RecFrame(0))
-			for (AudioFrame *out = spxEnc->EncodeFrame(s); out; out = spxEnc->EncodeFrame(NULL))
+			for (AudioFramePtr out = spxEnc->EncodeFrame(s); out; out = spxEnc->EncodeFrame(NULL))
 			{
 				EXPECT_GT(out->GetLength(), 0u);
 				produced++;
@@ -401,7 +401,7 @@ TEST(AudioRecorderChain, OpusVersAacCadenceParLEncodeur)
 	// 1 s : 50 trames opus de 20 ms.
 	for (int i = 0; i < 50; i++)
 	{
-		AudioFrame *rtp = opusEnc->EncodeFrame(Tone(960, 48000));
+		AudioFramePtr rtp = opusEnc->EncodeFrame(Tone(960, 48000));
 		if (!rtp)
 			continue;
 
@@ -422,7 +422,7 @@ TEST(AudioRecorderChain, OpusVersAacCadenceParLEncodeur)
 				EXPECT_EQ(aacEnc->numFrameSamples, 1024);
 			}
 
-			for (AudioFrame *f = aacEnc->EncodeFrame(s); f; f = aacEnc->EncodeFrame(NULL))
+			for (AudioFramePtr f = aacEnc->EncodeFrame(s); f; f = aacEnc->EncodeFrame(NULL))
 			{
 				EXPECT_GT(f->GetLength(), 0u);
 				lastTs = (DWORD)(audioSamples * 1000 / audioRate);

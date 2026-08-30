@@ -501,7 +501,7 @@ int AudioStream::SendAudio()
 		}
 
 		//Une trame d'entrée peut en remplir plusieurs : on purge à chaque fois.
-		for (AudioFrame* frame = codec->EncodeFrame(samples);
+		for (AudioFramePtr frame = codec->EncodeFrame(samples);
 		     frame; frame = codec->EncodeFrame(NULL))
 		{
 			if (frame->GetLength() > packet.GetMaxMediaLength())

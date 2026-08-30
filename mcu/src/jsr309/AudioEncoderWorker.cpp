@@ -288,7 +288,7 @@ int AudioEncoderMultiplexerWorker::EncodeSamples(SamplesPtr samples)
 	//La trame arrive à la taille que le producteur a écrite ; c'est l'encodeur
 	//qui la redécoupe à numFrameSamples, personne d'autre. Une trame d'entrée
 	//peut en remplir plusieurs : on purge à chaque fois.
-	for (AudioFrame* frame = audioEncoder->EncodeFrame(in);
+	for (AudioFramePtr frame = audioEncoder->EncodeFrame(in);
 	     frame; frame = audioEncoder->EncodeFrame(NULL))
 	{
 		if (frame->GetLength() > packet->GetMaxMediaLength())
