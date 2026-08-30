@@ -454,7 +454,7 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	srtp_err_status_t err;
 	srtp_policy_t policy;
 
-	Log("-Set local RTP SDES [key:%s,suite:%s]\n",key,suite);
+	Log("-Set local RTP SDES [suite:%s,keyLen:%u]\n",suite,len);
 
 	//empty policy
 	memset(&policy, 0, sizeof(srtp_policy_t));
