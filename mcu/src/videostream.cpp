@@ -934,7 +934,13 @@ int VideoStream::RecVideo()
 		{
 			if (videoDecoder->IsKeyFrame())
 				Log("-Got Intra\n");
-			
+
+			//Acquitter la trame de référence décodée (RPSI) : sans lui, un
+			//émetteur msvp8 force une trame clé toutes les 3 s
+			WORD refPictureId;
+			if (videoDecoder->GetReferencePictureId(refPictureId))
+				session->SendReferencePictureSelectionIndication(recSSRC,refPictureId);
+
 			//No seq number for frame
 			frameSeqNum = RTPPacket::MaxExtSeqNum;
 

@@ -3522,6 +3522,69 @@ int RTPSession::SendFIR(DWORD & ssrc)
 	return ret;
 }
 
+int RTPSession::SendReferencePictureSelectionIndication(DWORD ssrc, WORD pictureId)
+{
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
+
+	RTPStream* stream = getStream(ssrc);
+	if (stream == NULL)
+		stream = defaultStream;
+	if (stream == NULL)
+		return 0;
+	DWORD recSSRC = stream->GetRecSSRC();
+
+	//Le FCI porte le payload type du flux acquitté : le PT que le pair a
+	//déclaré pour le codec reçu (rtpMapIn : clé = PT, valeur = codec)
+	if (!rtpMapIn)
+		return 0;
+	DWORD codec = stream->GetRecCodec();
+	BYTE pt = RTPMap::NotFound;
+	for (RTPMap::const_iterator it = rtpMapIn->begin(); it != rtpMapIn->end(); ++it)
+		if (it->second == codec)
+		{
+			pt = it->first;
+			break;
+		}
+	if (pt == RTPMap::NotFound)
+		return 0;
+
+	//Bit string = le PictureID tel que reçu (RFC 7741 §5.1) : 2 octets
+	//réseau si étendu (bit M, 0x8000), 1 octet sinon — l'émetteur le
+	//compare à l'identique, sans le décoder
+	BYTE bitString[2];
+	DWORD len;
+	if (pictureId & 0x8000)
+	{
+		bitString[0] = pictureId >> 8;
+		bitString[1] = pictureId;
+		len = 2;
+	}
+	else
+	{
+		bitString[0] = pictureId;
+		len = 1;
+	}
+
+	Debug("-SendReferencePictureSelectionIndication pictureId=0x%.4x pt=%d ssrc=%x\n",pictureId,pt,recSSRC);
+
+	//Create rtcp sender report
+	RTCPCompoundPacket* rtcp = CreateSenderReport();
+
+	RTCPPayloadFeedback *rpsi = RTCPPayloadFeedback::Create(RTCPPayloadFeedback::ReferencePictureSelectionIndication,sendSSRC,recSSRC);
+	rpsi->AddField(new RTCPPayloadFeedback::ReferencePictureSelectionField(pt,bitString,len));
+	rtcp->AddRTCPacket(rpsi);
+
+	//Send packet
+	int ret = SendPacket(*rtcp);
+
+	//Delete it
+	delete(rtcp);
+
+	return ret;
+}
+
 int RTPSession::RequestFPU()
 {
 	//Verrou lecteur : DeleteStreams peut courir en parallele (voir

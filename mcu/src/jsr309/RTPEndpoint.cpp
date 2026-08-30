@@ -556,6 +556,12 @@ int RTPEndpoint::RequestUpdate()
 	return 0;
 }
 
+void RTPEndpoint::AcknowledgeReferencePicture(WORD pictureId)
+{
+	//Le RPSI répond au flux ENTRANT de cette jambe : flux par défaut (ssrc=0)
+	SendReferencePictureSelectionIndication(0,pictureId);
+}
+
  xmlrpc_value* ExternalFIRRequestedEvent::GetXmlValue(xmlrpc_env *env)
 {
 	 BYTE sessTag[1024];

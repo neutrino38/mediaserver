@@ -253,6 +253,14 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
                 if (waitIntra && videoDecoder->IsKeyFrame())
                         //Do not wait anymore
                         waitIntra = false;
+
+                //Acquitter la trame de référence décodée (RPSI), par le même
+                //chemin de retour que les demandes de FPU : la jambe RTP
+                //amont l'enverra à sa source
+                WORD refPictureId;
+                if (videoDecoder->GetReferencePictureId(refPictureId))
+                        if (std::shared_ptr<Joinable> j = joined.lock())
+                                j->AcknowledgeReferencePicture(refPictureId);
         }
 }
 

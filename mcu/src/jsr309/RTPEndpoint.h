@@ -45,6 +45,8 @@ public:
 	//Joinable interface
 	virtual void Update();
 	virtual void SetREMB(DWORD estimation);
+	//Relais de l'acquittement RPSI d'un consommateur aval vers notre pair
+	virtual void AcknowledgeReferencePicture(WORD pictureId);
 
 	//Joinable::Listener
 	virtual void onRTPPacket(RTPPacket &packet);

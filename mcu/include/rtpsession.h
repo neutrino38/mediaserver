@@ -323,6 +323,12 @@ public:
 	int SetProperties(const Properties& properties);
 	int RequestFPU();
 	int RequestFPU(DWORD & ssrc);
+	//Acquittement positif d'une trame de référence décodée (RPSI, RFC 4585
+	//§6.3.3) : c'est ce qui évite à un émetteur msvp8 de forcer une trame clé
+	//toutes les 3 s. pictureId = la valeur telle que reçue dans le payload
+	//descriptor (RFC 7741 §5.1, VP9 identique) : bit 0x8000 posé -> bit
+	//string de 2 octets réseau, sinon 1 octet. ssrc=0 -> flux par défaut.
+	int SendReferencePictureSelectionIndication(DWORD ssrc, WORD pictureId);
 	
 	int SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD overhead);
 	//Envoie un TMMBR au pair (borne son débit d'émission, en bps) et arme la
