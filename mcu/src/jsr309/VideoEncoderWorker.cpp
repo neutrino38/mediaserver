@@ -668,9 +668,9 @@ int VideoEncoderMultiplexerWorker::EncodePicture(PictPtr pic)
 	//Dump statistics
 	if (num && ((num%fps*10)==0))
 	{
-		Debug("-Send bitrate current=%d avg=%llf rate=[%llf,%llf] fps=[%llf,%llf] limit=%d\n",
-			current,bitrateAcu.GetInstantAvg()/1000,bitrateAcu.GetMinAvg()/1000,bitrateAcu.GetMaxAvg()/1000,
-			fpsAcu.GetMinAvg(),fpsAcu.GetMaxAvg(),peerLimit);
+		Debug("-Send bitrate current=%d avg=%.0f rate=[%.0f,%.0f] fps=[%.0f,%.0f] limit=%d\n",
+			current,(double)(bitrateAcu.GetInstantAvg()/1000),(double)(bitrateAcu.GetMinAvg()/1000),(double)(bitrateAcu.GetMaxAvg()/1000),
+			(double)fpsAcu.GetMinAvg(),(double)fpsAcu.GetMaxAvg(),peerLimit);
 		bitrateAcu.ResetMinMax();
 		fpsAcu.ResetMinMax();
 	}

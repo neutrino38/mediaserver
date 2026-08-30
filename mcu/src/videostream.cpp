@@ -719,7 +719,7 @@ int VideoStream::SendVideo()
 		{
 			Log("-Send video stats for participant codec = %s.\n", VideoCodec::GetNameFor(videoCodec));
 			Log("                  current bitrate=%d kbit/s  avg=%8.2f kbit/s  limit=%d kbit/s\n",
-                            current,bitrateAcu.GetInstantAvg()/1000,videoBitrateLimit);
+                            current,(double)(bitrateAcu.GetInstantAvg()/1000),videoBitrateLimit);
 			Log("                  fps=[%d]\n",
                             (fpsOut*1000)/statstime2);
 			bitrateAcu.ResetMinMax();
