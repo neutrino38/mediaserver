@@ -1,6 +1,6 @@
 #ifndef _RTPSESSION_H_
 #define _RTPSESSION_H_
-#include "worker.h"
+#include "pollhandler.h"
 #include <sys/socket.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -29,10 +29,12 @@
 
 
 
+class RtpSessionSet;
+
 class RTPSession : 
 	public RemoteRateEstimator::Listener,
 	public DTLSConnection::Listener,
-	public Worker
+	public PollHandler
 {
 public:
 	class Listener
@@ -309,10 +311,16 @@ public:
 	//depuis le thread de la session : l'objet SSL n'est pas concurrent, et cette
 	//boucle le lit à chaque datagramme entrant.
 	int  SendDTLSApplicationData(const BYTE* data,DWORD size);
-	//Réveille la boucle de la session sans attendre un paquet entrant. Un porteur
-	//de data channel en a besoin : la pile SCTP a produit des datagrammes, et
-	//c'est cette boucle — la seule qui ait le droit de chiffrer — qui les vide.
-	void WakeUp() { wait.Signal(); }
+	//Réveille le réacteur qui bat cette session, sans attendre un paquet entrant.
+	//Un porteur de data channel en a besoin : la pile SCTP a produit des
+	//datagrammes, et c'est ce thread — le seul qui ait le droit de chiffrer — qui
+	//les vide.
+	void WakeUp();
+
+	//Réacteur qui bat cette session, à poser AVANT Init. Refusé après, parce que
+	//End() doit se retirer du groupe où Init l'a inscrite, et pas d'un autre.
+	//Jamais posé = réacteur par défaut du processus (RtpSessionSet::Default).
+	bool SetPollGroup(RtpSessionSet* group);
 	//Le canal applicatif est-il ouvert ? Une jambe sans RTP n'a pas de profil
 	//SRTP, donc onDTLSSetup ne lui dit jamais rien : c'est ainsi qu'un porteur de
 	//data channel sait qu'il peut commencer à écrire.
@@ -357,8 +365,9 @@ private:
 	int SetLocalCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	void SetRTT(DWORD rtt);
-	void Start();
 	void Stop();
+	//Le réacteur effectif : celui qu'on a posé, sinon celui du processus.
+	RtpSessionSet* Group();
 	int  ReadRTP();
 	int  ReadRTCP();
 	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
@@ -377,13 +386,39 @@ private:
 
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
 
-	//Corps du thread hérité de Worker : la boucle poll des sockets RTP/RTCP.
-	//`override` EXPLICITE, et non décoratif : une classe dérivée qui déclarerait
-	//un `int Run()` le remplacerait silencieusement, et la boucle poll ne
-	//tournerait plus du tout pour elle. C'est arrivé avec RTPEndpoint (corrigé le
-	//2026-08-12 en renommant sa boucle en MultiplexLoop). Le mot-clé ne l'empêche
-	//pas côté dérivé, mais il documente le contrat au bon endroit.
-	int Run() override;
+	//Mesure de reference du chantier RTP-REACTOR (lot 0) : compte les GetPacket
+	//rendus a vide et les trace a 1 Hz. Retiree au lot 6.
+	void CountEmptyGetPacket();
+	std::atomic<DWORD> emptyGetCount{0};
+	std::atomic<QWORD> lastEmptyGetLogMs{0};
+
+	//--- PollHandler : ce que le réacteur appelle (docs/conception/RTP-REACTOR) ---
+	//
+	//Privées : personne ne les appelle sur une RTPSession, seul le réacteur les
+	//atteint par l'interface. Elles portent ensemble ce que faisait la boucle
+	//`poll` de la session : lecture RTP/RTCP, cadence transport-cc, amorçage NAT,
+	//checks ICE, handshake DTLS client, tick applicatif, watchdog d'inactivité.
+	int  GetPollFds(pollfd* fds, int max) override;
+	int  GetNextTimeoutMs(QWORD nowUs) override;
+	void OnPollEvents(const pollfd* fds, int count, QWORD nowUs) override;
+	void OnPeriodic(QWORD nowUs) override;
+	void OnPollError(short revents) override;
+
+	//Conditions des travaux périodiques. Extraites parce qu'elles servent DEUX
+	//fois par tour : pour borner l'attente, puis pour décider du travail. Les
+	//fonctions Drive* les revérifient elles-mêmes — c'est ce qui rend inoffensif
+	//un appel plus fréquent que nécessaire (§2 de la conception).
+	bool IsDrivingDTLSClient() const;
+	bool IsDrivingICEChecks()  const;
+	bool IsNATPriming()        const;
+	//La plus proche de deux échéances, -1 valant « aucune ».
+	static int Sooner(int waitMs,int candidateMs);
+
+	//Bornes d'attente de la boucle : watchdog, cadence des retransmissions du
+	//handshake DTLS client et des checks ICE, rapports transport-cc en attente.
+	static const int PollTimeoutMs		= 1000;
+	static const int DtlsPollTimeoutMs	= 250;
+	static const int TransportFeedbackPollMs = 25;
 
 	//P2 (offreur WebRTC) : pilotage du handshake DTLS en rôle CLIENT
 	void FlushDTLS();                    //vide write_bio DTLS vers sendAddr
@@ -508,10 +543,10 @@ private:
 	int 	simRtcpSocket;
 	int 	simPort;
 	int	simRtcpPort;
-	//[RTP, RTCP, eventfd de reveil du Wait herite (Worker)]
-	pollfd	ufds[3];
 	bool	inited;
 	bool	running;
+	//Réacteur posé par le propriétaire de la jambe, NULL = celui du processus.
+	RtpSessionSet* pollGroup;
 
 	//Watchdog d'inactivité (gap 5) : horodatage de la dernière activité (paquet reçu
 	//OU instant d'armement), seuil d'inactivité en ms (0 = désactivé), drapeau

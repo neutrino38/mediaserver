@@ -422,7 +422,6 @@ void* RTPEndpoint::run(void *par)
 	RTPEndpoint *end = (RTPEndpoint *)par;
         //Block signal in thread
 	blocksignals();
-	//Run : la boucle de démultiplexage, PAS Worker::Run() (cf. RTPEndpoint.h)
 	end->MultiplexLoop();
 	//Exit
 	return NULL;

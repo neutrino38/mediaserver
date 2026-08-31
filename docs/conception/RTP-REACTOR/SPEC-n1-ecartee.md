@@ -1,3 +1,20 @@
+> **Conception ÉCARTÉE. Ne pas l'implémenter.**
+>
+> Elle supprimait la pompe de réception : le `poll()` était porté par
+> `GetPacket()`, donc plus rien ne lisait les sockets tant qu'un consommateur
+> ne réclamait pas un paquet. Trois conséquences non résolues — perte de
+> l'avance de phase du jitter buffer, RTCP muet sur une session *sendonly*,
+> handshake ICE/DTLS non amorcé — qu'elle nommait elle-même B1, B3 et B6.
+>
+> La conception retenue est `SPEC.md`, dans ce répertoire : un réacteur
+> partagé, qui ne change pas qui lit les sockets, seulement combien de threads
+> le font. Ce fichier ne subsiste que pour dire ce qui a été écarté et
+> pourquoi ; il disparaît à la fin du chantier.
+>
+> Deux erreurs de fait à ne pas reprendre d'ici : les `msleep` y sont lus
+> comme des millisecondes alors qu'ils sont en microsecondes, et `GetPacket()`
+> y est décrit comme non bloquant alors que `RTPBuffer::Wait()` bloque déjà.
+
 # Le problème
 le mediaserver crée trop de thread pour ses traitements
 

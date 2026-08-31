@@ -22,6 +22,7 @@
 #include "medkit/codecs.h"
 #include "rtp.h"
 #include "rtpsession.h"
+#include "rtpsessionset.h"
 #include "ipaddress.h"
 #include "medkit/stunmessage.h"
 extern "C" {
@@ -351,8 +352,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Preparamos las direcciones de envio
 	sendAddr     = IPEndpoint();
 	sendRtcpAddr = IPEndpoint();
-	//No thread
+	//Pas encore inscrite dans un reacteur
 	running = false;
+	pollGroup = NULL;
 	//No stimator
 	remoteRateEstimator = NULL;
 	//Aucun feedback tant que la négociation n'en a pas demandé (arbitrage A2 du
@@ -712,7 +714,7 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	}
 	//P3 : réveille le thread Run (eventfd du Wait, jamais perdu) pour (ré)évaluer
 	//l'émission de checks STUN sortants dès que la destination sera connue.
-	wait.Signal();
+	WakeUp();
 	//Ok
 	return 1;
 }
@@ -1285,7 +1287,7 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 
 		//Si le thread dort dans poll(-1) (watchdog jusqu'ici désarmé), on le réveille
 		//via l'eventfd pour qu'il reprenne l'attente bornée sans attendre un paquet.
-		wait.Signal();
+		WakeUp();
 	}
 	else
 	{
@@ -1316,7 +1318,7 @@ void RTPSession::SetDTLSApplicationListener(ApplicationListener* listener)
 	//La cadence du consommateur borne l'attente du poll : réveiller la boucle
 	//pour qu'elle la relise sans attendre un paquet entrant.
 	setZeroTime(&lastAppTick);
-	wait.Signal();
+	WakeUp();
 }
 
 int RTPSession::SendDTLSApplicationData(const BYTE* data,DWORD size)
@@ -1359,7 +1361,7 @@ void RTPSession::RequestDTLSClientHandshake()
 
 	//Réveille le thread Run (eventfd) pour qu'il pilote le handshake sans attendre
 	//un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
-	wait.Signal();
+	WakeUp();
 }
 
 void RTPSession::DriveDTLSClientHandshake()
@@ -1633,7 +1635,7 @@ void RTPSession::ArmNATPriming()
 	gettimeofday(&natPrimingLast,NULL);
 
 	//Réveille le thread Run (s'il tourne) pour qu'il cadence la suite de la rafale
-	wait.Signal();
+	WakeUp();
 }
 
 void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
@@ -1917,10 +1919,18 @@ int RTPSession::Init()
 			setsockopt(simSocket,     IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
 			setsockopt(simRtcpSocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
 		}
+		//Sockets non bloquantes : le reacteur draine sans jamais s'endormir dans un
+		//recvfrom, et une fermeture par End() rend une erreur au lieu de bloquer.
+		fcntl(simSocket,    F_SETFL,fcntl(simSocket,    F_GETFL,0) | O_NONBLOCK);
+		fcntl(simRtcpSocket,F_SETFL,fcntl(simRtcpSocket,F_GETFL,0) | O_NONBLOCK);
+
 		//Everything ok
 		Log("-Got ports [%d,%d]\n",simPort,simRtcpPort);
-		//Start receiving
-		Start();
+
+		//Le reacteur bat cette session a partir d'ici : c'est ce qui amorce ICE et
+		//DTLS sans attendre qu'un consommateur reclame un paquet.
+		running = true;
+		Group()->Add(this);
 		//Done
 		Log("<Init RTPSession\n");
 		//Opened
@@ -2440,6 +2450,9 @@ int RTPSession::ReadRTP()
 		{
 			Error("-fd is not valid. Stoppong RTP session %p.\n", this);
 			running = false;
+			//Appelé DEPUIS le réacteur : le retrait est immédiat, sans attente.
+			//Sans lui la session resterait inscrite avec un descripteur mort.
+			Group()->Remove(this);
 		}
 		return 0;
 	}
@@ -2961,13 +2974,25 @@ int RTPSession::ReadRTP()
 	return 1;
 }
 
-void RTPSession::Start()
+RtpSessionSet* RTPSession::Group()
 {
-	//We are running
-	running = true;
+	return pollGroup ? pollGroup : &RtpSessionSet::Default();
+}
 
-	//Create thread
-	StartThread();
+bool RTPSession::SetPollGroup(RtpSessionSet* group)
+{
+	//Apres Init, la session est deja inscrite : changer de groupe ici ferait
+	//retirer End() d'un groupe ou personne ne l'a jamais mise.
+	if (running)
+		return Error("-RTPSession: groupe de poll pose apres Init, refuse [%p]\n",this);
+
+	pollGroup = group;
+	return true;
+}
+
+void RTPSession::WakeUp()
+{
+	Group()->Wake();
 }
 
 void RTPSession::Stop()
@@ -2978,8 +3003,11 @@ void RTPSession::Stop()
 		//Not running
 		running = false;
 
-		//Réveille le poll (eventfd du Wait hérité) et joint le thread
-		StopThread();
+		//Retrait SYNCHRONE : au retour, le reacteur ne poll plus nos sockets et
+		//n'appellera plus aucun de nos callbacks. C'est ce qui rend sur le close()
+		//que End() fait juste apres — sinon le descripteur pourrait etre reattribue
+		//sous les pieds du poll d'un autre thread.
+		Group()->Remove(this);
                 DeleteStreams();
 	}
 
@@ -2994,212 +3022,205 @@ void RTPSession::Stop()
         rtxUse.Unlock();
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-/***************************
- * Run
- * 	Server running thread
- ***************************/
-int RTPSession::Run()
+int RTPSession::Sooner(int waitMs,int candidateMs)
 {
-	Log(">Run RTPSession [%p]\n",this);
+	if (candidateMs < 0)
+		return waitMs;
+	if (waitMs < 0)
+		return candidateMs;
+	return waitMs < candidateMs ? waitMs : candidateMs;
+}
 
-	//Set values for polling
-	ufds[0].fd = simSocket;
-	ufds[0].events = POLLIN | POLLERR | POLLHUP;
-	ufds[1].fd = simRtcpSocket;
-	ufds[1].events = POLLIN | POLLERR | POLLHUP;
+//P2 : rôle client, DTLS prêt, handshake non terminé, destination connue. Le cas
+//serveur/passive reste inchangé.
+bool RTPSession::IsDrivingDTLSClient() const
+{
+	return dtls.IsInited() && dtls.IsClientRole()
+		&& !dtls.IsHandshakeCompleted()
+		&& HasRemote();
+}
 
-	//Set non blocking so we can get an error when we are closed by end
-	int fsflags = fcntl(simSocket,F_GETFL,0);
-	fsflags |= O_NONBLOCK;
-	fcntl(simSocket,F_SETFL,fsflags);
+//P3 : creds locales+distantes connues, destination connue, connectivité pas
+//encore confirmée. Face à un pair ICE-lite qui n'initie jamais ; s'arrête dès la
+//1re réponse ou le 1er check entrant.
+bool RTPSession::IsDrivingICEChecks() const
+{
+	return !iceConnected && iceLocalUsername && iceRemoteUsername
+		&& iceRemotePwd && HasRemote();
+}
 
-	fsflags = fcntl(simRtcpSocket,F_GETFL,0);
-	fsflags |= O_NONBLOCK;
-	fcntl(simRtcpSocket,F_SETFL,fsflags);
+//P6 : rafale d'amorçage NAT armée, en clair, destination connue.
+bool RTPSession::IsNATPriming() const
+{
+	return natPrimingLeft > 0 && !encript
+		&& HasRemote();
+}
 
-	//Réveil inter-thread : eventfd du Wait hérité (remplace le SIGIO historique)
-	ufds[2].fd = wait.GetPollFd();
-	ufds[2].events = POLLIN;
+int RTPSession::GetPollFds(pollfd* fds,int max)
+{
+	if (max < 2 || simSocket==FD_INVALID || simRtcpSocket==FD_INVALID)
+		return 0;
 
-	//Le chrono d'inactivité ne court que lorsqu'il est armé (ArmRTPTimeout, au SDP
-	//answer) : rien à amorcer ici.
+	fds[0].fd	= simSocket;
+	fds[0].events	= POLLIN | POLLERR | POLLHUP;
+	fds[1].fd	= simRtcpSocket;
+	fds[1].events	= POLLIN | POLLERR | POLLHUP;
 
-	//Attente bornée seulement lorsque le watchdog est armé, pour vérifier
-	//périodiquement l'inactivité ; sinon on conserve l'attente infinie d'origine
-	//(aucun réveil superflu pour les sessions n'utilisant pas le watchdog).
-	const int pollTimeout = 1000; //ms
-	//P2 : lorsqu'on pilote un handshake DTLS client, on borne l'attente plus court
-	//pour cadencer les retransmissions (le backoff réel est décidé par OpenSSL).
-	const int dtlsPollTimeout = 250; //ms
-	//Lot 4 : borne d'attente quand un rapport transport-cc est en attente. Plus
-	//court que MinIntervalUs pour que la cadence du generateur reste la sienne.
-	const int TRANSPORT_FEEDBACK_POLL_MS = 25;
+	return 2;
+}
 
-	//Run until ended
-	while(running)
+int RTPSession::GetNextTimeoutMs(QWORD nowUs)
+{
+	//Attente infinie par défaut : une session qui n'a rien à faire ne fait pas
+	//tourner le thread de son groupe. Watchdog, retransmissions du handshake
+	//DTLS client, checks ICE, amorçage NAT, rapports transport-cc en attente et
+	//cadence applicative sont les seules raisons de borner — la plus proche gagne.
+	int waitMs = rtpTimeoutArmed ? PollTimeoutMs : -1;
+
+	if (IsDrivingDTLSClient() || IsDrivingICEChecks())
+		waitMs = Sooner(waitMs,DtlsPollTimeoutMs);
+
+	if (IsNATPriming())
+		waitMs = Sooner(waitMs,NAT_PRIMING_INTERVAL_MS);
+
+	//Sans cette borne, le dernier rapport d'une rafale attendrait le paquet
+	//entrant suivant — et il n'y en a pas toujours un (fin de parole, freeze).
+	if (useTransportCC && transportFeedback.HasPending())
+		waitMs = Sooner(waitMs,TransportFeedbackPollMs);
+
+	if (ApplicationListener* app = appListener.load())
 	{
-		//P2 : pilotons-nous un handshake DTLS en rôle client ? (client, DTLS prêt,
-		//non terminé, destination connue). Le cas serveur/passive reste inchangé.
-		bool dtlsDriving = dtls.IsInited() && dtls.IsClientRole()
-				&& !dtls.IsHandshakeCompleted()
-				&& HasRemote();
+		DWORD tick = app->GetApplicationTickMs();
+		//0 = pas de cadence. Le passer à Sooner demanderait une attente NULLE.
+		if (tick)
+			waitMs = Sooner(waitMs,(int) tick);
+	}
 
-		//P3 : émettons-nous des checks STUN sortants ? (creds connues, destination
-		//connue, connectivité pas encore confirmée). Face à un pair ICE-lite qui
-		//n'initie jamais ; s'arrête dès la 1re réponse/check entrant.
-		bool iceDriving = !iceConnected && iceLocalUsername && iceRemoteUsername
-				&& iceRemotePwd && HasRemote();
+	return waitMs;
+}
 
-		//P6 : reste-t-il des paquets d'amorçage NAT à émettre ? (rafale armée, clair,
-		//destination connue). Cadencés ~20 ms par le poll borné ci-dessous.
-		bool natPriming = natPrimingLeft > 0 && !encript
-				&& HasRemote();
+void RTPSession::OnPollEvents(const pollfd* fds,int count,QWORD nowUs)
+{
+	if (count < 2)
+		return;
 
-		//Le consommateur de données applicatives (data channel) peut avoir ses
-		//propres timers et pas de thread : c'est cette boucle qui les bat. UNE
-		//seule lecture du pointeur pour tout le tour : il peut être retiré entre
-		//deux, et lire « il y a une cadence » puis appeler NULL est un crash.
-		ApplicationListener* app = appListener.load();
-		DWORD appTickMs = app ? app->GetApplicationTickMs() : 0;
+	if (fds[0].revents & POLLIN)
+	{
+		//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
+		//on mémorise l'instant et on réarme l'anti-rebond.
+		gettimeofday(&lastRecv,NULL);
+		rtpTimedOut = false;
+		//Read rtp data
+		ReadRTP();
+	}
 
-		//Attente : infinie par défaut, bornée si watchdog armé et/ou handshake DTLS
-		//client / checks ICE en cours (on prend le plus court des seuils).
-		int waitMs = rtpTimeoutArmed ? pollTimeout : -1;
-		if (dtlsDriving || iceDriving)
-			waitMs = (waitMs < 0) ? dtlsPollTimeout
-					      : (waitMs < dtlsPollTimeout ? waitMs : dtlsPollTimeout);
-		if (natPriming)
-			waitMs = (waitMs < 0) ? NAT_PRIMING_INTERVAL_MS
-					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
+	if (fds[1].revents & POLLIN)
+		//Read rtcp data
+		ReadRTCP();
+}
 
-		//Lot 4 : des arrivees restent a rapporter au pair. Sans cette borne, le
-		//dernier rapport d'une rafale attendrait le paquet entrant suivant — et
-		//il n'y en a pas toujours un (fin de parole, freeze video).
-		if (useTransportCC && transportFeedback.HasPending())
-			waitMs = (waitMs < 0) ? TRANSPORT_FEEDBACK_POLL_MS
-					      : (waitMs < TRANSPORT_FEEDBACK_POLL_MS ? waitMs : TRANSPORT_FEEDBACK_POLL_MS);
+void RTPSession::OnPeriodic(QWORD nowUs)
+{
+	//Rapporter au pair ce qui nous est arrivé, à la cadence du générateur. APRÈS
+	//les lectures : le rapport porte alors les paquets de ce tour.
+	if (useTransportCC)
+		SendTransportWideFeedback(nowUs);
 
-		if (appTickMs)
-			waitMs = (waitMs < 0) ? (int) appTickMs
-					      : (waitMs < (int) appTickMs ? waitMs : (int) appTickMs);
+	//Cadence la rafale d'amorçage NAT (~20 ms) tant qu'il en reste. APRÈS les
+	//lectures : si le pair a déjà latché et répondu, la rafale continue quand
+	//même jusqu'au bout — inoffensif, elle est courte et bornée.
+	if (IsNATPriming() && (getDifTime(&natPrimingLast)/1000) >= NAT_PRIMING_INTERVAL_MS)
+	{
+		SendNATPrimingPacket();
+		gettimeofday(&natPrimingLast,NULL);
+	}
 
-		//Wait for events
-		int nready = poll(ufds,3,waitMs);
-		if(nready<0)
+	//APRÈS les lectures : un check ou une réponse entrante a pu poser
+	//iceConnected et court-circuiter l'émission.
+	if (IsDrivingICEChecks())
+		DriveICEChecks();
+
+	//APRÈS les lectures aussi : les flights entrants (branche DTLS de ReadRTP)
+	//font d'abord progresser le handshake.
+	if (IsDrivingDTLSClient())
+		DriveDTLSClientHandshake();
+
+	//Le consommateur de données applicatives (data channel) peut avoir ses
+	//propres timers et pas de thread : c'est ce tour qui les bat. UNE seule
+	//lecture du pointeur : il peut être retiré entre deux, et lire « il y a une
+	//cadence » puis appeler NULL est un crash.
+	ApplicationListener* app = appListener.load();
+	DWORD appTickMs = app ? app->GetApplicationTickMs() : 0;
+
+	if (appTickMs)
+	{
+		//Écoulement RÉEL : le poll a pu rendre la main plus tôt (paquet entrant)
+		//ou plus tard (charge).
+		DWORD elapsed = isZeroTime(&lastAppTick) ? appTickMs
+					: (DWORD)(getDifTime(&lastAppTick)/1000);
+
+		if (elapsed >= appTickMs)
 		{
-			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler
-			if (errno==EINTR || errno==EAGAIN)
-				continue;
-			//Erreur dure (EBADF, EINVAL, ENOMEM...) : inutile de boucler à vide,
-			//on log et on sort proprement (msleep de garde anti busy-spin)
-			Error("-RTPSession poll error, arret de la boucle: errno=%d (%s) [%p]\n",
-					errno,strerror(errno),this);
-			msleep(10);
-			break;
-		}
-
-		//Réveil inter-thread : purger l'eventfd, SINON il reste lisible et chaque
-		//poll() suivant rend la main immédiatement — la boucle tourne alors à vide,
-		//à 100 % d'un cœur, jusqu'à la fin de l'appel. C'est le contrat de `Wait`
-		//(« le write reste lisible jusqu'au Drain() ») et il n'était honoré nulle
-		//part ici, alors que quatre chemins signalent cet eventfd :
-		//SetRemoteSTUNCredentials, ArmRTPTimeout, RequestDTLSClientHandshake et
-		//ArmNATPriming — ce dernier depuis SetRemotePort, donc à CHAQUE
-		//StartSending. Autrement dit : les quatre sessions RTP d'un appel B2BUA
-		//(deux pattes × audio/vidéo) partaient en rotation dès l'établissement.
-		if (ufds[2].revents & POLLIN)
-			wait.Drain();
-
-		if (ufds[0].revents & POLLIN)
-		{
-			//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
-			//on mémorise l'instant et on réarme l'anti-rebond.
-			gettimeofday(&lastRecv,NULL);
-			rtpTimedOut = false;
-			//Read rtp data
-			ReadRTP();
-		}
-		if (ufds[1].revents & POLLIN)
-			//Read rtcp data
-			ReadRTCP();
-
-		//Lot 4 : rapporter au pair ce qui nous est arrive, a la cadence du
-		//generateur. Place APRES les lectures : le rapport porte alors les
-		//paquets de ce tour de boucle.
-		if (useTransportCC)
-			SendTransportWideFeedback(getTime());
-
-		//P6 : cadence la rafale d'amorçage NAT (~20 ms entre paquets) tant qu'il en
-		//reste. Placé APRÈS ReadRTP : si le pair a déjà latché et répondu, la rafale
-		//continue quand même jusqu'au bout (inoffensif) — elle est courte et bornée.
-		if (natPriming && (getDifTime(&natPrimingLast)/1000) >= NAT_PRIMING_INTERVAL_MS)
-		{
-			SendNATPrimingPacket();
-			gettimeofday(&natPrimingLast,NULL);
-		}
-
-		//P3 : émettre/retransmettre les binding requests STUN sortants tant que la
-		//connectivité n'est pas confirmée (placé APRÈS ReadRTP : un check/réponse
-		//entrant peut avoir mis iceConnected à true et court-circuité l'émission).
-		if (iceDriving)
-			DriveICEChecks();
-
-		//P2 : piloter le handshake DTLS client (émission initiale du ClientHello puis
-		//retransmissions). Placé APRÈS ReadRTP pour que les flights entrants (traités
-		//par la branche DTLS de ReadRTP) fassent d'abord progresser le handshake.
-		if (dtlsDriving)
-			DriveDTLSClientHandshake();
-
-		//Cadence du consommateur applicatif, avec l'écoulement RÉEL : le poll a pu
-		//rendre la main plus tôt (paquet entrant) ou plus tard (charge). Placé
-		//APRÈS ReadRTP, pour que les données arrivées à ce tour soient déjà
-		//entrées dans la pile quand ses timers tournent.
-		if (appTickMs)
-		{
-			DWORD elapsed = isZeroTime(&lastAppTick) ? appTickMs
-						: (DWORD)(getDifTime(&lastAppTick)/1000);
-
-			if (elapsed >= appTickMs)
-			{
-				gettimeofday(&lastAppTick,NULL);
-				app->onApplicationTick(elapsed);
-			}
-		}
-
-		//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
-		//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
-		//onRTPTimeout (anti-rebond via rtpTimedOut).
-		if (rtpTimeoutArmed && rtpTimeout>0 && !rtpTimedOut
-				&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
-		{
-			//Marque la transition actif -> inactif
-			rtpTimedOut = true;
-			Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
-			//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
-			if (auto l = LockListener())
-				l->onRTPTimeout(this);
-		}
-
-		//Erreur/fermeture sur l'un des deux sockets : POLLHUP (pair parti),
-		//POLLERR (erreur socket) ou POLLNVAL (fd fermé, ex. via End()).
-		//NB: on teste bien ufds[1] pour le socket RTCP (bug historique corrige).
-		if ((ufds[0].revents & (POLLHUP|POLLERR|POLLNVAL)) ||
-		    (ufds[1].revents & (POLLHUP|POLLERR|POLLNVAL)))
-		{
-			//Error : on sort proprement de la boucle
-			Log("-RTPSession sortie sur evenement socket RTP=0x%x RTCP=0x%x [%p]\n",
-					ufds[0].revents,ufds[1].revents,this);
-			//Exit
-			break;
+			gettimeofday(&lastAppTick,NULL);
+			app->onApplicationTick(elapsed);
 		}
 	}
 
-	Log("<RTPSession run\n");
-	return 0;
+	//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
+	//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
+	//onRTPTimeout (anti-rebond via rtpTimedOut).
+	if (rtpTimeoutArmed && rtpTimeout>0 && !rtpTimedOut
+			&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
+	{
+		//Marque la transition actif -> inactif
+		rtpTimedOut = true;
+		Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
+		//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
+		if (auto l = LockListener())
+			l->onRTPTimeout(this);
+	}
+}
+
+void RTPSession::OnPollError(short revents)
+{
+	//POLLHUP (pair parti), POLLERR (erreur socket) ou POLLNVAL (fd fermé). Le
+	//réacteur nous retire après cet appel : cette session cesse de recevoir, les
+	//autres jambes du groupe continuent.
+	Log("-RTPSession sortie du groupe sur evenement socket 0x%x [%p]\n",revents,this);
+}
+
+//Mesure de reference du chantier RTP-REACTOR (lot 0). Wait() ne rend NULL que
+//lorsqu'il n'y a pas encore de flux pour ce SSRC — et le flux par defaut n'est
+//cree qu'a l'arrivee du PREMIER paquet. Pendant la sonnerie, le handshake, ou
+//face a un pair muet, la boucle du consommateur tourne donc a ~3 kHz (msleep est
+//en MICROsecondes). C'est ce nombre que le lot 3 doit faire tomber. A retirer au
+//lot 6 (docs/conception/RTP-REACTOR/SPEC.md).
+void RTPSession::CountEmptyGetPacket()
+{
+	DWORD count = ++emptyGetCount;
+	QWORD nowMs = getTime()/1000;
+	QWORD last  = lastEmptyGetLogMs.load();
+
+	//Premiere fois : on amorce la fenetre sans rien dire, faute d'intervalle.
+	if (!last)
+	{
+		if (lastEmptyGetLogMs.compare_exchange_strong(last,nowMs))
+			emptyGetCount = 0;
+		return;
+	}
+
+	if (nowMs < last + 1000)
+		return;
+	if (!lastEmptyGetLogMs.compare_exchange_strong(last,nowMs))
+		return;
+
+	emptyGetCount = 0;
+	//L'intervalle n'est PAS une seconde : la trace ne sort qu'a l'occasion d'un
+	//appel a vide, donc la fenetre couvre tout le temps depuis la precedente et
+	//peut valoir des dizaines de secondes. Sans elle, le compte se lirait comme
+	//un debit — et il serait faux d'un ordre de grandeur.
+	Log("-RTPSession attente active : %u GetPacket a vide en %llu ms [%ls,%p]\n",
+			count,(unsigned long long)(nowMs-last),LabelForLog(),this);
 }
 
 RTPPacket* RTPSession::GetPacket()
@@ -3207,7 +3228,7 @@ RTPPacket* RTPSession::GetPacket()
     streamUse.IncUse();
     RTPPacket* rtp = (defaultStream != NULL && !defaultStream->disabled) ? defaultStream->Wait() : NULL;
     streamUse.DecUse();
-    if (rtp == NULL) msleep(100);
+    if (rtp == NULL) { CountEmptyGetPacket(); msleep(100); }
     return rtp;
 }
 
@@ -3217,7 +3238,7 @@ RTPPacket* RTPSession::GetPacket(DWORD & ssrc)
     RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     RTPPacket* rtp = (s != NULL && !s->disabled) ? s->Wait() : NULL;
 	streamUse.DecUse();
-    if (rtp == NULL) msleep(100);
+    if (rtp == NULL) { CountEmptyGetPacket(); msleep(100); }
     return rtp;
 }
 
