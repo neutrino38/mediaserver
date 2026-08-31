@@ -108,8 +108,8 @@ void RemoteRateControl::Update(QWORD time,QWORD ts,DWORD size, bool mark)
 	prevTime = curTime;
 }
 
-//Aligne ligne a ligne sur le temoin ../webrtc (overuse_estimator.cc), les
-//divergences §3.4 du diagnostic corrigees une a une — voir rate-control.md.
+//Aligne ligne a ligne sur le temoin ../webrtc (overuse_estimator.cc) :
+//comparaison detaillee dans docs/reference/kalman-vs-webrtc.md.
 void RemoteRateControl::UpdateKalman(int deltaTime, int deltaSize, double tsDelta)
 {
 	//Debug("RemoteRateControl::UpdateKalman() deltas [time:%d size:%d ts:%f]\n",deltaTime, deltaSize, tsDelta);

@@ -569,7 +569,9 @@ int VideoStream::SendVideo()
 		{
 			//Do not send anymore
 			sendFPU = false;
-			//Do not send if just send one (100ms)
+			//Do not send if just sent one (10ms). getDifTime() is in
+			//microseconds. The flag is cleared above, so a request landing
+			//inside this window is DROPPED, not deferred.
 			if (getDifTime(&lastFPU)/100>100)
 			{
 				//Set it
@@ -822,7 +824,7 @@ int VideoStream::RecVideo()
 		//Si hemos perdido un paquete or still have not got an iframe
 		if(lostCount>1 || waitIntra)
 		{
-			//Check if we got listener and more than two seconds have elapsed from last request
+			//Check if we got listener and more than ten seconds have elapsed from last request
 			if (listener && getDifTime(&lastFPURequest)>10000000)
 			{
 				//Debug
@@ -906,7 +908,7 @@ int VideoStream::RecVideo()
 		//Lo decodificamos
 		if(!videoDecoder->DecodePacket(buffer,size,lost,packet->GetMark()))
 		{
-			//Check if we got listener and more than two seconds have elapsed from last request
+			//Check if we got listener and more than one second has elapsed from last request
 			if (listener && getDifTime(&lastFPURequest)>1000000)
 			{
 				//Debug

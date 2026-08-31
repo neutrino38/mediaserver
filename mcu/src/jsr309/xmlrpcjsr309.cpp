@@ -1302,7 +1302,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//les codecs SANS fmtp (valeur ""). La PRÉSENCE de la clé est le signal
 	//d'acceptation — c'est la seule source dont le contrôleur SIP dispose pour
 	//connaître l'ensemble accepté, donc filtrer les vides ferait disparaître PCMU,
-	//PCMA, G722 et T140 de ses SDP. Contrat : xmlrpc_jsr309_api.md §6.7 (qui l'énonce
+	//PCMA, G722 et T140 de ses SDP. Contrat : JSR-309-API.md §6.7 (qui l'énonce
 	//correctement) et nego_fmtp.md §5.2/§8-E, dont la formulation initiale disait
 	//l'inverse et a été corrigée le 2026-08-05 pour se caler sur ce code.
 	xmlrpc_value* fmtpStruct = xmlrpc_struct_new(env);

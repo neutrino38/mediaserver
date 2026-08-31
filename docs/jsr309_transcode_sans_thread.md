@@ -301,7 +301,7 @@ dans `EncodePicture` à côté de `fpsEffectif` et passé au `SetFrameRate` qui
 rouvre : **une seule trame clé** pour les deux changements. Le contrat XML-RPC
 ne change pas (rien côté elixip, MOTELI ni jsr309impl) ; libmedikit non plus
 (`gop_size` reste un nombre d'images, l'arithmétique est dans le mcu). Une
-phrase à ajouter dans `design/xmlrpc_jsr309_api.md` : « si la source est plus
+phrase à ajouter dans `JSR-309-API.md` : « si la source est plus
 lente que `fps`, le transcodeur garde la durée `intraPeriod/fps` en secondes ».
 Valeurs effectives journalisées à chaque réouverture.
 
@@ -564,7 +564,7 @@ Tests du sous-module : trois de plus dans
 `tests/test_video_encoder_reconfig.cpp`. `GetEffectiveFps` /
 `GetEffectiveIntraPeriod` exposent les valeurs appliquées ; elles sont
 journalisées à chaque changement. Contrat écrit dans
-`design/xmlrpc_jsr309_api.md` §6.11.
+`JSR-309-API.md` §6.11.
 
 **Lot 5 — recette — PRÉPARÉ, appel réel à jouer** : la procédure est écrite
 dans `docs/maintenance/recette-transcodeur-sans-thread.md` : les quatre

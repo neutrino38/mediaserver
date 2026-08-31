@@ -1,8 +1,8 @@
 /**
  * test_rate_control.cpp — caractérisation du contrôle de débit (lot 0).
  *
- * Harnais du chantier rate-control (diagnostic : rate-control.md, plan :
- * rate_control_plan.md). Les classes sous test — RemoteRateEstimator et
+ * Harnais du contrôle de débit (mécanismes : docs/RATE-CONTROL.md).
+ * Les classes sous test — RemoteRateEstimator et
  * RemoteRateControl — sont pures : on les nourrit de paquets synthétiques à
  * horloge SIMULÉE via l'overload Update(ssrc, now, ts, size, mark), et on
  * observe l'estimation par un Listener de capture.
@@ -101,7 +101,7 @@ TEST(RateControlEstimator, LEstimationSuitUnFluxRegulier)
 	const DWORD ssrc = 0x1234;
 
 	// 75 s simulées : le premier tick AIMD n'arrive qu'après le retard initial
-	// de 500 + 60 000 ms (rate-control.md, annexe B), puis un tick par seconde.
+	// de 500 + 60 000 ms, puis un tick par seconde.
 	FeedRegular(estimator, ssrc, /*from=*/100000, /*durationMs=*/75000);
 
 	DWORD estimation = estimator.GetEstimatedBitrate();
@@ -966,8 +966,7 @@ TEST(RateControlThreshold, UneVraieCongestionResteVueEnRegionNearMax)
 // ---------------------------------------------------------------------------
 // Suite RateControlJitter — la gigue ne doit pas mentir. Le critere de la seance
 // est « faux positifs <= 10 % des echantillons » ; un test le prononce plus
-// durement : ZERO bascule sur une gigue sans derive. Conception : lot 3bis de
-// rate_control_plan.md.
+// durement : ZERO bascule sur une gigue sans derive.
 // ---------------------------------------------------------------------------
 
 // Gigue deterministe. Pas de rand() : un test doit se rejouer a l'identique, et
@@ -1128,7 +1127,7 @@ void FeedLossPhase(RemoteRateControl& ctrl, QWORD& time, QWORD& ts,
 
 // ---------------------------------------------------------------------------
 // Suite RateControlLoss — le chemin de perte (UpdateLost), que ni l'escalier ni
-// la gigue n'exercent. Conception : lot 3bis de rate_control_plan.md.
+// la gigue n'exercent.
 // ---------------------------------------------------------------------------
 
 // Un seul test couvrait ce chemin, et il vérifiait une ABSENCE de détection : le

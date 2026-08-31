@@ -20,7 +20,7 @@ static const QWORD kInitializationMs = 5000;
 RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(1000)
 {
 	//Not last estimate
-	//Bornes realignees (rate-control.md, annexe B) : l'ancien plancher 128000
+	//Bornes realignees (docs/RATE-CONTROL.md) : l'ancien plancher 128000
 	//interdisait d'annoncer un reseau lent, l'ancien plafond 1280000000
 	//(coquille probable) n'en etait pas un — temoin : 30 Mb/s, plancher 16 kb/s
 	//(arbitrage A1 : en-dessous, mieux vaut geler l'image).
@@ -459,7 +459,7 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 		currentBitRate = maxConfiguredBitRate;
 
 	//Formats : DWORD -> %u, long double -> cast double + %f ("%llf" n'existe pas,
-	//les valeurs affichees etaient fausses — rate-control.md §4, "traces").
+	//les valeurs affichees etaient fausses).
 	//"stream=" nomme la patte (tag du participant / nom de l'endpoint) : sans lui
 	//un appel a deux pattes melange deux series dans le meme journal et le
 	//depouillement du lot 3 (mcu/tests/tools/) ne peut pas les separer.

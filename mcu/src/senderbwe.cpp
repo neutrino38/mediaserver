@@ -391,7 +391,7 @@ void SenderBWE::UpdateDelayEstimate(QWORD nowUs)
 		case Decrease:
 		{
 			//La descente porte sur le debit ACQUITTE, pas sur notre propre
-			//estimation (l'ecart qui empechait la convergence, rate-control.md §5.2)
+			//estimation (docs/RATE-CONTROL.md)
 			DWORD decreased = (DWORD)(Beta * ackedBps + 0.5);
 			if (decreased > 5000)
 				decreased -= 5000;

@@ -368,8 +368,8 @@ check-ipv6: tests/runtests
 	./tests/runtests --gtest_filter='IPv6*' --gtest_also_run_disabled_tests
 
 # Suite contrôle de débit (chantier rate-control, cf. tests/test_rate_control.cpp).
-# Tableau de bord du chantier : joue AUSSI les tests DISABLED_ (caractérisation
-# des défauts de rate-control.md §3, leves un a un par le lot 1 du plan).
+# Joue AUSSI les tests DISABLED_ (caractérisation de défauts levés un a un).
+# Les mécanismes sous test sont décrits dans docs/RATE-CONTROL.md.
 check-ratecontrol: tests/runtests
 	./tests/runtests --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
 

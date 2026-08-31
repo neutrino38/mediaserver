@@ -58,7 +58,7 @@ public:
 	void UpdateRTT(DWORD ssrc,DWORD rtt, QWORD now);
 	void UpdateLost(DWORD ssrc,DWORD lost, QWORD now);
 	//La taille vient du paquet lui-meme (GetSize()) : le 3e parametre qui
-	//recevait un horodatage a disparu (rate-control.md §3.1).
+	//recevait un horodatage a disparu.
 	void Update(DWORD ssrc, RTPTimedPacket* packet);
 	void Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool mark);
 	DWORD GetEstimatedBitrate();

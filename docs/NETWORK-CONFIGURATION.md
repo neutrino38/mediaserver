@@ -542,4 +542,4 @@ certificats WebSocket/DTLS) sont décrites dans le `readme.md`.
 |---|---|
 | `readme.md` | Installation, démarrage, ensemble des options de ligne de commande |
 | `MCU-API.md` §6.7 bis | Contrat du paramètre `profile` côté API MCU (pour le développeur du contrôleur) |
-| `xmlrpc_jsr309_api.md` §6.7 bis / §6.7 ter | Idem côté API JSR-309, et `GetNetworkProfiles` |
+| `JSR-309-API.md` §6.7 bis / §6.7 ter | Idem côté API JSR-309, et `GetNetworkProfiles` |

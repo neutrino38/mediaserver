@@ -1,7 +1,7 @@
 # FlexFEC dans Linphone SDK 6 — analyse de l'implémentation oRTP
 
 > Analyse sur pièces (2026-08-15), demandée en marge du chantier contrôle de
-> débit ([`rate_control_plan.md`](rate_control_plan.md), « hors périmètre »).
+> débit ([`../docs/RATE-CONTROL.md`](../docs/RATE-CONTROL.md), « hors périmètre »).
 > Références, commit `be0395f9` du monorepo linphone-sdk :
 > - `ortp/src/fecstream/` — 16 fichiers, ~118 Ko (encodeur, paquets, params,
 >   cluster de réception, stats, overhead) ;
@@ -34,8 +34,8 @@ Trois preuves convergentes dans le code :
    (`getProtectedSsrc()` = `rtp_get_csrc(mPacket, 0)`) — signature RFC 8627.
 
 **Conséquence interop : il existe deux mondes FEC disjoints.** Les navigateurs
-émettent ULPFEC (flexfec-03 derrière un field trial jamais activé —
-rate-control.md §5.3) ; Linphone 6 émet FlexFEC RFC 8627. Aucun pont possible
+émettent ULPFEC (flexfec-03 derrière un field trial jamais activé) ;
+Linphone 6 émet FlexFEC RFC 8627. Aucun pont possible
 au niveau du fil : un serveur qui veut réparer les deux parcs doit décoder les
 deux formats. Notre décodeur ULPFEC couvre le premier ; le second est à écrire.
 
@@ -67,8 +67,8 @@ deux formats. Notre décodeur ULPFEC couvre le premier ; le second est à écrir
 coupe la FEC quand ça perd trop pour qu'elle serve. Pas d'hystérésis
 explicite ; l'overhead réellement émis est mesuré (`getMeasuredOverhead()`).
 
-C'est exactement le raisonnement « la FEC s'achète sur le budget média » de
-rate-control.md §5.3, en plus simple que le `fec_controller` de libwebrtc :
+C'est exactement le raisonnement « la FEC s'achète sur le budget média »,
+en plus simple que le `fec_controller` de libwebrtc :
 la redondance est une fonction de (perte, bande passante) plafonnée — pas un
 pourcentage fixe. Les scénarios du testeur le confirment : variation
 5 Mb/s → 300 kb/s → 5 Mb/s, pertes 5-8 %, VP8 et AV1, avec SRTP/DTLS/ZRTP/ICE.

@@ -1,11 +1,10 @@
 # Outillage de mesure du contrôle de débit (lots 3, 6.5 et 7)
 
-Ce répertoire porte de quoi **exécuter et dépouiller** les séances de mesure du
-chantier : le lot 3 de [`rate_control_plan.md`](../../../rate_control_plan.md) —
-le *portillon* qui décide du GO/NO-GO du lot 6 —, la séance egress du 6.5, et la
-campagne d'interopérabilité du lot 7 (voir plus bas). Il ne contient aucun test
-unitaire : la suite
-gtest du chantier est `mcu/tests/test_rate_control.cpp`, jouée par
+Ce répertoire porte de quoi **exécuter et dépouiller** une séance de mesure du
+contrôle de débit : dégradation du lien en réception, en émission, et campagne
+d'interopérabilité (voir plus bas). Les mécanismes mesurés sont décrits dans
+[`docs/RATE-CONTROL.md`](../../../docs/RATE-CONTROL.md). Il ne contient aucun
+test unitaire : la suite gtest est `mcu/tests/test_rate_control.cpp`, jouée par
 `make check-ratecontrol`.
 
 | fichier | rôle |
@@ -317,10 +316,9 @@ Les valeurs elles-mêmes se lisent plus commodément dans `events.csv`
 (colonne `value_kbps`, lignes `REMB`/`TMMBR`) — le pcap sert à prouver le
 **dialecte** et le fait que ça sort de la machine.
 
-## Campagne d'interopérabilité (lot 7)
+## Campagne d'interopérabilité
 
-Trois montages, décrits au lot 7 de
-[`rate_control_plan.md`](../../../rate_control_plan.md) : navigateur ↔ navigateur,
+Trois montages : navigateur ↔ navigateur,
 navigateur → Linphone, Linphone → navigateur. L'outillage ne change pas ; ce qui
 change, c'est **où l'on dégrade** et **ce qu'on lit**.
 
@@ -353,7 +351,6 @@ pas dans le chemin : tout critère portant sur notre débit émis change de sens
 Les séances du lot 7 vont en **annexe E** du même document, une section par
 montage, le relevé de dialecte de la phase 0 en tête.
 
-Les mesures et la décision GO/NO-GO vont en **annexe D de
-[`rate-control.md`](../../../rate-control.md)** : le graphe, le bloc `--markdown`
-de chaque scénario, et la liste des alignements « lot 1bis » que la mesure
-réclame le cas échéant (arbitrage A3 du plan).
+Les mesures vont dans le **compte rendu de séance** : le graphe et le bloc
+`--markdown` de chaque scénario, plus la liste des correctifs que la mesure
+réclame le cas échéant.

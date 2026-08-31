@@ -119,7 +119,7 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
         //Si hemos perdido un paquete or still have not got an iframe
         if(lostCount>1 || waitIntra)
         {
-                //Check if we got listener and more than two seconds have elapsed from last request
+                //Check if we got listener and more than one second has elapsed from last request
                 if (getDifTime(&lastFPURequest)>1000000)
                 {
                         //lock() : source encore vivante ?
@@ -202,7 +202,7 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
         //Lo decodificamos
         if(!videoDecoder->DecodePacket(buffer,size,lost,packet.GetMark()))
         {
-                //Check if we got listener and more than two seconds have elapsed from last request
+                //Check if we got listener and more than one second has elapsed from last request
                 if (getDifTime(&lastFPURequest)>1000000)
                 {
                     if (std::shared_ptr<Joinable> j = joined.lock())

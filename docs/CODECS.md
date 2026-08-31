@@ -2,7 +2,7 @@
 
 > Référence des **propriétés de codec** (`codec.*`) reconnues par le média
 > serveur et du `fmtp` qu'il **génère** lors de la négociation JSR-309.
-> Complète `nego_fmtp.md` (conception) et `xmlrpc_jsr309_api.md` §6.7 (API).
+> Complète `nego_fmtp.md` (conception) et `JSR-309-API.md` §6.7 (API).
 > Statut : phase 4 livrée (génération du `fmtp` local + filtrage) ; l'ingestion
 > du `fmtp` **distant** (`codec.<x>.fmtp`) est routée mais pas encore parsée
 > (phase 5).

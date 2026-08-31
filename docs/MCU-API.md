@@ -6,7 +6,7 @@ Documentation de l'API XML-RPC exposée par `mcu/src/xmlrpcmcu.cpp`
 
 Cette interface est l'API **spécialisée MCU** (multipoint control unit) : elle
 pilote directement le moteur de conférence (`MCU` → `MultiConf` → participants /
-mixers / mosaïques). Contrairement à l'[API JSR-309](../design/xmlrpc_jsr309_api.md), plus
+mixers / mosaïques). Contrairement à l'[API JSR-309](JSR-309-API.md), plus
 générique et orientée « endpoint / joinable », l'API MCU raisonne en termes de
 **conférences** et de **participants** que l'on assemble dans des **mosaïques**,
 **sidebars** et incrustations vidéo. C'est l'API historique du produit MCU.
@@ -365,7 +365,7 @@ Autres conséquences :
   historique, `EventQueueDelete` sans effet de bord).
 
 La même politique gouverne les `MediaSession` de l'API `/jsr309`
-(`xmlrpc_jsr309_api.md` §5) — c'est le même code de balayage.
+(`JSR-309-API.md` §5) — c'est le même code de balayage.
 
 ### Types d'événements
 
@@ -774,7 +774,7 @@ serveur le journalise et négocie contre sa seule configuration.
 - La **présence de la clé est le signal d'acceptation** : c'est la seule source dont
   le contrôleur dispose pour connaître l'ensemble accepté, et c'est de là qu'il
   reconstruit sa ligne `m=` et ses `a=fmtp`. Même contrat, mot pour mot, que
-  `EndpointStartReceiving` côté JSR-309 (`xmlrpc_jsr309_api.md` §6.7).
+  `EndpointStartReceiving` côté JSR-309 (`JSR-309-API.md` §6.7).
 - La `rtpMap` réellement **installée** est la map filtrée, pas celle proposée.
 - Un média non négociable retombe sur la map proposée telle quelle, sans fmtp
   remonté (comportement d'avant la délégation).
@@ -1356,5 +1356,5 @@ entier du tuple d'événement est le type (`MCU::Events`) :
   celui décrit au §7. Attention : la classe participant réellement instanciée
   est `RTPParticipant2` (et non `RTPParticipant`, l'ancienne variante).
 
-Voir aussi l'[API JSR-309](../design/xmlrpc_jsr309_api.md) pour le pilotage bas niveau
+Voir aussi l'[API JSR-309](JSR-309-API.md) pour le pilotage bas niveau
 générique (endpoints, joinables, transcoders).
