@@ -202,6 +202,69 @@ préexistants) + 187 tests libmedikit.** Binaire `bin/debug/mcu` lié.
   de ~27/min à quelques-unes/min, trace `-SendReferencePictureSelectionIndication`
   (Debug, binaire en `-d`), non-régression du throttler TMMBR 7.9.
 
+### Recette n°1 (2026-08-31, 06:25-06:42, ~17 min) : nos RPSI partent, les clés ne baissent PAS
+
+Notre bord est HORS DE CAUSE, chaque maillon vérifié :
+- 523 RPSI émis, un par trame de référence décodée, dans les ms qui suivent le
+  décodage (pictureId à bit M, PT 96, SSRC média = le SSRC d'émission du pair) ;
+- le calcul de longueur d'oRTP sur notre FCI rend exactement 16 bits ;
+- le transport RTCP nous→pair FONCTIONNE : 35 TMMBN reçus en réponse à nos
+  29 TMMBR (le pair déchiffre et traite notre SRTCP).
+
+Et pourtant : 495 `Got Intra` en 17 min, cadence PARFAITEMENT stable à 2,0 s
+(322 intervalles pile à 2,0 s) = le tick msvp8 `vconf.fps × 3` trames en mode
+« jamais acquitté », du début à la fin. Nuance : pendant la PREMIÈRE minute,
+~23 refresh golden/altref INTER (acquittés par nous) s'intercalent, puis plus
+aucun après 06:26:10 — soit des ticks partiellement débloqués, soit du refresh
+spontané libvpx (flags à 0 hors tick) ; indécidable de notre bord.
+
+Côté sources Linphone (SDK 5.5.9), AUCUN garde n'explique le rejet :
+`media_stream_process_rtcp` itère chaque paquet du compound vers
+`video_stream_process_rtcp`, qui ne vérifie que le media SSRC (et journalise
+« was ignored. Our SSRC is » en cas d'échec) ; `enc_notify_rpsi` acquitte sans
+condition ; `enc_reset_frames_state` n'est appelé qu'à la création de
+l'encodeur. MAIS le pair réel est peut-être un Linphone 6 (ms2 plus récent que
+ces sources) — et son estimateur spamme : 1435 TMMBR reçus (~1,4/s) malgré nos
+1435 TMMBN, un poste d'anomalie en soi.
+
+**PROCHAINE ÉTAPE — le log CLIENT Linphone tranche en une minute** :
+- `VP8: receiving RPSI for picture_id` présent → l'ack arrive à msvp8, le
+  blocage est dans sa machine frames_state (ou une version divergente) ;
+- `was ignored. Our SSRC is` → désaccord de media SSRC, correctif chez nous ;
+- rien des deux → perte entre oRTP et videostream (garde propre à la version).
+Relever aussi la VERSION exacte du client. Sans log client : pcap côté client
+(le RTCP y est lisible si l'appel n'est pas SRTP, sinon logs seulement).
+
+### Recette n°2 (2026-08-31, 07:00-07:02, ~2,3 min, client redémarré avec traces) : **VALIDÉE**
+
+Client Linphone **6.2.1** (AppImage), traces détaillées fournies. Chaîne
+complète prouvée :
+- client : `VP8: receiving RPSI for picture_id 44577` puis compteur qui monte
+  (~1 RPSI/3 s reçu), zéro `was ignored` ;
+- client : 3 `Forcing vp8 key frame` dans les 7 premières secondes (démarrage
+  + un PLI), puis PLUS AUCUNE — relayées par `Forcing independant altref
+  frame.` toutes les ~18 s = le régime AVPF nominal acquitté (vp8.c:423,
+  altref indépendant toutes les 5×interval) ;
+- mcu : **5 `Got Intra` sur tout l'appel, toutes avant t+20 s** (référence
+  avant chantier : ~27/min), 49 RPSI émis. **Critère du lot 5 atteint.**
+
+Deux points consignés, à suivre hors chantier :
+1. **L'échec de la recette n°1 (06:25, même binaire, même processus, même
+   version client annoncée) reste inexpliqué côté client** — nos émissions
+   étaient identiques et arrivaient (TMMBN en réponse à nos TMMBR). Seule
+   différence connue : le client a été redémarré entre les deux. S'il
+   récidive : reprendre ses traces (elles montrent tout) ; piste à garder,
+   `video-conference.cpp:208` IGNORE les RPSI quand le client est en mode
+   packet-router/conférence locale.
+2. **Le client spamme des TMMBR** (~1,4/s : 1435/17 min puis 187/2,3 min)
+   malgré nos TMMBN immédiats, dans les DEUX essais — son estimateur de notre
+   flux oscille. Poste distinct (candidat 7.11 du contrôle de débit) ; nos
+   ripostes sont bornées (TMMBN systématique, notre encodeur amorti).
+3. Correction du constat du lot 0 : le SDP kelixip de CET appel PORTE
+   `a=rtcp-fb:96 ack rpsi` (answer et re-INVITE) — l'écho existe donc par un
+   autre chemin que la table `@supported_rtcp_fb` lue au lot 0 ; à retracer
+   si un jour l'écho compte.
+
 ## 8. Pièges connus, hérités des chantiers voisins
 
 - Vérifier les fins de ligne avant d'éditer `rtp.h` (des fichiers du dépôt sont
