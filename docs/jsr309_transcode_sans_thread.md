@@ -695,6 +695,78 @@ face au `RTPSmoother` de `RTPSession`.
   périmètre, à traiter ailleurs. `include/RTPSmoother.h` (lisseur de
   `RTPSession`) porte le MÊME `bool inited` non atomique — non touché ici.
 
+## 7 bis. Reste à faire : la bande morte de la montée du pas
+
+Mesuré le 2026-09-01, appel JSR-309 transcodé H.264 ↔ VP8 de 27 min, 720p,
+x264 `veryfast` mono-thread. Défaut réel, **non corrigé**.
+
+### Ce que le journal dit
+
+```
+-VideoTranscoder: encodeur trop lent [video transcoder outbound] :
+ 33 ms par image pour un budget de 41 ms (source 24 im/s)
+ -> 1 image sur 2 encodee, encodeur recale a 12 im/s
+```
+
+33 ms sous un budget de 41 ms, et pourtant le pas monte. C'est correct : le
+seuil n'est pas le budget mais la **part utilisable**, qui réserve un cinquième
+au décodage et au démux du même thread.
+
+```
+usable = 41 × UsableShareNum/UsableShareDen = 41 × 4/5 = 32,8 ms
+StepFor(32,8)                              = ceil(33 / 32,8) = 2
+```
+
+Le pas bascule donc pour **0,2 ms** de dépassement. Et pour redescendre il faut
+`32,8 × DownShareNum/DownShareDen = 23 ms` tenus `RecoveryUs` (3 s) — qu'un
+encodeur oscillant entre 25 et 34 ms n'atteint jamais.
+
+### Ce que cela produit
+
+| Mesure sur 27 min | Valeur |
+|---|---|
+| Traces « encodeur trop lent » | **4 par minute, chaque minute, pendant 23 min** |
+| Cadence de sortie | 12 im/s au lieu de 24 |
+| `OpenCodec` | 24, dont **14 dans les 70 premières secondes** |
+| `Got Intra` | 183 |
+| Paquets jetés par le `RTPBuffer` | **0** |
+
+Ce n'est pas un transitoire : c'est le régime permanent. Symptôme observé côté
+pair : environ une seconde de latence vidéo au démarrage, qui se résorbe
+lentement. La lenteur est la somme de quatre délais délibérés qui s'ajoutent :
+`MinSamples` (8 images) avant la première décision, `FpsWindow` (30 images)
+avant qu'une cadence puisse être appliquée, 5 s minimum entre deux
+applications, `RecoveryUs` (3 s) avant qu'un pas redescende.
+
+### Le défaut
+
+**La montée du pas n'a aucune bande morte**, alors que la descente en a 30 %.
+L'asymétrie est voulue — le `RTPBuffer` jette après 500 ms, il n'y a pas le
+temps d'attendre — et ce motif reste bon. Mais il n'exige pas une marge
+**nulle** : 500 ms à 25 im/s, c'est douze images de mou, de quoi confirmer une
+montée sur deux ou trois échantillons.
+
+### Options
+
+| Option | Verdict |
+|---|---|
+| **Bande morte sur la montée** : monter le pas seulement si `costUs > usable × 11/10`, ou après 2 à 3 échantillons consécutifs au-dessus du seuil | **Retenue.** Local à `FrameDecimator::Observe`, couvert par `mcu/tests/test_frame_decimator.cpp` |
+| `UsableShare` de 4/5 à 9/10 | Écartée : déplace le seuil sans le stabiliser, et prend la marge qui protège des pics de décodage |
+| `thread_count` > 1 pour libx264 | Écartée sur la seule lecture d'un journal : le mono-thread est un choix assumé pour un mixeur chargé (`h264/h264encoder.cpp`) |
+
+### Ce qui a été vérifié et écarté comme cause
+
+H.264 est **déjà** réglé pour le temps réel dans
+`third_party/fontventa/libmedikit/h264/h264encoder.cpp` : `preset veryfast`
+au-delà de VGA, `tune zerolatency`, `forced-idr`, `ref=1`, `subme` réduit,
+`thread_count = 1`. Il n'y a pas de réglage oublié — 33 ms est ce que coûte un
+720p mono-thread à ce preset.
+
+Le chantier « moins de threads RTP » (`docs/conception/RTP-REACTOR/SPEC.md`) est
+hors de cause : sur la même séance, zéro alerte du réacteur et zéro paquet jeté
+par le `RTPBuffer`. Le même régime est d'ailleurs documenté dans l'en-tête de
+`FrameDecimator.h` au 2026-08-29, avant ce chantier.
+
 ## 8. Ce que ce plan ne fait pas
 
 - Il ne touche pas aux threads des jambes RTP (`RTPSession::Run`,
