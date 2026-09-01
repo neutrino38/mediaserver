@@ -872,12 +872,54 @@ Comptages sur 20,4 min : **2** TMMBR émis (2 500 000 puis 2 350 536), 2 257
 REMB émis, 5 TMMBN reçus, 2 385 `onTargetBitrateRequested`. Aucune trace de
 TMMBR bruités.
 
-**Ce qui reste ouvert sur R8** : le pair n'a émis **ni TMMBR ni REMB** vers
-nous. La réception de la limite du pair — le chemin précis qui a changé de
-thread — n'a donc pas été exercée. Pour la clore il faut trois conditions
-réunies : un appel réellement transcodé (codecs différents des deux côtés, donc
-un encodeur), une dégradation appliquée (`netem_scenario.sh`), et un pair qui
-annonce sa limite (Linphone en `ccm tmmbr`).
+**Séance R8 du 2026-09-01** : appel transcodé VP8 ↔ H.264, dégradation
+`netem_scenario.sh -s escalier` appliquée en **égress** (le sens qui dégrade la
+réception du PAIR, donc celui qui le fait parler), pair Linphone.
+
+Les trois conditions manquantes sont enfin réunies : transcodage réel, `netem`
+appliqué, et **1 365 TMMBR reçus** en 4 min. Ce que la séance établit :
+
+- **la chaîne RTCP fonctionne après le changement de thread** — 1 365 TMMBR
+  reçus et traités, 480 `onTargetBitrateRequested`, et l'amortisseur décide
+  correctement de ne rien réémettre (459 fois `send=0`) ;
+- **aucune régression** : zéro alerte du réacteur, aucun paquet jeté, estimateur
+  de réception sans NaN ni hypothèse gelée.
+
+Mais **R8 n'est pas démontré**, et la séance dit pourquoi : `transport-cc` n'a
+pas été négocié (zéro trace `Activated transport-cc`). Or §15 de
+`RATE-CONTROL.md` l'écrit — sans transport-cc, l'estimateur d'émission ne
+produit rien. Le journal le confirme : `target=0 delay=0 acked=0` d'un bout à
+l'autre. Le mécanisme visé n'a donc pas pu agir.
+
+**Trois pièges de lecture de ce rapport**, à connaître avant de le relire :
+
+| Ce que le rapport dit | Ce que c'est |
+|---|---|
+| `tx:` « 0,8 s pour passer sous 250 kb/s » — OK | PAS une régulation : `target` valait 0 partout. Le rapport a lu un effondrement au plancher |
+| `tx:` 248,6 s au plancher, « jamais remontée » | même cause : pas de transport-cc, donc pas d'entrée |
+| trois KO « pas d'oscillation, coef. variation **nan** » | défaut de l'outil : une série constante donne un coefficient `nan`, et `nan < 0.20` est faux → KO au lieu de n/a |
+
+Et les quatre KO de la patte de réception comparent l'estimation à un « lien
+nominal 800/200 » qui ne s'appliquait pas à ce sens : l'entrant est resté à
+2 284, 2 273 puis 2 306 kb/s sur les trois paliers — jamais contraint. Le +58 %
+au-dessus de l'entrant est le plafond glissant de 1,5× documenté.
+
+**Ce qu'il faut pour clore R8** : un pair qui négocie **transport-cc** — donc un
+navigateur, pas un Linphone. C'est le seul montage où l'estimateur d'émission a
+une entrée, donc le seul où « le RTCP reçu pilote l'émission » est observable de
+bout en bout.
+
+**Troisième séance, 2026-09-01, appel JSR-309 transcodé H.264 ↔ VP8 de 27 min.**
+Zéro trace d'alerte, zéro `tour long`, et — c'est le point qui compte pour le
+chemin de réception — **zéro `file trop profonde`** : le jitter buffer n'a jeté
+aucun paquet sur 27 minutes de transcodage. Le lot 2 est propre sur les trois
+séances.
+
+La séance a montré une latence vidéo d'environ 1 s au démarrage, qui se résorbe
+lentement. Elle **n'appartient pas à ce chantier** : c'est le régime du
+`FrameDecimator` du transcodeur, dont l'en-tête documente déjà la même mesure au
+2026-08-29, avant le réacteur. Analyse dans la fiche mémoire du chantier
+transcodeur.
 
 **Un point à mesurer, pas à optimiser d'avance.** `OnPollEvents` lit **un**
 datagramme par tour, exactement comme la boucle d'avant (le `poll` est à
@@ -891,7 +933,7 @@ mesure du §4.3 dit le contraire, la parade est de **drainer** chaque socket
 prêt jusqu'à `EWOULDBLOCK` — à ne faire que sur mesure, parce que cela crée de
 la tête de ligne à l'intérieur du groupe.
 
-### Lot 3 — Attente bornée, fin de l'attente active
+### Lot 3 — Attente bornée, fin de l'attente active — CODE FAIT
 
 - `RTPBuffer::Wait(DWORD timeoutMs)`, `RTPSession::GetPacket(ssrc, timeoutMs)`
   (§4.1), attente sur condition quand le flux n'existe pas encore.
@@ -899,8 +941,48 @@ la tête de ligne à l'intérieur du groupe.
 - Test : « pendant la sonnerie, une jambe reçue ne consomme pas de CPU » —
   compteur de tours de boucle borné.
 
-**Critère** : le compteur du lot 0 point 2 tombe de ~3 300/s à ~5/s. Aucune
+**Critère** : le compteur du lot 0 point 2 tombe de ~2 250/s à ~5/s. Aucune
 latence ajoutée sur un appel réel.
+
+**VALIDÉ EN APPEL RÉEL le 2026-09-01** : appel JSR-309 transcodé (VP8 ↔ H.264),
+quatre jambes reçues, le compteur donne `attente active : 5 GetPacket a vide en
+1000 ms` sur chacune — contre ~2 250 avant le lot. Zéro alerte du réacteur, zéro
+`file trop profonde`.
+
+Deux entrées deviennent **une** : `GetPacket()` et `GetPacket(DWORD&)` sont
+remplacées par `GetPacket(DWORD ssrc, DWORD timeoutMs)`, `ssrc` 0 valant flux
+par défaut. Garder deux surcharges dont l'une prend un `DWORD&` et l'autre un
+`DWORD` rendait `GetPacket(x)` ambigu selon que `x` est une variable ou un
+littéral.
+
+Trois cas, trois comportements, et c'est là que tient tout le lot :
+
+| Cas | Comportement |
+|---|---|
+| Le flux existe | `RTPBuffer::Wait(timeoutMs)` — attente bornée, fenêtre de réordonnancement préservée |
+| Le flux est `disabled` (`CancelStreams`, donc arrêt en cours) | NULL **immédiat** : le consommateur doit sortir de sa boucle, pas attendre |
+| Le flux n'existe pas encore | attente de sa **naissance**, jamais de sondage |
+
+Le troisième cas est celui qui coûtait ~2 250 tours par seconde et par jambe.
+Il est réglé par un compteur de génération : `GetPacket` le lit **avant** de
+chercher le flux, puis attend que le compteur change. `AddStream` et
+`SetDefaultStream` l'incrémentent hors du verrou `streamUse` — l'ordre inverse
+serait une inversion de verrous avec `GetPacket`. Un flux né entre la lecture et
+l'attente est donc vu par le prédicat, évalué sous le verrou du `Wait` : **aucun
+réveil n'est perdu**, et le média ne démarre pas avec une échéance de retard.
+
+`SetDefaultStream` incrémente une seconde fois, après avoir posé
+`defaultStream` : l'incrément d'`AddStream` arrive avant que le flux par défaut
+existe, et un consommateur réveillé là verrait encore NULL.
+
+**Tests.** `RtpBufferPrimitive.BoundedWait*` (trois cas : expiration sur file
+vide, livraison d'un paquet arrivé avant l'échéance, et un paquet retenu par la
+fenêtre de réordonnancement qui **reste en file** au lieu d'être perdu).
+`RtpReactor.AReceivingLegWithNoTrafficDoesNotSpin` : 600 ms de boucle à 100 ms
+de borne donnent 6 tours, pas 6 000 — c'est LE test du lot.
+`RtpReactor.TheBirthOfAStreamWakesAWaitingConsumer` : borne de 8 s, paquet émis
+à 80 ms, sortie mesurée à **81 ms**. Sans le compteur de génération, ce test
+mettrait 8 s.
 
 ### Lot 4 — Groupes explicites, puis livraison poussée
 

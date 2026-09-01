@@ -333,13 +333,11 @@ int AudioStream::RecAudio()
 	while(receivingAudio == TaskRunning)
 	{
 		//Obtenemos el paquete
-		RTPPacket *packet = rtp.GetPacket();
+		RTPPacket *packet = rtp.GetPacket(0,RTPSession::ConsumerPollMs);
 		//Check
 		if (!packet)
 		{
-			msleep(200);
-			//Log("-audiostream: receved null packet.\n");
-			//Next
+			//GetPacket a deja attendu : relire le drapeau et repartir.
 			continue;
 		}
 

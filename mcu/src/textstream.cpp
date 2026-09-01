@@ -450,13 +450,12 @@ int TextStream::RecText()
 	while(receivingText  == TaskRunning)
 	{
 		//Get packet
-		RTPPacket* packet = rtp.GetPacket();
+		RTPPacket* packet = rtp.GetPacket(0,RTPSession::ConsumerPollMs);
 
 		//Check if gor anti
 		if (!packet)
                 {
-			//Next
-                        msleep(200);
+			//GetPacket a deja attendu : relire le drapeau et repartir.
 			continue;
                 }
 

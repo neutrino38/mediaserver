@@ -133,7 +133,12 @@ public:
 		cond.notify_all();
 	}
 
-	RTPPacket* Wait()
+	RTPPacket* Wait() { return Wait(0); }
+
+	//`timeoutMs` borne l'attente ; 0 = infinie, comme `Wait::WaitSignal`
+	//(wait.h). Rend NULL sur expiration comme sur annulation : c'est à
+	//l'appelant de distinguer, s'il en a besoin.
+	RTPPacket* Wait(DWORD timeoutMs)
 	{
 		//NO packet
 		RTPTimedPacket* rtp = NULL;
@@ -142,9 +147,18 @@ public:
 
 		WaiterScope scope(*this);
 
+		typedef std::chrono::steady_clock Clock;
+		const Clock::time_point deadline = Clock::now()
+						 + std::chrono::milliseconds(timeoutMs);
+
 		//While we have to wait
 		while (!cancel)
 		{
+			//Échéance du candidat retenu, s'il y en a un : c'est elle qui borne
+			//l'attente quand la file n'est pas vide.
+			Clock::time_point due = deadline;
+			bool held = false;
+
 			//Check if we have somethin in queue
 			if (!packets.empty())
 			{
@@ -173,17 +187,31 @@ public:
 					break;
 				}
 
-				//Attente PASSIVE jusqu'à l'échéance du candidat (réveillée
-				//avant si le paquet manquant arrive)
-				cond.wait_for(lock, std::chrono::milliseconds(time + maxWaitTime - now));
+				held = true;
+				due  = Clock::now()
+				     + std::chrono::milliseconds(time + maxWaitTime - now);
+				if (timeoutMs && deadline < due)
+					due = deadline;
 			}
 			else
 			{
 				//Not hurryUp more
 				hurryUp = false;
+			}
+
+			//Borne de l'appelant atteinte, et rien à rendre. Placé APRÈS
+			//l'examen de la file : un paquet arrivé juste avant l'échéance est
+			//livré, pas jeté.
+			if (timeoutMs && Clock::now() >= deadline)
+				break;
+
+			//Attente PASSIVE jusqu'à l'échéance du candidat (réveillée avant si
+			//le paquet manquant arrive), ou jusqu'à la borne de l'appelant.
+			if (held || timeoutMs)
+				cond.wait_until(lock, due);
+			else
 				//Wait until we have a new rtp packet
 				cond.wait(lock);
-			}
 		}
 
 		//canceled

@@ -3223,23 +3223,43 @@ void RTPSession::CountEmptyGetPacket()
 			count,(unsigned long long)(nowMs-last),LabelForLog(),this);
 }
 
-RTPPacket* RTPSession::GetPacket()
+void RTPSession::OnStreamsChanged()
 {
-    streamUse.IncUse();
-    RTPPacket* rtp = (defaultStream != NULL && !defaultStream->disabled) ? defaultStream->Wait() : NULL;
-    streamUse.DecUse();
-    if (rtp == NULL) { CountEmptyGetPacket(); msleep(100); }
-    return rtp;
+	++streamGeneration;
+	streamWait.Signal();
 }
 
-RTPPacket* RTPSession::GetPacket(DWORD & ssrc)
+RTPPacket* RTPSession::GetPacket(DWORD ssrc, DWORD timeoutMs)
 {
-    streamUse.IncUse();
-    RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
-    RTPPacket* rtp = (s != NULL && !s->disabled) ? s->Wait() : NULL;
+	//Lu AVANT la recherche : si un flux naît entre les deux, le prédicat de
+	//l'attente le voit déjà et ne dort pas.
+	const DWORD seen = streamGeneration.load();
+
+	streamUse.IncUse();
+	RTPStream* s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+	const bool disabled = (s != NULL) && s->disabled;
+	RTPPacket* rtp = (s != NULL && !disabled) ? s->Wait(timeoutMs) : NULL;
 	streamUse.DecUse();
-    if (rtp == NULL) { CountEmptyGetPacket(); msleep(100); }
-    return rtp;
+
+	if (rtp != NULL)
+		return rtp;
+
+	//Flux en cours d'arrêt (CancelStreams) : le consommateur doit sortir de sa
+	//boucle tout de suite, pas attendre une échéance.
+	if (disabled)
+		return NULL;
+
+	//Pas encore de flux pour ce SSRC : c'est le premier paquet reçu qui le crée.
+	//On attend cette naissance. Revenir sonder faisait tourner le consommateur
+	//à ~2 250 tours par seconde le temps d'un établissement d'appel.
+	if (s == NULL)
+	{
+		CountEmptyGetPacket();
+		streamWait.WaitUntil(timeoutMs,
+			[this,seen] { return streamGeneration.load() != seen; });
+	}
+
+	return NULL;
 }
 
 void RTPSession::CancelGetPacket()
@@ -4013,7 +4033,11 @@ bool RTPSession::AddStream( bool receiving, DWORD ssrc )
 		created = true;
 	}
         streamUse.Unlock();
-	//HORS du verrou streamUse : voir DeleteStreams, meme inversion.
+	//HORS du verrou streamUse : voir DeleteStreams, meme inversion. Le reveil
+	//des GetPacket en attente y est aussi, et pour la meme raison — l'ordre
+	//streamUse puis streamWait serait l'inverse de celui de GetPacket.
+	if (created)
+		OnStreamsChanged();
 	if (created && remoteRateEstimator)
 		remoteRateEstimator->AddStream(ssrc);
 	return true;
@@ -4088,6 +4112,10 @@ bool RTPSession::SetDefaultStream(bool receiving, DWORD ssrc )
 	streamUse.WaitUnusedAndLock();
 	defaultStream = getStream(ssrc);
 	streamUse.Unlock();
+
+	//AddStream a deja reveille, mais defaultStream n'etait pas encore pose : un
+	//GetPacket sur le flux par defaut aurait vu NULL et redormi.
+	OnStreamsChanged();
 
 	return true;
 }

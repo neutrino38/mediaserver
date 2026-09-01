@@ -384,12 +384,11 @@ int RTPEndpoint::MultiplexLoop()
         while(receiving)
         {
                 //Get the packet
-			RTPPacket* packet = RTPSession::GetPacket();
+			RTPPacket* packet = RTPSession::GetPacket(0,RTPSession::ConsumerPollMs);
 			//Check packet
 			if (!packet)
 			{
-				//Next
-				msleep(200);
+				//GetPacket a deja attendu : relire le drapeau et repartir.
 				continue;
 			}
 			//Check type

@@ -787,13 +787,12 @@ int VideoStream::RecVideo()
 	{
 
 		//Obtenemos el paquete
-		RTPPacket* packet = session->GetPacket(recSSRC);
+		RTPPacket* packet = session->GetPacket(recSSRC,RTPSession::ConsumerPollMs);
 
 		//Check
 		if (!packet)
                 {
-			//Next
-                    msleep(1000);
+			//GetPacket a deja attendu : relire le drapeau et repartir.
 		    continue;
                 }
 

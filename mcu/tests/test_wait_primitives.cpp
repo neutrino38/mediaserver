@@ -1011,6 +1011,71 @@ static RTPTimedPacket* MakePacketAt(WORD seq, QWORD arrivalMs, DWORD ssrc = 0x11
 
 // Un consommateur à l'arrêt : 200 paquets à 20 ms d'intervalle couvrent 4 s.
 // Seuls les 500 dernières millisecondes doivent rester.
+// --- Attente bornée (lot 3 du chantier RTP-REACTOR) -------------------------
+//
+// `Wait(0)` garde la sémantique historique, figée par les tests ci-dessus.
+// `Wait(timeoutMs)` rend la main à l'échéance sans rien perdre.
+
+TEST(RtpBufferPrimitive, BoundedWaitTimesOutOnEmptyBuffer)
+{
+	RTPBuffer buf;
+
+	QWORD before = getTime();
+	RTPPacket* p = buf.Wait(100);
+	QWORD elapsedMs = (getTime() - before)/1000;
+
+	EXPECT_EQ(p, (RTPPacket*)NULL);
+	EXPECT_GE(elapsedMs, (QWORD)80)  << "l attente doit vraiment attendre";
+	EXPECT_LT(elapsedMs, (QWORD)900) << "et rendre la main a l echeance";
+}
+
+TEST(RtpBufferPrimitive, BoundedWaitDeliversAPacketArrivingBeforeTheDeadline)
+{
+	RTPBuffer buf;
+
+	std::thread producer([&buf] {
+		std::this_thread::sleep_for(std::chrono::milliseconds(60));
+		buf.Add(MakePacket(1));
+	});
+
+	QWORD before = getTime();
+	RTPPacket* p = buf.Wait(3000);
+	QWORD elapsedMs = (getTime() - before)/1000;
+	producer.join();
+
+	ASSERT_NE(p, (RTPPacket*)NULL) << "le paquet arrive avant l echeance doit sortir";
+	EXPECT_EQ(p->GetSeqNum(), 1);
+	EXPECT_LT(elapsedMs, (QWORD)1000) << "sans attendre l echeance de l appelant";
+	delete p;
+}
+
+// La borne de l'appelant ne doit pas faire PERDRE un paquet retenu par la
+// fenêtre de réordonnancement : elle rend la main, le paquet reste en file, et
+// l'appel suivant le livre une fois la fenêtre écoulée.
+TEST(RtpBufferPrimitive, BoundedWaitKeepsAHeldPacketForTheNextCall)
+{
+	RTPBuffer buf;
+	buf.SetMaxWaitTime(300);
+
+	//Livrer le 1 fixe `next` a 2 : le 3 est alors un trou a combler.
+	buf.Add(MakePacket(1));
+	RTPPacket* first = buf.Wait(500);
+	ASSERT_NE(first, (RTPPacket*)NULL);
+	delete first;
+
+	buf.Add(MakePacket(3));
+
+	//Borne courte : la tete est retenue, on rend NULL sans la consommer.
+	EXPECT_EQ(buf.Wait(50), (RTPPacket*)NULL);
+	EXPECT_EQ(buf.Length(), (DWORD)1) << "le paquet retenu doit rester en file";
+
+	//Une fois la fenetre ecoulee, il sort.
+	RTPPacket* held = buf.Wait(1000);
+	ASSERT_NE(held, (RTPPacket*)NULL);
+	EXPECT_EQ(held->GetSeqNum(), 3);
+	delete held;
+}
+
 TEST(RtpBufferPrimitive, DeepQueueDropsTheOldest)
 {
 	RTPBuffer buf;

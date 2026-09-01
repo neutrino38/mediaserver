@@ -251,7 +251,7 @@ TEST(RtpReactor, TheReactorReallyReadsIncomingRtp)
 	RTPPacket* packet = NULL;
 	Clock::time_point t0 = Clock::now();
 	while (!packet && ElapsedMs(t0) < 2000)
-		packet = leg.session.GetPacket();
+		packet = leg.session.GetPacket(0,50);
 
 	ASSERT_NE(packet, nullptr) << "le reacteur n'a pas lu le paquet RTP";
 	EXPECT_EQ(packet->GetSSRC(), 0x0BADF00Du);
@@ -297,12 +297,12 @@ TEST(RtpReactor, TwoConsumersOnOneSessionEachGetItsOwnSsrc)
 	std::thread a([&] {
 		Clock::time_point t0 = Clock::now();
 		while (!fromMain && ElapsedMs(t0) < 2000)
-			fromMain = leg.session.GetPacket(mainSsrc);
+			fromMain = leg.session.GetPacket(mainSsrc,50);
 	});
 	std::thread b([&] {
 		Clock::time_point t0 = Clock::now();
 		while (!fromSlides && ElapsedMs(t0) < 2000)
-			fromSlides = leg.session.GetPacket(slidesSsrc);
+			fromSlides = leg.session.GetPacket(slidesSsrc,50);
 	});
 	a.join();
 	b.join();
@@ -316,6 +316,81 @@ TEST(RtpReactor, TwoConsumersOnOneSessionEachGetItsOwnSsrc)
 
 	delete fromMain;
 	delete fromSlides;
+
+	leg.session.End();
+	group.Stop();
+}
+
+// LE test du lot 3. Entre StartReceiving et le premier paquet du pair — sonnerie,
+// handshake, pair muet — il n'existe pas encore de flux pour ce SSRC. Le
+// consommateur revenait alors sonder : ~2 250 tours par seconde et par jambe,
+// mesurés le 2026-08-31 sur un appel JSR-309. Il doit maintenant ATTENDRE.
+TEST(RtpReactor, AReceivingLegWithNoTrafficDoesNotSpin)
+{
+	RtpSessionSet group("test-reactor-nospin");
+	ASSERT_TRUE(group.Start());
+
+	Leg leg;
+	ASSERT_TRUE(leg.Init(&group));
+
+	const DWORD timeoutMs = 100;
+	const long  durationMs = 600;
+
+	int calls = 0;
+	Clock::time_point t0 = Clock::now();
+	while (ElapsedMs(t0) < durationMs)
+	{
+		EXPECT_EQ(leg.session.GetPacket(0, timeoutMs), nullptr);
+		++calls;
+	}
+
+	// Le budget théorique est durationMs/timeoutMs, soit 6 tours. La borne haute
+	// est large pour ne pas être flaky sous charge, mais elle reste à trois
+	// ordres de grandeur du sondage qu'elle remplace.
+	EXPECT_LE(calls, 30) << calls << " tours en " << durationMs
+			     << " ms : le consommateur sonde encore";
+	EXPECT_GE(calls, 2)  << "l attente ne doit pas etre infinie non plus";
+
+	leg.session.End();
+	group.Stop();
+}
+
+// La contrepartie : attendre ne doit pas ajouter de latence. Le premier paquet
+// crée le flux, et cette naissance réveille l'attente au lieu de la laisser
+// courir jusqu'à son échéance. C'est ce que garantit le compteur de génération
+// lu AVANT la recherche du flux — sans lui, le réveil serait perdu et le média
+// démarrerait avec un retard d'une échéance entière.
+TEST(RtpReactor, TheBirthOfAStreamWakesAWaitingConsumer)
+{
+	RtpSessionSet group("test-reactor-birth");
+	ASSERT_TRUE(group.Start());
+
+	Leg leg;
+	ASSERT_TRUE(leg.Init(&group));
+	const int port = leg.session.GetLocalPort();
+	ASSERT_GT(port, 0);
+
+	// Borne volontairement énorme : si le réveil est perdu, le test le voit.
+	const DWORD hugeTimeoutMs = 8000;
+
+	RTPPacket* packet = NULL;
+	Clock::time_point t0 = Clock::now();
+
+	std::thread consumer([&] {
+		while (!packet && ElapsedMs(t0) < (long)hugeTimeoutMs)
+			packet = leg.session.GetPacket(0, hugeTimeoutMs);
+	});
+
+	std::this_thread::sleep_for(std::chrono::milliseconds(80));
+	ASSERT_TRUE(SendRtpTo(port));
+
+	consumer.join();
+	long elapsed = ElapsedMs(t0);
+
+	ASSERT_NE(packet, nullptr) << "le paquet doit sortir";
+	EXPECT_LT(elapsed, 1500L) << "reveil perdu : " << elapsed
+				  << " ms pour un paquet emis a 80 ms";
+	delete packet;
 
 	leg.session.End();
 	group.Stop();

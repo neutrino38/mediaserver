@@ -1,6 +1,7 @@
 #ifndef _RTPSESSION_H_
 #define _RTPSESSION_H_
 #include "pollhandler.h"
+#include "wait.h"
 #include <sys/socket.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -235,9 +236,16 @@ public:
 	
 	void CancelGetPacket();
 	
+	//Période de relecture du drapeau d'arrêt par un consommateur, donc la borne
+	//qu'il passe à GetPacket. Assez courte pour qu'un StopReceiving réponde,
+	//assez longue pour que l'attente ne coûte rien.
+	static const DWORD ConsumerPollMs = 200;
+
 	// Multi stream
-	RTPPacket* GetPacket();
-	RTPPacket* GetPacket(DWORD & ssrc);
+	//`timeoutMs` borne l'attente ; `ssrc` 0 = flux par défaut. Rend NULL sur
+	//expiration, sur annulation, ou quand le flux demandé n'existe pas encore —
+	//dans ce dernier cas APRÈS avoir attendu sa naissance, jamais en sondant.
+	RTPPacket* GetPacket(DWORD ssrc, DWORD timeoutMs);
 	void CancelGetPacket(DWORD & ssrc);
 	
 	void ResetPacket(bool clear) { if (defaultStream != NULL) defaultStream->Reset(clear) ;};
@@ -385,6 +393,10 @@ private:
 	void ReSendPacket(int seq);
 
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
+
+	//Un flux vient d'apparaître : réveille les GetPacket qui attendent sa
+	//naissance.
+	void OnStreamsChanged();
 
 	//Mesure de reference du chantier RTP-REACTOR (lot 0) : compte les GetPacket
 	//rendus a vide et les trace a 1 Hz. Retiree au lot 6.
@@ -806,6 +818,12 @@ private:
 	RTPOrderedPackets	rtxs;
 	Use				rtxUse;
 	Use				streamUse;
+	//Naissance d'un flux : `GetPacket` attend cet événement au lieu de sonder
+	//quand le SSRC demandé n'a pas encore de flux — le premier paquet reçu le
+	//crée. Le compteur est lu AVANT la recherche, donc un flux né entre les deux
+	//est vu par le prédicat de l'attente : aucun réveil n'est perdu.
+	::Wait				streamWait;
+	std::atomic<DWORD>		streamGeneration{0};
     bool        	resetRequested;
 	
 	DWORD			lastSendSSRC;
