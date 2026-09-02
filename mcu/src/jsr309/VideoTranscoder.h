@@ -113,6 +113,12 @@ private:
 	//la source peut respecter la bande passante négociée du puits.
 	void PushSourceBitrateLimit();
 
+	//Relaie une limite (bps) du puits vers la source, bornée en haut par la
+	//consigne négociée de la patte émettrice et en bas, en transcodage, par le
+	//plancher de la sonde. L'amortissement du feedback est celui de la jambe
+	//amont (RembThrottler) : ce chemin n'en refait pas un second.
+	void RelayToSource(DWORD estimation);
+
 	//Fenêtre de mesure : 30 écarts, soit 1 s à 30 im/s et 2 s à 15 im/s. Assez
 	//pour lisser le rendu irrégulier d'un navigateur (Chrome oscille entre 24 et
 	//30), assez court pour suivre une vraie bascule.
@@ -121,6 +127,9 @@ private:
 	//(mute vidéo) : compter ce temps ferait tomber la mesure vers 0 et la reprise
 	//serait encodée à 1 im/s.
 	static const DWORD	FpsPauseTicks = 90000;
+	//Une BAISSE de cadence n'est appliquée qu'après 20 s (unités 90 kHz) passées
+	//sous l'hystérésis sans interruption ; une hausse s'applique tout de suite.
+	static const DWORD	FpsDropHoldTicks = 20*90000;
 
 	VideoEncoderMultiplexerWorker	encoder;
 	VideoDecoderJoinableWorker	decoder;
@@ -149,6 +158,9 @@ private:
 	//chacune coûtant une trame clé.
 	int		appliedFps;
 	timeval		lastFpsApply;
+	//Temps de flux (90 kHz) passé sous l'hystérésis depuis la dernière mesure
+	//dans la bande : la baisse n'est poussée qu'à FpsDropHoldTicks.
+	DWORD		lowTicks;
 	//Instant du dernier encodage (µs) : borne la cadence de sortie à la consigne.
 	QWORD		lastEncodedUs;
 

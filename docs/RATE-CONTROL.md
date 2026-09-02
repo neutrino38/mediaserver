@@ -344,37 +344,84 @@ la toute première image est encodée à cinq fois la cible pour amorcer l'image
 
 Un pair Linphone qui a subi une congestion ne relève plus jamais sa limite. Son
 TMMBR vaut 0,7 × ce qu'il reçoit à la détection, puis 0,9 × cette même valeur à
-la résolution — il ne remesure pas. Sa seule voie de remontée est son estimateur
-d'images (VBE), qui ignore toute image de moins de 3 paquets : à 55 kb/s une
-image fait un paquet, il est aveugle. Mesure du 2026-09-02 (journal du pair) :
-55 kb/s de 720p demandés 36 s après la restauration d'un lien parfait, et pas
-une seule estimation VBE en quatre minutes.
+la résolution. Il ne remesure pas. Sa seule voie de remontée est son estimateur
+d'images (VBE), et cet estimateur a trois propriétés qui verrouillent tout :
 
-Le serveur ne peut pas lever une limite que le pair réémet quatre fois par
-seconde. Il peut le faire **remesurer** : `BitrateProbe`
-(`mcu/src/jsr309/BitrateProbe.h`, appliqué dans `VideoEncoderMultiplexerWorker`
-après le `min()` des limites) dépasse la limite du pair par paliers de × 1,4,
-jamais sous 500 kb/s (3 paquets par image à 15 im/s), pendant 6 s (70 mesures
-VBE puis sa fenêtre de 5 s). Le code du pair porte alors son TMMBR à la nouvelle
-estimation, et la sonde suivante part de ce palier.
+- il ignore toute image de moins de 3 paquets (`mPacketCountMin`). À 190 kb/s et
+  15 im/s une image fait 1,6 ko, soit 2 paquets : il ne voit rien. Mesure du
+  2026-09-02 (journal du pair) : un échantillon toutes les 10 s pendant 5 min ;
+- il estime le 10e centile de ses 200 dernières images qualifiées
+  (`mMaxMeasurements`, confiance 90 %). Une hausse n'apparaît qu'après le
+  renouvellement de plus de 180 images à la cadence haute ;
+- son contrôleur n'applique une estimation que si elle dépasse la précédente de
+  10 % (« not enough greater »), de 40 % après une congestion.
+
+Le pair borne donc l'émetteur, puis ne mesure plus que des images que l'émetteur
+ne peut plus produire sous cette borne. Le serveur ne peut pas lever une limite
+que le pair réémet chaque seconde. Il peut le faire **remesurer** :
+`BitrateProbe` (`mcu/src/jsr309/BitrateProbe.h`, appliqué dans
+`VideoEncoderMultiplexerWorker` après le `min()` des limites) dépasse la limite
+du pair par paliers de × 1,4, jamais sous le **plancher** de 3 paquets pleins
+par image à la cadence effective, plus 25 % pour la crête VBV à 90 % et
+l'entête RTP (607 kb/s à 15 im/s, 1215 à 30), pendant **15 s** (plus de 180
+images à 15 im/s, puis la période de 5 s du VBE).
+
+**L'encodeur doit remplir la cible.** Un encodeur H.264 en CRF s'arrête à la
+qualité qui lui suffit : la crête VBV n'est qu'un plafond. Séance du
+2026-09-02, mesurée chez le pair : sonde annoncée à 500 kb/s, reçu 240 à 316,
+hors sonde 175 à 190. Le pair n'avait rien à suivre. Pendant la sonde le worker
+appelle `VideoEncoder::SetFillBudget(true)` : l'encodeur H.264 descend son CRF à
+10 et c'est le VBV qui borne, donc le débit émis colle à la consigne, à chaud
+sans trame clé. Les codecs dont le rate control vise déjà la consigne (VP8
+temps réel) n'ont rien à changer. La trace de fin de sonde donne le débit
+**réellement émis** sur la dernière seconde : c'est lui que le pair mesure. Une
+sonde dont le débit émis reste sous le plancher n'a rien prouvé.
 
 C'est un écart délibéré au RFC 5104, borné trois fois :
 
 - la sonde ne part que si c'est la limite du **pair** qui borne l'encodeur, et
   après 5 s de lien propre ;
 - elle ne dépasse jamais la consigne négociée ni notre propre estimateur
-  d'émission — c'est lui, par son étage de perte, qui dit si le lien la porte ;
+  d'émission. C'est lui, par son étage de perte, qui dit si le lien la porte ;
 - elle s'interrompt à la première perte, et l'intervalle entre deux sondes
   double à chaque échec (10 s → 120 s). Il revient au minimum dès que le pair
   suit.
 
+Le pair Linphone n'applique une estimation que si elle dépasse d'au moins 40 %
+le débit qu'il **reçoit**. Pendant la sonde, il reçoit justement l'estimation :
+il ne relève donc sa limite qu'une fois la sonde finie et le débit retombé.
+Mesuré le 2026-09-02 : 248 → 570 kb/s, 6 s après la fin d'une sonde à 687. La
+sonde guette cette hausse encore 10 s après sa fin (`FollowGraceUs`) et la
+compte comme un succès : l'intervalle revient au minimum et la sonde suivante
+part du nouveau palier.
+
 Chaque transition est tracée (`VideoEncoder: sonde …`). Coût : deux
-reconfigurations d'encodeur par sonde — à chaud en H.264 (CRF/VBV relus par
+reconfigurations d'encodeur par sonde, à chaud en H.264 (CRF/VBV relus par
 trame), une réouverture donc une trame clé en VP8.
 
 Le chemin conférence (`VideoStream`) applique le même `min()` sans sonde : un
 participant Linphone y rencontre le même verrou après congestion. À câbler
 quand le besoin se présente, avec la même classe.
+
+### 8.y Les demandes d'intra du pair : une par seconde
+
+Un pair Linphone envoie un PLI à chaque perte détectée (« sequence
+inconsistency ») et à chaque erreur de décodage. Il négocie NACK mais ne s'en
+sert pas pour la vidéo. Séance du 2026-09-02, journal du pair : 662 PLI en
+5 min, jusqu'à 9 par seconde pendant la phase à 200 kb/s.
+
+L'encodeur honorait chaque PLI par une image clé immédiate : 605 intras forcées
+dans la même séance, une toutes les 80 ms au pire. Sous un lien saturé c'est un
+cercle vicieux : l'image clé est plus grosse, elle produit la perte suivante, qui
+produit le PLI suivant. Le pair ne voit alors que des images clés tronquées.
+
+`VideoEncoderMultiplexerWorker` n'honore plus qu'**une intra forcée par
+seconde** (`MinForcedIntraUs`). Une demande qui arrive moins d'une seconde après
+la précédente est ignorée et comptée (trace `demandes d'intra ignorees`). Le
+pair redemande si sa référence est encore abîmée, c'est le contrat du PLI
+(RFC 4585 §6.3.1). La même borne existait déjà pour la demande relayée à la
+source (`VideoTranscoder::RequestSourceFPU`). Les intras qui ne viennent pas du
+pair ne sont pas concernées : première image d'un encodeur recréé, période intra.
 
 ## 9. Le lissage à l'émission
 
@@ -411,15 +458,22 @@ transcodeur vidéo. L'audio n'est pas lissé : il part directement.
 
 ## 10. Le relais : faire ralentir la source
 
-En mode pont, le serveur ne produit rien. Le seul levier est de propager la
-contrainte **à contre-courant**.
+La contrainte du puits est propagée **à contre-courant** jusqu'à la source, que
+le chemin soit un pont ou un transcodage.
+
+En mode pont, c'est le seul levier : le serveur ne produit rien.
+
+En transcodage, l'encodeur absorbe déjà la limite (§8), mais absorber seul ne
+suffit pas. Ré-encoder du 720p à 140 kbit/s donne une image inexploitable. La
+source, prévenue, choisit une taille d'image adaptée au débit, et le
+ré-encodage redevient regardable.
 
 ```mermaid
 flowchart LR
-    S["source A"] -->|"flux relayé"| T["transcodeur<br/>en mode pont"]
+    S["source A"] -->|"flux"| T["transcodeur<br/>pont ou transcodage"]
     T --> P["puits B"]
     P -.->|"TMMBR / REMB<br/>« je sature »"| T
-    T -.->|"TMMBR, borné par la consigne<br/>négociée de la patte vers B"| S
+    T -.->|"TMMBR, borné en haut par la consigne<br/>et en bas par le plancher"| S
 ```
 
 La chaîne, étape par étape :
@@ -427,11 +481,65 @@ La chaîne, étape par étape :
 1. le puits B envoie un TMMBR ou un REMB ;
 2. le serveur le remonte au producteur du flux ;
 3. **si un encodeur est dans le chemin**, il absorbe la limite (§8) ;
-4. **si le chemin est un pont**, la demande repart vers la source A —
-   **bornée par la consigne négociée de la patte émettrice**. Un puits ne peut
-   pas autoriser plus que ce que sa propre négociation prévoit ;
+4. la demande repart **toujours** vers la source A, bornée aux deux bouts :
+   **en haut par la consigne négociée de la patte émettrice** — un puits ne peut
+   pas autoriser plus que sa propre négociation —, **en bas par le plancher de
+   la sonde** (ci-dessous). La consigne l'emporte sur le plancher ;
 5. côté source, la limite fait deux choses : elle **borne l'estimateur local**
    de cette patte, et elle **part sur le fil**, amortie par l'amortisseur (§5).
+
+L'image clé, elle, n'est pas relayée en transcodage : le transcodeur la produit
+seul (§12).
+
+### 10.1 Le plancher : ne pas rendre la source aveugle
+
+**Une source tenue trop bas verrouille le pair pour de bon.** Elle rend une
+image trop petite, nos trames vers le puits tombent sous 3 paquets, et
+l'estimateur du pair n'a plus rien à mesurer (§8.x). La sonde qui doit lever sa
+limite devient invisible, et sa limite ne se lève plus jamais.
+
+Séance netem du 2026-09-02, transcodage dans les deux sens :
+
+| observation | mesure |
+|---|---|
+| limite du puits relayée à la source | 108 kbit/s |
+| définition choisie par la source, 1,6 s plus tard | 160x120, au lieu de 1280x720 |
+| durée passée en 160x120 | 3 min 24 s, dont 30 s sur un lien restauré |
+| sonde émise pendant ce temps | 485 kbit/s demandés, 240 réellement émis |
+| trames vers le puits | 2 paquets, sous le seuil de 3 |
+| limite du pair | figée à 108 712 bit/s pendant 3 min 18 s |
+
+Le plancher est donc celui de la sonde : **3 paquets pleins par image à la
+cadence de l'encodeur, plus 25 %** (`BitrateProbe::Floor`, 810 kbit/s à 20 im/s).
+La source peut rétrécir, jamais au point de nous rendre muets.
+
+**Le plancher ne s'applique qu'en transcodage.** En mode pont, la limite relayée
+*est* le débit du flux qui traverse : la relever noierait le puits.
+
+### 10.2 L'amortissement : ne pas répéter le puits
+
+Le relais passe par le même amortisseur que le feedback local
+(`RembThrottler`, §5), et il obéit à la **règle du dialecte négocié** — la même
+que la mesure locale. Ce n'est pas parce que la contrainte vient de l'aval
+qu'il faut la redire chaque fois qu'elle arrive :
+
+- une **baisse franche** part tout de suite ;
+- une **hausse** doit être un pas franc, et informative — un pair qui dépasse
+  déjà la limite annoncée n'apprendrait rien ;
+- le reste attend la période, et en dialecte TMMBR **il n'y a pas de période** :
+  la limite est collante (RFC 5104).
+
+La comparaison se fait avec la dernière valeur **annoncée**, jamais avec la
+mesure locale. C'est tout le correctif : un plafond bien plus bas que la mesure
+passait pour une baisse franche à chaque fois qu'il arrivait.
+
+Séance du 2026-09-02 : le puits réémettait son TMMBR **9 fois par seconde**,
+toujours la même valeur. Chacun repartait en relais — 2 099 en 232 s. La source
+a rebasculé 6 fois de définition, chaque bascule coûtant une trame clé.
+
+La répétition périodique du plafond reste assurée par le rapport RTCP
+(`SendSenderReport`), qui recompose la valeur courante sans rouvrir la décision.
+Supprimer un relais redondant ne perd donc aucune contrainte.
 
 Deux détails d'exploitation :
 

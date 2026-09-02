@@ -210,6 +210,13 @@ private:
 
 	std::atomic<bool> encoding;
 	std::atomic<bool> sendFPU;
+	//Dernière intra forcée (µs) : une demande (PLI, FIR, SLI) qui arrive moins
+	//d'une seconde après est ignorée, le pair redemande si sa référence est
+	//encore abîmée. Sans cela un pair qui PLI à chaque perte obtient une image
+	//clé par PLI, et chaque image clé produit la perte suivante.
+	QWORD lastForcedIntraUs;
+	DWORD ignoredFPU;
+	static const QWORD MinForcedIntraUs = 1000000;
 	bool    useInputSize;
 };
 

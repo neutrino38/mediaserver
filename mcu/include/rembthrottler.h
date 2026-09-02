@@ -34,6 +34,11 @@
  *     la source entre VGA et 720p (0,03 a 0,94 s apres l'envoi) ;
  *   - un plafond venu d'AILLEURS (l'autre patte d'un relais, lot 5) se compose
  *     par min() avec la mesure locale : on annonce le plus contraint des deux.
+ *     Il obéit à la règle du dialecte, comme la mesure, et se compare à ce qui
+ *     a été ANNONCÉ. Ce n'est pas parce que la contrainte vient de l'aval qu'il
+ *     faut la redire à chaque fois qu'elle arrive. Séance du 2026-09-02 : un
+ *     pair qui réémet son TMMBR 9 fois par seconde faisait partir 2099 relais
+ *     identiques en 232 s vers la source, et 6 bascules de définition chez elle.
  *
  * La classe ne connaît ni socket ni horloge : l'appelant lui passe l'instant
  * (getTimeMS() en production, une horloge simulée dans les tests) et reçoit un
@@ -91,11 +96,12 @@ public:
 	//Remet l'amortisseur à l'état neuf : la prochaine annonce part sans attendre.
 	void Reset()
 	{
-		lastSent     = NoLimit;
-		lastSendTime = 0;
-		hasSent      = false;
-		maxBitrate   = NoLimit;
-		peerBitrate  = 0;
+		lastSent      = NoLimit;
+		lastAnnounced = NoLimit;
+		lastSendTime  = 0;
+		hasSent       = false;
+		maxBitrate    = NoLimit;
+		peerBitrate   = 0;
 	}
 
 	//Débit réellement reçu du pair, en bps ; 0 = inconnu, aucun filtrage. Posé
@@ -137,28 +143,51 @@ public:
 		hasSent      = true;
 
 		out = Compose(bitrate);
+		//Ce qui part sur le fil, distinct de la mesure : c'est à lui que le
+		//chemin du plafond se compare.
+		lastAnnounced = out;
 		return true;
 	}
 
 	/**
 	 * Un plafond posé de l'extérieur (la patte opposée d'un relais, lot 5).
-	 * Un plafond qui DESCEND part tout de suite ; un plafond qui remonte, ou
-	 * qui ne mord pas sur la mesure locale, attend la période.
+	 * La décision est celle du DIALECTE NÉGOCIÉ, comme pour la mesure locale, et
+	 * elle se compare à la dernière valeur réellement annoncée : une baisse
+	 * franche part tout de suite, une hausse doit être un pas franc et
+	 * informative, le bruit attend la période s'il y en a une.
 	 * @return true s'il faut émettre maintenant
 	 */
 	bool SetMaxBitrate(DWORD bitrate, QWORD now, DWORD& out)
 	{
 		maxBitrate = bitrate;
 
-		//Rien de neuf à dire au pair si le plafond ne mord pas sur ce qu'on a
-		//déjà annoncé, et que la période n'est pas écoulée.
-		if (hasSent && now < lastSendTime + SendIntervalMs && lastSent <= maxBitrate)
-			return false;
+		const DWORD announce = Compose(lastSent);
 
-		lastSendTime = now;
-		hasSent      = true;
+		if (hasSent)
+		{
+			//Comparé à la dernière valeur ANNONCÉE, pas à la mesure locale.
+			//C'est tout le correctif : comparer à la mesure faisait passer un
+			//plafond bien plus bas qu'elle pour une baisse franche, à chaque
+			//fois qu'il arrivait. Un puits qui réémet son TMMBR 9 fois par
+			//seconde faisait ainsi partir 9 relais par seconde vers la source
+			//— séance du 2026-09-02, 2099 plafonds identiques en 232 s, et
+			//6 bascules de définition chez la source.
+			const bool drop = (QWORD)announce * policy.dropThresholdPercent / 100
+					<= (QWORD)lastAnnounced;
+			const bool step = policy.raiseStepPercent
+				&& (QWORD)announce * 100 >= (QWORD)lastAnnounced * (100 + policy.raiseStepPercent)
+				&& RaiseIsInformative();
+			const bool period = policy.raiseIntervalMs
+				&& now >= lastSendTime + policy.raiseIntervalMs;
+			if (!drop && !step && !period)
+				return false;
+		}
 
-		out = Compose(lastSent);
+		lastSendTime  = now;
+		hasSent       = true;
+		lastAnnounced = announce;
+
+		out = announce;
 		return true;
 	}
 
@@ -186,8 +215,14 @@ public:
 	DWORD GetLastSent()  const { return lastSent;   }
 	DWORD GetMaxBitrate() const { return maxBitrate; }
 
+	//La dernière valeur réellement annoncée au pair, NoLimit tant que rien
+	//n'est parti. Distincte de lastSent, qui est la MESURE locale : sans elle,
+	//un plafond externe constant repartait à chaque appel.
+	DWORD GetLastAnnounced() const { return lastAnnounced; }
+
 private:
 	DWORD	lastSent;
+	DWORD	lastAnnounced;
 	QWORD	lastSendTime;
 	bool	hasSent;
 	DWORD	maxBitrate;

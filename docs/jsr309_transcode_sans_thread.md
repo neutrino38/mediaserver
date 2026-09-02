@@ -272,8 +272,18 @@ consigne : `configuredFps` est une borne du contrôleur (et du niveau AV1 via
 Hystérésis avant d'appliquer : on ne change `fps` que si la fenêtre est
 **pleine**, si la mesure s'écarte de la valeur en vigueur de **plus de 25 %**,
 et **au plus une fois toutes les 5 s** — chaque application coûte une trame
-clé (ci-dessous). Une source qui passe de 30 à 28 ne déclenche rien ; 30 → 15
-déclenche après 30 images à 15, soit 2 s.
+clé (ci-dessous). Une source qui passe de 30 à 28 ne déclenche rien ; 15 → 30
+déclenche après 30 images à 30, soit 1 s.
+
+Une **baisse** n'est appliquée qu'après **20 s de flux** passées sans
+interruption sous la bande (`FpsDropHoldTicks`, compté sur les pts). Le
+compteur repart à zéro dès que la mesure revient dans la bande. Raison : une
+source qui creuse à 11 im/s trois secondes puis revient à 15 coûtait deux
+trames clés, et chez le pair 0,5 à 1 s de gigue à chaque aller-retour, jusqu'à
+une fausse congestion sur réseau sain (séance du 2026-09-02, journal Linphone :
+`jitter buffer rls stats … max_ts_deviation`). Une baisse qui dure, elle, doit
+passer : l'encodeur ouvert à 30 im/s qui n'en reçoit que 10 n'émet qu'un tiers
+de son budget. Une hausse s'applique tout de suite pour la même raison.
 
 Trois façons d'appliquer, une seule juste (**décision 2026-08-28 : (i),
 réouvrir**) :
@@ -553,8 +563,8 @@ faisait le Stop/Start du lisseur. Tests :
 **Lot 4 bis — cadence réelle (3.6) — FAIT** : `VideoDecoderJoinableWorker`
 pose `frame->GetAVFrame()->pts = packet.GetTimestamp()` sur les deux chemins de
 livraison. `VideoTranscoder` tient la fenêtre de 30 écarts, le seuil de pause de
-1 s, l'hystérésis de 25 % et la borne de 5 s, puis pousse la valeur par
-`SetMeasuredFrameRate`. `EncodePicture` calcule `fpsEffectif` et `intraEffectif`
+1 s, l'hystérésis de 25 %, la tenue de 20 s d'une baisse et la borne de 5 s,
+puis pousse la valeur par `SetMeasuredFrameRate`. `EncodePicture` calcule `fpsEffectif` et `intraEffectif`
 (`RecomputeFrameRate`) et n'appelle `SetFrameRate` qu'au changement : une seule
 trame clé pour les deux. Côté libmedikit, `FfVideoEncoder::ShouldReopenForFps`
 (seuil 20 %, symétrique) et sa prise en compte dans `VP8Encoder`, `AV1Encoder` et

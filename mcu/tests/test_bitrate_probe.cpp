@@ -14,6 +14,8 @@
 namespace {
 
 const QWORD S = 1000000;	// une seconde en µs
+const int   FPS = 15;
+const int   F = BitrateProbe::Floor(FPS);	// 607 kb/s : 3 paquets par image à 15 im/s
 
 // Fait avancer la sonde image par image (15 im/s) pendant `seconds`, en
 // rappelant Apply avec les mêmes entrées. Rend la dernière cible.
@@ -25,7 +27,7 @@ static int Tick(BitrateProbe& p, int& target, int peer, int bwe, int ceiling,
 	for (int i = 0; i < frames; ++i)
 	{
 		now += S / 15;
-		out = p.Apply(target, peer, bwe, ceiling, now);
+		out = p.Apply(target, peer, bwe, ceiling, FPS, now);
 	}
 	return out;
 }
@@ -59,7 +61,7 @@ TEST(BitrateProbe, NeSondePasQuandLePairEstDejaALaConsigne)
 }
 
 // Le cœur : 55 kb/s, lien propre. Après 5 s d'armement la sonde part au
-// plancher de 500 (3 paquets/image), dure 6 s, puis revient à 55.
+// plancher (3 paquets/image à 15 im/s), dure 15 s, puis revient à 55.
 TEST(BitrateProbe, SondeAuPlancherPuisRevientSiLePairNeSuitPas)
 {
 	BitrateProbe p;
@@ -71,11 +73,11 @@ TEST(BitrateProbe, SondeAuPlancherPuisRevientSiLePairNeSuitPas)
 
 	int during = Tick(p, target, 55, 15000, 2500, now, 0.5);
 	ASSERT_TRUE(p.IsProbing());
-	EXPECT_EQ(BitrateProbe::FloorKbps, during) << "55 x 1,4 = 77 < plancher 500";
-	EXPECT_EQ(500, p.GetProbeKbps());
+	EXPECT_EQ(F, during) << "55 x 1,4 = 77 < plancher";
+	EXPECT_EQ(F, p.GetProbeKbps());
 
-	EXPECT_EQ(500, Tick(p, target, 55, 15000, 2500, now, 5.0)) << "6 s de sonde";
-	EXPECT_EQ(55,  Tick(p, target, 55, 15000, 2500, now, 1.0)) << "fin de sonde : retour a la limite";
+	EXPECT_EQ(F,  Tick(p, target, 55, 15000, 2500, now, 14.0)) << "15 s de sonde";
+	EXPECT_EQ(55, Tick(p, target, 55, 15000, 2500, now, 1.5)) << "fin de sonde : retour a la limite";
 	EXPECT_FALSE(p.IsProbing());
 
 	// Le pair n'a pas suivi : l'intervalle a double, rien avant.
@@ -87,9 +89,18 @@ TEST(BitrateProbe, SondeAuPlancherPuisRevientSiLePairNeSuitPas)
 // Le pas de x1,4 au-dessus du plancher, borne par la consigne.
 TEST(BitrateProbe, LePasEstDeUnVirguleQuatreBorneParLaConsigne)
 {
-	EXPECT_EQ(500,  BitrateProbe::Wanted(55,   2500));
-	EXPECT_EQ(1400, BitrateProbe::Wanted(1000, 2500));
-	EXPECT_EQ(2500, BitrateProbe::Wanted(2000, 2500)) << "jamais au-dessus de la consigne";
+	EXPECT_EQ(F,    BitrateProbe::Wanted(55,   2500, FPS));
+	EXPECT_EQ(1400, BitrateProbe::Wanted(1000, 2500, FPS));
+	EXPECT_EQ(2500, BitrateProbe::Wanted(2000, 2500, FPS)) << "jamais au-dessus de la consigne";
+}
+
+// Le plancher suit la cadence : 3 paquets de 1350 octets par image, +25 %.
+TEST(BitrateProbe, LePlancherSuitLaCadence)
+{
+	EXPECT_EQ(607,  BitrateProbe::Floor(15));
+	EXPECT_EQ(1215, BitrateProbe::Floor(30));
+	EXPECT_EQ(BitrateProbe::Floor(1), BitrateProbe::Floor(0)) << "cadence inconnue : plancher minimal";
+	EXPECT_LT(BitrateProbe::Floor(15), BitrateProbe::Floor(20));
 }
 
 // Abandon a la premiere perte : notre estimateur redescend sous la valeur
@@ -102,7 +113,7 @@ TEST(BitrateProbe, LaPerteInterromptLaSondeEtEspaceLaSuivante)
 	Tick(p, target, 55, 15000, 2500, now, 5.5);
 	ASSERT_TRUE(p.IsProbing());
 
-	// L'etage de perte a reagi : l'estimateur tombe a 300, sous les 500 sondes.
+	// L'etage de perte a reagi : l'estimateur tombe a 300, sous la valeur sondee.
 	int after = Tick(p, target, 55, 300, 2500, now, 0.1);
 	EXPECT_EQ(55, after);
 	EXPECT_FALSE(p.IsProbing());
@@ -124,6 +135,7 @@ TEST(BitrateProbe, QuandLePairSuitLEchelleMonte)
 	// Bob a remesure : TMMBR 520. L'appelant recalcule target = min(...) = 520.
 	target = 520;
 	EXPECT_EQ(520, Tick(p, target, 520, 15000, 2500, now, 0.1));
+	EXPECT_EQ(BitrateProbe::Followed, p.LastEvent());
 	EXPECT_EQ(BitrateProbe::IntervalMinUs, p.GetIntervalUs()) << "le pair a suivi : pas de back-off";
 
 	// Prochaine sonde : 520 x 1,4 = 728, apres l'intervalle minimal + armement.
@@ -133,16 +145,62 @@ TEST(BitrateProbe, QuandLePairSuitLEchelleMonte)
 	EXPECT_EQ(728, next);
 }
 
+// Linphone n'applique une estimation que si elle depasse de 40 % ce qu'il
+// recoit : pendant la sonde il recoit l'estimation, il ne releve donc sa limite
+// qu'APRES la fin (6 s apres, mesure). Cette hausse-la compte comme un succes :
+// l'intervalle revient au minimum au lieu de doubler.
+TEST(BitrateProbe, UneHausseJusteApresLaSondeCompteCommeUnSucces)
+{
+	BitrateProbe p;
+	QWORD now = 10 * S;
+	int target = 248;
+	Tick(p, target, 248, 15000, 2500, now, 5.5);
+	ASSERT_TRUE(p.IsProbing());
+	Tick(p, target, 248, 15000, 2500, now, 15.5);
+	ASSERT_FALSE(p.IsProbing());
+	EXPECT_EQ(2 * BitrateProbe::IntervalMinUs, p.GetIntervalUs()) << "fin sans suite : back-off";
+
+	// 6 s plus tard, le pair passe a 570.
+	Tick(p, target, 248, 15000, 2500, now, 6.0);
+	target = 570;
+	Tick(p, target, 570, 15000, 2500, now, 0.1);
+	EXPECT_EQ(BitrateProbe::Followed, p.LastEvent());
+	EXPECT_EQ(BitrateProbe::IntervalMinUs, p.GetIntervalUs()) << "la hausse dans le delai de grace annule le back-off";
+
+	// Et la sonde suivante part du nouveau palier : 570 x 1,4 = 798.
+	Tick(p, target, 570, 15000, 2500, now, 10.0);
+	int next = Tick(p, target, 570, 15000, 2500, now, 5.5);
+	ASSERT_TRUE(p.IsProbing());
+	EXPECT_EQ(798, next);
+}
+
+// Passe le delai de grace, une hausse du pair n'est plus attribuee a la sonde.
+TEST(BitrateProbe, UneHausseTardiveNAnnulePasLeBackOff)
+{
+	BitrateProbe p;
+	QWORD now = 10 * S;
+	int target = 248;
+	Tick(p, target, 248, 15000, 2500, now, 21.0);
+	ASSERT_FALSE(p.IsProbing());
+	ASSERT_EQ(2 * BitrateProbe::IntervalMinUs, p.GetIntervalUs());
+
+	Tick(p, target, 248, 15000, 2500, now, 11.0);
+	target = 570;
+	Tick(p, target, 570, 15000, 2500, now, 0.1);
+	EXPECT_NE(BitrateProbe::Followed, p.LastEvent());
+	EXPECT_EQ(2 * BitrateProbe::IntervalMinUs, p.GetIntervalUs());
+}
+
 // La sonde ne depasse jamais notre propre estimateur.
 TEST(BitrateProbe, LaSondeEstBorneeParNotreEstimateur)
 {
 	BitrateProbe p;
 	QWORD now = 10 * S;
 	int target = 55;
-	// L'estimateur ne porte que 600 : la sonde voudrait 500 (ok) — mais avec un
-	// pair a 1000 elle voudrait 1400, et l'estimateur a 1200 la coupe a 1200.
-	Tick(p, target, 55, 600, 2500, now, 5.5);
-	EXPECT_EQ(500, p.GetProbeKbps());
+	// L'estimateur porte 700 : la sonde voudrait le plancher (ok) — mais avec un
+	// pair a 1000 elle voudrait 1400, et l'estimateur a 1200 ne la porte pas.
+	Tick(p, target, 55, 700, 2500, now, 5.5);
+	EXPECT_EQ(F, p.GetProbeKbps());
 
 	BitrateProbe q;
 	QWORD t2 = 10 * S;

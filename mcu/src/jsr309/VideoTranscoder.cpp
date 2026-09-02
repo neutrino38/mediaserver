@@ -29,6 +29,7 @@ VideoTranscoder::VideoTranscoder(std::wstring &name)
 	gapCount = 0;
 	gapIndex = 0;
 	gapSum = 0;
+	lowTicks = 0;
 	appliedFps = 0;
 	setZeroTime(&lastFpsApply);
 	lastEncodedUs = 0;
@@ -139,21 +140,60 @@ void VideoTranscoder::SetREMB(DWORD estimation)
 {
 	//En mode pont, l'encodeur n'est pas dans le chemin : seule la source peut
 	//baisser le débit du flux relayé. La demande du puits (TMMBR/REMB, en bps)
-	//remonte donc à l'amont, bornée par la consigne négociée de la patte
-	//émettrice — le puits ne peut pas « autoriser » plus que sa négociation.
+	//remonte donc à l'amont.
 	if (state == 2)
 	{
-		DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
-		if (cap && estimation > cap)
-			estimation = cap;
-
-		if (std::shared_ptr<Joinable> j = joined.lock())
-			j->SetREMB(estimation);
+		RelayToSource(estimation);
 		return;
 	}
 
-	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe la limite.
+	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe la limite...
 	encoder.SetREMB(estimation);
+
+	//...et la source en est prévenue AUSSI, pour qu'elle choisisse une taille
+	//d'image adaptée au débit : ré-encoder du 720p à 140 kb/s donne une image
+	//inexploitable. Le plancher de RelayToSource est ce qui empêche cette
+	//prévenance de se retourner en verrou.
+	RelayToSource(estimation);
+}
+
+void VideoTranscoder::RelayToSource(DWORD estimation)
+{
+	DWORD relayed = estimation;
+
+	//PLANCHER, en transcodage seulement. Une source tenue trop bas rend une
+	//image trop petite pour que nos trames vers le puits fassent 3 paquets, or
+	//c'est ce seuil que l'estimateur d'un pair Linphone exige pour mesurer
+	//quoi que ce soit : la sonde qui doit lever sa limite devient invisible, et
+	//sa limite ne se lève plus jamais. Séance netem du 2026-09-02 : 108 kb/s
+	//relayés, source en 160x120, sonde à 485 kb/s qui n'émet que 240, limite du
+	//pair figée 3 min 18 s dont 30 s sur un lien restauré.
+	//En mode pont il n'y a pas de plancher : la limite EST le débit du flux
+	//relayé, la relever noierait le puits.
+	if (state != 2)
+	{
+		//La cadence EFFECTIVE est celle de nos trames, donc celle du plancher.
+		//Elle vaut 0 tant que l'encodeur n'a pas ouvert son codec : la consigne
+		//prend alors le relais, sans quoi le plancher tomberait à 40 kb/s et ne
+		//protégerait plus rien.
+		int fps = encoder.GetEffectiveFps();
+		if (fps <= 0)
+			fps = encoder.GetConfiguredFps();
+
+		DWORD floor = ((DWORD)BitrateProbe::Floor(fps))*1000;
+		if (relayed < floor)
+			relayed = floor;
+	}
+
+	//Consigne négociée de la patte émettrice : un puits ne peut pas
+	//« autoriser » plus que ce que sa propre négociation prévoit. Elle passe
+	//APRÈS le plancher — une consigne basse l'emporte sur lui.
+	DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
+	if (cap && relayed > cap)
+		relayed = cap;
+
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->SetREMB(relayed);
 }
 
 void VideoTranscoder::SetSenderEstimate(DWORD estimation)
@@ -376,6 +416,7 @@ void VideoTranscoder::ResetFrameRateWindow()
 	gapCount = 0;
 	gapIndex = 0;
 	gapSum = 0;
+	lowTicks = 0;
 }
 
 //§3.6 — estime `fpsMesure = 90000 x (nombre d'écarts) / (somme des écarts)` sur
@@ -436,7 +477,24 @@ void VideoTranscoder::MeasureFrameRate(DWORD pts)
 	if (inforce <= 0)
 		return;
 	if (abs(measured - inforce)*4 <= inforce)
+	{
+		lowTicks = 0;
 		return;
+	}
+
+	//Une BAISSE n'est appliquée que si elle dure. Une source qui creuse à
+	//11 im/s trois secondes puis revient à 15 coûtait deux trames clés, et
+	//chez le pair 0,5 à 1 s de gigue à chaque fois — jusqu'à une fausse
+	//congestion (séance du 2026-09-02). Une hausse s'applique tout de suite :
+	//l'encodeur sous-utilise sinon son budget par image.
+	if (measured < inforce)
+	{
+		lowTicks += gap;
+		if (lowTicks < FpsDropHoldTicks)
+			return;
+	}
+	else
+		lowTicks = 0;
 
 	//Au plus une application toutes les 5 s.
 	if (getDifTime(&lastFpsApply) < 5000000)
@@ -446,6 +504,7 @@ void VideoTranscoder::MeasureFrameRate(DWORD pts)
 	    measured, tag.c_str(), inforce);
 
 	appliedFps = measured;
+	lowTicks = 0;
 	getUpdDifTime(&lastFpsApply);
 	encoder.SetMeasuredFrameRate(measured);
 }

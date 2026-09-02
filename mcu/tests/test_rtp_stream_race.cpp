@@ -65,10 +65,14 @@ TEST(RTPStreamRace, LeCheminRtcpNeLitPasDesStreamsDetruits)
 
 	std::atomic<bool> stop(false);
 	std::thread reader([&] {
+		// Le plafond doit VARIER : l'amortisseur ne réémet pas une valeur déjà
+		// annoncée, et ce tour ne descendrait plus dans CreateSenderReport.
+		bool high = false;
 		while (!stop)
 		{
 			session.RequestFPU();
-			session.SetMaxReceiveBitrate(300000);
+			session.SetMaxReceiveBitrate(high ? 600000 : 300000);
+			high = !high;
 			MediaStatistics stats;
 			session.GetStatistics(0, stats);
 		}

@@ -569,6 +569,58 @@ TEST(RateControlThrottler, LePlafondSurvitAUneMesureBasse)
 	EXPECT_EQ(2000000u, out);
 }
 
+// LE test de régression du relais. Le plafond se comparait à la MESURE locale :
+// un plafond bien plus bas qu'elle passait pour une baisse franche à chaque fois
+// qu'il arrivait, période ou pas. Séance netem du 2026-09-02 : le puits
+// réémettait son TMMBR 9 fois par seconde, toujours la même valeur, et chacun
+// repartait en relais vers la source — 2099 en 232 s, et 6 bascules de
+// définition chez elle. La répétition périodique du plafond reste assurée par
+// SendSenderReport, qui recompose sans rouvrir la décision.
+TEST(RateControlThrottler, UnPlafondIdentiqueNeRepartPasEnTMMBR)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(108712, 1010, out));
+	ASSERT_EQ(108712u, out);
+
+	// 232 s du régime mesuré : 9 plafonds identiques par seconde.
+	int sent = 0;
+	for (QWORD now = 1120; now < 1010 + 232000; now += 111)
+		if (throttler.SetMaxBitrate(108712, now, out))
+			sent++;
+
+	EXPECT_EQ(0, sent) << "une valeur deja annoncee n'apprend rien au pair";
+	EXPECT_EQ(108712u, throttler.GetLastAnnounced());
+}
+
+// Le plafond obéit à la même asymétrie que la mesure : une baisse franche part
+// tout de suite, une hausse doit être un pas franc, le bruit ne part jamais.
+TEST(RateControlThrottler, EnTMMBRLePlafondSuitLaMemeAsymetrieQueLaMesure)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(500000, 1010, out));
+	ASSERT_EQ(500000u, out);
+
+	// +5 % : dans le bruit. Rien ne part, même longtemps après — le TMMBR est
+	// collant, il n'y a pas de période en dialecte TMMBR.
+	EXPECT_FALSE(throttler.SetMaxBitrate(525000, 60000, out));
+
+	// +40 % : pas franc, ça part.
+	ASSERT_TRUE(throttler.SetMaxBitrate(700000, 61000, out));
+	EXPECT_EQ(700000u, out);
+
+	// -15 % : baisse franche, immédiate.
+	ASSERT_TRUE(throttler.SetMaxBitrate(595000, 61100, out));
+	EXPECT_EQ(595000u, out);
+}
+
 // ─── Politique du dialecte TMMBR (mesures alice_bob_1 2026-08-22, §7.9 2026-08-30) ──
 // Linphone détruit et recrée son encodeur VP8 à CHAQUE TMMBR de valeur différente
 // (msvideoqualitycontroller.c → vp8.c enc_set_configuration) : une trame clé par

@@ -23,6 +23,8 @@ VideoEncoderMultiplexerWorker::VideoEncoderMultiplexerWorker() :
 	pushed = false;
 	encoding = false;
 	sendFPU = false;
+	lastForcedIntraUs = 0;
+	ignoredFPU = 0;
 	codec = (VideoCodec::Type)-1;
 	mode = 0;
 	width = 0;
@@ -577,10 +579,21 @@ int VideoEncoderMultiplexerWorker::EncodePicture(PictPtr pic)
 	//Check if we need to send intra
 	if (sendFPU.exchange(false))
 	{
-		//Log
-		Log("-FastPictureUpdate\n");
-		//Set it
-		videoEncoder->FastPictureUpdate();
+		const QWORD now = getTime();
+		if (lastForcedIntraUs && now - lastForcedIntraUs < MinForcedIntraUs)
+		{
+			//Au plus une intra forcée par seconde (cf. lastForcedIntraUs).
+			ignoredFPU++;
+		}
+		else
+		{
+			Log("-FastPictureUpdate%s\n", ignoredFPU ? " (demandes ignorees depuis la precedente)" : "");
+			if (ignoredFPU)
+				Log("-VideoEncoder: %u demandes d'intra ignorees en moins d'une seconde\n", ignoredFPU);
+			ignoredFPU = 0;
+			lastForcedIntraUs = now;
+			videoEncoder->FastPictureUpdate();
+		}
 	}
 
 	//Calculate target bitrate
@@ -619,24 +632,35 @@ int VideoEncoderMultiplexerWorker::EncodePicture(PictPtr pic)
 
 	//Sonde : dépasser la limite du pair, bornée et réversible, pour qu'il
 	//remesure (cf. BitrateProbe.h). Ne joue que si c'est lui qui borne.
-	target = probe.Apply(target, peerLimit, bweLimit, bitrate, getTime());
+	target = probe.Apply(target, peerLimit, bweLimit, bitrate, fps, getTime());
+	//Débit réellement émis sur la dernière seconde : c'est lui que le pair
+	//mesure, pas la consigne.
+	const unsigned emitted = bitrateAcu.IsInWindow() ? (unsigned)(bitrateAcu.GetInstantAvg()/1000) : 0;
 	switch (probe.LastEvent())
 	{
 		case BitrateProbe::Start:
-			Log("-VideoEncoder: sonde au-dessus de la limite du pair %d -> %d kb/s (estimateur %d, consigne %d)\n",
-			    peerLimit, probe.GetProbeKbps(), bweLimit, bitrate);
+			Log("-VideoEncoder: sonde au-dessus de la limite du pair %d -> %d kb/s (estimateur %d, consigne %d, emis %u)\n",
+			    peerLimit, probe.GetProbeKbps(), bweLimit, bitrate, emitted);
 			break;
 		case BitrateProbe::End:
-			Log("-VideoEncoder: sonde terminee, le pair n'a pas suivi (limite %d kb/s), prochaine dans %u s\n",
-			    peerLimit, (unsigned)(probe.GetIntervalUs()/1000000));
+			Log("-VideoEncoder: sonde terminee, le pair n'a pas suivi (limite %d kb/s, emis %u kb/s), prochaine dans %u s\n",
+			    peerLimit, emitted, (unsigned)(probe.GetIntervalUs()/1000000));
 			break;
 		case BitrateProbe::Abort:
-			Log("-VideoEncoder: sonde interrompue (pair %d, estimateur %d kb/s), prochaine dans %u s\n",
-			    peerLimit, bweLimit, (unsigned)(probe.GetIntervalUs()/1000000));
+			Log("-VideoEncoder: sonde interrompue (pair %d, estimateur %d, emis %u kb/s), prochaine dans %u s\n",
+			    peerLimit, bweLimit, emitted, (unsigned)(probe.GetIntervalUs()/1000000));
+			break;
+		case BitrateProbe::Followed:
+			Log("-VideoEncoder: sonde : le pair a suivi, limite %d -> %d kb/s, prochaine dans %u s\n",
+			    probe.GetPeerAtStart(), peerLimit, (unsigned)(probe.GetIntervalUs()/1000000));
 			break;
 		default:
 			break;
 	}
+	//Pendant la sonde l'encodeur doit émettre la cible, pas la qualité qui lui
+	//suffit : c'est le débit émis que le pair mesure. Rappelé à chaque image,
+	//l'encodeur pouvant avoir été recréé entre-temps.
+	videoEncoder->SetFillBudget(probe.IsProbing());
 
 	//Check if we have a new bitrate
 	if (target && target!=current)

@@ -192,6 +192,20 @@ void FeedVideo(Vp8Source& vp8, RTPMultiplexer& source, int frames, int fps,
 	}
 }
 
+// Nourrit `frames` images à `fps` par l'horodatage RTP seul, sans attendre :
+// c'est la cadence portée par les pts que mesure le transcodeur, pas l'horloge.
+void FeedVideoByTimestamp(Vp8Source& vp8, RTPMultiplexer& source, int frames, int fps,
+			  DWORD& timestamp)
+{
+	const DWORD step = 90000 / (DWORD)fps;
+	for (int n = 0; n < frames; ++n)
+	{
+		vp8.NextFrame((BYTE)(16 + (n * 7) % 200), timestamp,
+			      [&](RTPPacket& p){ source.Multiplex(p); });
+		timestamp += step;
+	}
+}
+
 // Le lisseur étale les paquets d'une image : c'est la seule chose qu'on attende
 // dans les tests vidéo, et elle est bornée.
 bool WaitForOutput(CountingSink& sink, int atLeast, int timeoutMs)
@@ -579,6 +593,56 @@ TEST(TranscoderRecette, VideoNonAdaptatifGardeLaGeometrieDuControleur)
 
 	EXPECT_EQ(GetWidth(CIF), transcoder.GetEffectiveWidth());
 	EXPECT_EQ(GetHeight(CIF), transcoder.GetEffectiveHeight());
+
+	transcoder.Dettach();
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// Une BAISSE de cadence de la source n'est appliquée à l'encodeur qu'après 20 s
+// de flux ininterrompues sous l'hystérésis. Un creux de quelques secondes ne
+// rouvre plus le codec (deux trames clés et 0,5 à 1 s de gigue chez le pair à
+// chaque aller-retour, séance du 2026-09-02). Le compteur repart à zéro dès que
+// la source revient dans la bande.
+TEST(TranscoderRecette, VideoUneBaisseDeCadenceNEstAppliqueeQueSiElleDure)
+{
+	Vp8Source vp8;
+	if (!vp8.Open(GetWidth(CIF), GetHeight(CIF), 20, 256))
+		GTEST_SKIP() << "encodeur VP8 indisponible";
+
+	std::wstring name = L"recette-video-cadence";
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(/*adaptative=*/false, /*allowBridging=*/false));
+
+	Properties props;
+	ASSERT_EQ(1, transcoder.SetCodec(VideoCodec::H264, CIF, 20, 256, 10, props));
+
+	CountingSink sink;
+	transcoder.AddListener(&sink);
+	auto source = std::make_shared<RTPMultiplexer>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	DWORD timestamp = 0;
+	//Fenêtre pleine à la consigne (la cadence effective n'est calculée qu'à la
+	//première image encodée), puis un creux de 6 s à 10 im/s.
+	FeedVideoByTimestamp(vp8, *source, 40, 20, timestamp);
+	FeedVideo(vp8, *source, 2, 20, timestamp);
+	ASSERT_EQ(20, transcoder.GetEffectiveFps());
+	FeedVideoByTimestamp(vp8, *source, 60, 10, timestamp);
+	FeedVideo(vp8, *source, 2, 10, timestamp);	//au moins une image encodée
+	EXPECT_EQ(20, transcoder.GetEffectiveFps()) << "un creux de 6 s ne doit pas etre applique";
+
+	//Retour à la consigne : le compteur repart. 15 s à 10 im/s ne suffisent
+	//toujours pas.
+	FeedVideoByTimestamp(vp8, *source, 40, 20, timestamp);
+	FeedVideoByTimestamp(vp8, *source, 150, 10, timestamp);
+	FeedVideo(vp8, *source, 2, 10, timestamp);
+	EXPECT_EQ(20, transcoder.GetEffectiveFps()) << "15 s sous la bande apres un retour : pas encore";
+
+	//Au-delà de 20 s ininterrompues, la baisse est réelle : appliquée.
+	FeedVideoByTimestamp(vp8, *source, 80, 10, timestamp);
+	FeedVideo(vp8, *source, 2, 10, timestamp);
+	EXPECT_EQ(10, transcoder.GetEffectiveFps()) << "une baisse qui dure doit etre appliquee";
 
 	transcoder.Dettach();
 	transcoder.RemoveListener(&sink);

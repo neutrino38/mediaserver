@@ -165,6 +165,55 @@ int FeedAt(Vp8Source& vp8, RTPMultiplexer& source, int frames, int fps,
 	return delivered;
 }
 
+// Nourrit `frames` images à `fps` par l'horodatage seul, sans attendre : sert à
+// faire passer du TEMPS DE FLUX (la tenue de 20 s d'une baisse de cadence se
+// compte sur les pts), pas à faire encoder.
+void FeedByTimestamp(Vp8Source& vp8, RTPMultiplexer& source, int frames, int fps,
+		     DWORD& timestamp)
+{
+	const DWORD step = 90000 / (DWORD)fps;
+	for (int n = 0; n < frames; ++n)
+	{
+		vp8.NextFrame((BYTE)(16 + (n * 7) % 200), timestamp,
+			      [&](RTPPacket& p){ source.Multiplex(p); });
+		timestamp += step;
+	}
+}
+
+// Puits qui compte les images clés H264 : une trame clé = un horodatage RTP
+// portant au moins un NAL IDR (type 5), seul ou en début de FU-A.
+class IntraCountingSink : public Joinable::Listener
+{
+public:
+	void onRTPPacket(RTPPacket &packet) override
+	{
+		const BYTE* p = packet.GetMediaData();
+		const DWORD len = packet.GetMediaLength();
+		if (len < 2)
+			return;
+		const int type = p[0] & 0x1f;
+		bool idr = (type == 5) || (type == 28 && (p[1] & 0x80) && (p[1] & 0x1f) == 5);
+		if (!idr)
+			return;
+		std::lock_guard<std::mutex> lock(mutex);
+		if (!has || packet.GetTimestamp() != last)
+		{
+			intras++;
+			last = packet.GetTimestamp();
+			has = true;
+		}
+	}
+	void onResetStream() override {}
+	void onEndStream() override {}
+	int TryCheckCodec(int codec) override { return -1; }
+	int Intras() { std::lock_guard<std::mutex> lock(mutex); return intras; }
+private:
+	std::mutex	mutex;
+	int		intras = 0;
+	DWORD		last = 0;
+	bool		has = false;
+};
+
 // ── Lot 4 : plus de thread, plus de file ────────────────────────────────────
 
 // L'image traverse décodage, redimensionnement, encodage et lissage sur le
@@ -317,8 +366,14 @@ TEST(VideoEncoderInline, UneSourceLenteAbaisseLaCadenceDeLEncodeur)
 
 	DWORD timestamp = 0;
 	// 45 images à 15 im/s : la fenêtre (30 écarts) se remplit au bout de 31, la
-	// marge couvre une image qui ne se décoderait pas.
+	// marge couvre une image qui ne se décoderait pas. Une BAISSE n'est appliquée
+	// qu'après 20 s de flux sous la bande : on fait passer ce temps par les
+	// horodatages, puis quelques images en temps réel pour qu'une soit encodée.
 	ASSERT_GT(FeedAt(vp8, *source, 45, 15, timestamp), 30);
+	EXPECT_EQ(30, transcoder.GetEffectiveFps())
+		<< "3 s sous la bande : la baisse ne doit pas encore etre appliquee";
+	FeedByTimestamp(vp8, *source, 15 * 20, 15, timestamp);
+	ASSERT_GT(FeedAt(vp8, *source, 5, 15, timestamp), 3);
 
 	EXPECT_EQ(15, transcoder.GetEffectiveFps())
 		<< "l'encodeur doit suivre la cadence reelle de la source";
@@ -439,11 +494,59 @@ TEST(VideoEncoderInline, ApresUnePauseLaFenetreDoitSeRemplirAvantDAgir)
 	EXPECT_EQ(30, transcoder.GetEffectiveFps())
 		<< "une fenetre incomplete ne doit rien appliquer";
 
-	// Trente-cinq de plus : la fenêtre est pleine et postérieure à la pause.
+	// Trente-cinq de plus : la fenêtre est pleine et postérieure à la pause ;
+	// puis 20 s de flux à cette cadence (tenue d'une baisse).
 	ASSERT_GT(FeedAt(vp8, *source, 35, 15, timestamp), 25);
+	FeedByTimestamp(vp8, *source, 15 * 20, 15, timestamp);
+	ASSERT_GT(FeedAt(vp8, *source, 5, 15, timestamp), 3);
 	EXPECT_EQ(15, transcoder.GetEffectiveFps())
 		<< "la nouvelle cadence doit s'appliquer une fois la fenetre pleine";
 	EXPECT_EQ(150, transcoder.GetEffectiveIntraPeriod());
+
+	transcoder.Dettach();
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// Un pair qui envoie un PLI à chaque perte (Linphone : 662 en 5 min le
+// 2026-09-02) obtenait une image clé par PLI, et chaque image clé produisait la
+// perte suivante. L'encodeur n'honore plus qu'une demande d'intra par seconde ;
+// le pair redemande si sa référence est encore abîmée.
+TEST(VideoEncoderInline, UneRafaleDeDemandesDIntraNeDonneQuUneImageCleParSeconde)
+{
+	Vp8Source vp8;
+	if (!vp8.Open(GetWidth(CIF), GetHeight(CIF), 20, 256))
+		GTEST_SKIP() << "encodeur VP8 indisponible";
+
+	std::wstring name = L"fpu-rafale";
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(/*adaptative=*/false, /*allowBridging=*/false));
+
+	Properties props;
+	ASSERT_EQ(1, transcoder.SetCodec(VideoCodec::H264, CIF, 20, 256, 300, props));
+
+	IntraCountingSink sink;
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<RTPMultiplexer>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	// 2 s d'images à 20 im/s, une demande d'intra avant CHAQUE image.
+	DWORD timestamp = 0;
+	const DWORD step = 90000 / 20;
+	for (int n = 0; n < 40; ++n)
+	{
+		transcoder.Update();
+		vp8.NextFrame((BYTE)(16 + (n * 7) % 200), timestamp,
+			      [&](RTPPacket& p){ source->Multiplex(p); });
+		timestamp += step;
+		std::this_thread::sleep_for(Ms(50));
+	}
+	// Laisser le lisseur étaler la dernière image.
+	std::this_thread::sleep_for(Ms(300));
+
+	EXPECT_GE(sink.Intras(), 2) << "la premiere image et au moins une intra forcee";
+	EXPECT_LE(sink.Intras(), 4) << sink.Intras() << " images cles en 2 s pour 40 demandes : pas de borne";
 
 	transcoder.Dettach();
 	transcoder.RemoveListener(&sink);
