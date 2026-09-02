@@ -340,6 +340,42 @@ la toute première image est encodée à cinq fois la cible pour amorcer l'image
 
 ---
 
+### 8.x La sonde au-dessus de la limite du pair
+
+Un pair Linphone qui a subi une congestion ne relève plus jamais sa limite. Son
+TMMBR vaut 0,7 × ce qu'il reçoit à la détection, puis 0,9 × cette même valeur à
+la résolution — il ne remesure pas. Sa seule voie de remontée est son estimateur
+d'images (VBE), qui ignore toute image de moins de 3 paquets : à 55 kb/s une
+image fait un paquet, il est aveugle. Mesure du 2026-09-02 (journal du pair) :
+55 kb/s de 720p demandés 36 s après la restauration d'un lien parfait, et pas
+une seule estimation VBE en quatre minutes.
+
+Le serveur ne peut pas lever une limite que le pair réémet quatre fois par
+seconde. Il peut le faire **remesurer** : `BitrateProbe`
+(`mcu/src/jsr309/BitrateProbe.h`, appliqué dans `VideoEncoderMultiplexerWorker`
+après le `min()` des limites) dépasse la limite du pair par paliers de × 1,4,
+jamais sous 500 kb/s (3 paquets par image à 15 im/s), pendant 6 s (70 mesures
+VBE puis sa fenêtre de 5 s). Le code du pair porte alors son TMMBR à la nouvelle
+estimation, et la sonde suivante part de ce palier.
+
+C'est un écart délibéré au RFC 5104, borné trois fois :
+
+- la sonde ne part que si c'est la limite du **pair** qui borne l'encodeur, et
+  après 5 s de lien propre ;
+- elle ne dépasse jamais la consigne négociée ni notre propre estimateur
+  d'émission — c'est lui, par son étage de perte, qui dit si le lien la porte ;
+- elle s'interrompt à la première perte, et l'intervalle entre deux sondes
+  double à chaque échec (10 s → 120 s). Il revient au minimum dès que le pair
+  suit.
+
+Chaque transition est tracée (`VideoEncoder: sonde …`). Coût : deux
+reconfigurations d'encodeur par sonde — à chaud en H.264 (CRF/VBV relus par
+trame), une réouverture donc une trame clé en VP8.
+
+Le chemin conférence (`VideoStream`) applique le même `min()` sans sonde : un
+participant Linphone y rencontre le même verrou après congestion. À câbler
+quand le besoin se présente, avec la même classe.
+
 ## 9. Le lissage à l'émission
 
 Une image encodée sort d'un bloc. L'envoyer d'un bloc, c'est mesurer sa propre
@@ -688,8 +724,12 @@ make check               # tout, y compris RPSI et pacer
   avant la perte. L'étage de perte s'amorce sur le débit réellement émis (mesuré
   dans `SendPacket`) et suit les Receiver Reports du pair : < 2 % de perte →
   +8 %/s ; 2-10 % → cible tenue ; > 10 % → réduction ×(512−perte)/512. La cible
-  vidéo est bornée en dessous à 128 kb/s — sous ce plancher une consigne vidéo
-  n'est plus une régulation.
+  vidéo est bornée à [128 kb/s, 6 Mb/s] (`RTPSession::VideoSenderEstimate{Min,Max}Bps`) :
+  sous le plancher une consigne vidéo n'est plus une régulation ; sans plafond
+  l'estimateur monte de +8 %/s jusqu'à 30 Mb/s faute de perte, chiffre sans
+  sens qui allonge la redescente. Le plafond doit rester supérieur à la plus
+  haute consigne négociée, sinon c'est lui qui bride l'encodeur ; l'atteindre
+  est tracé une fois (`BWE-TX: limite codee en dur de … atteinte`).
 - **La cible de l'estimateur d'émission atteint l'encodeur partout où il y en a
   un** : chemin conférence (`VideoStream`), port de mixeur
   (`VideoEncoderMultiplexerWorker`) et transcodeur 1:1
@@ -802,13 +842,14 @@ donnerait un contrôle d'émission aux pattes sans transport-cc.
 | `mcu/src/jsr309/VideoTranscoder.cpp` | les modes pont et transcodage, la décimation, le suivi de cadence |
 | `mcu/src/jsr309/FrameDecimator.h` | le pas de décimation et son hystérésis |
 | `mcu/src/jsr309/RTPEndpoint.cpp` | la propagation entre pattes |
+| `mcu/src/jsr309/BitrateProbe.h` | la sonde au-dessus de la limite du pair (§8.x) |
 | `mcu/src/jsr309/VideoDecoderWorker.cpp` | les demandes d'image clé et l'acquittement RPSI, chemin JSR-309 |
 | `mcu/src/fecdecoder.cpp` | le décodage ULPFEC |
 | `third_party/fontventa/libmedikit/ffvideocodec.cpp` | les seuils de réouverture de l'encodeur, la période intra, le forçage d'image clé |
 | `third_party/fontventa/libmedikit/vp8/vp8frameheader.cpp` | la lecture des drapeaux de référence VP8 |
 | `third_party/fontventa/libmedikit/vp8/vp8decoder.cpp` | l'armement de l'acquittement RPSI |
 
-Tests : `mcu/tests/test_rate_control.cpp`, `test_sender_bwe.cpp`,
+Tests : `mcu/tests/test_rate_control.cpp`, `test_sender_bwe.cpp`, `test_bitrate_probe.cpp`,
 `test_rtp_pacer.cpp`, `test_rpsi.cpp`,
 `third_party/fontventa/libmedikit/tests/test_vp8_frameheader.cpp` (parseur
 d'en-tête VP8 et conditions d'acquittement) et `test_video_encoder_reconfig.cpp`

@@ -243,13 +243,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	this->listener = listener;
 	//And media
 	this->media = media;
-	//Plancher de la cible d'émission vidéo (128 kb/s, arbitrage mainteneur
-	//2026-09-02) : le défaut de l'estimateur est 16 kb/s, et une consigne vidéo
-	//à 16 kb/s n'est plus une régulation, c'est une extinction. Le contrôle par
-	//perte seule (pair sans transport-cc) peut y traîner la cible sur un lien
-	//durablement mauvais. 0 = garder le plafond par défaut de l'estimateur.
+	//Bornes de l'estimateur d'émission vidéo : cf. rtpsession.h.
 	if (media == MediaFrame::Video)
-		senderBWE.SetMinMaxBitrate(128000, 0);
+		senderBWE.SetMinMaxBitrate(VideoSenderEstimateMinBps, VideoSenderEstimateMaxBps);
 	this->role	= role;
 	//Init values
 	sendType = -1;

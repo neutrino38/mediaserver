@@ -88,6 +88,7 @@ SenderBWE::SenderBWE()
 	//Bornes du lot 1 (arbitrage A1) : en dessous de 16 kb/s mieux vaut geler
 	minConfiguredBitrate = 16000;
 	maxConfiguredBitrate = 30000000;
+	atCeiling = false;
 }
 
 void SenderBWE::TraceEstimate(QWORD nowUs, bool changed)
@@ -433,6 +434,16 @@ bool SenderBWE::UpdateTarget(DWORD bitrate, QWORD nowUs)
 	bitrate = ClampBitrate(bitrate);
 	bool changed = bitrate != lossBasedTarget;
 	lossBasedTarget = bitrate;
+
+	//Sur le FRONT seulement : a ce plafond l'estimateur peut rester des minutes,
+	//une trace par rapport serait du bruit. Sans transport-cc il y monte des
+	//qu'il n'y a pas de perte : le voir ici dit que la borne codee en dur (cf.
+	//RTPSession::VideoSenderEstimateMaxBps) est ce qui le tient, pas le lien.
+	const bool ceiling = bitrate >= maxConfiguredBitrate;
+	if (ceiling && !atCeiling)
+		Log("-BWE-TX: limite codee en dur de %u kbit/s atteinte, l'estimateur d'emission ne montera pas plus haut [%s]\n",
+		    maxConfiguredBitrate / 1000, eventSource ? eventSource->GetName() : "");
+	atCeiling = ceiling;
 	return changed;
 }
 

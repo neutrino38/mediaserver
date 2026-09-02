@@ -241,6 +241,17 @@ public:
 	//assez longue pour que l'attente ne coûte rien.
 	static const DWORD ConsumerPollMs = 200;
 
+	//Bornes de l'estimateur d'ÉMISSION d'une session vidéo (arbitrage
+	//mainteneur 2026-09-02). Plancher : sous 128 kb/s une consigne vidéo n'est
+	//plus une régulation. Plafond : sans transport-cc l'estimateur monte de
+	//+8 %/s tant qu'il n'y a pas de perte, jusqu'au défaut de 30 Mb/s — un
+	//chiffre qui ne veut rien dire et qui rend la redescente lente. 6 Mb/s
+	//couvre du 1080p de bonne qualité. RÈGLE : ce plafond doit rester
+	//SUPÉRIEUR à la plus haute consigne vidéo négociée, sinon c'est lui qui
+	//bride l'encodeur, en silence, sur toute jambe sans transport-cc.
+	static const DWORD VideoSenderEstimateMinBps = 128000;
+	static const DWORD VideoSenderEstimateMaxBps = 6000000;
+
 	// Multi stream
 	//`timeoutMs` borne l'attente ; `ssrc` 0 = flux par défaut. Rend NULL sur
 	//expiration, sur annulation, ou quand le flux demandé n'existe pas encore —

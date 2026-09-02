@@ -103,6 +103,7 @@ private:
 	bool UpdateTarget(DWORD bitrate, QWORD nowUs);
 
 	DWORD lossBasedTarget;		//b/s ; 0 = pas de cible encore
+	bool  atCeiling;		//la cible bute sur maxConfiguredBitrate (trace sur le front)
 	BYTE  lastFractionLost;
 	QWORD lastLossReportUs;
 	QWORD lastLossDecreaseUs;
