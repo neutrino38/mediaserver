@@ -17,6 +17,7 @@
 #include "medkit/videorescaler.h"
 #include "video.h"
 #include "RTPMultiplexerSmoother.h"
+#include "BitrateProbe.h"
 
 //Encodeur vidéo d'une patte émettrice JSR-309. UN SEUL corps de traitement,
 //`EncodePicture`, et deux façons de l'alimenter (lot 4 de
@@ -169,6 +170,9 @@ private:
 	//(RFC 5104) — écrit par le plan de contrôle, lu par le chemin des paquets.
 	std::atomic<int> videoBitrateLimit;
 	std::atomic<int> senderBweLimit;
+	//Sonde au-dessus de la limite du pair (cf. BitrateProbe.h). Lue et écrite
+	//par le seul thread d'encodage.
+	BitrateProbe probe;
 	Properties params;
 
 	//── Plan de contrôle (thread XML-RPC) ────────────────────────────────────

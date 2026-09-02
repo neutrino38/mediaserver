@@ -617,6 +617,27 @@ int VideoEncoderMultiplexerWorker::EncodePicture(PictPtr pic)
 	if (bweLimit>0 && target>bweLimit)
 		target = bweLimit;
 
+	//Sonde : dépasser la limite du pair, bornée et réversible, pour qu'il
+	//remesure (cf. BitrateProbe.h). Ne joue que si c'est lui qui borne.
+	target = probe.Apply(target, peerLimit, bweLimit, bitrate, getTime());
+	switch (probe.LastEvent())
+	{
+		case BitrateProbe::Start:
+			Log("-VideoEncoder: sonde au-dessus de la limite du pair %d -> %d kb/s (estimateur %d, consigne %d)\n",
+			    peerLimit, probe.GetProbeKbps(), bweLimit, bitrate);
+			break;
+		case BitrateProbe::End:
+			Log("-VideoEncoder: sonde terminee, le pair n'a pas suivi (limite %d kb/s), prochaine dans %u s\n",
+			    peerLimit, (unsigned)(probe.GetIntervalUs()/1000000));
+			break;
+		case BitrateProbe::Abort:
+			Log("-VideoEncoder: sonde interrompue (pair %d, estimateur %d kb/s), prochaine dans %u s\n",
+			    peerLimit, bweLimit, (unsigned)(probe.GetIntervalUs()/1000000));
+			break;
+		default:
+			break;
+	}
+
 	//Check if we have a new bitrate
 	if (target && target!=current)
 	{
