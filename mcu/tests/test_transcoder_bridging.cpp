@@ -335,6 +335,33 @@ TEST_F(VideoBridgingTest, TheLocalSenderEstimateStaysLocalWhenTranscoding)
 	transcoder.End();
 }
 
+// La limite du puits (TMMBR/REMB) remonte à la source AUSSI en transcodage.
+// Absorber seul dans l'encodeur donnait du 720p à 140 kb/s (séance netem du
+// 2026-09-02) : seule la source peut fournir une image plus petite pour ce débit.
+TEST_F(VideoBridgingTest, TheSinkLimitIsRelayedUpstreamWhenTranscodingToo)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	// Le puits ne sait porter que VP8 ; il arrive du H.264 : transcodage.
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+	RTPPacket packet = MakeVideoPacket(VideoCodec::H264, 7, 90000);
+	source->Publish(packet);
+	ASSERT_TRUE(sink.received.empty());
+
+	transcoder.SetREMB(140000);
+
+	ASSERT_EQ(1u, source->rembs.size())
+		<< "en transcodage la limite du puits doit remonter a la source";
+	EXPECT_EQ(140000u, source->rembs[0]);
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
 TEST_F(VideoBridgingTest, AttachWiresTheDecoderWhenBridgingIsNotAllowed)
 {
 	// Le comportement historique reste intact là où le pont n'est pas demandé

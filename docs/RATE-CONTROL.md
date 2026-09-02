@@ -411,8 +411,12 @@ transcodeur vidéo. L'audio n'est pas lissé : il part directement.
 
 ## 10. Le relais : faire ralentir la source
 
-En mode pont, le serveur ne produit rien. Le seul levier est de propager la
-contrainte **à contre-courant**.
+La contrainte du puits est propagée **à contre-courant** jusqu'à la source,
+que le chemin soit un pont ou un transcodage. En mode pont c'est le seul levier.
+En transcodage l'encodeur l'absorbe aussi, mais absorber seul ne suffit pas :
+ré-encoder un 720p à 140 kb/s donne une image inexploitable, alors que la
+source, prévenue, choisit une taille d'image adaptée au débit et le ré-encodage
+redevient regardable (mesure du 2026-09-02).
 
 ```mermaid
 flowchart LR
@@ -426,10 +430,12 @@ La chaîne, étape par étape :
 
 1. le puits B envoie un TMMBR ou un REMB ;
 2. le serveur le remonte au producteur du flux ;
-3. **si un encodeur est dans le chemin**, il absorbe la limite (§8) ;
-4. **si le chemin est un pont**, la demande repart vers la source A —
-   **bornée par la consigne négociée de la patte émettrice**. Un puits ne peut
-   pas autoriser plus que ce que sa propre négociation prévoit ;
+3. la demande repart **toujours** vers la source A — **bornée par la consigne
+   négociée de la patte émettrice**. Un puits ne peut pas autoriser plus que ce
+   que sa propre négociation prévoit ;
+4. **si un encodeur est dans le chemin**, il absorbe la limite en plus (§8) :
+   les deux se cumulent par `min()`. L'image clé, elle, n'est pas relayée en
+   transcodage — le transcodeur la produit seul (§12) ;
 5. côté source, la limite fait deux choses : elle **borne l'estimateur local**
    de cette patte, et elle **part sur le fil**, amortie par l'amortisseur (§5).
 
