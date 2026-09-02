@@ -24,7 +24,11 @@ public:
 		virtual ~Listener(){};
 	public:
 		//Interface
-		virtual void onTargetBitrateRequested(DWORD bitrate) = 0;
+		//`congestion` : la baisse vient d'une surutilisation mesurée (état
+		//Decrease). Sinon l'estimation ne fait que SUIVRE ce que le pair envoie
+		//(plafond glissant 1,5 x l'entrant) : ce n'est pas un signal, et
+		//l'annoncer à un pair obéissant l'enferme à son débit d'échauffement.
+		virtual void onTargetBitrateRequested(DWORD bitrate, bool congestion) = 0;
 	};
 public:
 	enum State {

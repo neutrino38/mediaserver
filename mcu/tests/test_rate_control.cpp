@@ -58,7 +58,7 @@ const DWORD kTargetBps  = kFrameBytes * 8 * 1000 / kFrameMs; // ~303 kb/s
 class BitrateCapture : public RemoteRateEstimator::Listener
 {
 public:
-	void onTargetBitrateRequested(DWORD bitrate) override { targets.push_back(bitrate); }
+	void onTargetBitrateRequested(DWORD bitrate, bool) override { targets.push_back(bitrate); }
 	std::vector<DWORD> targets;
 };
 
@@ -716,6 +716,73 @@ TEST(RateControlThrottler, UneBaisseFranchePartMemeQuandLePairDepasse)
 	EXPECT_EQ(800000u, out);
 }
 
+// ─── La baisse qui n'est qu'un suivi (mesure du 2026-09-02) ───────────────────
+// L'estimation de réception suit l'entrant (plafond 1,5 x). Quand le pair
+// s'échauffe, elle s'effondre sur son débit d'échauffement SANS congestion.
+// Annoncer cet effondrement comme « urgent » enferme un pair obéissant : Alice
+// est passée en 320x240 à 08:17:35 et n'en est jamais ressortie.
+
+TEST(RateControlThrottler, UneBaisseSansCongestionNEstPasUrgente)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	// 2291 kb/s annoncés à l'échauffement (accumulateur gonflé par la trame clé).
+	ASSERT_TRUE(throttler.OnEstimateChanged(2291280, 1000, out));
+
+	// Une seconde plus tard le plafond glissant suit l'entrant à 134 kb/s :
+	// 1,5 x 134 + 10 = 211. État Increase, aucun OverUsing.
+	EXPECT_FALSE(throttler.OnEstimateChanged(211060, 2026, out, /*congestion=*/false))
+		<< "un suivi de l entrant n est pas un ordre de ralentir";
+}
+
+TEST(RateControlThrottler, UneBaisseDeCongestionResteUrgente)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2291280, 1000, out));
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1500000, 2026, out, /*congestion=*/true))
+		<< "le lien sature : le pair doit l apprendre tout de suite";
+	EXPECT_EQ(1500000u, out);
+}
+
+// Après un suivi non annoncé, la référence reste la dernière valeur ÉMISE : la
+// remontée du pair se juge contre elle, et part dès qu'elle la dépasse d'un pas.
+TEST(RateControlThrottler, ApresUnSuiviLaRemonteeSeJugeContreLaDerniereAnnonce)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2291280, 1000, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(211060, 2026, out, false));
+
+	// Le pair a fini de s'échauffer, l'estimation remonte : 2,3 Mb/s n'est
+	// qu'à +0,4 % de la dernière annonce, rien à dire ; 2,8 Mb/s est un pas.
+	throttler.SetPeerBitrate(2000000);
+	EXPECT_FALSE(throttler.OnEstimateChanged(2300000, 9000, out, false));
+	EXPECT_TRUE(throttler.OnEstimateChanged(2800000, 10000, out, false));
+	EXPECT_EQ(2800000u, out);
+}
+
+// En REMB il y a une période : un suivi part à la période comme n'importe quelle
+// variation, il perd seulement son passe-droit d'urgence.
+TEST(RateControlThrottler, EnREMBUnSuiviAttendLaPeriodeAuLieuDePartirToutDeSuite)
+{
+	RembThrottler throttler;	// RembPolicy par défaut
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(1000000, 1050, out, false))
+		<< "dans la periode, sans congestion : on attend";
+	EXPECT_TRUE(throttler.OnEstimateChanged(1000000, 1250, out, false))
+		<< "la periode ecoulee, la variation part normalement";
+}
+
 TEST(RateControlThrottler, LeDialecteREMBGardeSesSeuils)
 {
 	RembThrottler throttler;
@@ -791,7 +858,7 @@ class ReentrantCapture : public RemoteRateEstimator::Listener
 public:
 	ReentrantCapture(RemoteRateEstimator& estimator) : estimator(estimator) {}
 
-	void onTargetBitrateRequested(DWORD bitrate) override
+	void onTargetBitrateRequested(DWORD bitrate, bool) override
 	{
 		estimator.GetSSRCs(ssrcs);
 		estimated = estimator.GetEstimatedBitrate();
@@ -849,7 +916,7 @@ TEST(RateControlEstimator, UnListenerPeutInterrogerLEstimateurDepuisLaNotificati
 class SlowCapture : public RemoteRateEstimator::Listener
 {
 public:
-	void onTargetBitrateRequested(DWORD bitrate) override
+	void onTargetBitrateRequested(DWORD bitrate, bool) override
 	{
 		notifying = true;
 		usleep(300000);

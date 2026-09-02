@@ -208,6 +208,9 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	}
 
 	DWORD estimation = estimated ? GetEstimatedBitrateUnlocked() : 0;
+	//Capturé sous le verrou ÉCRIVAIN, comme l'estimation : l'état pourrait
+	//changer entre le relâchement et la notification.
+	const bool congestion = (state == Decrease);
 
 	//Unloc
 	lock.Unlock();
@@ -232,7 +235,7 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	lock.IncUse();
 	for (Listener* l : listeners)
 		//Send it
-		l->onTargetBitrateRequested(estimation);
+		l->onTargetBitrateRequested(estimation, congestion);
 	lock.DecUse();
 }
 

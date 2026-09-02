@@ -3737,7 +3737,7 @@ void RTPSession::SetRTT(DWORD rtt)
 	}		
 }
 
-void RTPSession::onTargetBitrateRequested(DWORD bitrate)
+void RTPSession::onTargetBitrateRequested(DWORD bitrate, bool congestion)
 {
     BitrateFeedbackMode mode;
     DWORD announce = 0;
@@ -3755,7 +3755,7 @@ void RTPSession::onTargetBitrateRequested(DWORD bitrate)
     bitrateFeedbackThrottler.SetPeerBitrate(peerBitrate);
     //L'amortisseur suit la mesure locale même quand rien ne part : c'est lui qui
     //compose le min() avec un éventuel plafond venu de l'autre patte.
-    send = bitrateFeedbackThrottler.OnEstimateChanged(bitrate, getTimeMS(), announce);
+    send = bitrateFeedbackThrottler.OnEstimateChanged(bitrate, getTimeMS(), announce, congestion);
     mutex.unlock();
 
     Debug("-RTPSession::onTargetBitrateRequested() mode %d, bitrate [%d] -> [%d] send %d for %s stream %p.\n",

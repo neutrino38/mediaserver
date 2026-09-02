@@ -649,6 +649,18 @@ et 720p, de 0,03 à 0,94 s après l'envoi. Ces hausses-là sont retenues
 pair, rien n'est filtré ; et une hausse que le pair RESPECTE part toujours,
 puisque la lever est précisément ce qui le libère.
 
+**Une baisse n'est urgente que si elle vient d'une congestion.** L'estimation de
+réception suit ce que le pair envoie (plafond glissant à 1,5 × l'entrant). Elle
+peut donc BAISSER sans qu'aucune surutilisation n'ait été mesurée — typiquement à
+l'établissement, quand le pair s'échauffe : mesure du 2026-09-02, Alice émet
+134 kb/s à la 15e seconde, l'estimation tombe de 2 291 à 211 kb/s en une seconde,
+état `Increase`, zéro `OverUsing`. Annoncer cette baisse comme urgente a enfermé
+Alice en 320×240 pour tout l'appel : elle obéit, l'entrant chute, le plafond
+suit, et plus rien ne remonte. L'estimateur dit désormais POURQUOI il notifie
+(`onTargetBitrateRequested(bitrate, congestion)`) ; seule une baisse en état
+`Decrease` court-circuite l'amortisseur. Un suivi de l'entrant se traite comme
+n'importe quelle variation : jamais en TMMBR, à la période en REMB.
+
 **Outillage de mesure** — `mcu/tests/tools/` : `netem_scenario.sh` applique une
 dégradation reproductible et journalise ses marqueurs ; `bwe_report.py` lit
 `mcu.log` avec ces marqueurs et sort un CSV, un graphe SVG et un verdict par

@@ -363,7 +363,7 @@ public:
 	//dans le dialecte négocié. Rend 0 si rien n'est parti (rien de neuf à dire).
 	int SetMaxReceiveBitrate(DWORD bitrate);
 
-	virtual void onTargetBitrateRequested(DWORD bitrate);
+	virtual void onTargetBitrateRequested(DWORD bitrate, bool congestion);
 	virtual void onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DWORD localMasterKeySize,BYTE* remoteMasterKey,DWORD remoteMasterKeySize);
 private:
 	//Le champ REMB (identifiant 'REMB' + débit + SSRC couverts) prêt à être

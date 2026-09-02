@@ -9,7 +9,13 @@
  * style maison plutôt que recopiée (arbitrage A5 du plan) :
  *
  *   - une BAISSE de plus de 3 % part TOUT DE SUITE — c'est le message urgent,
- *     le lien sature et le pair doit ralentir ;
+ *     le lien sature et le pair doit ralentir. Seulement si elle vient d'une
+ *     CONGESTION mesurée : l'estimation peut aussi baisser parce qu'elle suit
+ *     l'entrant (plafond glissant 1,5 x), et annoncer cette baisse-là enferme
+ *     un pair obéissant. Mesure du 2026-09-02, appel sans dégradation : Alice
+ *     s'échauffe à 134 kb/s, l'estimation tombe de 2291 à 211 kb/s en une
+ *     seconde sans OverUsing, le TMMBR 211 part comme « urgent », Alice obéit
+ *     et passe en 320x240 pour le reste de l'appel ;
  *   - tout le reste (hausse, ou variation dans le bruit) attend la période de
  *     hausse depuis la dernière annonce — 200 ms en REMB, que Chrome attend
  *     périodique. En TMMBR il n'y a PAS de période : la limite est collante
@@ -104,13 +110,16 @@ public:
 	 * @param bitrate  la nouvelle estimation, en bps
 	 * @param now      l'instant, en ms
 	 * @param out      [sortie] le débit à annoncer au pair, plafond compris
+	 * @param congestion la baisse vient d'une surutilisation mesurée ; sinon
+	 *                 c'est un suivi de l'entrant, qui n'a rien d'urgent
 	 * @return true s'il faut émettre maintenant
 	 */
-	bool OnEstimateChanged(DWORD bitrate, QWORD now, DWORD& out)
+	bool OnEstimateChanged(DWORD bitrate, QWORD now, DWORD& out, bool congestion = true)
 	{
 		if (hasSent)
 		{
-			const bool drop = (QWORD)bitrate * policy.dropThresholdPercent / 100 <= (QWORD)lastSent;
+			const bool drop = congestion
+				&& (QWORD)bitrate * policy.dropThresholdPercent / 100 <= (QWORD)lastSent;
 			const bool step = policy.raiseStepPercent
 				&& (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + policy.raiseStepPercent)
 				&& RaiseIsInformative();
