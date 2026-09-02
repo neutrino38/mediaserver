@@ -29,6 +29,10 @@ public:
 	bool ProcessFeedback(const std::vector<SentPacketHistory::Result>& results, DWORD lost, QWORD nowUs);
 	//Fraction perdue d'un RR sur notre flux sortant (unites de 1/256)
 	bool UpdateFractionLost(BYTE fractionLost, QWORD nowUs);
+	//Debit reellement EMIS, fenetre glissante sur les instants d'emission.
+	//Nourri par ProcessFeedback avec transport-cc ; sans transport-cc, par
+	//SendPacket a chaque paquet, sinon l'etage de perte n'a rien a amorcer.
+	void UpdateSentBitrate(QWORD sentUs, DWORD bytes);
 	void UpdateRTT(DWORD rttMs);
 
 	void SetStartBitrate(DWORD bitrate, QWORD nowUs);
@@ -109,12 +113,9 @@ private:
 	//Trace : au changement de cible, et au moins une fois par seconde —
 	//une serie echantillonnee aux seuls changements biaise le depouillement
 	//(dispersion, oscillation) du lot 3 etendu aux traces BWE-TX.
-	//Debit reellement EMIS, fenetre glissante sur les instants d'emission des
-	//paquets rapportes (pertes comprises, a la taille moyenne du rapport).
-	//C'est lui qui separe le regime auto-limite (emis << cible : notre
+	//Le debit emis separe le regime auto-limite (emis << cible : notre
 	//encodeur borne, le plafond 1,5 x l'acquitte ne prouve rien) du regime
 	//limite par le reseau (emis ~= cible : le plafond est legitime).
-	void UpdateSentBitrate(QWORD sentUs, DWORD bytes);
 	bool IsSelfLimited(DWORD currentBps);
 	double sentBitrate;		//kb/s, -1 tant que la fenetre n'est pas pleine
 	double sentVar;

@@ -539,6 +539,11 @@ bool SenderBWE::UpdateFractionLost(BYTE fractionLost, QWORD nowUs)
 	DWORD before = GetEstimatedBitrate();
 	if (!lossBasedTarget && delayInitialized)
 		lossBasedTarget = delayCurrentBitrate;
+	//Sans controleur de delai (pas de transport-cc), la cible s'amorce sur le
+	//debit reellement emis. Mesure pas encore prete : elle reste a 0 et le
+	//prochain RR reessaie.
+	else if (!lossBasedTarget)
+		lossBasedTarget = GetSentBitrate();
 	UpdateLossEstimate(nowUs);
 	DWORD after = GetEstimatedBitrate();
 	TraceEstimate(nowUs, after != before);

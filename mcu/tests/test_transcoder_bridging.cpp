@@ -224,7 +224,10 @@ public:
 	}
 
 	void Update() override {}
-	void SetREMB(DWORD estimation) override {}
+	void SetREMB(DWORD estimation) override { rembs.push_back(estimation); }
+
+	// Les limites de débit remontées par l'aval (relais du mode pont).
+	std::vector<DWORD> rembs;
 
 	// Ce que fait RTPMultiplexer::Multiplex côté production.
 	void Publish(RTPPacket &packet)
@@ -268,6 +271,65 @@ TEST_F(VideoBridgingTest, AttachPutsTheTranscoderOnThePathSoBridgingCanHappen)
 		<< "un paquet publie par la SOURCE doit arriver relaye au puits";
 	ASSERT_EQ(sizeof(kMagic), sink.received[0].length);
 	EXPECT_EQ(0, memcmp(kMagic, sink.received[0].payload.data(), sizeof(kMagic)));
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// La cible du BWE émetteur local suit le même chemin que la limite du pair.
+// En mode pont il n'y a pas d'encodeur : elle remonte à la source, qui est la
+// seule à pouvoir baisser le débit du flux relayé. Sans la surcharge
+// SetSenderEstimate, elle tombait dans le no-op de Joinable et le lien saturé
+// restait saturé (séance netem du 2026-09-01 : image figée, jamais remontée).
+TEST_F(VideoBridgingTest, TheLocalSenderEstimateIsRelayedUpstreamWhenBridging)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	// Passe en mode pont : le puits porte le codec entrant.
+	RTPPacket packet = MakeVideoPacket(VideoCodec::VP8, 42, 90000);
+	source->Publish(packet);
+	ASSERT_EQ(1u, sink.received.size());
+
+	transcoder.SetSenderEstimate(600000);
+
+	ASSERT_EQ(1u, source->rembs.size())
+		<< "en mode pont, l estimation locale doit remonter a la source";
+	EXPECT_EQ(600000u, source->rembs[0])
+		<< "sans consigne negociee (SetCodec jamais appele), la valeur passe telle quelle";
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// En transcodage, l'estimation est absorbée par l'encodeur local : rien ne
+// remonte. Ralentir la source ne réduirait pas ce que NOTRE encodeur émet.
+TEST_F(VideoBridgingTest, TheLocalSenderEstimateStaysLocalWhenTranscoding)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	// Le puits ne sait porter que VP8 ; il arrive du H.264 : décodage.
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	RTPPacket packet = MakeVideoPacket(VideoCodec::H264, 7, 90000);
+	source->Publish(packet);
+	ASSERT_TRUE(sink.received.empty());
+
+	transcoder.SetSenderEstimate(600000);
+
+	EXPECT_TRUE(source->rembs.empty())
+		<< "en transcodage, l estimation ne doit pas remonter a la source";
 
 	transcoder.RemoveListener(&sink);
 	transcoder.End();

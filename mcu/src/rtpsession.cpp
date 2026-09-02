@@ -243,6 +243,13 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	this->listener = listener;
 	//And media
 	this->media = media;
+	//Plancher de la cible d'émission vidéo (128 kb/s, arbitrage mainteneur
+	//2026-09-02) : le défaut de l'estimateur est 16 kb/s, et une consigne vidéo
+	//à 16 kb/s n'est plus une régulation, c'est une extinction. Le contrôle par
+	//perte seule (pair sans transport-cc) peut y traîner la cible sur un lien
+	//durablement mauvais. 0 = garder le plafond par défaut de l'estimateur.
+	if (media == MediaFrame::Video)
+		senderBWE.SetMinMaxBitrate(128000, 0);
 	this->role	= role;
 	//Init values
 	sendType = -1;
@@ -2293,6 +2300,15 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			std::lock_guard<std::mutex> guard(senderBweMutex);
 			sentHistory.OnPacketSent((WORD)transportSeqNum, getTime(), len);
 		}
+		else
+		{
+			//Sans transport-cc, ProcessFeedback ne tourne jamais : c'est ici
+			//que l'estimateur apprend ce que nous emettons, sinon l'etage de
+			//perte des RR n'a rien a amorcer et la cible reste a 0. Avec
+			//transport-cc, ProcessFeedback le nourrit deja : ne pas compter deux fois.
+			std::lock_guard<std::mutex> guard(senderBweMutex);
+			senderBWE.UpdateSentBitrate(getTime(), len);
+		}
 	}
 
 	//Exit
@@ -3385,24 +3401,36 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateRequest:
-						Log("-TempMaxMediaStreamBitrateRequest received from [%s] on %s stream\n", fromAddr, MediaFrame::TypeToString(media));
 						for (BYTE i=0;i<fb->GetFieldCount();i++)
 						{
 							//Get field
 							RTCPRTPFeedback::TempMaxMediaStreamBitrateField *field = (RTCPRTPFeedback::TempMaxMediaStreamBitrateField*) fb->GetField(i);
-							//Check if it is for us
-							if (field->GetSSRC()==sendSSRC)
+							//Un champ qui ne vise pas notre SSRC sortant est ignoré. Le dire :
+							//sans cette trace, un pair qui se trompe de cible est indistinguable
+							//d'un pair qui ne demande rien (séance du 2026-09-01 : 1365 TMMBR
+							//reçus, aucune valeur lisible dans le journal).
+							if (field->GetSSRC()!=sendSSRC)
 							{
-								//call listener
-								if (auto l = LockListener())
-									l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
-								//RFC 5104 §4.2.1.2 : l'émetteur de média répond TMMBN, sinon
-								//le pair retransmet son TMMBR à chaque intervalle RTCP —
-								//exactement ce que NOUS faisons en face tant que le TMMBN
-								//n'arrive pas (pendingTMBR, SendSenderReport). Répondu même
-								//sans listener : la restriction est acquise au niveau session.
-								SendTempMaxMediaStreamBitrateNotification(field->GetBitrate(),field->GetOverhead());
+								Debug("-TempMaxMediaStreamBitrateRequest ignore, champ pour ssrc %u (le notre est %u) [%p]\n",
+									field->GetSSRC(),sendSSRC,this);
+								continue;
 							}
+
+							//La VALEUR demandée est ce qui pilote notre émission vers ce
+							//pair : c'est elle qu'il faut lire, pas le seul fait d'avoir
+							//reçu un TMMBR.
+							Log("-TempMaxMediaStreamBitrateRequest received from [%s] on %s stream: maxBitrate = %u, overhead = %u\n",
+								fromAddr,MediaFrame::TypeToString(media),
+								field->GetBitrate(),field->GetOverhead());
+							//call listener
+							if (auto l = LockListener())
+								l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+							//RFC 5104 §4.2.1.2 : l'émetteur de média répond TMMBN, sinon
+							//le pair retransmet son TMMBR à chaque intervalle RTCP —
+							//exactement ce que NOUS faisons en face tant que le TMMBN
+							//n'arrive pas (pendingTMBR, SendSenderReport). Répondu même
+							//sans listener : la restriction est acquise au niveau session.
+							SendTempMaxMediaStreamBitrateNotification(field->GetBitrate(),field->GetOverhead());
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:

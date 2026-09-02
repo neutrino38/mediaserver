@@ -660,14 +660,20 @@ make check               # tout, y compris RPSI et pacer
 
 - **Pas de RFC 8888 (CCFB).** Les rapports d'arrivée sont au format
   transport-cc, c'est-à-dire un brouillon jamais publié en RFC.
-- **Sans transport-cc, l'estimateur d'émission ne produit rien du tout.** Son
-  étage de perte lit bien les Receiver Reports, mais il ne s'amorce que sur une
-  valeur de l'étage de délai, lequel n'a alors aucune entrée. Face à un pair qui
-  n'offre que `ccm tmmbr` — Linphone, par exemple — le serveur n'a donc pas de
-  contrôle d'émission propre : seule la limite annoncée par le pair agit.
-- **La cible de l'estimateur d'émission n'atteint pas l'encodeur d'un
-  transcodeur JSR-309.** Elle atteint l'encodeur sur le chemin conférence et sur
-  un port de mixeur ; sur un transcodeur 1:1, seul le REMB/TMMBR du pair agit.
+- **Sans transport-cc, l'estimateur d'émission n'a que son étage de perte.**
+  L'étage de délai n'a aucune entrée : pas de plafonnement fin, pas de détection
+  avant la perte. L'étage de perte s'amorce sur le débit réellement émis (mesuré
+  dans `SendPacket`) et suit les Receiver Reports du pair : < 2 % de perte →
+  +8 %/s ; 2-10 % → cible tenue ; > 10 % → réduction ×(512−perte)/512. La cible
+  vidéo est bornée en dessous à 128 kb/s — sous ce plancher une consigne vidéo
+  n'est plus une régulation.
+- **La cible de l'estimateur d'émission atteint l'encodeur partout où il y en a
+  un** : chemin conférence (`VideoStream`), port de mixeur
+  (`VideoEncoderMultiplexerWorker`) et transcodeur 1:1
+  (`VideoTranscoder::SetSenderEstimate`), toujours composée par `min()` avec la
+  limite annoncée par le pair. En mode **pont** il n'y a pas d'encodeur : la
+  cible remonte à la source en TMMBR/REMB, bornée par la consigne négociée,
+  comme la limite du pair.
 - **L'audio et le texte sont hors périmètre** : ni estimation, ni lissage, ni
   limite de débit.
 - **Pas de FEC émise, pas de budget de protection.** Le serveur décode ULPFEC

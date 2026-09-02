@@ -40,6 +40,11 @@ public:
 	virtual void AddListener(Joinable::Listener *listener);
 	virtual void Update();
 	virtual void SetREMB(DWORD estimation);
+	//Cible du BWE émetteur LOCAL de la patte émettrice (lot 6.3), estimée sur
+	//ses seuls RR quand le pair n'offre pas transport-cc. Sans cette surcharge
+	//elle tombait dans le no-op de Joinable : l'estimation existait, l'encodeur
+	//ne l'apprenait jamais.
+	virtual void SetSenderEstimate(DWORD estimation);
 	virtual void RemoveListener(Joinable::Listener *listener);
 	//Phase 5 : les bornes négociées de la patte émettrice descendent à l'encodeur.
 	virtual void SetNegotiatedCodecProperties(const std::map<int,Properties>& byCodec);

@@ -156,6 +156,23 @@ void VideoTranscoder::SetREMB(DWORD estimation)
 	encoder.SetREMB(estimation);
 }
 
+void VideoTranscoder::SetSenderEstimate(DWORD estimation)
+{
+	//En mode pont, l'encodeur n'est pas dans le chemin : même réponse que pour
+	//la limite du pair — seule la source peut baisser le débit du flux relayé.
+	//SetREMB porte déjà ce relais amont, borné par la consigne négociée.
+	if (state == 2)
+	{
+		SetREMB(estimation);
+		return;
+	}
+
+	//Transcodage (ou mode encore inconnu) : deuxième champ à côté de la limite
+	//du pair, le chemin des paquets prend le min des deux
+	//(cf. VideoEncoderMultiplexerWorker::SetSenderEstimate).
+	encoder.SetSenderEstimate(estimation);
+}
+
 void VideoTranscoder::RemoveListener(Joinable::Listener *listener)
 {
 	encoder.RemoveListener(listener);
