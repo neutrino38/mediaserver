@@ -16,6 +16,13 @@ xmlrpc_value* BroadcasterCreateBroadcast(xmlrpc_env *env, xmlrpc_value *param_ar
 	int maxConcurrent;
 	xmlrpc_parse_value(env, param_array, "(ssii)", &str,&tag,&maxTransfer,&maxConcurrent);
 
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
 	//Parse string
 	nameParser.Parse((BYTE*)str,strlen(str));
         tagParser.Parse((BYTE*)tag,strlen(tag));

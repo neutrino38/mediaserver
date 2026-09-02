@@ -904,10 +904,20 @@ nominal 800/200 » qui ne s'appliquait pas à ce sens : l'entrant est resté à
 2 284, 2 273 puis 2 306 kb/s sur les trois paliers — jamais contraint. Le +58 %
 au-dessus de l'entrant est le plafond glissant de 1,5× documenté.
 
-**Ce qu'il faut pour clore R8** : un pair qui négocie **transport-cc** — donc un
-navigateur, pas un Linphone. C'est le seul montage où l'estimateur d'émission a
-une entrée, donc le seul où « le RTCP reçu pilote l'émission » est observable de
-bout en bout.
+**Ce qu'il faudrait pour clore R8** : un pair qui négocie **transport-cc** — donc
+un navigateur, pas un Linphone. C'est le seul montage où l'estimateur d'émission
+a une entrée, donc le seul où « le RTCP reçu pilote l'émission » est observable
+de bout en bout.
+
+**ARBITRAGE DU 2026-09-02 : on n'y consacre plus de temps.** R8 a été recetté —
+trois séances, dont deux avec transcodage réel et `netem`. Le résultat n'est pas
+satisfaisant, et le mainteneur tranche que ce chantier a déjà coûté assez : R8
+n'est plus une condition de clôture du chantier réacteur. Ce que les séances ont
+établi tient, et c'est ce qui compte ici : la chaîne RTCP fonctionne après le
+changement de thread (1 365 TMMBR reçus et traités, aucune alerte, aucun paquet
+jeté). Ce qui reste insatisfaisant appartient au **chantier contrôle de débit**,
+qui est **reporté à une prochaine version** — pas abandonné. Ne pas relancer une
+séance BWE au titre de R8 sans demande explicite.
 
 **Troisième séance, 2026-09-01, appel JSR-309 transcodé H.264 ↔ VP8 de 27 min.**
 Zéro trace d'alerte, zéro `tour long`, et — c'est le point qui compte pour le
@@ -944,10 +954,53 @@ la tête de ligne à l'intérieur du groupe.
 **Critère** : le compteur du lot 0 point 2 tombe de ~2 250/s à ~5/s. Aucune
 latence ajoutée sur un appel réel.
 
-**VALIDÉ EN APPEL RÉEL le 2026-09-01** : appel JSR-309 transcodé (VP8 ↔ H.264),
-quatre jambes reçues, le compteur donne `attente active : 5 GetPacket a vide en
-1000 ms` sur chacune — contre ~2 250 avant le lot. Zéro alerte du réacteur, zéro
-`file trop profonde`.
+**Compteur relevé en appel réel le 2026-09-01**, sur l'appel JSR-309 transcodé
+(VP8 ↔ H.264) de la séance R8 : quatre jambes reçues, le compteur donne `attente
+active : 5 GetPacket a vide en 1000 ms` sur chacune — contre ~2 250 avant le lot.
+Zéro alerte du réacteur, zéro `file trop profonde`.
+
+**RECETTE JOUÉE LE 2026-09-02**, les trois scénarios, sur un binaire portant
+lot 3 + lot 4a. Résultats :
+
+1. **Sonnerie sans décrocher** (19 s, appel B2BUA JSR-309, 4 jambes reçues
+   silencieuses) : **5** `GetPacket` à vide par ~1000 ms sur chaque jambe, dans
+   les 80 traces sans exception — soit exactement la borne de 200 ms, et un
+   facteur 450 sur les ~2 250/s d'avant le lot. CPU **2,0 %** d'un cœur contre
+   **1,8 %** au repos : indiscernable. Aucune alerte réacteur.
+2. **Pair muet** : `kill -STOP` du client, jamais `kill -9` — tuer le processus
+   ferme sa socket SIP, la signalisation le voit tout de suite et le contrôleur
+   raccroche bien avant les 10 s du chien de garde ; le média n'a jamais le temps
+   de devenir muet. Gelé, on obtient **2** `onRTPTimeout`, un par jambe muette,
+   **une seule fois chacun** (l'anti-rebond `rtpTimedOut` tient), suivis de
+   l'`EndpointDisconnectedEvent`. Courbe CPU à la seconde : ~88 % pendant l'appel
+   transcodé, **chute à ~25 %** au gel, **plate** pendant les 15 s de silence,
+   1–3 % après démontage. Le CPU tombe, il ne monte pas : la borne de 200 ms
+   n'est pas devenue un sondage. Écart assumé : la fiche demande 60 s de silence,
+   on en obtient **15** — chien de garde à 10 s plus 5 s de réaction du
+   contrôleur, impossible d'en avoir plus sans désarmer l'un des deux.
+3. **`StartReceiving`/`StopReceiving` cinq fois par média** (audio, vidéo, texte,
+   soit 15 cycles) : aucun blocage, `StartReceiving` ≤ 3,1 ms. **Aucun thread
+   orphelin** : 17 threads après 15 cycles contre 15 après la création du
+   participant, et retour à 6 contre 5 au repos après suppression — dans le bruit
+   de ±2 du pool Abyss, et surtout sans accumulation par cycle. Zéro alerte.
+
+**Une mesure expliquée, puis corrigée** : `StopReceiving` coûtait **~201 ms**
+systématiquement quand la jambe n'avait JAMAIS reçu de paquet. `CancelGetPacket`
+n'annule que `defaultStream`, lequel est NULL dans ce cas : personne n'était
+réveillé, et le consommateur parqué dans la branche « flux pas encore né »
+épuisait sa borne (`ConsumerPollMs`) avant de voir l'arrêt. Les deux surcharges
+de `CancelGetPacket` appellent désormais `OnStreamsChanged()`, qui incrémente la
+génération et signale — donc réveille aussi celui qui attend une naissance.
+`CancelStreams` en fait autant, pour le même motif sur le chemin JSR-309.
+Mesuré après correctif, trois passes de 15 cycles : **audio et texte à
+0,6–1,7 ms** au lieu de 201.
+
+La **vidéo reste à ~102 ms**, et ce n'est pas le même mécanisme :
+`VideoStream::StopReceiving` (`videostream.cpp:429`) ne s'endort pas sur une
+condition, elle **sonde** — `msleep(100000)`, soit 100 ms, jusqu'à dix fois, avec
+un join forcé au bout. Les 102 ms sont sa première sieste, par construction.
+Cette boucle disparaît au lot 4c avec le thread consommateur qu'elle attend : ne
+pas la retoucher avant.
 
 Deux entrées deviennent **une** : `GetPacket()` et `GetPacket(DWORD&)` sont
 remplacées par `GetPacket(DWORD ssrc, DWORD timeoutMs)`, `ssrc` 0 valant flux
@@ -989,9 +1042,10 @@ mettrait 8 s.
 Ordre imposé : le regroupement d'abord, le push ensuite. Chacun est
 observable seul.
 
-1. **4a — regroupement.** `RTPParticipant` et `Endpoint` créent leurs groupes
-   selon le découpage du §3.6 — {audio, texte} et {vidéo MAIN, SLIDES} — et
-   les posent avant `Init()`. Instrumenter la durée des tours (§4.3).
+1. **4a — regroupement — CODE FAIT.** `RTPParticipant` et `Endpoint` créent
+   leurs groupes selon le découpage du §3.6 — {audio, texte} et {vidéo MAIN,
+   SLIDES} — et les posent avant `Init()`. L'instrumentation de la durée des
+   tours (§4.3) était déjà livrée au lot 1.
 2. **4b — push.** `MediaListener`, `RTPBuffer::GetDue`, intégration du
    `msUntilDue` dans `GetNextTimeoutMs`. Basculer **un** site à la fois, dans
    cet ordre : `TextStream` (le plus simple, débit faible), `AudioStream`,
@@ -1004,6 +1058,26 @@ observable seul.
 conforme au tableau du §4.5. Recette : conférence 3 participants, partage de
 document BFCP (les deux flux vidéo d'une même session), enregistrement MP4,
 appel B2BUA transcodé 20 min sans dérive de gigue ni trame clé parasite.
+
+**Ce que 4a livre.** Deux membres `RtpSessionSet` par propriétaire de jambe
+(`RTPParticipant`, `Endpoint`), **déclarés avant** les flux et les ports :
+l'ordre inverse de destruction des membres est ce qui garantit que le retrait
+d'`End()` porte sur un réacteur encore vivant. Ils sont démarrés à la demande —
+un `Endpoint` sans jambe vidéo ne paie pas ce thread — et posés avant les
+`Init()` qui inscrivent les sessions, `SetPollGroup` étant refusé après. Côté
+JSR-309, `Endpoint::JoinPollGroup` traite aussi le port recréé par
+`ConfigureMediaConnection`, et ignore un port qui n'est pas une session RTP
+(`WSEndpoint`) ; le test porte sur la **forme** du transport, donc un data
+channel (`DCEndpoint`) se bat comme une jambe RTP. Le nom du groupe —
+`part-<id>-{media,video}`, `jsr309-<adresse>-{media,video}` — est ce qui rend la
+trace de tour long lisible en production.
+
+**Tests.** `RtpReactorGroups.AParticipantSplitsAudioAndVideoIntoTwoReactors` et
+`…AJsr309EndpointSplitsAudioAndVideoIntoTwoReactors` : le texte partage le
+réacteur de l'audio, la vidéo a le sien, chaque groupe compte ses deux jambes,
+`RtpSessionSet::Default()` ne grossit pas, et les deux groupes sont vides après
+`End()`. Vérifiés par mutation : mettre la vidéo dans le groupe audio les fait
+échouer tous les deux.
 
 ### Lot 5 — Nettoyage et documentation
 

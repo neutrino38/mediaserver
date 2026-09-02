@@ -1518,6 +1518,13 @@ xmlrpc_value* StartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	    xmlrpc_parse_value(env, param_array, "(iiisiS)", &confId,&partId,&media,&sendIp,&sendPort,&rtpMap);
 	
 	}
+
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
 	
 	//Get the rtp map
 	RTPMap map;
@@ -2087,6 +2094,13 @@ MCU *mcu = (MCU *)user_data;
 		xmlrpc_parse_value(env, param_array, "(iiiSi)", &confId,&partId,&media,&rtpMap,&role);
 
 	}
+
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
 
 	//Get the rtp map
 	RTPMap map;

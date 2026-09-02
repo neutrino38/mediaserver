@@ -445,7 +445,12 @@ int TextStream::RecText()
 
 	Log(">RecText\n");
 	rtp.ResetPacket(false);
-	receivingText = TaskRunning;
+	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
+	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
+	//boucle ne sortait plus JAMAIS, et le pthread_join de l'appelant restait
+	//bloque a vie — avec lui le thread XML-RPC, puis End() et l'arret du
+	//processus (SIGTERM sans effet). Garde deja en place dans videostream.cpp.
+	if (receivingText == TaskStarting) receivingText = TaskRunning;
 	//Mientras tengamos que capturar
 	while(receivingText  == TaskRunning)
 	{
@@ -530,7 +535,12 @@ int TextStream::SendTextOverDataChannel()
 {
 	Log(">SendText sur data channel\n");
 
-	sendingText = TaskRunning;
+	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
+	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
+	//boucle ne sortait plus JAMAIS, et le pthread_join de l'appelant restait
+	//bloque a vie — avec lui le thread XML-RPC, puis End() et l'arret du
+	//processus (SIGTERM sans effet). Garde deja en place dans videostream.cpp.
+	if (sendingText == TaskStarting) sendingText = TaskRunning;
 
 	while (sendingText == TaskRunning)
 	{
@@ -564,7 +574,12 @@ int TextStream::SendText()
     DWORD lastTime = 0;
 
     Log(">SendText\n");
-    sendingText = TaskRunning;
+	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
+	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
+	//boucle ne sortait plus JAMAIS, et le pthread_join de l'appelant restait
+	//bloque a vie — avec lui le thread XML-RPC, puis End() et l'arret du
+	//processus (SIGTERM sans effet). Garde deja en place dans videostream.cpp.
+    if (sendingText == TaskStarting) sendingText = TaskRunning;
     //Mientras tengamos que capturar
     while(sendingText == TaskRunning)
     {

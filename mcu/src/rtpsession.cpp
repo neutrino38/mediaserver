@@ -3280,6 +3280,13 @@ void RTPSession::CancelGetPacket()
     streamUse.IncUse();
 	if (defaultStream != NULL) defaultStream->Cancel();
     streamUse.DecUse();
+
+    //HORS du verrou streamUse. Annuler `defaultStream` ne reveille que le
+    //consommateur d'un flux DEJA NE. Celui d'une jambe qui n'a jamais rien recu
+    //attend la NAISSANCE d'un flux, et defaultStream est NULL : personne n'etait
+    //reveille, donc chaque StopReceiving coutait la borne entiere
+    //(ConsumerPollMs) — 201 ms mesures en recette le 2026-09-02.
+    OnStreamsChanged();
 }
 
 void RTPSession::CancelGetPacket(DWORD & ssrc)
@@ -3288,6 +3295,10 @@ void RTPSession::CancelGetPacket(DWORD & ssrc)
     RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     if (s) s->Cancel();
     streamUse.DecUse();
+
+    //Meme raison que la surcharge sans ssrc : le flux demande peut ne pas
+    //exister encore, et son consommateur attend alors sa naissance.
+    OnStreamsChanged();
 }
 
 void RTPSession::ResetPacket(DWORD & ssrc, bool clear) 
@@ -4091,6 +4102,14 @@ bool RTPSession::CancelStreams()
         it->second->Cancel();
     }
     streamUse.DecUse();
+
+    //HORS du verrou streamUse, meme inversion que AddStream/DeleteStreams.
+    //La boucle ci-dessus ne reveille que les consommateurs de flux EXISTANTS ;
+    //celui qui attend la NAISSANCE d'un flux n'est dans aucune de ces entrees.
+    //Sur une jambe qui n'a jamais rien recu la map est vide, donc personne
+    //n'etait reveille : chaque StopReceiving coutait la borne entiere
+    //(ConsumerPollMs) avant que le consommateur ne voie l'arret.
+    OnStreamsChanged();
     return true;
 }
 

@@ -64,6 +64,13 @@ xmlrpc_value* MediaSessionCreate(xmlrpc_env *env, xmlrpc_value *param_array, voi
 	int queueId;
         xmlrpc_parse_value(env, param_array, "(si)", &str,&queueId);
 
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
 	//Parse string
 	nameParser.Parse((BYTE*)str,strlen(str));
 
@@ -934,6 +941,13 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 	int media;
 	xmlrpc_value *map;
 	xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&map);
+
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
 
 	//Get the rtp map
 	Properties properties;

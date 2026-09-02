@@ -8,8 +8,21 @@
 #include "rtpparticipant.h"
 #include "medkit/negotiator.h"
 
+#include <stdio.h>
+
+//Étiquette du réacteur : la trace de tour long (RtpSessionSet::LongTurnUs) ne
+//nomme que le groupe, elle doit donc dire de quelle jambe il s'agit.
+static std::string PollGroupName(DWORD partId,const char* suffix)
+{
+	char buffer[64];
+	snprintf(buffer,sizeof(buffer),"part-%u-%s",(unsigned)partId,suffix);
+	return buffer;
+}
+
 RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag) :
 	Participant(Participant::RTP,partId),
+	mediaGroup(PollGroupName(partId,"media").c_str()),
+	videoGroup(PollGroupName(partId,"video").c_str()),
 	audio(this),
 	text(NULL),
 	eventSource(tag)
@@ -116,12 +129,20 @@ int RTPParticipant::Init()
 	//aliasé sur le bloc de contrôle de ce participant. shared_from_this() est
 	//légal ici (Init appelé après make_shared), illégal dans le constructeur.
 	auto self = shared_from_this();
+
+	//Les réacteurs de cette jambe (§3.6), posés AVANT les Init() qui inscrivent
+	//les sessions : SetPollGroup est refusé après. Démarrés ici et pas dans le
+	//constructeur, pour qu'un participant jamais initialisé ne coûte aucun thread.
+	mediaGroup.Start();
+	videoGroup.Start();
+
 	for(int i=0; i < MAX_VIDEO_STREAM && video[i] != NULL ; ++i)
 
 	{
 		//Set estimator for video
 		video[i]->SetRemoteRateEstimator(&estimator);
 		//Init each stream
+		video[i]->GetOwnSession().SetPollGroup(&videoGroup);
 		ret &= video[i]->Init(NULL,NULL);
 		//Observe sa propre session par défaut
 		video[i]->SetRTPSession(std::shared_ptr<RTPSession>(self,&video[i]->GetOwnSession()),0);
@@ -132,11 +153,13 @@ int RTPParticipant::Init()
 		video[i]->SetWeakListener(std::static_pointer_cast<VideoStream::Listener>(self));
 	}
 
+	audio.GetOwnSession().SetPollGroup(&mediaGroup);
 	ret &= audio.Init(audioInput,audioOutput);
 	//M-6 : idem via le sous-objet AudioStream::Listener.
 	audio.SetWeakListener(std::static_pointer_cast<AudioStream::Listener>(self));
 	//text : listener volontairement NULL (cf. constructeur text(NULL)) —
 	//comportement historique inchangé, pas de weak listener.
+	text.GetOwnSession().SetPollGroup(&mediaGroup);
 	ret &= text.Init(textInput,textOutput);
 	//aggregater results
 	return ret;

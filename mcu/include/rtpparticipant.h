@@ -16,6 +16,7 @@
 #include "audiostream.h"
 #include "textstream.h"
 #include "mp4recorder.h"
+#include "rtpsessionset.h"
 #include "eventstreaminghandler.h"
 
 #define MAX_VIDEO_STREAM 2
@@ -119,10 +120,28 @@ public:
 	virtual void onRTPPacketReceived( RTPSession *session );
 	
         virtual int DumpInfo(std::string & info);
+
+	//Réacteur qui bat la jambe de ce média (SPEC.md §3.6). C'est la forme
+	//observable du découpage : {audio, texte} d'un côté, {vidéo MAIN, SLIDES}
+	//de l'autre.
+	RtpSessionSet& GetPollGroup(MediaFrame::Type media)
+	{
+		return media == MediaFrame::Video ? videoGroup : mediaGroup;
+	}
 		
 public:
 	MP4Recorder	recorder; //FIX this!
 private:
+	//DÉCLARÉS AVANT video/audio/text, ET C'EST LE CONTRAT : les RTPSession de
+	//ces flux s'inscrivent dans ces deux réacteurs à Init() et s'en retirent à
+	//End(), or les membres se détruisent dans l'ORDRE INVERSE de leur
+	//déclaration. Déclarés après, ils mourraient AVANT les flux, et le retrait
+	//porterait sur un réacteur détruit.
+	//
+	//Deux groupes et non un (§3.6) : la vidéo coûte des dizaines de ms par
+	//image, l'audio veut la main toutes les 20 ms.
+	RtpSessionSet		mediaGroup;	//audio + texte
+	RtpSessionSet		videoGroup;	//vidéo MAIN + SLIDES
 	VideoStream* 	video[MAX_VIDEO_STREAM];
 	AudioStream		audio;
 	TextStream		text;

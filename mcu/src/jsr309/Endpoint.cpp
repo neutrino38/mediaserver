@@ -16,7 +16,23 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-Endpoint::Endpoint(std::wstring name,bool audioSupported,bool videoSupported,bool textSupported) : eventSource(name)
+#include <stdio.h>
+
+//Etiquette du reacteur : la trace de tour long (RtpSessionSet::LongTurnUs) ne
+//nomme que le groupe, elle doit donc dire de quelle jambe il s'agit. L'adresse
+//suffit a l'identifier, et le nom de l'Endpoint est un wstring que le controleur
+//choisit.
+static std::string PollGroupName(const void* owner,const char* suffix)
+{
+	char buffer[64];
+	snprintf(buffer,sizeof(buffer),"jsr309-%p-%s",owner,suffix);
+	return buffer;
+}
+
+Endpoint::Endpoint(std::wstring name,bool audioSupported,bool videoSupported,bool textSupported)
+	: eventSource(name)
+	, mediaGroup(PollGroupName(this,"media").c_str())
+	, videoGroup(PollGroupName(this,"video").c_str())
 {
 	//Store name
 	this->name = name;
@@ -46,6 +62,26 @@ Endpoint::~Endpoint()
 {
 }
 
+//§3.6 : deux reacteurs par jambe. Un decodage video coute des dizaines de ms
+//dans le thread du reacteur (lot 4b) : l'audio ne doit jamais l'attendre.
+void Endpoint::JoinPollGroup(const std::shared_ptr<Port>& port, MediaFrame::Type media)
+{
+	//Un port qui n'est pas une session RTP n'a pas de socket a poll (WSEndpoint).
+	//Le test porte sur la FORME du transport, pas sur ce qu'il porte : un data
+	//channel (DCEndpoint) derive de RTPEndpoint et se bat comme une jambe RTP.
+	RTPEndpoint* rtp = port ? dynamic_cast<RTPEndpoint*>(port.get()) : NULL;
+
+	if (!rtp)
+		return;
+
+	RtpSessionSet& group = GetPollGroup(media);
+
+	//Demarre a la demande : un Endpoint sans jambe video ne paie pas ce thread.
+	group.Start();
+	//Refuse apres Init : c'est pourquoi l'appel precede celui du port.
+	rtp->SetPollGroup(&group);
+}
+
 //Methods
 int Endpoint::Init()
 {
@@ -53,6 +89,7 @@ int Endpoint::Init()
 	{
 	    if (ports[i]) 
 	    {
+			JoinPollGroup(ports[i],(MediaFrame::Type)i);
 			ports[i]->Init();
 			if ( i == MediaFrame::Video && ports[i]->GetTransport() == MediaFrame::RTP ) 
 			{
@@ -63,6 +100,7 @@ int Endpoint::Init()
 	    
 	    if (ports2[i])
 	    {
+			JoinPollGroup(ports2[i],(MediaFrame::Type)i);
 			ports2[i]->Init();
 			if ( i == MediaFrame::Video && ports2[i]->GetTransport() == MediaFrame::RTP) 
 			{
@@ -800,6 +838,10 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 					return Error("Transport not supported.\n");
 			}
 			
+			//Le groupe se pose AVANT tout Init du nouveau port, comme dans
+			//Endpoint::Init : SetPollGroup est refuse ensuite.
+			JoinPollGroup(p2,media);
+
 			if ( role == MediaFrame::VIDEO_MAIN )
 			{
 				p2->SwitchJoin(p);

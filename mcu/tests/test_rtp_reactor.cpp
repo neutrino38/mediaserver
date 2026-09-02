@@ -24,6 +24,8 @@
 #include "rtp.h"
 #include "rtpsession.h"
 #include "rtpsessionset.h"
+#include "rtpparticipant.h"
+#include "../src/jsr309/Endpoint.h"
 
 namespace {
 
@@ -394,6 +396,96 @@ TEST(RtpReactor, TheBirthOfAStreamWakesAWaitingConsumer)
 
 	leg.session.End();
 	group.Stop();
+}
+
+// StopReceiving coutait la borne ENTIERE (200 ms) sur une jambe qui n'avait
+// jamais recu un paquet : CancelStreams n'itere que sur les flux EXISTANTS, or
+// le consommateur y attend une NAISSANCE, et la map est vide. Mesure de recette
+// du 2026-09-02 : 201 ms par StopReceiving, quinze fois de suite.
+TEST(RtpReactor, CancelStreamsWakesAConsumerWaitingForABirth)
+{
+	RtpSessionSet group("test-reactor-cancel");
+	ASSERT_TRUE(group.Start());
+
+	Leg leg;
+	ASSERT_TRUE(leg.Init(&group));
+
+	// Borne volontairement enorme : si le reveil manque, le test le voit.
+	const DWORD hugeTimeoutMs = 8000;
+
+	RTPPacket* packet = (RTPPacket*)0x1;
+	Clock::time_point t0 = Clock::now();
+
+	std::thread consumer([&] { packet = leg.session.GetPacket(0, hugeTimeoutMs); });
+
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	leg.session.CancelStreams();
+
+	consumer.join();
+	long elapsed = ElapsedMs(t0);
+
+	EXPECT_EQ(packet, nullptr) << "un flux annule ne rend pas de paquet";
+	EXPECT_LT(elapsed, 400L) << "reveil manque : " << elapsed
+				 << " ms pour un CancelStreams a 50 ms";
+
+	leg.session.End();
+	group.Stop();
+}
+
+// ---------------------------------------------------------------------------
+// Lot 4a — groupes explicites (§3.6)
+//
+// Ce que ces deux tests tiennent : le découpage DÉCIDÉ, {audio, texte} d'un
+// côté et {vidéo MAIN, SLIDES} de l'autre. Ils échouent si un propriétaire
+// oublie de poser son groupe (la jambe tombe dans le réacteur du processus) ou
+// s'il met l'audio et la vidéo ensemble — c'est-à-dire s'il laisse le socket
+// audio non poll pendant un décodage vidéo, ce que tout le lot cherche à éviter.
+// ---------------------------------------------------------------------------
+
+TEST(RtpReactorGroups, AParticipantSplitsAudioAndVideoIntoTwoReactors)
+{
+	DWORD defaultBefore = RtpSessionSet::Default().GetHandlerCount();
+
+	std::shared_ptr<RTPParticipant> part = std::make_shared<RTPParticipant>(4242, L"lot4a");
+	ASSERT_EQ(part->Init(), 1);
+
+	EXPECT_EQ(&part->GetPollGroup(MediaFrame::Audio), &part->GetPollGroup(MediaFrame::Text))
+		<< "le texte partage le reacteur de l'audio";
+	EXPECT_NE(&part->GetPollGroup(MediaFrame::Audio), &part->GetPollGroup(MediaFrame::Video))
+		<< "l'audio ne doit jamais attendre le travail de la video";
+
+	EXPECT_EQ(part->GetPollGroup(MediaFrame::Audio).GetHandlerCount(), 2u) << "audio + texte";
+	EXPECT_EQ(part->GetPollGroup(MediaFrame::Video).GetHandlerCount(), 2u) << "MAIN + SLIDES";
+
+	EXPECT_EQ(RtpSessionSet::Default().GetHandlerCount(), defaultBefore)
+		<< "aucune jambe ne doit tomber dans le reacteur du processus";
+
+	part->End();
+
+	EXPECT_EQ(part->GetPollGroup(MediaFrame::Audio).GetHandlerCount(), 0u);
+	EXPECT_EQ(part->GetPollGroup(MediaFrame::Video).GetHandlerCount(), 0u);
+}
+
+TEST(RtpReactorGroups, AJsr309EndpointSplitsAudioAndVideoIntoTwoReactors)
+{
+	DWORD defaultBefore = RtpSessionSet::Default().GetHandlerCount();
+
+	Endpoint endpoint(L"lot4a", true, true, true);
+	endpoint.Init();
+
+	EXPECT_EQ(&endpoint.GetPollGroup(MediaFrame::Audio), &endpoint.GetPollGroup(MediaFrame::Text));
+	EXPECT_NE(&endpoint.GetPollGroup(MediaFrame::Audio), &endpoint.GetPollGroup(MediaFrame::Video));
+
+	EXPECT_EQ(endpoint.GetPollGroup(MediaFrame::Audio).GetHandlerCount(), 2u) << "audio + texte";
+	EXPECT_EQ(endpoint.GetPollGroup(MediaFrame::Video).GetHandlerCount(), 2u) << "MAIN + SLIDES";
+
+	EXPECT_EQ(RtpSessionSet::Default().GetHandlerCount(), defaultBefore)
+		<< "aucune jambe ne doit tomber dans le reacteur du processus";
+
+	endpoint.End();
+
+	EXPECT_EQ(endpoint.GetPollGroup(MediaFrame::Audio).GetHandlerCount(), 0u);
+	EXPECT_EQ(endpoint.GetPollGroup(MediaFrame::Video).GetHandlerCount(), 0u);
 }
 
 } // namespace

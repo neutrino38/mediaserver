@@ -15,6 +15,7 @@
 #include "websockets.h"
 #include "RTPMultiplexer.h"
 #include "remoterateestimator.h"
+#include "rtpsessionset.h"
 #include "medkit/negotiator.h"
 
 class RTPEndpoint;
@@ -205,6 +206,14 @@ public:
 	
 	const Statistics * GetStatistics();
 
+	//Reacteur qui bat la jambe de ce media (SPEC.md §3.6). C'est la forme
+	//observable du decoupage : {audio, texte} d'un cote, {video MAIN, SLIDES}
+	//de l'autre.
+	RtpSessionSet& GetPollGroup(MediaFrame::Type media)
+	{
+		return media == MediaFrame::Video ? videoGroup : mediaGroup;
+	}
+
 private:
 	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media)
 	{
@@ -237,6 +246,11 @@ private:
 	RTPEndpoint* GetRTPEndpoint(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	
 private:
+	//Inscrit ce port dans le reacteur de sa classe de media, et demarre ce
+	//reacteur s'il ne tournait pas. Sans effet sur un port qui n'est pas une
+	//session RTP (WSEndpoint).
+	void JoinPollGroup(const std::shared_ptr<Port>& port, MediaFrame::Type media);
+
 	std::wstring name;
 
 	//DECLARES AVANT ports/ports2, ET C'EST LE CONTRAT : les RTPSession des ports
@@ -250,6 +264,12 @@ private:
 	RemoteRateEstimator estimator;
 	RemoteRateEstimator estimator2;
 	EvenSource eventSource;
+	//Meme contrat d'ordre que les estimateurs ci-dessus, pour la meme raison :
+	//les ports s'inscrivent dans ces reacteurs a Init() et s'en retirent a
+	//End(). Deux et non un (§3.6) : la video coute des dizaines de ms par image,
+	//l'audio veut la main toutes les 20 ms.
+	RtpSessionSet mediaGroup;	//audio + texte
+	RtpSessionSet videoGroup;	//video MAIN + SLIDES
 
 	//RTP sessions
 	std::shared_ptr<Port> ports[4];

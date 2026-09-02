@@ -196,11 +196,50 @@ Signaux d'alerte dans `/var/log/mcu.log` :
 
 ### Lot 3 — attente bornée
 
-1. **Sonnerie sans décrocher, 30 s** : CPU indiscernable du repos.
-2. **Pair muet** : établir l'appel, couper l'émission du pair, laisser 60 s. Le
-   watchdog doit rendre `onRTPTimeout` une seule fois, et le CPU rester plat.
+1. **Sonnerie sans décrocher, 30 s** : CPU indiscernable du repos. Relever la
+   trace `attente active : N GetPacket a vide en M ms` sur chaque jambe reçue :
+   **5 pour 1000 ms**, pas ~2 250. C'est la borne de 200 ms
+   (`RTPSession::ConsumerPollMs`) qu'on lit là, une jambe qui donne autre chose
+   est une régression.
+2. **Pair muet** : établir l'appel avec du média dans les deux sens, couper
+   l'émission du pair, observer. Le watchdog doit rendre `onRTPTimeout` **une
+   seule fois** par jambe muette, et le CPU **descendre** puis rester plat.
+
+   **`kill -STOP` du client, jamais `kill -9`.** Tuer le processus ferme aussi sa
+   socket SIP : la signalisation le voit immédiatement, le contrôleur raccroche,
+   et le média n'a jamais le temps de devenir muet — on remesure alors un
+   raccroché ordinaire. Gelé, le client cesse d'émettre du RTP mais sa socket
+   reste ouverte. Le mute de Linphone ne convient pas non plus : il continue
+   d'émettre.
+
+   **La phase muette ne dure pas 60 s**, et c'est structurel : le chien de garde
+   tombe à 10 s (`EndpointStartRTPTimeout`, 10 000 ms posés par le contrôleur) et
+   celui-ci raccroche ~5 s après l'`EndpointDisconnectedEvent`. On dispose donc
+   de ~15 s de régime muet — assez pour juger la platitude, à condition
+   d'échantillonner le CPU **à la seconde** : un min/max/moyenne sur toute la
+   fenêtre mélange l'appel vivant, le silence et le démontage, et ne conclut
+   rien.
 3. `StopReceiving` puis `StartReceiving` sur la même jambe, 5 fois : pas de
-   blocage, pas de thread orphelin.
+   blocage, pas de thread orphelin. Se pilote en XML-RPC sans aucun pair, donc
+   **sur une instance à part** (`bin/debug/mcu --http-port 9091 --rtmp-port 1936
+   --websocket-port 8101 --min-rtp-port 40000 --max-rtp-port 40999 -d`) : le
+   serveur partagé garde son contrôleur, et une erreur de pilotage ne coûte rien.
+   Attendu : `StartReceiving` de l'ordre de la milliseconde, et un total de
+   threads qui ne monte pas cycle après cycle.
+
+   Attendu : **moins de 2 ms** par `StopReceiving` sur l'audio et le texte, même
+   quand la jambe n'a jamais reçu un paquet. La **vidéo reste à ~102 ms**, et
+   c'est normal : `VideoStream::StopReceiving` sonde par `msleep(100000)` au lieu
+   d'attendre une condition. Un audio ou un texte qui remonte à ~200 ms signale
+   que le réveil des attentes de naissance a été perdu
+   (`RTPSession::CancelGetPacket` → `OnStreamsChanged`).
+
+   **Et surtout : ce scénario est celui qui a trouvé la course de démarrage.** Un
+   `StopReceiving` qui ne rend JAMAIS la main veut dire que le thread
+   consommateur a écrasé le `TaskStopping` de son appelant par `TaskRunning` en
+   démarrant. Signature : `pthread_join` éternel dans la pile du thread XML-RPC,
+   drapeau `receivingX == TaskRunning`, et un processus que SIGTERM ne tue plus.
+   Enchaîner Start/Stop sans délai est ce qui la fait sortir.
 
 ### Lot 4a — deux groupes par jambe
 
@@ -210,7 +249,9 @@ Le compte de threads doit remonter comme au tableau. Puis vérifier l'isolation 
 2. Pendant ce temps, écouter l'audio. **Aucune gigue audible.** C'est tout
    l'objet du découpage : si l'audio grésille, le découpage n'est pas appliqué.
 3. Relever les traces `tour long` : elles doivent viser le groupe vidéo, jamais
-   le groupe audio.
+   le groupe audio. Le nom du groupe dit lequel : `part-<id du participant>-media`
+   ou `-video` côté MCU, `jsr309-<adresse de l'Endpoint>-media` ou `-video` côté
+   JSR-309.
 
 ### Lot 4b et 4c — livraison poussée
 

@@ -329,7 +329,12 @@ int AudioStream::RecAudio()
 	rtp.ResetPacket(false);
 	//Mientras tengamos que capturar
 	
-	receivingAudio = TaskRunning;
+	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
+	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
+	//boucle ne sortait plus JAMAIS, et le pthread_join de l'appelant restait
+	//bloque a vie — avec lui le thread XML-RPC, puis End() et l'arret du
+	//processus (SIGTERM sans effet). Garde deja en place dans videostream.cpp.
+	if (receivingAudio == TaskStarting) receivingAudio = TaskRunning;
 	while(receivingAudio == TaskRunning)
 	{
 		//Obtenemos el paquete
@@ -483,7 +488,12 @@ int AudioStream::SendAudio()
 	
 	//Get ts multiplier
 	float multiplier = (float) clock/ (float) rate;
-	sendingAudio = TaskRunning;
+	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
+	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
+	//boucle ne sortait plus JAMAIS, et le pthread_join de l'appelant restait
+	//bloque a vie — avec lui le thread XML-RPC, puis End() et l'arret du
+	//processus (SIGTERM sans effet). Garde deja en place dans videostream.cpp.
+	if (sendingAudio == TaskStarting) sendingAudio = TaskRunning;
 	//Mientras tengamos que capturar
 	while(sendingAudio == TaskRunning)
 	{
