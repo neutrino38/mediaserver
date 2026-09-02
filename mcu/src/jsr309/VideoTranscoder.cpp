@@ -141,25 +141,18 @@ void VideoTranscoder::SetREMB(DWORD estimation)
 	//baisser le débit du flux relayé. La demande du puits (TMMBR/REMB, en bps)
 	//remonte donc à l'amont, bornée par la consigne négociée de la patte
 	//émettrice — le puits ne peut pas « autoriser » plus que sa négociation.
-	DWORD relayed = estimation;
-	DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
-	if (cap && relayed > cap)
-		relayed = cap;
-
-	if (std::shared_ptr<Joinable> j = joined.lock())
-		j->SetREMB(relayed);
-
-	//En mode pont il n'y a rien d'autre à faire : l'encodeur n'est pas dans le
-	//chemin.
 	if (state == 2)
-		return;
+	{
+		DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
+		if (cap && estimation > cap)
+			estimation = cap;
 
-	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe AUSSI la limite,
-	//et la source l'a reçue plus haut. Absorber seul produisait du 720p à
-	//140 kb/s — de la bouillie — alors que la source, prévenue, choisit une
-	//image plus petite pour ce débit, et le ré-encodage redevient regardable.
-	//Les deux se cumulent par min() ; l'image clé, elle, reste absorbée (FIR
-	//non relayé, cf. Update) parce que le transcodeur peut la produire seul.
+		if (std::shared_ptr<Joinable> j = joined.lock())
+			j->SetREMB(estimation);
+		return;
+	}
+
+	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe la limite.
 	encoder.SetREMB(estimation);
 }
 
