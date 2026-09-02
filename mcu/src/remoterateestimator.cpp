@@ -555,6 +555,15 @@ DWORD RemoteRateEstimator::GetEstimatedBitrateUnlocked() const
 	return bitrateAcu.IsInWindow() ? currentBitRate : 0;
 }
 
+DWORD RemoteRateEstimator::GetIncomingBitrate()
+{
+	//Meme verrou lecteur que GetEstimatedBitrate : l'accumulateur est ecrit par
+	//le thread qui recoit les paquets.
+	lock.IncUse();
+	DWORD incoming = bitrateAcu.IsInWindow() ? (DWORD)bitrateAcu.GetInstantAvg() : 0;
+	lock.DecUse();
+	return incoming;
+}
 DWORD RemoteRateEstimator::GetEstimatedBitrate()
 {
 	//Lecteur : trois threads lisent sans verrou jusqu'ici (revue rate-control)

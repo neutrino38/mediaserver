@@ -638,6 +638,17 @@ La ligne de synthèse de l'estimateur de réception :
 BWE: estimation stream=<patte> state=<Hold|Increase|Decrease> region=<…> usage=<Normal|OverUsing|UnderUsing> currentBitRate=… incoming=… min=… max=…
 ```
 
+**Une annonce qui n'apprend rien ne part pas.** Un TMMBR est une LIMITE. Quand
+le pair produit déjà plus que la limite annoncée, c'est sa propre négociation
+qui le borne : monter notre plafond ne changera rien à ce qu'il émet. Or Linphone
+repioche taille et cadence à chaque TMMBR de valeur différente — mesure du
+2026-09-02, appel sans dégradation : sur 6 annonces, 4 dépassaient le débit
+réellement reçu, et chacune a fait basculer la définition de la source entre VGA
+et 720p, de 0,03 à 0,94 s après l'envoi. Ces hausses-là sont retenues
+(`RembThrottler::RaiseIsInformative`). Deux garde-fous : sans mesure du débit du
+pair, rien n'est filtré ; et une hausse que le pair RESPECTE part toujours,
+puisque la lever est précisément ce qui le libère.
+
 **Outillage de mesure** — `mcu/tests/tools/` : `netem_scenario.sh` applique une
 dégradation reproductible et journalise ses marqueurs ; `bwe_report.py` lit
 `mcu.log` avec ces marqueurs et sort un CSV, un graphe SVG et un verdict par

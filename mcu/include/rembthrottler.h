@@ -19,6 +19,13 @@
  *     toutes les 2,6 s mesurée le 2026-08-30 avec la période de 5 s. Seul un pas
  *     franc de hausse part, et la baisse n'est « franche » qu'à 10 % (un pas
  *     d'AIMD vaut 15 %, le bruit du plafond glissant 3 %) ;
+ *   - une HAUSSE que le pair DEPASSE deja ne part pas : ce n'est plus notre
+ *     limite qui le borne mais sa propre negociation, donc monter le plafond ne
+ *     changera rien a ce qu'il emet — alors que le seul fait de recevoir un
+ *     TMMBR de valeur differente lui fait repiocher taille et cadence. Mesure du
+ *     2026-09-02, appel sans degradation : sur 6 annonces, 4 annoncaient plus
+ *     que le debit reellement recu, et chacune a fait basculer la definition de
+ *     la source entre VGA et 720p (0,03 a 0,94 s apres l'envoi) ;
  *   - un plafond venu d'AILLEURS (l'autre patte d'un relais, lot 5) se compose
  *     par min() avec la mesure locale : on annonce le plus contraint des deux.
  *
@@ -58,6 +65,10 @@ public:
 	static constexpr Policy TmmbrPolicy = { 0, 20, 110 };
 	//Valeur d'« aucun plafond externe » et de « rien encore annoncé ».
 	static constexpr DWORD NoLimit = 0xFFFFFFFF;
+	//Tolérance sur « le pair respecte notre limite » : il faut qu'il la dépasse
+	//de plus de 5 % pour qu'on le déclare tenu par sa propre négociation. En
+	//dessous, il peut être en train de l'appliquer, et la lever l'informe.
+	static constexpr QWORD PeerOverLimitPercent = 105;
 
 	RembThrottler()
 	{
@@ -78,6 +89,14 @@ public:
 		lastSendTime = 0;
 		hasSent      = false;
 		maxBitrate   = NoLimit;
+		peerBitrate  = 0;
+	}
+
+	//Débit réellement reçu du pair, en bps ; 0 = inconnu, aucun filtrage. Posé
+	//avant la décision, il sert à reconnaître une hausse qui n'apprend rien.
+	void SetPeerBitrate(DWORD bitrate)
+	{
+		peerBitrate = bitrate;
 	}
 
 	/**
@@ -93,7 +112,8 @@ public:
 		{
 			const bool drop = (QWORD)bitrate * policy.dropThresholdPercent / 100 <= (QWORD)lastSent;
 			const bool step = policy.raiseStepPercent
-				&& (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + policy.raiseStepPercent);
+				&& (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + policy.raiseStepPercent)
+				&& RaiseIsInformative();
 			const bool period = policy.raiseIntervalMs
 				&& now >= lastSendTime + policy.raiseIntervalMs;
 			if (!drop && !step && !period)
@@ -133,6 +153,18 @@ public:
 		return true;
 	}
 
+	//Une hausse apprend-elle quelque chose au pair ? Non s'il DÉPASSE déjà la
+	//limite qu'on lui a annoncée : le plafond effectif est alors le sien, et
+	//monter le nôtre ne changera pas ce qu'il émet. Vrai quand on ne mesure
+	//rien (on n'invente pas) et quand il respecte la limite, car la lever est
+	//précisément ce qui le libère.
+	bool RaiseIsInformative() const
+	{
+		if (!peerBitrate || lastSent == NoLimit)
+			return true;
+		return (QWORD)peerBitrate * 100 <= (QWORD)lastSent * PeerOverLimitPercent;
+	}
+
 	//Le débit à annoncer pour une mesure locale donnée : le plus contraint de
 	//la mesure et du plafond externe. Sans effet de bord — le chemin périodique
 	//(SendSenderReport) redit la valeur courante sans rouvrir la décision.
@@ -150,6 +182,7 @@ private:
 	QWORD	lastSendTime;
 	bool	hasSent;
 	DWORD	maxBitrate;
+	DWORD	peerBitrate;
 	Policy	policy = RembPolicy;
 };
 

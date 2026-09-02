@@ -3743,9 +3743,16 @@ void RTPSession::onTargetBitrateRequested(DWORD bitrate)
     DWORD announce = 0;
     bool  send;
 
+    //Ce que le pair PRODUIT vraiment : l'amortisseur s'en sert pour reconnaitre
+    //une hausse qui ne lui apprendrait rien. Lu hors de notre verrou — il a le
+    //sien — et avant lui, pour ne pas imbriquer les deux.
+    const DWORD peerBitrate = remoteRateEstimator
+                            ? remoteRateEstimator->GetIncomingBitrate() : 0;
+
     // Memory barrier
     mutex.lock();
     mode = bitrateFeedbackMode;
+    bitrateFeedbackThrottler.SetPeerBitrate(peerBitrate);
     //L'amortisseur suit la mesure locale même quand rien ne part : c'est lui qui
     //compose le min() avec un éventuel plafond venu de l'autre patte.
     send = bitrateFeedbackThrottler.OnEstimateChanged(bitrate, getTimeMS(), announce);

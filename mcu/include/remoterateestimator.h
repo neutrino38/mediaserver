@@ -62,6 +62,10 @@ public:
 	void Update(DWORD ssrc, RTPTimedPacket* packet);
 	void Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool mark);
 	DWORD GetEstimatedBitrate();
+	//Debit REELLEMENT recu du pair, en bps ; 0 si la fenetre de mesure n'est pas
+	//pleine. Il dit si la limite qu'on a annoncee borne encore le pair, ou s'il
+	//est deja tenu par sa propre negociation (cf. RembThrottler).
+	DWORD GetIncomingBitrate();
 	void GetSSRCs(std::list<DWORD> &ssrcs);
 	void SetTemporalMaxLimit(DWORD limit);
 	void SetTemporalMinLimit(DWORD limit);

@@ -643,6 +643,79 @@ TEST(RateControlThrottler, EnDialecteTMMBRUneBaisseFranchePartToujoursImmediatem
 // Le dialecte REMB garde ses seuils : une baisse de 5 % part, une hausse attend
 // 200 ms puis part. Chrome attend des annonces périodiques et n'a pas le défaut
 // de Linphone.
+// ─── La hausse inerte (mesure du 2026-09-02) ────────────────────────────────
+// Appel SANS dégradation : 6 TMMBR en 6 min, dont 4 annonçaient PLUS que le
+// débit réellement reçu du pair. Chacune a fait basculer la définition de la
+// source entre VGA et 720p, 0,03 à 0,94 s après l'envoi. Quand le pair dépasse
+// déjà la limite annoncée, c'est sa propre négociation qui le borne : monter le
+// plafond ne change rien à ce qu'il émet, et ne lui coûte qu'un repiochage.
+
+TEST(RateControlThrottler, UneHausseQueLePairDepasseDejaNEmetPas)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	// Première annonce : 2,21 Mb/s, comme la séance.
+	ASSERT_TRUE(throttler.OnEstimateChanged(2213936, 1000, out));
+
+	// Le pair produit 2,46 Mb/s : il dépasse ce qu'on lui a annoncé, donc notre
+	// limite ne le borne pas.
+	throttler.SetPeerBitrate(2462000);
+
+	// Un pas franc de hausse (+26 %) qui, sans le garde, serait parti.
+	EXPECT_FALSE(throttler.OnEstimateChanged(2784745, 6000, out))
+		<< "hausse inerte : le pair est deja au-dela";
+	EXPECT_FALSE(throttler.OnEstimateChanged(3384364, 12000, out))
+		<< "et elle reste inerte plus haut encore";
+}
+
+// Le garde ne doit pas créer de cliquet : quand le pair RESPECTE la limite, la
+// lever est justement ce qui le libère.
+TEST(RateControlThrottler, UneHausseQuiLibereLePairPartToujours)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(500000, 1000, out));
+
+	// Le pair s'y tient : c'est NOTRE limite qui le borne.
+	throttler.SetPeerBitrate(500000);
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 6000, out))
+		<< "sans cela, le pair resterait enferme a 500 kb/s";
+	EXPECT_EQ(1000000u, out);
+}
+
+// Sans mesure du pair, on ne filtre rien : le garde ne doit pas changer le
+// comportement là où il n'a pas d'information.
+TEST(RateControlThrottler, SansMesureDuPairLaHaussePartCommeAvant)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2213936, 1000, out));
+	// SetPeerBitrate jamais appelé : aucune mesure.
+	EXPECT_TRUE(throttler.OnEstimateChanged(2784745, 6000, out));
+}
+
+// Une baisse franche reste urgente, même quand le pair dépasse la limite : elle
+// dit au pair de ralentir, c'est le message qui ne doit jamais être retenu.
+TEST(RateControlThrottler, UneBaisseFranchePartMemeQuandLePairDepasse)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2213936, 1000, out));
+	throttler.SetPeerBitrate(2462000);
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(800000, 6000, out));
+	EXPECT_EQ(800000u, out);
+}
+
 TEST(RateControlThrottler, LeDialecteREMBGardeSesSeuils)
 {
 	RembThrottler throttler;
