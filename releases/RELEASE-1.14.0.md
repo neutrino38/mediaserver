@@ -8,4 +8,7 @@
 - seconde vague de petites amélioration sur le mixeur audio
 - passage de l'encodeur VP8 en mode temps réel + multithread.
 - ajustement du contrôle de débit pour éviter un flux constant de TMMBR si la bande passante ne bouge pas.
+- optimisation des rtpsession (groupement dans des RtpSessionSet et GetPacket() bloquant)
 
+# Limitation
+- le contrôle de débit (rate control) n'est toujours pas satisfaisant
