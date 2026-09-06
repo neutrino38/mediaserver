@@ -4,7 +4,8 @@
 
 Le chantier « réacteur RTP » remplace une boucle `poll()` par session RTP par un
 **réacteur partagé** : un thread et un seul `poll()` pour un groupe de sessions.
-Puis il retire les threads consommateurs, les paquets étant livrés par callback.
+Les threads consommateurs restent, et `GetPacket()` reste l'entrée de lecture —
+le chantier s'arrête au lot 4a (SPEC §4.2).
 
 Conception et lots : `docs/conception/RTP-REACTOR/SPEC.md`.
 
@@ -46,7 +47,20 @@ systemctl restart mediaserver
 tail -f /var/log/mcu.log
 ```
 
-2. Un contrôleur, un navigateur WebRTC et un Linphone.
+2. **Vérifier que le serveur exécute le binaire qu'on croit.** Un mediaserver
+   qui tourne depuis plusieurs jours peut exécuter un binaire remplacé sur le
+   disque depuis : le processus garde l'ancien inode, et la séance ne mesure
+   alors rien de ce qu'on croit tester.
+
+```sh
+readlink /proc/$(pgrep -x mediaserver)/exe   # au besoin avec sudo
+cd mcu && make -q mcu; echo $?               # 0 = binaire a jour avec les sources
+```
+
+   Un `(deleted)` en fin de ligne veut dire **redémarrage obligatoire** avant de
+   commencer.
+
+3. Un contrôleur, un navigateur WebRTC et un Linphone.
 
 ### Par quelle API recetter ?
 
@@ -86,7 +100,7 @@ optionnels :
 L'API MCU est documentée dans `docs/MCU-API.md`, la JSR-309 dans
 `docs/JSR-309-API.md`.
 
-3. L'outil de recensement des threads :
+4. L'outil de recensement des threads :
 
 ```sh
 mcu/tests/tools/thread_census.sh            # une photo
@@ -152,14 +166,15 @@ circule. Attendu après le lot 3 : indiscernable du repos.
 
 Par jambe, deux réacteurs : `{audio, texte}` et `{vidéo MAIN, SLIDES}`.
 
-| | Avant | Lot 2 (1 réacteur global) | Lot 4a (2 par jambe) | Lot 4c (push) |
-|---|---|---|---|---|
-| `RTPParticipant`, 4 sessions | 14 | 10 | 12 | 8 |
-| `Endpoint` JSR-309, 2 jambes reçues | 6 | 2 | 4 | 2 |
-| Appel B2BUA | 12 | 4 | 8 | 4 |
+| | Avant | Lot 2 (1 réacteur global) | **Lot 4a : état final** |
+|---|---|---|---|
+| `RTPParticipant`, 4 sessions | 14 | 10 | **12** |
+| `Endpoint` JSR-309, 2 jambes reçues | 6 | 2 | **4** |
+| Appel B2BUA | 12 | 4 | **8** |
 
-Le lot 4a **remonte** le compte : c'est voulu, il prépare le push. Un total qui
-ne bouge pas au lot 2 signifie que les sessions ne sont pas inscrites dans le
+Le lot 4a **remonte** le compte de 2 threads par jambe : c'est voulu, ils
+achètent l'isolation entre l'audio et la vidéo (SPEC §3.6). Un total qui ne
+bouge pas au lot 2 signifie que les sessions ne sont pas inscrites dans le
 réacteur — ce n'est pas une bonne nouvelle, c'est un lot qui n'a rien fait.
 
 ## Recette par lot
@@ -196,11 +211,11 @@ Signaux d'alerte dans `/var/log/mcu.log` :
 
 ### Lot 3 — attente bornée
 
-1. **Sonnerie sans décrocher, 30 s** : CPU indiscernable du repos. Relever la
-   trace `attente active : N GetPacket a vide en M ms` sur chaque jambe reçue :
-   **5 pour 1000 ms**, pas ~2 250. C'est la borne de 200 ms
-   (`RTPSession::ConsumerPollMs`) qu'on lit là, une jambe qui donne autre chose
-   est une régression.
+1. **Sonnerie sans décrocher, 30 s** : CPU **indiscernable du repos**. C'est le
+   seul indicateur, et il suffit : une jambe qui sonderait remonterait à ~3 kHz
+   et se verrait tout de suite sur la courbe. Le compte exact des `GetPacket`
+   rendus à vide est tenu par le test
+   `RtpReactor.AReceivingLegWithNoTrafficDoesNotSpin`, pas par une trace.
 2. **Pair muet** : établir l'appel avec du média dans les deux sens, couper
    l'émission du pair, observer. Le watchdog doit rendre `onRTPTimeout` **une
    seule fois** par jambe muette, et le CPU **descendre** puis rester plat.
@@ -251,21 +266,40 @@ Le compte de threads doit remonter comme au tableau. Puis vérifier l'isolation 
 3. Relever les traces `tour long` : elles doivent viser le groupe vidéo, jamais
    le groupe audio. Le nom du groupe dit lequel : `part-<id du participant>-media`
    ou `-video` côté MCU, `jsr309-<adresse de l'Endpoint>-media` ou `-video` côté
-   JSR-309.
+   JSR-309. Dépouillement :
 
-### Lot 4b et 4c — livraison poussée
+```sh
+grep -a "tour long" /var/log/mcu.log | sed -E 's/.*\[(.*)\] tour long.*/\1/' | sort | uniq -c
+```
 
-Un site à la fois, recette entre chaque : texte, puis audio, puis
-`RTPEndpoint`, puis vidéo.
+**Zéro `tour long` n'est pas un échec.** C'est même l'attendu le plus probable :
+en mode tiré, le décodage n'est pas dans le thread du réacteur, donc aucun tour
+ne dépasse le seuil de 50 ms. Le verdict de l'isolation repose alors sur le
+point 2, l'écoute.
 
-1. Après chaque bascule : appel bidirectionnel du média concerné, 5 min.
-2. **Conférence à 3 participants** : audio mixé propre, mosaïque à jour.
-3. **Partage de document BFCP** : les deux flux vidéo d'une même session (MAIN
-   et SLIDES) doivent arriver tous les deux. C'est le cas que l'ancien modèle
-   servait avec deux threads sur une même session.
-4. **Enregistrement MP4** : lire le fichier, vérifier audio, vidéo et sous-titres.
-5. **Appel B2BUA transcodé, 20 min** : ni dérive de gigue, ni trame clé
-   parasite. Comparer au relevé du lot 2.
+**Un tour long à l'ÉTABLISSEMENT n'est pas un échec non plus, s'il vient du
+DTLS.** Le handshake DTLS tourne dans le thread du réacteur, par conception : il
+produit un tour d'environ 50 ms sur le groupe de la jambe qui négocie — souvent
+`-media` —, avant qu'aucun paquet média ne circule. Avant de conclure, lire le
+thread qui a tracé :
+
+```sh
+grep -a "<id du thread>" /var/log/mcu.log   # les étapes SSL doivent y être
+```
+
+Ce qui fait échouer le point 3, c'est un tour long **en régime établi** sur un
+groupe `-media` : là, un travail long tourne vraiment dans le réacteur de
+l'audio.
+
+### Lot 4b et 4c — HORS CHANTIER
+
+La livraison poussée n'est pas faite : les paquets restent tirés par
+`GetPacket()` et les threads consommateurs restent. Motif et conséquences dans
+le SPEC, §4.2. Rien à recetter ici.
+
+Les scénarios qu'elle aurait demandés — conférence à 3, partage BFCP,
+enregistrement MP4, B2BUA transcodé de 20 min — restent valables comme recette
+de non-régression après tout changement dans `RTPSession` ou `RtpSessionSet`.
 
 ## Passe ThreadSanitizer
 

@@ -3201,40 +3201,6 @@ void RTPSession::OnPollError(short revents)
 	Log("-RTPSession sortie du groupe sur evenement socket 0x%x [%p]\n",revents,this);
 }
 
-//Mesure de reference du chantier RTP-REACTOR (lot 0). Wait() ne rend NULL que
-//lorsqu'il n'y a pas encore de flux pour ce SSRC — et le flux par defaut n'est
-//cree qu'a l'arrivee du PREMIER paquet. Pendant la sonnerie, le handshake, ou
-//face a un pair muet, la boucle du consommateur tourne donc a ~3 kHz (msleep est
-//en MICROsecondes). C'est ce nombre que le lot 3 doit faire tomber. A retirer au
-//lot 6 (docs/conception/RTP-REACTOR/SPEC.md).
-void RTPSession::CountEmptyGetPacket()
-{
-	DWORD count = ++emptyGetCount;
-	QWORD nowMs = getTime()/1000;
-	QWORD last  = lastEmptyGetLogMs.load();
-
-	//Premiere fois : on amorce la fenetre sans rien dire, faute d'intervalle.
-	if (!last)
-	{
-		if (lastEmptyGetLogMs.compare_exchange_strong(last,nowMs))
-			emptyGetCount = 0;
-		return;
-	}
-
-	if (nowMs < last + 1000)
-		return;
-	if (!lastEmptyGetLogMs.compare_exchange_strong(last,nowMs))
-		return;
-
-	emptyGetCount = 0;
-	//L'intervalle n'est PAS une seconde : la trace ne sort qu'a l'occasion d'un
-	//appel a vide, donc la fenetre couvre tout le temps depuis la precedente et
-	//peut valoir des dizaines de secondes. Sans elle, le compte se lirait comme
-	//un debit — et il serait faux d'un ordre de grandeur.
-	Log("-RTPSession attente active : %u GetPacket a vide en %llu ms [%ls,%p]\n",
-			count,(unsigned long long)(nowMs-last),LabelForLog(),this);
-}
-
 void RTPSession::OnStreamsChanged()
 {
 	++streamGeneration;
@@ -3266,7 +3232,6 @@ RTPPacket* RTPSession::GetPacket(DWORD ssrc, DWORD timeoutMs)
 	//à ~2 250 tours par seconde le temps d'un établissement d'appel.
 	if (s == NULL)
 	{
-		CountEmptyGetPacket();
 		streamWait.WaitUntil(timeoutMs,
 			[this,seen] { return streamGeneration.load() != seen; });
 	}

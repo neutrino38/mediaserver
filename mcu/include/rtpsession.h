@@ -409,12 +409,6 @@ private:
 	//naissance.
 	void OnStreamsChanged();
 
-	//Mesure de reference du chantier RTP-REACTOR (lot 0) : compte les GetPacket
-	//rendus a vide et les trace a 1 Hz. Retiree au lot 6.
-	void CountEmptyGetPacket();
-	std::atomic<DWORD> emptyGetCount{0};
-	std::atomic<QWORD> lastEmptyGetLogMs{0};
-
 	//--- PollHandler : ce que le réacteur appelle (docs/conception/RTP-REACTOR) ---
 	//
 	//Privées : personne ne les appelle sur une RTPSession, seul le réacteur les

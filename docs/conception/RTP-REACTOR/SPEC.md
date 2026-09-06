@@ -1,12 +1,16 @@
 # Réduire le nombre de threads autour de RTPSession
 
-Conception n°2. Elle remplace `SPEC-n1-ecartee.md`, dans ce même répertoire, dont
-l'approche — faire porter le `poll()` par `GetPacket()` — est jugée trop
-risquée (§3.4 explique pourquoi, en une phrase par risque).
+Conception n°2. L'approche concurrente — faire porter le `poll()` par
+`GetPacket()`, donc supprimer la pompe de réception — est écartée : le §3.5 dit
+ce qu'elle cassait, en une ligne par blocage.
 
 Objet : un **réacteur partagé** (`RtpSessionSet`) qui bat les sockets d'un
-groupe de sessions RTP avec un seul `poll()` et un seul thread, puis la
-suppression progressive des threads consommateurs.
+groupe de sessions RTP avec un seul `poll()` et un seul thread.
+
+**Le chantier s'arrête au lot 4a — DÉCIDÉ (2026-09-06).** Les threads de pompe
+disparaissent, les threads consommateurs restent, et la livraison des paquets
+reste **tirée** : `GetPacket()` est conservé. §4.2 dit ce que la livraison
+poussée aurait apporté, et pourquoi elle n'est pas faite.
 
 ---
 
@@ -285,8 +289,6 @@ public:
 	//Réveil : à appeler quand un handler a du travail hors événement réseau.
 	void Wake();
 
-	bool IsReactorThread() const;
-
 private:
 	int Run();                 //la boucle
 	void RebuildFds();         //sous `lock`
@@ -381,68 +383,90 @@ Le réacteur ne change **pas qui lit les sockets par rapport au jitter
 buffer**. Il change seulement **combien de threads** portent ces lectures.
 C'est tout l'écart de risque entre les deux conceptions.
 
-Une bonne idée de la n°1 est **conservée** : le déqueue non bloquant
-`RTPBuffer::GetDue(DWORD& msUntilDue)`. Elle sert ici à autre chose — dire au
-réacteur dans combien de temps un paquet retenu deviendra livrable (§4.2).
+Une idée de la n°1 — le déqueue non bloquant
+`RTPBuffer::GetDue(DWORD& msUntilDue)` — n'a de sens qu'avec la livraison
+poussée, qui n'est pas faite (§4.2). Elle n'est pas implémentée.
 
 ### 3.6 Découpage des groupes : deux groupes par jambe — DÉCIDÉ
 
 **Décision : deux réacteurs par jambe**, {audio, texte} et {vidéo MAIN,
-vidéo SLIDES}. C'est l'option (a) ci-dessous.
-
-L'idée de départ était « un groupe par participant / Endpoint ». Le bon axe,
-à raffiner sur **un** point : quand la livraison passera en push (§4.2), le
-travail du consommateur — démultiplexage, décodage, transcodage — tournera
-**dans le thread du réacteur**. Tout ce qui est dans le même groupe attend
-donc ce travail.
-
-Mesure connue : un encodage VP8 720p coûte ~22 ms par image (fiche mémoire du
-chantier transcodeur). À 25 im/s, c'est plus d'un demi-cœur, en blocs de
-22 ms. Mettre l'audio dans le même groupe que la vidéo, c'est laisser le
-socket audio non poll pendant 22 ms.
+vidéo SLIDES}. C'est l'option (a) ci-dessous. Elle est **confirmée le
+2026-09-06**, après l'arrêt du chantier au lot 4a : la livraison restant tirée
+(§4.2), la question « un seul groupe par jambe suffirait-il ? » se repose en
+entier. Ce paragraphe donne la réponse, et ce qui la fonde dans le code.
 
 Trois découpages possibles :
 
-| Option | Threads / Endpoint | Couplage |
+| Option | Threads / jambe | Couplage |
 |---|---|---|
 | (a) un groupe par classe de média : {audio, texte} et {vidéo MAIN, vidéo SLIDES} | **2** | l'audio n'attend jamais la vidéo |
-| (b) un groupe par Endpoint | 1 | l'audio attend le transcodage vidéo |
-| (c) un pool de N réacteurs pour tout le serveur, sessions réparties par hachage | N (fixe) | des participants sans rapport se bloquent entre eux |
+| (b) un groupe par participant / `Endpoint` | 1 | l'audio attend ce que la vidéo fait dans le réacteur |
+| (c) un pool de N réacteurs pour tout le serveur, sessions réparties par hachage | N (fixe) | des appels sans rapport se bloquent entre eux |
 
-**Pourquoi (a).** Elle donne 2 threads par jambe au lieu de 5 à 8, sans
-coupler un média temps réel serré (audio, 20 ms) à un média coûteux (vidéo).
-(b) échangeait un thread contre un risque de gigue audio qu'on ne saurait pas
-mesurer avant la recette. (c) n'a de sens qu'une fois le coût réel d'un tour
-de réacteur mesuré, et elle sacrifie l'isolation entre appels — mauvais
-échange pour un MCU. Elle reste consultable si le nombre de threads redevient
-un problème à grande échelle, PAS avant.
+**Ce que le thread du réacteur porte vraiment**, en mode tiré — le seul mode
+livré. Un tour lit **un** datagramme par socket prêt, déchiffre, analyse, et
+dépose dans le jitter buffer ; il traite le RTCP entrant et les timers
+(watchdog, ICE, DTLS, amorçage NAT, tick applicatif). Le décodage et
+l'encodage restent dans les threads consommateurs. Les callbacks du RTCP sont
+tous des affectations : `videoBitrateLimit` (`videostream.cpp:127`), un
+drapeau `sendFPU` (`VideoEncoderWorker.cpp:406`), un relais borné côté
+JSR-309. Les sockets sont non bloquantes (`rtpsession.cpp:1927`), donc aucun
+envoi ne peut y bloquer. Un tour coûte O(N) sur les sessions du groupe, de
+l'ordre de 20 µs à 80 sessions.
+
+Autrement dit : **le travail long n'est pas dans le réacteur**, et l'argument
+« l'audio attendrait le transcodage » ne s'applique pas au code livré. Le
+découpage garde pourtant deux raisons, et elles se lisent dans le code.
+
+**Raison 1 : le verrou `streamUse`, tenu jusqu'à 200 ms.** `GetPacket` prend
+le verrou lecteur **avant** l'attente bornée et ne le rend qu'après
+(`rtpsession.cpp:3253`) : un consommateur parqué le tient pendant
+`ConsumerPollMs`, soit 200 ms. Or le réacteur prend ce même verrou en
+**écriture** dès qu'un SSRC inconnu arrive : `ReadRTP` appelle
+`SetDefaultStream` (`:4162`) ou `ChangeStream` (`:4200`), tous deux sans
+borne, ou `AddStream` (`:4067`), borné à 500 ms. Les lecteurs sont
+prioritaires, c'est un choix assumé de `use.h`. Donc **la naissance d'un SSRC
+sur une session dont un consommateur est parqué fait attendre le thread du
+réacteur, jusqu'à 200 ms**. Trois cas réels : le flux SLIDES qui naît à côté
+de MAIN, un changement de SSRC sur re-INVITE, un flux figé. Avec deux groupes,
+cette attente reste dans le groupe vidéo ; avec un seul, elle emporte l'audio,
+soit dix paquets en retard.
+
+**Raison 2 : le rayon de panne.** Un groupe par jambe borne à **un appel** tout
+ce qui pourrait faire attendre un réacteur. Un réacteur global le laisserait
+porter sur tous les appels du serveur à la fois.
+
+**Pourquoi (a).** (b) économise exactement **un thread par jambe** — 110 au
+lieu de 120 sur une conférence à 10 participants (§4.5) — contre le couplage
+vidéo → audio de 200 ms de la raison 1. Mauvais échange sur un serveur média.
+(c) sacrifie en plus l'isolation entre appels. Elle reste consultable si le
+nombre de threads redevient un problème à grande échelle, PAS avant.
 
 Ce que (a) laisse comme couplage, et qui est **assumé** : la vidéo SLIDES est
-dans le groupe de la vidéo MAIN, donc elle attend son transcodage. Le partage
-de document est à quelques images par seconde.
+dans le groupe de la vidéo MAIN, donc les deux flux d'un partage de document
+partagent la même attente. Le partage de document est à quelques images par
+seconde.
 
 **Repli obligatoire.** Une session qu'aucun propriétaire n'inscrit doit
 marcher quand même — les tests unitaires en créent, `Broadcaster` aussi.
 `RTPSession::Init()` s'inscrit alors dans un **groupe par défaut** du
 processus, créé à la demande. Un seul chemin de code, pas deux : il n'existe
-plus de session portant son propre thread. Contrainte associée : la livraison
-en push n'est autorisée que pour une session inscrite dans un groupe
-**explicite** ; le groupe par défaut reste en mode tiré (§4.1).
+plus de session portant son propre thread.
 
 Ce groupe par défaut est aussi **l'étape de migration** : au lot 2, toutes les
 sessions y sont, et le serveur entier tourne sur un seul thread de réacteur —
-c'est sûr parce qu'aucun travail long n'y tourne encore. Le découpage en deux
-groupes par jambe n'arrive qu'au lot 4a, juste avant que le push n'y mette du
-décodage.
+c'est sûr parce qu'aucun travail long n'y tourne. Le découpage en deux groupes
+par jambe arrive au lot 4a.
 
 ---
 
 ## 4. Le chemin de consommation
 
 Le réacteur enlève les threads de pompe. Les threads consommateurs — 4 par
-participant, 1 à 4 par Endpoint — demandent un second geste.
+participant, 1 à 4 par `Endpoint` — restent : **seule l'étape A est livrée**,
+et §4.2 dit pourquoi.
 
-### 4.1 Étape A : borner l'attente et tuer l'attente active
+### 4.1 Étape A : borner l'attente et tuer l'attente active — LIVRÉ (lot 3)
 
 Cible : `GetPacket` ne fait plus tourner personne, et le consommateur garde
 son thread. Petit changement, gain immédiat, aucun déplacement de travail.
@@ -473,7 +497,28 @@ qui suit. La boucle relit son drapeau toutes les 200 ms au pire ; les
 Sites : `audiostream.cpp:336`, `videostream.cpp:790`, `textstream.cpp:453`,
 `RTPEndpoint.cpp:387`.
 
-### 4.2 Étape B : livraison poussée, le thread consommateur disparaît
+### 4.2 Étape B : livraison poussée — HORS CHANTIER — DÉCIDÉ
+
+**On ne la fait pas** (2026-09-06). Le mode tiré est conservé : `GetPacket()`
+reste l'entrée de lecture, et les threads consommateurs restent.
+
+Le motif est un choix d'architecture, pas un manque de temps. Le mode tiré
+**découple le réseau du traitement média** : un décodage long ne retarde jamais
+la lecture des sockets, parce que les deux tournent sur des threads distincts.
+Le push supprime ce découplage — il fait entrer le travail long dans le thread
+du réacteur, et l'ordre de grandeur est connu : un encodage VP8 720p coûte
+~22 ms par image (fiche mémoire du chantier transcodeur), soit, à 25 im/s, plus
+d'un demi-cœur en blocs de 22 ms. On échangerait 4 threads par participant et
+1 à 4 par `Endpoint` contre un couplage neuf, à mesurer sur quatre sites de
+livraison. Le gain déjà acquis — les threads de pompe et l'attente active — ne
+dépend pas de cette étape.
+
+Si un chantier reprend le push un jour, deux points ne sont pas négociables : le
+découpage en deux groupes par jambe (§3.6) devient une condition de sûreté et
+non plus un confort ; et la bascule se fait **un site à la fois**, avec recette
+entre chaque.
+
+Ce qui suit est la conception de cette étape, gardée pour ce chantier-là.
 
 Cible : le réacteur livre les paquets **échus** à un listener, dans son
 thread. Plus de `recAudioThread`, `recVideoThread`, `recTextThread`, ni de
@@ -535,20 +580,24 @@ session d'un autre flux.
 
 ### 4.3 La tête de ligne, honnêtement
 
-En push, le travail du consommateur bloque le `poll()` de son groupe. Deux
-constats :
+En mode tiré, le thread du réacteur ne porte aucun travail long : §3.6 dit ce
+qu'il fait vraiment, et pourquoi les callbacks du RTCP ne coûtent rien.
 
-- **Pour la jambe concernée, rien ne change.** Aujourd'hui déjà, pendant que
-  `MultiplexLoop` décode et encode, personne n'appelle `GetPacket` : les
-  paquets s'accumulent dans le socket puis dans le jitter buffer. Le réacteur
-  reproduit ce comportement à l'identique.
-- **Le couplage NOUVEAU est entre jambes du même groupe**, et c'est
-  exactement ce que le découpage en deux groupes par jambe (§3.6) borne.
+Le couplage entre jambes d'un même groupe existe quand même, et il a une borne
+connue : **200 ms**, celle du verrou `streamUse` tenu par un consommateur
+parqué pendant qu'un SSRC naît (raison 1 du §3.6). C'est exactement ce que le
+découpage en deux groupes empêche d'atteindre l'audio.
 
-Garde-fou à poser : le réacteur mesure la durée de chaque `OnPollEvents` +
-`OnPeriodic` et **trace au-delà d'un seuil** (proposition : 50 ms), au plus
-une trace par seconde et par groupe, en nommant la session. Sans cette trace,
-une régression de gigue serait indiagnosticable.
+Garde-fou permanent : le réacteur mesure la durée de chaque `OnPollEvents` +
+`OnPeriodic` et **trace au-delà de 50 ms** (`RtpSessionSet::LongTurnUs`), au
+plus une trace par seconde et par groupe (`rtpsessionset.cpp:298`). Le nom du
+groupe — `part-<id>-{media,video}`, `jsr309-<adresse>-{media,video}` — dit
+quelle jambe et quel média ont attendu. Sans cette trace, une régression de
+gigue serait indiagnosticable.
+
+En push (§4.2), ce raisonnement changerait du tout au tout : le travail du
+consommateur bloquerait le `poll()` de son groupe, et la borne ne serait plus
+de 200 ms mais du coût d'un décodage.
 
 ### 4.4 Les lisseurs d'émission : HORS CHANTIER — DÉCIDÉ
 
@@ -571,38 +620,38 @@ Le chemin d'émission reste donc entier : les threads de lissage restent, et
 seulement si le nombre de threads redevient le problème dominant, et alors
 comme chantier séparé, avec sa propre séance de mesure BWE.
 
-### 4.5 Gain attendu
+### 4.5 Gain obtenu
 
-Le nombre de threads ne baisse pas de façon monotone, et il faut le dire :
-le lot 4a en **rajoute**. C'est voulu, et voici pourquoi.
+Le nombre de threads ne baisse pas de façon monotone, et il faut le dire : le
+lot 4a en **rajoute** deux par jambe. C'est voulu, et voici pourquoi.
 
 Au lot 2, un seul réacteur pour tout le processus suffit : rien de long n'y
-tourne — seulement lire un datagramme et l'empiler. C'est le plus gros gain
-du chantier, pour le plus petit risque.
+tourne — seulement lire un datagramme et l'empiler. C'est le plus gros gain du
+chantier, pour le plus petit risque.
 
-Au lot 4a, on découpe en groupes par jambe. On remonte donc à 2 threads par
-jambe, non pour le plaisir, mais parce que le lot 4b va mettre du travail
-long dans ces threads (décodage, transcodage) et qu'on refuse de coupler
-l'audio d'un appel à la vidéo d'un autre.
+Au lot 4a, on découpe en groupes par jambe. Ces deux threads par jambe achètent
+l'isolation du §3.6 : l'attente de 200 ms du verrou `streamUse` reste dans le
+groupe où elle naît, et le rayon de panne d'un réacteur est **un appel**, pas
+le serveur entier.
 
-Au lot 4c, les threads consommateurs disparaissent et la courbe redescend
-pour de bon. C'est l'état final : les lisseurs d'émission gardent leur thread
-(§4.4).
+C'est l'état final. Les threads consommateurs restent (§4.2), et les lisseurs
+d'émission gardent le leur (§4.4).
 
-| | Aujourd'hui | Lot 2 : 1 réacteur global | Lot 4a : 2 réacteurs par jambe | Lot 4c : push (final) |
+| | Aujourd'hui | Lot 2 : 1 réacteur global | **État final : 2 réacteurs par jambe** | Pour mémoire : push, non fait |
 |---|---|---|---|---|
-| `RTPParticipant`, 4 sessions | 14 | 10 | 12 | **8** |
-| `Endpoint` JSR-309, 4 sessions dont 2 reçues | 6 | 2 | 4 | **2** |
-| Appel B2BUA, 2 `Endpoint` | 12 | 4 | 8 | **4** |
-| Conférence, 10 participants RTP | 140 | 100 | 120 | **80** |
+| `RTPParticipant`, 4 sessions | 14 | 10 | **12** | 8 |
+| `Endpoint` JSR-309, 4 sessions dont 2 reçues | 6 | 2 | **4** | 2 |
+| Appel B2BUA, 2 `Endpoint` | 12 | 4 | **8** | 4 |
+| Conférence, 10 participants RTP | 140 | 100 | **120** | 80 |
 
 La colonne « lot 2 » compte en plus **un** thread pour tout le processus. Les
 deux dernières comptent 2 threads de réacteur par jambe (§3.6).
 
-Vue autrement : un appel B2BUA transcodé passe de **12 threads à 4**, et une
-conférence à 10 participants de **140 à 80**. Sur les 8 threads restants d'un
-`RTPParticipant`, 4 sont des threads d'émission et 2 des lisseurs — c'est-à-dire
-tout le chemin d'émission, laissé intact à dessein.
+Vue autrement : un appel B2BUA transcodé passe de **12 threads à 8**, et une
+conférence à 10 participants de **140 à 120**. Les 12 threads d'un
+`RTPParticipant` se répartissent ainsi : 2 réacteurs, 4 consommateurs de
+réception, 4 threads d'émission et 2 lisseurs — c'est-à-dire tout le chemin
+d'émission et tout le traitement média, laissés intacts à dessein.
 
 ## 5. C++17, coroutines : ce qui s'applique vraiment
 
@@ -675,12 +724,16 @@ Utile, indépendamment des coroutines :
 
 ## 6. Ce que ce chantier ne fait pas
 
+- **La livraison reste tirée.** `GetPacket()` reste l'entrée de lecture, et
+  les threads consommateurs restent : 4 par `RTPParticipant`, 1 à 4 par
+  `Endpoint`. Décision explicite (§4.2).
 - **Le chemin d'émission n'est pas touché du tout.** `SendPacket()` continue
   d'écrire sur le socket depuis le thread appelant, et `RTPSmoother` /
   `RTPMultiplexerSmoother` gardent leur thread. Décision explicite : ce sont
   les pacers du contrôle de débit (§4.4).
 - **Le jitter buffer n'est pas retouché** dans sa logique : mêmes conditions
-  de livraison, mêmes délais. On lui ajoute deux entrées non bloquantes.
+  de livraison, mêmes délais. On lui ajoute une entrée bornée,
+  `RTPBuffer::Wait(timeoutMs)`.
 - **Les threads d'encodage et de mixage restent.** Ce sont d'autres chantiers
   (transcodeurs sans thread, mixeurs).
 - **Les jambes inutiles restent créées.** Que `Endpoint` ouvre 4 sessions et
@@ -704,7 +757,8 @@ check` vert à chaque lot.
 2. Compteur d'attente active : `RTPSession::CountEmptyGetPacket()` compte les
    `GetPacket` rendus à vide et les trace à 1 Hz (`attente active : N GetPacket
    a vide en 1 s`). Placé dans la session, pas dans les quatre consommateurs :
-   ils passent tous par là. À retirer au lot 6.
+   ils passent tous par là. **Outil de mesure du chantier, retiré au lot 5** —
+   les relevés ci-dessous et au lot 3 viennent de lui.
 3. `docs/maintenance/recette-reacteur-rtp.md` : la recette, lot par lot, avec
    les nombres de threads attendus et les traces d'alerte à guetter.
 
@@ -999,8 +1053,9 @@ La **vidéo reste à ~102 ms**, et ce n'est pas le même mécanisme :
 `VideoStream::StopReceiving` (`videostream.cpp:429`) ne s'endort pas sur une
 condition, elle **sonde** — `msleep(100000)`, soit 100 ms, jusqu'à dix fois, avec
 un join forcé au bout. Les 102 ms sont sa première sieste, par construction.
-Cette boucle disparaît au lot 4c avec le thread consommateur qu'elle attend : ne
-pas la retoucher avant.
+Cette boucle reste, comme le thread consommateur qu'elle attend. La retoucher
+demande de remplacer son sondage par une condition : c'est un chantier
+`VideoStream`, pas celui-ci.
 
 Deux entrées deviennent **une** : `GetPacket()` et `GetPacket(DWORD&)` sont
 remplacées par `GetPacket(DWORD ssrc, DWORD timeoutMs)`, `ssrc` 0 valant flux
@@ -1037,27 +1092,55 @@ de borne donnent 6 tours, pas 6 000 — c'est LE test du lot.
 à 80 ms, sortie mesurée à **81 ms**. Sans le compteur de génération, ce test
 mettrait 8 s.
 
-### Lot 4 — Groupes explicites, puis livraison poussée
+### Lot 4a — Groupes explicites — FAIT, RECETTE PASSÉE
 
-Ordre imposé : le regroupement d'abord, le push ensuite. Chacun est
-observable seul.
+C'est le dernier lot de code du chantier : 4b (push) et 4c (retrait du mode
+tiré) sont hors chantier (§4.2).
 
-1. **4a — regroupement — CODE FAIT.** `RTPParticipant` et `Endpoint` créent
-   leurs groupes selon le découpage du §3.6 — {audio, texte} et {vidéo MAIN,
-   SLIDES} — et les posent avant `Init()`. L'instrumentation de la durée des
-   tours (§4.3) était déjà livrée au lot 1.
-2. **4b — push.** `MediaListener`, `RTPBuffer::GetDue`, intégration du
-   `msUntilDue` dans `GetNextTimeoutMs`. Basculer **un** site à la fois, dans
-   cet ordre : `TextStream` (le plus simple, débit faible), `AudioStream`,
-   `RTPEndpoint`, `VideoStream`. Build + recette entre chaque.
-3. **4c — retrait du mode tiré.** Une fois les 4 sites basculés, supprimer
-   `GetPacket`/`CancelGetPacket` du chemin de réception, et l'attente bornée
-   du lot 3 avec. Il ne doit rester **qu'un** motif de livraison.
+`RTPParticipant` et `Endpoint` créent leurs groupes selon le découpage du §3.6
+— {audio, texte} et {vidéo MAIN, SLIDES} — et les posent avant `Init()`.
+L'instrumentation de la durée des tours (§4.3) était déjà livrée au lot 1.
 
-**Critère** de 4c : plus aucun `recXThread` ni `MultiplexLoop`. Recensement
-conforme au tableau du §4.5. Recette : conférence 3 participants, partage de
-document BFCP (les deux flux vidéo d'une même session), enregistrement MP4,
-appel B2BUA transcodé 20 min sans dérive de gigue ni trame clé parasite.
+**Recette**, section « Lot 4a » de `docs/maintenance/recette-reacteur-rtp.md`,
+deux volets. Le compte de threads doit remonter au tableau du §4.5. Puis
+l'isolation : appel transcodé 720p qui charge le réacteur vidéo, écoute de
+l'audio pendant ce temps — **aucune gigue audible** —, et traces `tour long`
+visant le groupe vidéo, jamais le groupe audio.
+
+**RECETTE JOUÉE ET PASSÉE LE 2026-09-06**, les deux volets, sur un binaire
+portant le code du commit `f992754`.
+
+**Volet A, sans pair.** Le compte de threads se pilote en XML-RPC sur une
+instance à part (port 9091) : `EndpointCreate` coûte **exactement 2 threads** —
+les deux réacteurs — et chaque `EndpointStartReceiving` en ajoute **un**, son
+`MultiplexLoop`. Un `Endpoint` à deux jambes reçues fait donc 4 threads, comme
+au tableau du §4.5. Trois cycles création/suppression : retour au compte de
+départ, **aucune accumulation**. Côté MCU, `CreateParticipant` coûte 6 threads,
+dont les 2 réacteurs. Les noms relevés — `part-501-media` et `part-501-video` —
+prouvent qu'il n'y a que **deux** groupes pour les quatre sessions : le texte
+partage bien le réacteur de l'audio.
+
+**Volet A, en appel réel.** Appel B2BUA JSR-309, deux `Endpoint`, audio et vidéo
+reçus des deux côtés : **24 threads** pendant l'appel contre **12** au repos, et
+les **4 réacteurs** nommés dans le journal, deux par `Endpoint`. Les 8 threads
+restants sont le traitement média, que le tableau du §4.5 ne compte pas — il ne
+compte que le transport. Après raccroché, retour à **11 threads**, dans la plage
+du repos : aucun thread orphelin sur un appel réel de 6 minutes.
+
+**Volet B, l'isolation.** Vidéo 1280x720 réellement transcodée (seul l'audio est
+en pont, OPUS ↔ OPUS), CPU à **110 %** d'un cœur pendant 3 min 30. **L'audio est
+resté propre à l'écoute** : c'est le verdict du lot. Zéro alerte réacteur, zéro
+`file trop profonde`. `attente active` : 5 `GetPacket` à vide pour 1000 ms à
+l'établissement, puis plus rien dès que le média circule.
+
+**Une** trace `tour long`, et elle vise le groupe **audio** :
+`jsr309-…-media tour long : 50 ms`, à l'établissement. Le thread y déroulait le
+**handshake DTLS de sa propre jambe** — client hello, certificat, key exchange,
+change cipher spec — avant qu'aucun paquet média ne circule. Le DTLS dans le
+thread du réacteur est prévu par la conception (§2). Ce n'est donc pas du
+travail média tombé dans le réacteur audio, et il n'y a **aucune** trace en
+régime établi. La fiche de recette dit désormais que seul un tour long en
+régime établi fait échouer le point 3.
 
 **Ce que 4a livre.** Deux membres `RtpSessionSet` par propriétaire de jambe
 (`RTPParticipant`, `Endpoint`), **déclarés avant** les flux et les ports :
@@ -1079,21 +1162,23 @@ réacteur de l'audio, la vidéo a le sien, chaque groupe compte ses deux jambes,
 `End()`. Vérifiés par mutation : mettre la vidéo dans le groupe audio les fait
 échouer tous les deux.
 
-### Lot 5 — Nettoyage et documentation
+### Lot 5 — Nettoyage et documentation — FAIT le 2026-09-06
 
-- Retrait de l'instrumentation du lot 0 devenue inutile ; **garder** la trace
-  de tour long du §4.3, c'est un garde-fou permanent.
-- `docs/reference/threads-rtp.md` : le modèle de threads du transport RTP,
-  les groupes, le contrat de `Remove`, l'interdit « ne pas bloquer dans un
-  callback de réacteur ».
-- `CLAUDE.md` : le piège à connaître, et lui seul — « toute session RTP est
-  battue par un `RtpSessionSet` ; un callback qui bloque bloque tout son
-  groupe ».
-- Mise à jour de la fiche mémoire du chantier.
-- `SPEC-n1-ecartee.md` : la supprimer. Une fois le chantier fait, garder deux
-  conceptions concurrentes du même sujet est un piège pour le prochain
-  lecteur. Elle ne survit que le temps du chantier, pour dire ce qu'on a
-  écarté et pourquoi.
+- **Compteur d'attente active retiré** (`RTPSession::CountEmptyGetPacket`, lot 0
+  point 2). Le mode tiré étant définitif, il traçait une ligne par seconde et
+  par jambe reçue, en permanence ; et le test
+  `RtpReactor.AReceivingLegWithNoTrafficDoesNotSpin` tient déjà l'invariant
+  qu'il surveillait. La trace de tour long du §4.3 **reste** : elle, c'est un
+  garde-fou permanent.
+- `docs/reference/threads-rtp.md` : le modèle de threads livré — le réacteur,
+  les deux groupes par jambe, le mode tiré et ses threads consommateurs, le
+  contrat de `Remove`, les trois couplages connus avec leurs bornes, et les
+  cinq règles d'écriture d'un callback appelé par le réacteur.
+- `CLAUDE.md` : le piège, et lui seul.
+- `SPEC-n1-ecartee.md` : supprimée. Garder deux conceptions concurrentes du même
+  sujet est un piège pour le prochain lecteur ; ce que la n°1 cassait est dit au
+  §3.5.
+- Fiche mémoire du chantier mise à jour.
 
 ---
 
@@ -1102,22 +1187,27 @@ réacteur de l'audio, la vidéo a le sien, chaque groupe compte ses deux jambes,
 | # | Risque | Gravité | Traitement |
 |---|---|---|---|
 | R1 | Course de fermeture de socket au retrait d'une session | **Haute** | quiesce synchrone du §3.4, prouvé par un test dédié au lot 1 |
-| R2 | Tête de ligne entre jambes d'un même groupe | **Haute** | deux groupes par jambe (§3.6) + trace de tour long (§4.3) |
-| R3 | Réentrance : un callback appelle `End()` sur sa propre session, ou attend un verrou tenu par un autre thread du groupe | **Haute** | `IsReactorThread()` + `Remove` non bloquant depuis le réacteur ; contrat écrit dans `docs/reference/threads-rtp.md` ; à vérifier sur chaque site du lot 4b |
+| R2 | Tête de ligne entre jambes d'un même groupe | Moyenne | en mode tiré, aucun travail long dans le réacteur : le couplage est borné à 200 ms par le verrou `streamUse` (§3.6) ; deux groupes par jambe + trace de tour long (§4.3) |
+| R3 | Réentrance : un callback appelle `End()` sur sa propre session, ou attend un verrou tenu par un autre thread du groupe | **Haute** | `Remove` compare son `std::thread::id` et ne s'attend pas lui-même quand l'appel vient du réacteur ; contrat écrit dans `docs/reference/threads-rtp.md` ; à vérifier sur chaque callback appelé par le réacteur — listeners RTCP, `onRTPTimeout`, `onApplicationTick` |
 | R4 | `OnPeriodic` appelé plus souvent qu'aujourd'hui déclenche une retransmission parasite | Basse | vérifié : chaque travail garde son horloge (§2). À re-vérifier à chaque ajout de travail périodique |
 | R5 | Le groupe par défaut réunit des sessions sans rapport | Basse | il reste en mode tiré, donc aucun travail long n'y tourne |
 | R6 | Un `POLLERR` ne fait plus taire la session mais la retire du groupe | Basse | changement de comportement **voulu** ; à tracer explicitement |
-| R7 | Régression de gigue invisible en test, visible en appel | Moyenne | recette live obligatoire aux lots 2 et 4b ; séance de mesure BWE |
-| R8 | Le contrôle de débit dérive alors qu'on n'a pas touché à l'émission | Moyenne | l'émission est hors chantier (§4.4), mais la RÉCEPTION du RTCP change de thread : faire une séance de mesure BWE au lot 2 ET au lot 4b, pas seulement à la fin |
+| R7 | Régression de gigue invisible en test, visible en appel | Moyenne | recette live obligatoire aux lots 2, 3 et 4a ; séance de mesure BWE |
+| R8 | Le contrôle de débit dérive alors qu'on n'a pas touché à l'émission | Moyenne | l'émission est hors chantier (§4.4), mais la RÉCEPTION du RTCP change de thread : séance de mesure BWE jouée au lot 2. R8 n'est plus une condition de clôture (arbitrage du 2026-09-02, §7 lot 2) |
 
 ### Décisions prises
 
+- **Arrêt du chantier au lot 4a** (2026-09-06) : la livraison reste tirée,
+  `GetPacket()` est conservé, les threads consommateurs restent (§4.2).
 - **Découpage des groupes** : deux réacteurs par jambe, {audio, texte} et
-  {vidéo MAIN, SLIDES} (§3.6).
+  {vidéo MAIN, SLIDES} (§3.6). Confirmé le 2026-09-06 en mode tiré, contre
+  l'option d'un groupe unique par jambe : celle-ci économise un thread par
+  jambe et rend l'audio sensible à l'attente de 200 ms du verrou `streamUse`.
 - **Lisseurs d'émission** : hors chantier, on ne touche pas au pacer du
   contrôle de débit (§4.4).
+- **R8** : recetté, puis sorti du chantier le 2026-09-02 (§7, lot 2).
 - **Emplacement** : `docs/conception/RTP-REACTOR/`, clé `RTP-REACTOR`.
 
 ### Reste à trancher
 
-Rien. Le chantier peut démarrer au lot 0.
+Rien. Le chantier est clos : le code, les recettes et la documentation.
