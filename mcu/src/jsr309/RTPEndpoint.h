@@ -21,7 +21,11 @@ class RTPEndpoint :
 	public RTPSession::Listener
 {
 public:
-	RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	//`proto` dit ce que la jambe TRANSPORTE, pas ce qu'elle est : ICE, DTLS,
+	//socket et boucle poll sont les mêmes pour un data channel (MediaFrame::SCTP),
+	//qui en dérive. Défaut RTP, le seul cas jusqu'ici.
+	RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN,
+		    MediaFrame::MediaProtocol proto = MediaFrame::RTP);
 	virtual ~RTPEndpoint();
 
 	virtual int Init();
@@ -41,6 +45,8 @@ public:
 	//Joinable interface
 	virtual void Update();
 	virtual void SetREMB(DWORD estimation);
+	//Relais de l'acquittement RPSI d'un consommateur aval vers notre pair
+	virtual void AcknowledgeReferencePicture(WORD pictureId);
 
 	//Joinable::Listener
 	virtual void onRTPPacket(RTPPacket &packet);
@@ -65,12 +71,6 @@ public:
 	
 private:
 	//Corps du thread de démultiplexage (pthread créé par StartReceiving).
-	//
-	//NE PAS le renommer `Run()` : `RTPSession` dérive de `Worker`, dont `Run()`
-	//est virtuel pur et porte la boucle poll des sockets RTP/RTCP. Un `Run()` ici
-	//OVERRIDE celui de `RTPSession` — le thread du Worker exécutait alors cette
-	//boucle-ci, et la boucle poll ne tournait JAMAIS pour un endpoint JSR-309
-	//(aucun paquet RTP lu). C'était le cas jusqu'au 2026-08-12.
 	int MultiplexLoop();
 
 	//Bascule le PT d'émission sur `wanted`, ou rend false si la rtpMap de sortie

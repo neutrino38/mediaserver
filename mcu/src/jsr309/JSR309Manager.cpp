@@ -250,6 +250,17 @@ int JSR309Manager::GetMediaSessionRef(int id,std::shared_ptr<MediaSession> &sess
 }
 
 /**************************************
+* GetMediaSessionCount
+*	Nombre de sessions vivantes
+**************************************/
+int JSR309Manager::GetMediaSessionCount()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+
+	return sessions.size();
+}
+
+/**************************************
 * DeleteMediaSession
 *	Inicializa la JSR309Manager
 **************************************/

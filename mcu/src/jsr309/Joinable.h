@@ -52,6 +52,12 @@ public:
 	//relais, la propagation amont est l'affaire du lot 5, pas de ce canal.
 	virtual void SetSenderEstimate(DWORD estimation) {}
 
+	//Acquittement d'une trame de référence que le consommateur aval vient de
+	//décoder (RPSI, RFC 4585 §6.3.3) — le symétrique positif d'Update(), et
+	//le même chemin de retour vers la source. No-op par défaut : seule une
+	//jambe RTP a un pair à qui l'adresser (mixers, players : rien à faire).
+	virtual void AcknowledgeReferencePicture(WORD pictureId) {}
+
 	//Média effectivement négocié côté source (StartReceiving reçu) — override
 	//dans Endpoint::Port. Les sources toujours actives (mixers, transcoders,
 	//players) gardent le défaut.

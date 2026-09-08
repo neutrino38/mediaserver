@@ -86,8 +86,6 @@ void MP4Player::onTextFrame(TextFrame &text)
 
 void MP4Player::onRTPPacket(RTPPacket &packet)
 {
-	SWORD buffer[1024];
-	DWORD bufferSize = 1024;
 	//Get data
 	BYTE *data = packet.GetMediaData();
 	//Get leght
@@ -105,10 +103,13 @@ void MP4Player::onRTPPacket(RTPPacket &packet)
 				return;
 
 			//Decode it
-			len = audioDecoder->Decode(data,len,buffer,bufferSize);
+			audioDecoder->Decode(data,len);
 
-			//Play it
-			audioOutput->PlayBuffer(buffer,len,0);
+			//Play it. Un paquet peut donner plusieurs trames : les jouer
+			//toutes, entières — l'ancien tampon de 1024 tronquait au-delà.
+			for (SamplesPtr samples = audioDecoder->GetFrame(); samples;
+			     samples = audioDecoder->GetFrame())
+				audioOutput->PlayFrame(samples);
 
 			break;
 		case MediaFrame::Video:

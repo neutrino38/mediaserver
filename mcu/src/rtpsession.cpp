@@ -22,6 +22,7 @@
 #include "medkit/codecs.h"
 #include "rtp.h"
 #include "rtpsession.h"
+#include "rtpsessionset.h"
 #include "ipaddress.h"
 #include "medkit/stunmessage.h"
 extern "C" {
@@ -242,6 +243,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	this->listener = listener;
 	//And media
 	this->media = media;
+	//Bornes de l'estimateur d'émission vidéo : cf. rtpsession.h.
+	if (media == MediaFrame::Video)
+		senderBWE.SetMinMaxBitrate(VideoSenderEstimateMinBps, VideoSenderEstimateMaxBps);
 	this->role	= role;
 	//Init values
 	sendType = -1;
@@ -305,6 +309,10 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	dtlsClientStarted = false;
 	dtlsClientFailed  = false;
 	setZeroTime(&dtlsClientStart);
+	//Aucun consommateur de données applicatives DTLS : le DTLS ne sert alors qu'à
+	//dériver les clés SRTP, comme avant.
+	appListener = NULL;
+	setZeroTime(&lastAppTick);
 	sendSRTPSession = NULL;
 	recvSRTPSession = NULL;
 	recvSRTPSession_secondary = NULL;
@@ -327,6 +335,7 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	memset(iceCheckTransId,0,sizeof(iceCheckTransId));
 	//La cible d'envoi n'a encore été posée par personne
 	iceOwnsSendAddr = false;
+	iceMissingLocalPwdReported = false;
 	//P5 : événement « média établi » pas encore émis
 	rtpReceivedNotified = false;
 	//P6 : aucune rafale d'amorçage NAT en cours
@@ -347,8 +356,9 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	//Preparamos las direcciones de envio
 	sendAddr     = IPEndpoint();
 	sendRtcpAddr = IPEndpoint();
-	//No thread
+	//Pas encore inscrite dans un reacteur
 	running = false;
+	pollGroup = NULL;
 	//No stimator
 	remoteRateEstimator = NULL;
 	//Aucun feedback tant que la négociation n'en a pas demandé (arbitrage A2 du
@@ -450,7 +460,7 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 	srtp_err_status_t err;
 	srtp_policy_t policy;
 
-	Log("-Set local RTP SDES [key:%s,suite:%s]\n",key,suite);
+	Log("-Set local RTP SDES [suite:%s,keyLen:%u]\n",suite,len);
 
 	//empty policy
 	memset(&policy, 0, sizeof(srtp_policy_t));
@@ -644,14 +654,11 @@ int RTPSession::SetProperties(const Properties& properties)
 	bitrateFeedbackMode = askedTMMBR ? BitrateFeedbackTMMBR
 			    : askedREMB  ? BitrateFeedbackREMB
 					 : BitrateFeedbackNone;
-	//La cadence de hausse suit le dialecte : un pair TMMBR (Linphone)
-	//reconfigure son encodeur à chaque annonce, on espace donc les hausses ;
-	//un pair REMB (navigateur) lisse lui-même, la période courte reste.
-	if (bitrateFeedbackMode == BitrateFeedbackTMMBR)
-		bitrateFeedbackThrottler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-							RembThrottler::TmmbrRaiseStepPercent);
-	else
-		bitrateFeedbackThrottler.SetRaisePolicy(RembThrottler::SendIntervalMs, 0);
+	//Ce qui mérite une annonce dépend du dialecte : un pair TMMBR (Linphone)
+	//reconfigure son encodeur à chaque valeur différente, un pair REMB
+	//(navigateur) attend une annonce périodique (cf. rembthrottler.h).
+	bitrateFeedbackThrottler.SetPolicy(bitrateFeedbackMode == BitrateFeedbackTMMBR
+					   ? RembThrottler::TmmbrPolicy : RembThrottler::RembPolicy);
 	if (bitrateFeedbackMode != BitrateFeedbackNone)
 		Log("Activated %s bitrate feedback on %s stream %p.\n",
 		    bitrateFeedbackMode == BitrateFeedbackTMMBR ? "TMMBR+REMB" : "REMB",
@@ -711,7 +718,7 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	}
 	//P3 : réveille le thread Run (eventfd du Wait, jamais perdu) pour (ré)évaluer
 	//l'émission de checks STUN sortants dès que la destination sera connue.
-	wait.Signal();
+	WakeUp();
 	//Ok
 	return 1;
 }
@@ -1284,7 +1291,7 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 
 		//Si le thread dort dans poll(-1) (watchdog jusqu'ici désarmé), on le réveille
 		//via l'eventfd pour qu'il reprenne l'attente bornée sans attendre un paquet.
-		wait.Signal();
+		WakeUp();
 	}
 	else
 	{
@@ -1300,6 +1307,39 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 //sur le chemin d'erreur transport (onRTPTimeout -> EndpointDisconnectedEvent).
 //OpenSSL abandonne en général avant (HandleTimeout renvoie -1), c'est un filet.
 #define DTLS_CLIENT_HANDSHAKE_TIMEOUT 30000
+
+/************************
+* SetDTLSApplicationListener / SendDTLSApplicationData
+*	Greffe d'un consommateur de données applicatives DTLS — un data channel
+*	WebRTC. La session reste le porteur (ICE, DTLS, socket, latch, thread) et
+*	ne connaît ni SCTP ni T.140.
+*************************/
+void RTPSession::SetDTLSApplicationListener(ApplicationListener* listener)
+{
+	appListener = listener;
+	//Le DTLS livre directement au consommateur : la session ne recopie rien.
+	dtls.SetApplicationListener(listener);
+	//La cadence du consommateur borne l'attente du poll : réveiller la boucle
+	//pour qu'elle la relise sans attendre un paquet entrant.
+	setZeroTime(&lastAppTick);
+	WakeUp();
+}
+
+int RTPSession::SendDTLSApplicationData(const BYTE* data,DWORD size)
+{
+	//Le chiffrement pousse dans write_bio ; c'est FlushDTLS qui met sur le fil,
+	//vers la destination latchée. Sans destination connue, rien ne part — et le
+	//consommateur n'a rien à faire de cette information : le handshake n'est pas
+	//terminé non plus, donc WriteApplicationData refuse déjà.
+	int len = dtls.WriteApplicationData(data,size);
+
+	if (len <= 0)
+		return 0;
+
+	FlushDTLS();
+
+	return len;
+}
 
 void RTPSession::FlushDTLS()
 {
@@ -1325,7 +1365,7 @@ void RTPSession::RequestDTLSClientHandshake()
 
 	//Réveille le thread Run (eventfd) pour qu'il pilote le handshake sans attendre
 	//un paquet entrant (le pair ICE-lite/passive n'en enverra pas).
-	wait.Signal();
+	WakeUp();
 }
 
 void RTPSession::DriveDTLSClientHandshake()
@@ -1599,7 +1639,7 @@ void RTPSession::ArmNATPriming()
 	gettimeofday(&natPrimingLast,NULL);
 
 	//Réveille le thread Run (s'il tourne) pour qu'il cadence la suite de la rafale
-	wait.Signal();
+	WakeUp();
 }
 
 void RTPSession::SetRemoteRateEstimator(RemoteRateEstimator* estimator)
@@ -1883,10 +1923,18 @@ int RTPSession::Init()
 			setsockopt(simSocket,     IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
 			setsockopt(simRtcpSocket, IPPROTO_IP, IP_TOS, &tos, sizeof(tos));
 		}
+		//Sockets non bloquantes : le reacteur draine sans jamais s'endormir dans un
+		//recvfrom, et une fermeture par End() rend une erreur au lieu de bloquer.
+		fcntl(simSocket,    F_SETFL,fcntl(simSocket,    F_GETFL,0) | O_NONBLOCK);
+		fcntl(simRtcpSocket,F_SETFL,fcntl(simRtcpSocket,F_GETFL,0) | O_NONBLOCK);
+
 		//Everything ok
 		Log("-Got ports [%d,%d]\n",simPort,simRtcpPort);
-		//Start receiving
-		Start();
+
+		//Le reacteur bat cette session a partir d'ici : c'est ce qui amorce ICE et
+		//DTLS sans attendre qu'un consommateur reclame un paquet.
+		running = true;
+		Group()->Add(this);
 		//Done
 		Log("<Init RTPSession\n");
 		//Opened
@@ -2249,6 +2297,15 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			std::lock_guard<std::mutex> guard(senderBweMutex);
 			sentHistory.OnPacketSent((WORD)transportSeqNum, getTime(), len);
 		}
+		else
+		{
+			//Sans transport-cc, ProcessFeedback ne tourne jamais : c'est ici
+			//que l'estimateur apprend ce que nous emettons, sinon l'etage de
+			//perte des RR n'a rien a amorcer et la cible reste a 0. Avec
+			//transport-cc, ProcessFeedback le nourrit deja : ne pas compter deux fois.
+			std::lock_guard<std::mutex> guard(senderBweMutex);
+			senderBWE.UpdateSentBitrate(getTime(), len);
+		}
 	}
 
 	//Exit
@@ -2380,6 +2437,217 @@ int RTPSession::ReadRTCP()
 }
 
 /*********************************
+* ProcessSTUN
+*	Les checks de connectivité ICE, dans les deux sens. `stun` reste la
+*	propriété de ReadRTP, qui l'alloue et le détruit.
+*********************************/
+void RTPSession::ProcessSTUN(STUNMessage* stun,const IPEndpoint& from_addr)
+{
+	STUNMessage::Type type = stun->GetType();
+	STUNMessage::Method method = stun->GetMethod();
+	
+	//If it is a request
+	if (type==STUNMessage::Request && method==STUNMessage::Binding)
+	{
+		DWORD len = 0;
+		//Create response
+		STUNMessage* resp = stun->CreateResponse();
+		//Add received xor mapped addres
+		resp->AddXorAddressAttribute(from_addr.Sockaddr());
+		//TODO: Check incoming request username attribute value starts with iceLocalUsername+":"
+		//Create  response
+		DWORD size = resp->GetSize();
+		BYTE *aux = (BYTE*)malloc(size);
+
+		//Check if we have local passworkd
+		Debug("ICE: receiving Binding Request from %s localPwd=%s\n", from_addr.Address().ToString().c_str(),
+		    (iceLocalPwd != NULL) ? iceLocalPwd : "no password");
+
+		// Le distant utilise ICE et nous a fourni son mot de passe.
+		// Si nous ne disposons pas (encore) du nôtre, la réponse part sans
+		// MESSAGE-INTEGRITY, et sera IGNOREE (RFC 5389 §10.1.2). 
+
+		// Le contrôleur n'a pas appelé SetLocalSTUNCredentials()
+		// Rapporter cela comme une erreur.
+		if (iceRemotePwd && !iceLocalPwd && !iceMissingLocalPwdReported)
+		{
+			iceMissingLocalPwdReported = true;
+			Error("-RTPSession ICE: incoming STUN request from [%s:%d] but missing our local password"
+			      " on [%s,role:%d,port:%d]. Response without MESSAGE-INTEGRITY will be sent and"
+			      " probably ignored by the remote party. The controller need to call SetLocalSTUNCredentials().\n",
+			      from_addr.Address().ToString().c_str(),from_addr.Port(),
+			      MediaFrame::TypeToString(media),role,simPort);
+		}
+
+		if (iceRemotePwd)
+		{
+			if (iceLocalPwd)
+				//Serialize and autenticate
+				len = resp->AuthenticatedFingerPrint(aux,size,iceLocalPwd);
+			else
+				//Do nto authenticate
+				len = resp->NonAuthenticatedFingerPrint(aux,size);
+
+			//Branche vide et non retour anticipé : le `return 0` d'avant fuyait
+			//`aux`, `resp` et `stun`, et jetait un check par ailleurs valide.
+			if (len)
+				sendto(simSocket,aux,len,0,from_addr,from_addr.Len());
+			else
+				Debug("ICE: packet empty no need to send it\n");
+		}
+		else
+		{
+			Debug("ICE: No iceRemotePwd defined yet. Dropping request...\n");
+		}
+
+		//Clean memory
+		free(aux);
+		//Clean response
+		delete(resp);
+
+		if ( !HasIceRemote() )
+		{
+			iceRemoteIP = from_addr.Address();
+		}
+
+		//P3 : un check entrant valide prouve la connectivité (rôle serveur /
+		//navigateur) -> on cesse nos éventuels checks sortants (pas de régression).
+		if (!iceConnected && iceRemotePwd)
+		{
+			Log("-RTPSession ICE: connectivité confirmée (check entrant) [%p]\n",this);
+			iceConnected = true;
+		}
+
+		//If set
+		if (stun->HasAttribute(STUNMessage::Attribute::IceControlled)
+			|| stun->HasAttribute(STUNMessage::Attribute::UseCandidate)
+			|| SameAddr(iceRemoteIP,from_addr.Address()))
+		{
+			// We should check that username matches
+			if (iceRemoteUsername)
+			{
+				// ICE is enabled
+				if ( !HasRecIP() )
+				{
+					// set recIP if not set
+					recIP = from_addr.Address();
+					recPort = from_addr.Port();
+				}
+				
+				
+				if ( !SameAddr(sendAddr.Address(),recIP) 
+				     || 
+				     sendAddr.Port() != recPort )
+				{
+					// Do symetric RTP
+					sendAddr = Dest(recIP,recPort);
+					//Paire validée par un check entrant : c'est ICE qui tient
+					//désormais la cible, pas le `c=` du SDP
+					iceOwnsSendAddr = true;
+				}
+			}
+
+			DWORD len = 0;
+			//Create trans id
+			BYTE transId[12];
+			//Set first to 0
+			set4(transId,0,0);
+			//Set timestamp as trans id
+			set8(transId,4,getTime());
+			//Create binding request to send back
+			STUNMessage *request = new STUNMessage(STUNMessage::Request,STUNMessage::Binding,transId);
+			//Check usernames
+			if (iceLocalUsername && iceRemoteUsername)
+				//Add username
+				request->AddUsernameAttribute(iceLocalUsername,iceRemoteUsername);
+				//Add other attributes
+			if ( stun->HasAttribute(STUNMessage::Attribute::IceControlled ) )
+			{
+				request->AddAttribute(STUNMessage::Attribute::IceControlling,(QWORD)-1);
+				request->AddAttribute(STUNMessage::Attribute::UseCandidate);
+			}
+			else
+				request->AddAttribute(STUNMessage::Attribute::IceControlled,(QWORD)-1);
+
+			request->AddAttribute(STUNMessage::Attribute::Priority,(DWORD)33554431);
+			//Create  request
+			DWORD size = request->GetSize();
+			BYTE* aux = (BYTE*)malloc(size);
+
+			//Check remote pwd
+			if (iceRemotePwd)
+			{
+				Debug("ICE: sending bind request with remote user=[%s], remote password=[%s] to %s:%d.\n",
+			      (iceRemoteUsername != NULL) ? iceRemoteUsername : "no user",
+			      (iceRemotePwd != NULL ) ? iceRemotePwd : "no pwd",
+				 from_addr.Address().ToString().c_str(), from_addr.Port());
+				if (iceRemotePwd)
+				//Serialize and autenticate
+					len = request->AuthenticatedFingerPrint(aux,size,iceRemotePwd);
+				else
+				//Do nto authenticate
+					len = request->NonAuthenticatedFingerPrint(aux,size);
+
+				//Send it — ou pas, si la sérialisation n'a rien produit. Ce cas
+				//sortait de la fonction par un `return 0` qui sautait les trois
+				//libérations ci-dessous : le tampon `aux`, la requête `request` et
+				//le message `stun` fuyaient à chaque binding request qu'on n'arrivait
+				//pas à signer. Rien à émettre n'est pas une raison de ne pas ranger.
+				if (len)
+					sendto(simSocket,aux,len,0,from_addr,from_addr.Len());
+				else
+					Debug("ICE: packet empty no need to send it\n");
+			}
+
+			//Clean memory
+			free(aux);
+			//Clean response
+			delete(request);
+
+			// Needed for DTLS in client mode (otherwise the DTLS "Client Hello" is not sent over the wire)
+			//
+			//…mais seulement s'il Y A un DTLS. Le demander sur une session qui n'en
+			//a pas coûtait une ERR par binding request reçu, et un pair qui fait de
+			//l'ICE en émet plusieurs par flux même quand nous n'avons annoncé ni ICE
+			//ni DTLS : une paire d'appels Linphone en RTP clair produisait ainsi une
+			//quarantaine de « DTLSConnection::Read() | SSL not yet ready » sur son
+			//chemin nominal (trafic du 2026-08-14).
+			//
+			//Structuré en `if` et non en retour anticipé : la sortie de ce bloc
+			//passe par le `delete(stun)` d'en dessous. Le `return 0` qui gardait le
+			//cas « rien à émettre » le sautait, et fuyait le message STUN à chaque
+			//fois — il devient la branche vide qu'il aurait toujours dû être.
+			if (dtls.IsInited())
+			{
+				//Local : ReadRTP le prêtait, et c'était sa seule dépendance ici.
+				BYTE buffer[MTU];
+				len = dtls.Read(buffer,MTU);
+				//Send back
+				if (len)
+					sendto(simSocket,buffer,len,0,from_addr,from_addr.Len());
+				else
+					Debug("DTLS: packet empty no need to send it\n");
+			}
+		}
+	}
+	//P3 : réponse à un binding request que NOUS avons émis (pair ICE-lite ou full).
+	//Le handler historique n'acceptait que les Request : les Response étaient
+	//ignorées, ce qui empêchait toute validation de connectivité côté offreur.
+	else if (type==STUNMessage::Response && method==STUNMessage::Binding)
+	{
+		Log("ICE: réception Binding Response de %s:%d [%p]\n",
+			from_addr.Address().ToString().c_str(), from_addr.Port(), this);
+		//Validation pragmatique (parité avec le niveau ICE existant : pas de
+		//vérif MESSAGE-INTEGRITY sur l'entrant) : une Binding Response provenant du
+		//pair attendu confirme la connectivité.
+		if (!HasIceRemote() || SameAddr(iceRemoteIP,from_addr.Address()))
+			OnICEConnectivityConfirmed(from_addr);
+		else
+			Debug("ICE: Binding Response d'une source inattendue, ignorée [%p]\n",this);
+	}
+}
+
+/*********************************
 * GetTextPacket
 *	Lee el siguiente paquete de video
 *********************************/
@@ -2406,6 +2674,9 @@ int RTPSession::ReadRTP()
 		{
 			Error("-fd is not valid. Stoppong RTP session %p.\n", this);
 			running = false;
+			//Appelé DEPUIS le réacteur : le retrait est immédiat, sans attente.
+			//Sans lui la session resterait inscrite avec un descripteur mort.
+			Group()->Remove(this);
 		}
 		return 0;
 	}
@@ -2416,191 +2687,7 @@ int RTPSession::ReadRTP()
 	//If it was
 	if (stun)
 	{
-		STUNMessage::Type type = stun->GetType();
-		STUNMessage::Method method = stun->GetMethod();
-		
-		//If it is a request
-		if (type==STUNMessage::Request && method==STUNMessage::Binding)
-		{
-			DWORD len = 0;
-			//Create response
-			STUNMessage* resp = stun->CreateResponse();
-			//Add received xor mapped addres
-			resp->AddXorAddressAttribute(from_addr.Sockaddr());
-			//TODO: Check incoming request username attribute value starts with iceLocalUsername+":"
-			//Create  response
-			DWORD size = resp->GetSize();
-			BYTE *aux = (BYTE*)malloc(size);
-
-			//Check if we have local passworkd
-			Debug("ICE: receiving Binding Request from %s localPwd=%s\n", from_addr.Address().ToString().c_str(), 
-			    (iceLocalPwd != NULL) ? iceLocalPwd : "no password");
-			if (iceRemotePwd)
-			{
-				if (iceLocalPwd)
-					//Serialize and autenticate
-					len = resp->AuthenticatedFingerPrint(aux,size,iceLocalPwd);
-				else
-					//Do nto authenticate
-					len = resp->NonAuthenticatedFingerPrint(aux,size);
-				if (!len)
-				{
-					Debug("ICE: packet empty no need to send it\n");
-					return 0;	
-				}
-						
-				//Send it
-				sendto(simSocket,aux,len,0,from_addr,from_addr.Len());
-			}
-			else
-			{
-				Debug("ICE: No iceRemotePwd defined yet. Dropping request...\n");
-			}
-
-			//Clean memory
-			free(aux);
-			//Clean response
-			delete(resp);
-
-			if ( !HasIceRemote() )
-			{
-				iceRemoteIP = from_addr.Address();
-			}
-
-			//P3 : un check entrant valide prouve la connectivité (rôle serveur /
-			//navigateur) -> on cesse nos éventuels checks sortants (pas de régression).
-			if (!iceConnected && iceRemotePwd)
-			{
-				Log("-RTPSession ICE: connectivité confirmée (check entrant) [%p]\n",this);
-				iceConnected = true;
-			}
-
-			//If set
-			if (stun->HasAttribute(STUNMessage::Attribute::IceControlled)
-				|| stun->HasAttribute(STUNMessage::Attribute::UseCandidate)
-				|| SameAddr(iceRemoteIP,from_addr.Address()))
-			{
-				// We should check that username matches
-				if (iceRemoteUsername)
-				{
-					// ICE is enabled
-					if ( !HasRecIP() )
-					{
-						// set recIP if not set
-						recIP = from_addr.Address();
-						recPort = from_addr.Port();
-					}
-					
-					
-					if ( !SameAddr(sendAddr.Address(),recIP) 
-					     || 
-					     sendAddr.Port() != recPort )
-					{
-						// Do symetric RTP
-						sendAddr = Dest(recIP,recPort);
-						//Paire validée par un check entrant : c'est ICE qui tient
-						//désormais la cible, pas le `c=` du SDP
-						iceOwnsSendAddr = true;
-					}
-				}
-
-				DWORD len = 0;
-				//Create trans id
-				BYTE transId[12];
-				//Set first to 0
-				set4(transId,0,0);
-				//Set timestamp as trans id
-				set8(transId,4,getTime());
-				//Create binding request to send back
-				STUNMessage *request = new STUNMessage(STUNMessage::Request,STUNMessage::Binding,transId);
-				//Check usernames
-				if (iceLocalUsername && iceRemoteUsername)
-					//Add username
-					request->AddUsernameAttribute(iceLocalUsername,iceRemoteUsername);
-					//Add other attributes
-				if ( stun->HasAttribute(STUNMessage::Attribute::IceControlled ) )
-				{
-					request->AddAttribute(STUNMessage::Attribute::IceControlling,(QWORD)-1);
-					request->AddAttribute(STUNMessage::Attribute::UseCandidate);
-				}
-				else
-					request->AddAttribute(STUNMessage::Attribute::IceControlled,(QWORD)-1);
-
-				request->AddAttribute(STUNMessage::Attribute::Priority,(DWORD)33554431);
-				//Create  request
-				DWORD size = request->GetSize();
-				BYTE* aux = (BYTE*)malloc(size);
-
-				//Check remote pwd
-				if (iceRemotePwd)
-				{
-					Debug("ICE: sending bind request with remote user=[%s], remote password=[%s] to %s:%d.\n",
-				      (iceRemoteUsername != NULL) ? iceRemoteUsername : "no user",
-				      (iceRemotePwd != NULL ) ? iceRemotePwd : "no pwd",
-					 from_addr.Address().ToString().c_str(), from_addr.Port());
-					if (iceRemotePwd)
-					//Serialize and autenticate
-						len = request->AuthenticatedFingerPrint(aux,size,iceRemotePwd);
-					else
-					//Do nto authenticate
-						len = request->NonAuthenticatedFingerPrint(aux,size);
-
-					//Send it — ou pas, si la sérialisation n'a rien produit. Ce cas
-					//sortait de la fonction par un `return 0` qui sautait les trois
-					//libérations ci-dessous : le tampon `aux`, la requête `request` et
-					//le message `stun` fuyaient à chaque binding request qu'on n'arrivait
-					//pas à signer. Rien à émettre n'est pas une raison de ne pas ranger.
-					if (len)
-						sendto(simSocket,aux,len,0,from_addr,from_addr.Len());
-					else
-						Debug("ICE: packet empty no need to send it\n");
-				}
-
-				//Clean memory
-				free(aux);
-				//Clean response
-				delete(request);
-
-				// Needed for DTLS in client mode (otherwise the DTLS "Client Hello" is not sent over the wire)
-				//
-				//…mais seulement s'il Y A un DTLS. Le demander sur une session qui n'en
-				//a pas coûtait une ERR par binding request reçu, et un pair qui fait de
-				//l'ICE en émet plusieurs par flux même quand nous n'avons annoncé ni ICE
-				//ni DTLS : une paire d'appels Linphone en RTP clair produisait ainsi une
-				//quarantaine de « DTLSConnection::Read() | SSL not yet ready » sur son
-				//chemin nominal (trafic du 2026-08-14).
-				//
-				//Structuré en `if` et non en retour anticipé : la sortie de ce bloc
-				//passe par le `delete(stun)` d'en dessous. Le `return 0` qui gardait le
-				//cas « rien à émettre » le sautait, et fuyait le message STUN à chaque
-				//fois — il devient la branche vide qu'il aurait toujours dû être.
-				if (dtls.IsInited())
-				{
-					len = dtls.Read(buffer,MTU);
-					//Send back
-					if (len)
-						sendto(simSocket,buffer,len,0,from_addr,from_addr.Len());
-					else
-						Debug("DTLS: packet empty no need to send it\n");
-				}
-			}
-		}
-		//P3 : réponse à un binding request que NOUS avons émis (pair ICE-lite ou full).
-		//Le handler historique n'acceptait que les Request : les Response étaient
-		//ignorées, ce qui empêchait toute validation de connectivité côté offreur.
-		else if (type==STUNMessage::Response && method==STUNMessage::Binding)
-		{
-			Log("ICE: réception Binding Response de %s:%d [%p]\n",
-				from_addr.Address().ToString().c_str(), from_addr.Port(), this);
-			//Validation pragmatique (parité avec le niveau ICE existant : pas de
-			//vérif MESSAGE-INTEGRITY sur l'entrant) : une Binding Response provenant du
-			//pair attendu confirme la connectivité.
-			if (!HasIceRemote() || SameAddr(iceRemoteIP,from_addr.Address()))
-				OnICEConnectivityConfirmed(from_addr);
-			else
-				Debug("ICE: Binding Response d'une source inattendue, ignorée [%p]\n",this);
-		}
-
+		ProcessSTUN(stun,from_addr);
 		//Delete message
 		delete(stun);
 		//Exit
@@ -2927,13 +3014,25 @@ int RTPSession::ReadRTP()
 	return 1;
 }
 
-void RTPSession::Start()
+RtpSessionSet* RTPSession::Group()
 {
-	//We are running
-	running = true;
+	return pollGroup ? pollGroup : &RtpSessionSet::Default();
+}
 
-	//Create thread
-	StartThread();
+bool RTPSession::SetPollGroup(RtpSessionSet* group)
+{
+	//Apres Init, la session est deja inscrite : changer de groupe ici ferait
+	//retirer End() d'un groupe ou personne ne l'a jamais mise.
+	if (running)
+		return Error("-RTPSession: groupe de poll pose apres Init, refuse [%p]\n",this);
+
+	pollGroup = group;
+	return true;
+}
+
+void RTPSession::WakeUp()
+{
+	Group()->Wake();
 }
 
 void RTPSession::Stop()
@@ -2944,8 +3043,11 @@ void RTPSession::Stop()
 		//Not running
 		running = false;
 
-		//Réveille le poll (eventfd du Wait hérité) et joint le thread
-		StopThread();
+		//Retrait SYNCHRONE : au retour, le reacteur ne poll plus nos sockets et
+		//n'appellera plus aucun de nos callbacks. C'est ce qui rend sur le close()
+		//que End() fait juste apres — sinon le descripteur pourrait etre reattribue
+		//sous les pieds du poll d'un autre thread.
+		Group()->Remove(this);
                 DeleteStreams();
 	}
 
@@ -2960,204 +3062,209 @@ void RTPSession::Stop()
         rtxUse.Unlock();
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-/***************************
- * Run
- * 	Server running thread
- ***************************/
-int RTPSession::Run()
+int RTPSession::Sooner(int waitMs,int candidateMs)
 {
-	Log(">Run RTPSession [%p]\n",this);
+	if (candidateMs < 0)
+		return waitMs;
+	if (waitMs < 0)
+		return candidateMs;
+	return waitMs < candidateMs ? waitMs : candidateMs;
+}
 
-	//Set values for polling
-	ufds[0].fd = simSocket;
-	ufds[0].events = POLLIN | POLLERR | POLLHUP;
-	ufds[1].fd = simRtcpSocket;
-	ufds[1].events = POLLIN | POLLERR | POLLHUP;
+//P2 : rôle client, DTLS prêt, handshake non terminé, destination connue. Le cas
+//serveur/passive reste inchangé.
+bool RTPSession::IsDrivingDTLSClient() const
+{
+	return dtls.IsInited() && dtls.IsClientRole()
+		&& !dtls.IsHandshakeCompleted()
+		&& HasRemote();
+}
 
-	//Set non blocking so we can get an error when we are closed by end
-	int fsflags = fcntl(simSocket,F_GETFL,0);
-	fsflags |= O_NONBLOCK;
-	fcntl(simSocket,F_SETFL,fsflags);
+//P3 : creds locales+distantes connues, destination connue, connectivité pas
+//encore confirmée. Face à un pair ICE-lite qui n'initie jamais ; s'arrête dès la
+//1re réponse ou le 1er check entrant.
+bool RTPSession::IsDrivingICEChecks() const
+{
+	return !iceConnected && iceLocalUsername && iceRemoteUsername
+		&& iceRemotePwd && HasRemote();
+}
 
-	fsflags = fcntl(simRtcpSocket,F_GETFL,0);
-	fsflags |= O_NONBLOCK;
-	fcntl(simRtcpSocket,F_SETFL,fsflags);
+//P6 : rafale d'amorçage NAT armée, en clair, destination connue.
+bool RTPSession::IsNATPriming() const
+{
+	return natPrimingLeft > 0 && !encript
+		&& HasRemote();
+}
 
-	//Réveil inter-thread : eventfd du Wait hérité (remplace le SIGIO historique)
-	ufds[2].fd = wait.GetPollFd();
-	ufds[2].events = POLLIN;
+int RTPSession::GetPollFds(pollfd* fds,int max)
+{
+	if (max < 2 || simSocket==FD_INVALID || simRtcpSocket==FD_INVALID)
+		return 0;
 
-	//Le chrono d'inactivité ne court que lorsqu'il est armé (ArmRTPTimeout, au SDP
-	//answer) : rien à amorcer ici.
+	fds[0].fd	= simSocket;
+	fds[0].events	= POLLIN | POLLERR | POLLHUP;
+	fds[1].fd	= simRtcpSocket;
+	fds[1].events	= POLLIN | POLLERR | POLLHUP;
 
-	//Attente bornée seulement lorsque le watchdog est armé, pour vérifier
-	//périodiquement l'inactivité ; sinon on conserve l'attente infinie d'origine
-	//(aucun réveil superflu pour les sessions n'utilisant pas le watchdog).
-	const int pollTimeout = 1000; //ms
-	//P2 : lorsqu'on pilote un handshake DTLS client, on borne l'attente plus court
-	//pour cadencer les retransmissions (le backoff réel est décidé par OpenSSL).
-	const int dtlsPollTimeout = 250; //ms
-	//Lot 4 : borne d'attente quand un rapport transport-cc est en attente. Plus
-	//court que MinIntervalUs pour que la cadence du generateur reste la sienne.
-	const int TRANSPORT_FEEDBACK_POLL_MS = 25;
+	return 2;
+}
 
-	//Run until ended
-	while(running)
+int RTPSession::GetNextTimeoutMs(QWORD nowUs)
+{
+	//Attente infinie par défaut : une session qui n'a rien à faire ne fait pas
+	//tourner le thread de son groupe. Watchdog, retransmissions du handshake
+	//DTLS client, checks ICE, amorçage NAT, rapports transport-cc en attente et
+	//cadence applicative sont les seules raisons de borner — la plus proche gagne.
+	int waitMs = rtpTimeoutArmed ? PollTimeoutMs : -1;
+
+	if (IsDrivingDTLSClient() || IsDrivingICEChecks())
+		waitMs = Sooner(waitMs,DtlsPollTimeoutMs);
+
+	if (IsNATPriming())
+		waitMs = Sooner(waitMs,NAT_PRIMING_INTERVAL_MS);
+
+	//Sans cette borne, le dernier rapport d'une rafale attendrait le paquet
+	//entrant suivant — et il n'y en a pas toujours un (fin de parole, freeze).
+	if (useTransportCC && transportFeedback.HasPending())
+		waitMs = Sooner(waitMs,TransportFeedbackPollMs);
+
+	if (ApplicationListener* app = appListener.load())
 	{
-		//P2 : pilotons-nous un handshake DTLS en rôle client ? (client, DTLS prêt,
-		//non terminé, destination connue). Le cas serveur/passive reste inchangé.
-		bool dtlsDriving = dtls.IsInited() && dtls.IsClientRole()
-				&& !dtls.IsHandshakeCompleted()
-				&& HasRemote();
+		DWORD tick = app->GetApplicationTickMs();
+		//0 = pas de cadence. Le passer à Sooner demanderait une attente NULLE.
+		if (tick)
+			waitMs = Sooner(waitMs,(int) tick);
+	}
 
-		//P3 : émettons-nous des checks STUN sortants ? (creds connues, destination
-		//connue, connectivité pas encore confirmée). Face à un pair ICE-lite qui
-		//n'initie jamais ; s'arrête dès la 1re réponse/check entrant.
-		bool iceDriving = !iceConnected && iceLocalUsername && iceRemoteUsername
-				&& iceRemotePwd && HasRemote();
+	return waitMs;
+}
 
-		//P6 : reste-t-il des paquets d'amorçage NAT à émettre ? (rafale armée, clair,
-		//destination connue). Cadencés ~20 ms par le poll borné ci-dessous.
-		bool natPriming = natPrimingLeft > 0 && !encript
-				&& HasRemote();
+void RTPSession::OnPollEvents(const pollfd* fds,int count,QWORD nowUs)
+{
+	if (count < 2)
+		return;
 
-		//Attente : infinie par défaut, bornée si watchdog armé et/ou handshake DTLS
-		//client / checks ICE en cours (on prend le plus court des seuils).
-		int waitMs = rtpTimeoutArmed ? pollTimeout : -1;
-		if (dtlsDriving || iceDriving)
-			waitMs = (waitMs < 0) ? dtlsPollTimeout
-					      : (waitMs < dtlsPollTimeout ? waitMs : dtlsPollTimeout);
-		if (natPriming)
-			waitMs = (waitMs < 0) ? NAT_PRIMING_INTERVAL_MS
-					      : (waitMs < NAT_PRIMING_INTERVAL_MS ? waitMs : NAT_PRIMING_INTERVAL_MS);
+	if (fds[0].revents & POLLIN)
+	{
+		//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
+		//on mémorise l'instant et on réarme l'anti-rebond.
+		gettimeofday(&lastRecv,NULL);
+		rtpTimedOut = false;
+		//Read rtp data
+		ReadRTP();
+	}
 
-		//Lot 4 : des arrivees restent a rapporter au pair. Sans cette borne, le
-		//dernier rapport d'une rafale attendrait le paquet entrant suivant — et
-		//il n'y en a pas toujours un (fin de parole, freeze video).
-		if (useTransportCC && transportFeedback.HasPending())
-			waitMs = (waitMs < 0) ? TRANSPORT_FEEDBACK_POLL_MS
-					      : (waitMs < TRANSPORT_FEEDBACK_POLL_MS ? waitMs : TRANSPORT_FEEDBACK_POLL_MS);
+	if (fds[1].revents & POLLIN)
+		//Read rtcp data
+		ReadRTCP();
+}
 
-		//Wait for events
-		int nready = poll(ufds,3,waitMs);
-		if(nready<0)
+void RTPSession::OnPeriodic(QWORD nowUs)
+{
+	//Rapporter au pair ce qui nous est arrivé, à la cadence du générateur. APRÈS
+	//les lectures : le rapport porte alors les paquets de ce tour.
+	if (useTransportCC)
+		SendTransportWideFeedback(nowUs);
+
+	//Cadence la rafale d'amorçage NAT (~20 ms) tant qu'il en reste. APRÈS les
+	//lectures : si le pair a déjà latché et répondu, la rafale continue quand
+	//même jusqu'au bout — inoffensif, elle est courte et bornée.
+	if (IsNATPriming() && (getDifTime(&natPrimingLast)/1000) >= NAT_PRIMING_INTERVAL_MS)
+	{
+		SendNATPrimingPacket();
+		gettimeofday(&natPrimingLast,NULL);
+	}
+
+	//APRÈS les lectures : un check ou une réponse entrante a pu poser
+	//iceConnected et court-circuiter l'émission.
+	if (IsDrivingICEChecks())
+		DriveICEChecks();
+
+	//APRÈS les lectures aussi : les flights entrants (branche DTLS de ReadRTP)
+	//font d'abord progresser le handshake.
+	if (IsDrivingDTLSClient())
+		DriveDTLSClientHandshake();
+
+	//Le consommateur de données applicatives (data channel) peut avoir ses
+	//propres timers et pas de thread : c'est ce tour qui les bat. UNE seule
+	//lecture du pointeur : il peut être retiré entre deux, et lire « il y a une
+	//cadence » puis appeler NULL est un crash.
+	ApplicationListener* app = appListener.load();
+	DWORD appTickMs = app ? app->GetApplicationTickMs() : 0;
+
+	if (appTickMs)
+	{
+		//Écoulement RÉEL : le poll a pu rendre la main plus tôt (paquet entrant)
+		//ou plus tard (charge).
+		DWORD elapsed = isZeroTime(&lastAppTick) ? appTickMs
+					: (DWORD)(getDifTime(&lastAppTick)/1000);
+
+		if (elapsed >= appTickMs)
 		{
-			//EINTR/EAGAIN : interruption par signal, on retente sans rien signaler
-			if (errno==EINTR || errno==EAGAIN)
-				continue;
-			//Erreur dure (EBADF, EINVAL, ENOMEM...) : inutile de boucler à vide,
-			//on log et on sort proprement (msleep de garde anti busy-spin)
-			Error("-RTPSession poll error, arret de la boucle: errno=%d (%s) [%p]\n",
-					errno,strerror(errno),this);
-			msleep(10);
-			break;
-		}
-
-		//Réveil inter-thread : purger l'eventfd, SINON il reste lisible et chaque
-		//poll() suivant rend la main immédiatement — la boucle tourne alors à vide,
-		//à 100 % d'un cœur, jusqu'à la fin de l'appel. C'est le contrat de `Wait`
-		//(« le write reste lisible jusqu'au Drain() ») et il n'était honoré nulle
-		//part ici, alors que quatre chemins signalent cet eventfd :
-		//SetRemoteSTUNCredentials, ArmRTPTimeout, RequestDTLSClientHandshake et
-		//ArmNATPriming — ce dernier depuis SetRemotePort, donc à CHAQUE
-		//StartSending. Autrement dit : les quatre sessions RTP d'un appel B2BUA
-		//(deux pattes × audio/vidéo) partaient en rotation dès l'établissement.
-		if (ufds[2].revents & POLLIN)
-			wait.Drain();
-
-		if (ufds[0].revents & POLLIN)
-		{
-			//Any inbound traffic (RTP/STUN/DTLS) prouve que le pair est vivant :
-			//on mémorise l'instant et on réarme l'anti-rebond.
-			gettimeofday(&lastRecv,NULL);
-			rtpTimedOut = false;
-			//Read rtp data
-			ReadRTP();
-		}
-		if (ufds[1].revents & POLLIN)
-			//Read rtcp data
-			ReadRTCP();
-
-		//Lot 4 : rapporter au pair ce qui nous est arrive, a la cadence du
-		//generateur. Place APRES les lectures : le rapport porte alors les
-		//paquets de ce tour de boucle.
-		if (useTransportCC)
-			SendTransportWideFeedback(getTime());
-
-		//P6 : cadence la rafale d'amorçage NAT (~20 ms entre paquets) tant qu'il en
-		//reste. Placé APRÈS ReadRTP : si le pair a déjà latché et répondu, la rafale
-		//continue quand même jusqu'au bout (inoffensif) — elle est courte et bornée.
-		if (natPriming && (getDifTime(&natPrimingLast)/1000) >= NAT_PRIMING_INTERVAL_MS)
-		{
-			SendNATPrimingPacket();
-			gettimeofday(&natPrimingLast,NULL);
-		}
-
-		//P3 : émettre/retransmettre les binding requests STUN sortants tant que la
-		//connectivité n'est pas confirmée (placé APRÈS ReadRTP : un check/réponse
-		//entrant peut avoir mis iceConnected à true et court-circuité l'émission).
-		if (iceDriving)
-			DriveICEChecks();
-
-		//P2 : piloter le handshake DTLS client (émission initiale du ClientHello puis
-		//retransmissions). Placé APRÈS ReadRTP pour que les flights entrants (traités
-		//par la branche DTLS de ReadRTP) fassent d'abord progresser le handshake.
-		if (dtlsDriving)
-			DriveDTLSClientHandshake();
-
-		//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
-		//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
-		//onRTPTimeout (anti-rebond via rtpTimedOut).
-		if (rtpTimeoutArmed && rtpTimeout>0 && !rtpTimedOut
-				&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
-		{
-			//Marque la transition actif -> inactif
-			rtpTimedOut = true;
-			Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
-			//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
-			if (auto l = LockListener())
-				l->onRTPTimeout(this);
-		}
-
-		//Erreur/fermeture sur l'un des deux sockets : POLLHUP (pair parti),
-		//POLLERR (erreur socket) ou POLLNVAL (fd fermé, ex. via End()).
-		//NB: on teste bien ufds[1] pour le socket RTCP (bug historique corrige).
-		if ((ufds[0].revents & (POLLHUP|POLLERR|POLLNVAL)) ||
-		    (ufds[1].revents & (POLLHUP|POLLERR|POLLNVAL)))
-		{
-			//Error : on sort proprement de la boucle
-			Log("-RTPSession sortie sur evenement socket RTP=0x%x RTCP=0x%x [%p]\n",
-					ufds[0].revents,ufds[1].revents,this);
-			//Exit
-			break;
+			gettimeofday(&lastAppTick,NULL);
+			app->onApplicationTick(elapsed);
 		}
 	}
 
-	Log("<RTPSession run\n");
-	return 0;
+	//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
+	//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
+	//onRTPTimeout (anti-rebond via rtpTimedOut).
+	if (rtpTimeoutArmed && rtpTimeout>0 && !rtpTimedOut
+			&& (getDifTime(&lastRecv)/1000) > rtpTimeout)
+	{
+		//Marque la transition actif -> inactif
+		rtpTimedOut = true;
+		Log("-RTPSession inactivité > %u ms, notification onRTPTimeout [%p]\n",rtpTimeout,this);
+		//Notifie le listener (RTPEndpoint publiera EndpointDisconnectedEvent)
+		if (auto l = LockListener())
+			l->onRTPTimeout(this);
+	}
 }
 
-RTPPacket* RTPSession::GetPacket()
+void RTPSession::OnPollError(short revents)
 {
-    streamUse.IncUse();
-    RTPPacket* rtp = (defaultStream != NULL && !defaultStream->disabled) ? defaultStream->Wait() : NULL;
-    streamUse.DecUse();
-    if (rtp == NULL) msleep(100);
-    return rtp;
+	//POLLHUP (pair parti), POLLERR (erreur socket) ou POLLNVAL (fd fermé). Le
+	//réacteur nous retire après cet appel : cette session cesse de recevoir, les
+	//autres jambes du groupe continuent.
+	Log("-RTPSession sortie du groupe sur evenement socket 0x%x [%p]\n",revents,this);
 }
 
-RTPPacket* RTPSession::GetPacket(DWORD & ssrc)
+void RTPSession::OnStreamsChanged()
 {
-    streamUse.IncUse();
-    RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
-    RTPPacket* rtp = (s != NULL && !s->disabled) ? s->Wait() : NULL;
+	++streamGeneration;
+	streamWait.Signal();
+}
+
+RTPPacket* RTPSession::GetPacket(DWORD ssrc, DWORD timeoutMs)
+{
+	//Lu AVANT la recherche : si un flux naît entre les deux, le prédicat de
+	//l'attente le voit déjà et ne dort pas.
+	const DWORD seen = streamGeneration.load();
+
+	streamUse.IncUse();
+	RTPStream* s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+	const bool disabled = (s != NULL) && s->disabled;
+	RTPPacket* rtp = (s != NULL && !disabled) ? s->Wait(timeoutMs) : NULL;
 	streamUse.DecUse();
-    if (rtp == NULL) msleep(100);
-    return rtp;
+
+	if (rtp != NULL)
+		return rtp;
+
+	//Flux en cours d'arrêt (CancelStreams) : le consommateur doit sortir de sa
+	//boucle tout de suite, pas attendre une échéance.
+	if (disabled)
+		return NULL;
+
+	//Pas encore de flux pour ce SSRC : c'est le premier paquet reçu qui le crée.
+	//On attend cette naissance. Revenir sonder faisait tourner le consommateur
+	//à ~2 250 tours par seconde le temps d'un établissement d'appel.
+	if (s == NULL)
+	{
+		streamWait.WaitUntil(timeoutMs,
+			[this,seen] { return streamGeneration.load() != seen; });
+	}
+
+	return NULL;
 }
 
 void RTPSession::CancelGetPacket()
@@ -3166,6 +3273,13 @@ void RTPSession::CancelGetPacket()
     streamUse.IncUse();
 	if (defaultStream != NULL) defaultStream->Cancel();
     streamUse.DecUse();
+
+    //HORS du verrou streamUse. Annuler `defaultStream` ne reveille que le
+    //consommateur d'un flux DEJA NE. Celui d'une jambe qui n'a jamais rien recu
+    //attend la NAISSANCE d'un flux, et defaultStream est NULL : personne n'etait
+    //reveille, donc chaque StopReceiving coutait la borne entiere
+    //(ConsumerPollMs) — 201 ms mesures en recette le 2026-09-02.
+    OnStreamsChanged();
 }
 
 void RTPSession::CancelGetPacket(DWORD & ssrc)
@@ -3174,6 +3288,10 @@ void RTPSession::CancelGetPacket(DWORD & ssrc)
     RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     if (s) s->Cancel();
     streamUse.DecUse();
+
+    //Meme raison que la surcharge sans ssrc : le flux demande peut ne pas
+    //exister encore, et son consommateur attend alors sa naissance.
+    OnStreamsChanged();
 }
 
 void RTPSession::ResetPacket(DWORD & ssrc, bool clear) 
@@ -3283,24 +3401,36 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateRequest:
-						Log("-TempMaxMediaStreamBitrateRequest received from [%s] on %s stream\n", fromAddr, MediaFrame::TypeToString(media));
 						for (BYTE i=0;i<fb->GetFieldCount();i++)
 						{
 							//Get field
 							RTCPRTPFeedback::TempMaxMediaStreamBitrateField *field = (RTCPRTPFeedback::TempMaxMediaStreamBitrateField*) fb->GetField(i);
-							//Check if it is for us
-							if (field->GetSSRC()==sendSSRC)
+							//Un champ qui ne vise pas notre SSRC sortant est ignoré. Le dire :
+							//sans cette trace, un pair qui se trompe de cible est indistinguable
+							//d'un pair qui ne demande rien (séance du 2026-09-01 : 1365 TMMBR
+							//reçus, aucune valeur lisible dans le journal).
+							if (field->GetSSRC()!=sendSSRC)
 							{
-								//call listener
-								if (auto l = LockListener())
-									l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
-								//RFC 5104 §4.2.1.2 : l'émetteur de média répond TMMBN, sinon
-								//le pair retransmet son TMMBR à chaque intervalle RTCP —
-								//exactement ce que NOUS faisons en face tant que le TMMBN
-								//n'arrive pas (pendingTMBR, SendSenderReport). Répondu même
-								//sans listener : la restriction est acquise au niveau session.
-								SendTempMaxMediaStreamBitrateNotification(field->GetBitrate(),field->GetOverhead());
+								Debug("-TempMaxMediaStreamBitrateRequest ignore, champ pour ssrc %u (le notre est %u) [%p]\n",
+									field->GetSSRC(),sendSSRC,this);
+								continue;
 							}
+
+							//La VALEUR demandée est ce qui pilote notre émission vers ce
+							//pair : c'est elle qu'il faut lire, pas le seul fait d'avoir
+							//reçu un TMMBR.
+							Log("-TempMaxMediaStreamBitrateRequest received from [%s] on %s stream: maxBitrate = %u, overhead = %u\n",
+								fromAddr,MediaFrame::TypeToString(media),
+								field->GetBitrate(),field->GetOverhead());
+							//call listener
+							if (auto l = LockListener())
+								l->onTempMaxMediaStreamBitrateRequest(this,field->GetBitrate(),field->GetOverhead());
+							//RFC 5104 §4.2.1.2 : l'émetteur de média répond TMMBN, sinon
+							//le pair retransmet son TMMBR à chaque intervalle RTCP —
+							//exactement ce que NOUS faisons en face tant que le TMMBN
+							//n'arrive pas (pendingTMBR, SendSenderReport). Répondu même
+							//sans listener : la restriction est acquise au niveau session.
+							SendTempMaxMediaStreamBitrateNotification(field->GetBitrate(),field->GetOverhead());
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
@@ -3461,6 +3591,69 @@ int RTPSession::SendFIR(DWORD & ssrc)
 	return ret;
 }
 
+int RTPSession::SendReferencePictureSelectionIndication(DWORD ssrc, WORD pictureId)
+{
+	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
+	//RTPSession::CreateSenderReport).
+	ScopedUse scopedStreams(streamUse);
+
+	RTPStream* stream = getStream(ssrc);
+	if (stream == NULL)
+		stream = defaultStream;
+	if (stream == NULL)
+		return 0;
+	DWORD recSSRC = stream->GetRecSSRC();
+
+	//Le FCI porte le payload type du flux acquitté : le PT que le pair a
+	//déclaré pour le codec reçu (rtpMapIn : clé = PT, valeur = codec)
+	if (!rtpMapIn)
+		return 0;
+	DWORD codec = stream->GetRecCodec();
+	BYTE pt = RTPMap::NotFound;
+	for (RTPMap::const_iterator it = rtpMapIn->begin(); it != rtpMapIn->end(); ++it)
+		if (it->second == codec)
+		{
+			pt = it->first;
+			break;
+		}
+	if (pt == RTPMap::NotFound)
+		return 0;
+
+	//Bit string = le PictureID tel que reçu (RFC 7741 §5.1) : 2 octets
+	//réseau si étendu (bit M, 0x8000), 1 octet sinon — l'émetteur le
+	//compare à l'identique, sans le décoder
+	BYTE bitString[2];
+	DWORD len;
+	if (pictureId & 0x8000)
+	{
+		bitString[0] = pictureId >> 8;
+		bitString[1] = pictureId;
+		len = 2;
+	}
+	else
+	{
+		bitString[0] = pictureId;
+		len = 1;
+	}
+
+	Debug("-SendReferencePictureSelectionIndication pictureId=0x%.4x pt=%d ssrc=%x\n",pictureId,pt,recSSRC);
+
+	//Create rtcp sender report
+	RTCPCompoundPacket* rtcp = CreateSenderReport();
+
+	RTCPPayloadFeedback *rpsi = RTCPPayloadFeedback::Create(RTCPPayloadFeedback::ReferencePictureSelectionIndication,sendSSRC,recSSRC);
+	rpsi->AddField(new RTCPPayloadFeedback::ReferencePictureSelectionField(pt,bitString,len));
+	rtcp->AddRTCPacket(rpsi);
+
+	//Send packet
+	int ret = SendPacket(*rtcp);
+
+	//Delete it
+	delete(rtcp);
+
+	return ret;
+}
+
 int RTPSession::RequestFPU()
 {
 	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
@@ -3544,18 +3737,25 @@ void RTPSession::SetRTT(DWORD rtt)
 	}		
 }
 
-void RTPSession::onTargetBitrateRequested(DWORD bitrate)
+void RTPSession::onTargetBitrateRequested(DWORD bitrate, bool congestion)
 {
     BitrateFeedbackMode mode;
     DWORD announce = 0;
     bool  send;
 
+    //Ce que le pair PRODUIT vraiment : l'amortisseur s'en sert pour reconnaitre
+    //une hausse qui ne lui apprendrait rien. Lu hors de notre verrou — il a le
+    //sien — et avant lui, pour ne pas imbriquer les deux.
+    const DWORD peerBitrate = remoteRateEstimator
+                            ? remoteRateEstimator->GetIncomingBitrate() : 0;
+
     // Memory barrier
     mutex.lock();
     mode = bitrateFeedbackMode;
+    bitrateFeedbackThrottler.SetPeerBitrate(peerBitrate);
     //L'amortisseur suit la mesure locale même quand rien ne part : c'est lui qui
     //compose le min() avec un éventuel plafond venu de l'autre patte.
-    send = bitrateFeedbackThrottler.OnEstimateChanged(bitrate, getTimeMS(), announce);
+    send = bitrateFeedbackThrottler.OnEstimateChanged(bitrate, getTimeMS(), announce, congestion);
     mutex.unlock();
 
     Debug("-RTPSession::onTargetBitrateRequested() mode %d, bitrate [%d] -> [%d] send %d for %s stream %p.\n",
@@ -3868,7 +4068,11 @@ bool RTPSession::AddStream( bool receiving, DWORD ssrc )
 		created = true;
 	}
         streamUse.Unlock();
-	//HORS du verrou streamUse : voir DeleteStreams, meme inversion.
+	//HORS du verrou streamUse : voir DeleteStreams, meme inversion. Le reveil
+	//des GetPacket en attente y est aussi, et pour la meme raison — l'ordre
+	//streamUse puis streamWait serait l'inverse de celui de GetPacket.
+	if (created)
+		OnStreamsChanged();
 	if (created && remoteRateEstimator)
 		remoteRateEstimator->AddStream(ssrc);
 	return true;
@@ -3891,6 +4095,14 @@ bool RTPSession::CancelStreams()
         it->second->Cancel();
     }
     streamUse.DecUse();
+
+    //HORS du verrou streamUse, meme inversion que AddStream/DeleteStreams.
+    //La boucle ci-dessus ne reveille que les consommateurs de flux EXISTANTS ;
+    //celui qui attend la NAISSANCE d'un flux n'est dans aucune de ces entrees.
+    //Sur une jambe qui n'a jamais rien recu la map est vide, donc personne
+    //n'etait reveille : chaque StopReceiving coutait la borne entiere
+    //(ConsumerPollMs) avant que le consommateur ne voie l'arret.
+    OnStreamsChanged();
     return true;
 }
 
@@ -3943,6 +4155,10 @@ bool RTPSession::SetDefaultStream(bool receiving, DWORD ssrc )
 	streamUse.WaitUnusedAndLock();
 	defaultStream = getStream(ssrc);
 	streamUse.Unlock();
+
+	//AddStream a deja reveille, mais defaultStream n'etait pas encore pose : un
+	//GetPacket sur le flux par defaut aurait vu NULL et redormi.
+	OnStreamsChanged();
 
 	return true;
 }

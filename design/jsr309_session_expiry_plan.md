@@ -95,7 +95,7 @@ opt-in à oublier.
 
 - Contrat pour les clients à queue PARTAGÉE (jsr309impl Java : UNE queue pour
   toutes ses sessions) : 60 s sans poll y emporte TOUT — correct si le client
-  est mort. **Documenté** comme changement de contrat (`xmlrpc_jsr309_api.md`
+  est mort. **Documenté** comme changement de contrat (`JSR-309-API.md`
   §5 « Le long-poll est la preuve de vie du client », `readme.md`).
 - Le 60 s : **configurable**, `--event-queue-expires <s>`, 0 = désactivé,
   **actif par défaut** (`XmlEventQueue::DefaultExpiresSecs`).
@@ -149,7 +149,7 @@ Fichiers touchés :
 | `mcu/src/main.cpp` | option `--event-queue-expires <s>` (défaut `XmlEventQueue::DefaultExpiresSecs`), passée à `jsr309Manager.Init` **et** `mcu.Init`, documentée dans `--help` |
 | `mcu/tests/test_jsr309_session_expiry.cpp` | 13 tests : vitalité de la file (file neuve dans la grâce, jamais pollée → expire, poller attaché → protège indéfiniment, détachement → relance le compte à rebours, ré-attache → l'annule, dernier poller gagne), recensement `GetIdleQueues`, balayeur nominal, **référence en vol qui survit** (shared_ptr), `EventQueueDelete` → armement sans destruction, destruction à l'échéance, session à `queueId` 0 jamais balayée, délai 0 = désarmé, `End()` joint le balayeur |
 | `mcu/tests/test_mcu_conference_expiry.cpp` **(nouveau)** | 7 tests, mêmes propriétés côté conférences + **libération du `tag`** (nominal et à l'arrêt) |
-| `xmlrpc_jsr309_api.md`, `MCU-API.md`, `readme.md`, `CLAUDE.md` | contrat côté client des deux API (§5, §6.1/6.2, §9.6 pour JSR-309 ; §5, §6.1, §7.1 pour MCU — où le montage « file partagée » est désormais signalé comme point de défaillance unique), option CLI + traces de log, invariant dans les conventions |
+| `JSR-309-API.md`, `MCU-API.md`, `readme.md`, `CLAUDE.md` | contrat côté client des deux API (§5, §6.1/6.2, §9.6 pour JSR-309 ; §5, §6.1, §7.1 pour MCU — où le montage « file partagée » est désormais signalé comme point de défaillance unique), option CLI + traces de log, invariant dans les conventions |
 
 Écarts assumés par rapport à l'esquisse du §7.3 :
 
@@ -412,7 +412,7 @@ lock est à la fois plus simple et identique dans sa mécanique d'extraction (`J
 | 3 | `mcu/src/jsr309/JSR309Manager.h` | champs `lastActivity`/`timeout` dans `MediaSessionEntry` ; membres `sweeper`/`sweeperWakeup`/`stopping` ; déclarations `SetMediaSessionTimeout`, `SweepLoop` ; includes `<thread>`, `<condition_variable>`, `<chrono>`, `<vector>` |
 | 4 | `mcu/src/jsr309/JSR309Manager.cpp` | init `lastActivity` dans `CreateMediaSession` ; touch dans `GetMediaSessionRef` ; `SetMediaSessionTimeout` ; `SweepLoop` (§3.3) ; démarrage du thread dans `Init`, arrêt+join dans `End` ; correction du retour d'`AddEvent` non testé dans `DeliverEvent` |
 | 5 | `mcu/src/jsr309/xmlrpcjsr309.cpp` | handlers `MediaSessionSetTimeout` et `MediaSessionPing` + 2 entrées dans `jsr309CmdList` (`xmlrpcjsr309.cpp:2755`) |
-| 6 | `xmlrpc_jsr309_api.md` | documenter les 2 méthodes et l'événement 7 |
+| 6 | `JSR-309-API.md` | documenter les 2 méthodes et l'événement 7 |
 | 7 | `jsr309impl` / elixip (hors repo C++) | consommer l'événement 7 ; côté `jsr309impl` Java, mapping dans `MSControlFactoryImpl` comme pour l'événement 6 (`MSControlFactoryImpl.java:189`) — peut suivre dans un second temps, l'événement est simplement ignoré sinon |
 
 Aucun changement de `MediaSession.*` : le mécanisme vit entièrement dans le manager (la session

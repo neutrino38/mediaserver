@@ -569,7 +569,9 @@ int VideoStream::SendVideo()
 		{
 			//Do not send anymore
 			sendFPU = false;
-			//Do not send if just send one (100ms)
+			//Do not send if just sent one (10ms). getDifTime() is in
+			//microseconds. The flag is cleared above, so a request landing
+			//inside this window is DROPPED, not deferred.
 			if (getDifTime(&lastFPU)/100>100)
 			{
 				//Set it
@@ -622,7 +624,7 @@ int VideoStream::SendVideo()
 		}
 		
 		//Procesamos el frame
-		VideoFrame *videoFrame = videoEncoder->EncodeFrame(pic);
+		VideoFramePtr videoFrame = videoEncoder->EncodeFrame(pic);
 
 		//If was failed
 		if (!videoFrame)
@@ -673,15 +675,11 @@ int VideoStream::SendVideo()
 
 		//If first
 		if (!frameTime)
-		{
 			//Set frame time, slower
 			frameTime = 5*1000000/videoFPS;
-			//Restore bitrate
-			videoEncoder->SetFrameRate(videoFPS,current,videoIntraPeriod);
-		} else {
+		else
 			//Set frame time
 			frameTime = 1000000/videoFPS;
-		}
 
 		//Add frame size in bits to bitrate calculator
 		bitrateAcu.Update(getDifTime(&first)/1000,videoFrame->GetLength()*8);
@@ -710,7 +708,12 @@ int VideoStream::SendVideo()
 		//reporte le depassement sur l'image suivante, borne par MaxAheadUs.
 
 		//Send it smoothly
-		smoother.SendFrame(videoFrame,sendingTime);
+		smoother.SendFrame(videoFrame.get(),sendingTime);
+
+		//Restore bitrate after the first frame, once it is on its way: a
+		//SetFrameRate may reopen the codec, better not while an image waits.
+		if (!num)
+			videoEncoder->SetFrameRate(videoFPS,current,videoIntraPeriod);
 
 		//Dump statistics
 		DWORD statstime2 = (DWORD) (getDifTime(&statstimer) / 1000);
@@ -718,7 +721,7 @@ int VideoStream::SendVideo()
 		{
 			Log("-Send video stats for participant codec = %s.\n", VideoCodec::GetNameFor(videoCodec));
 			Log("                  current bitrate=%d kbit/s  avg=%8.2f kbit/s  limit=%d kbit/s\n",
-                            current,bitrateAcu.GetInstantAvg()/1000,videoBitrateLimit);
+                            current,(double)(bitrateAcu.GetInstantAvg()/1000),videoBitrateLimit);
 			Log("                  fps=[%d]\n",
                             (fpsOut*1000)/statstime2);
 			bitrateAcu.ResetMinMax();
@@ -784,13 +787,12 @@ int VideoStream::RecVideo()
 	{
 
 		//Obtenemos el paquete
-		RTPPacket* packet = session->GetPacket(recSSRC);
+		RTPPacket* packet = session->GetPacket(recSSRC,RTPSession::ConsumerPollMs);
 
 		//Check
 		if (!packet)
                 {
-			//Next
-                    msleep(1000);
+			//GetPacket a deja attendu : relire le drapeau et repartir.
 		    continue;
                 }
 
@@ -821,7 +823,7 @@ int VideoStream::RecVideo()
 		//Si hemos perdido un paquete or still have not got an iframe
 		if(lostCount>1 || waitIntra)
 		{
-			//Check if we got listener and more than two seconds have elapsed from last request
+			//Check if we got listener and more than ten seconds have elapsed from last request
 			if (listener && getDifTime(&lastFPURequest)>10000000)
 			{
 				//Debug
@@ -905,7 +907,7 @@ int VideoStream::RecVideo()
 		//Lo decodificamos
 		if(!videoDecoder->DecodePacket(buffer,size,lost,packet->GetMark()))
 		{
-			//Check if we got listener and more than two seconds have elapsed from last request
+			//Check if we got listener and more than one second has elapsed from last request
 			if (listener && getDifTime(&lastFPURequest)>1000000)
 			{
 				//Debug
@@ -933,7 +935,13 @@ int VideoStream::RecVideo()
 		{
 			if (videoDecoder->IsKeyFrame())
 				Log("-Got Intra\n");
-			
+
+			//Acquitter la trame de référence décodée (RPSI) : sans lui, un
+			//émetteur msvp8 force une trame clé toutes les 3 s
+			WORD refPictureId;
+			if (videoDecoder->GetReferencePictureId(refPictureId))
+				session->SendReferencePictureSelectionIndication(recSSRC,refPictureId);
+
 			//No seq number for frame
 			frameSeqNum = RTPPacket::MaxExtSeqNum;
 

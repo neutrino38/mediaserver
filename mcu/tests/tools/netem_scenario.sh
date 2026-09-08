@@ -1,5 +1,5 @@
 #!/bin/bash
-# Injecte les trois scenarios de degradation du lot 3 (rate_control_plan.md) et
+# Injecte les trois scenarios de degradation (docs/RATE-CONTROL.md) et
 # journalise chaque changement avec son horodatage, pour que bwe_report.py puisse
 # recouper les traces BWE du mediaserver avec ce qui a reellement ete fait au
 # reseau.

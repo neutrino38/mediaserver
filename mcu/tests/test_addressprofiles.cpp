@@ -290,6 +290,72 @@ TEST_F(AddressProfilesTest, SansNatLesDeuxAdressesSontIdentiques)
 }
 
 
+// Une SEULE interface, privée, nattée 1:1 avec une publique, et des pairs des
+// deux côtés : une UA dans le réseau privé, une UA sur Internet. Le serveur doit
+// annoncer la publique à l'une et la privée à l'autre, donc porter DEUX profils
+// dont l'adresse LIÉE est la même :
+//
+//   --public-ip <privee> --nat <publique> --internal-ip <privee>
+//
+// Rien ne s'y oppose et c'est ce que ce test fixe : `publicv4` et `internalv4`
+// sont deux emplacements distincts, et le seul contrôle d'unicité porte sur
+// l'emplacement, pas sur l'adresse. Le contrôleur choisit ensuite le profil
+// jambe par jambe.
+//
+// Aucun conflit de bind non plus : la table ne lie rien. Le bind a lieu par
+// session RTP (`RTPSession::SetAddressProfile` -> `Rebind`), et chaque session
+// prend son propre couple de ports — même adresse, ports différents.
+TEST_F(AddressProfilesTest, MemeAdresseLieeEnPublicEtEnInterne)
+{
+	const IPAddress locale = FirstAttached(AF_INET, true);
+	if (!locale.IsSet())
+		GTEST_SKIP() << "pas d'adresse v4 privee annoncable attachee sur cet hote";
+
+	const IPAddress publique = IPAddress::Parse("203.0.113.9");
+
+	std::string error;
+	ASSERT_TRUE(AddressProfiles::AddPublic(locale, error)) << error;
+	ASSERT_TRUE(AddressProfiles::SetNat(publique, error)) << error;
+	ASSERT_TRUE(AddressProfiles::AddInternal(locale, error))
+		<< "la meme adresse liee doit etre acceptable comme interne : " << error;
+	ASSERT_TRUE(AddressProfiles::Freeze(error)) << error;
+
+	// Les deux profils sont disponibles...
+	ASSERT_TRUE(AddressProfiles::IsAvailable(AddressProfiles::PublicV4));
+	ASSERT_TRUE(AddressProfiles::IsAvailable(AddressProfiles::InternalV4));
+
+	// ...ils lient la MÊME adresse...
+	EXPECT_TRUE(AddressProfiles::BindAddress(AddressProfiles::PublicV4) == locale);
+	EXPECT_TRUE(AddressProfiles::BindAddress(AddressProfiles::InternalV4) == locale);
+
+	// ...et annoncent des adresses DIFFÉRENTES, ce qui est tout l'objet.
+	EXPECT_TRUE(AddressProfiles::AnnouncedAddress(AddressProfiles::PublicV4) == publique)
+		<< "l'UA sur Internet doit recevoir l'adresse publique";
+	EXPECT_TRUE(AddressProfiles::AnnouncedAddress(AddressProfiles::InternalV4) == locale)
+		<< "l'UA du reseau prive doit recevoir l'adresse privee";
+}
+
+// L'ordre des options ne change rien ici non plus : `--internal-ip` avant
+// `--public-ip` donne la même table. Le sens d'un /etc/sysconfig ne peut pas
+// dépendre du sens de lecture.
+TEST_F(AddressProfilesTest, MemeAdresseLieeOrdreInverse)
+{
+	const IPAddress locale = FirstAttached(AF_INET, true);
+	if (!locale.IsSet())
+		GTEST_SKIP() << "pas d'adresse v4 privee annoncable attachee sur cet hote";
+
+	const IPAddress publique = IPAddress::Parse("203.0.113.9");
+
+	std::string error;
+	ASSERT_TRUE(AddressProfiles::AddInternal(locale, error)) << error;
+	ASSERT_TRUE(AddressProfiles::SetNat(publique, error)) << error;
+	ASSERT_TRUE(AddressProfiles::AddPublic(locale, error)) << error;
+	ASSERT_TRUE(AddressProfiles::Freeze(error)) << error;
+
+	EXPECT_TRUE(AddressProfiles::AnnouncedAddress(AddressProfiles::PublicV4) == publique);
+	EXPECT_TRUE(AddressProfiles::AnnouncedAddress(AddressProfiles::InternalV4) == locale);
+}
+
 /* =========================================================================
  * §4 — ORDRE DES OPTIONS, GEL, LECTURE.
  * ========================================================================= */

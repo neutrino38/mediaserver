@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.13.1"
+VERSION="1.14.0"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
@@ -371,7 +371,7 @@ case $1 in
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel ;;
+		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"

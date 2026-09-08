@@ -1,10 +1,12 @@
 #include "log.h"
 #include "pipeaudiooutput.h"
+#include <vector>
 
 extern "C" {
 #include <libswresample/swresample.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/samplefmt.h>
+#include <libavutil/mathematics.h>
 }
 
 // Crée un rééchantillonneur mono S16 inputRate -> outputRate via libswresample
@@ -46,6 +48,7 @@ PipeAudioOutput::PipeAudioOutput(bool calcVAD)
 	playRate = 0;
 	//No resampler yet
 	swr = NULL;
+	swrInRate = 0;
 	//(le mutex est construit par la std lib)
 }
 
@@ -55,26 +58,51 @@ PipeAudioOutput::~PipeAudioOutput()
 	if (swr) swr_free(&swr);
 }
 
-int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
+int PipeAudioOutput::PlayFrame(SamplesPtr samples)
 {
-	SWORD resampled[4096];
+	if (!samples || samples->GetNbSamples() == 0)
+		return 0;
+
+	std::vector<SWORD> resampled;
 	int v = -1;
 
 	//Bloqueamos (protège aussi swr/playRate contre StartPlaying/StopPlaying concurrents)
 	std::lock_guard<std::mutex> lock(mutex);
 
+	SWORD *buffer = samples->GetData();
+	DWORD  size   = samples->GetNbSamples();
+	DWORD  inRate = samples->GetRate();
+
 	//Check if we need to calculate it
-	if (calcVAD && vad.IsRateSupported(playRate))
+	if (calcVAD && vad.IsRateSupported(inRate))
 		//Calculate vad
-		v = vad.CalcVad(buffer,size,playRate)*size;
+		v = vad.CalcVad(buffer,size,inRate)*size;
+
+	//La trame fait foi : si sa fréquence a changé, on rouvre le resampler ici,
+	//sans que le producteur ait à prévenir (cf. bug de fréquence du 2026-08-14).
+	if (nativeRate && inRate != nativeRate && (!swr || swrInRate != inRate))
+	{
+		if (swr)
+		{
+			Log("-PipeAudioOutput: fréquence d'entrée %u -> %u Hz, resampler rouvert\n",
+				swrInRate, inRate);
+			swr_free(&swr);
+		}
+		swr = OpenResampler(inRate,nativeRate);
+		swrInRate = inRate;
+	}
 
 	//Check if we are transtrating
 	if (swr)
 	{
-		//Resample (mono S16) via libswresample
-		uint8_t *outp = (uint8_t*)resampled;
+		const int cap = (int)av_rescale_rnd(
+			swr_get_delay(swr, (int64_t)inRate) + size,
+			nativeRate, (int64_t)inRate, AV_ROUND_UP);
+		resampled.resize(cap);
+
+		uint8_t *outp = (uint8_t*)&resampled[0];
 		const uint8_t *inp = (const uint8_t*)buffer;
-		int produced = swr_convert(swr, &outp, 4096, &inp, (int)size);
+		int produced = swr_convert(swr, &outp, cap, &inp, (int)size);
 		if (produced < 0)
 			//Error
 			return Error("-PipeAudioOutput could not transrate\n");
@@ -82,10 +110,10 @@ int PipeAudioOutput::PlayBuffer(SWORD *buffer,DWORD size,DWORD frameTime)
 		//Check if we need to calculate it
 		if (calcVAD && v<0 && vad.IsRateSupported(nativeRate))
 			//Calculate vad
-			v = vad.CalcVad(resampled,produced,nativeRate)*produced;
+			v = vad.CalcVad(&resampled[0],produced,nativeRate)*produced;
 
 		//Update parameters
-		buffer = resampled;
+		buffer = &resampled[0];
 		size = (DWORD)produced;
 	}
 
@@ -125,16 +153,10 @@ int PipeAudioOutput::StartPlaying(DWORD rate)
 	//Lock
 	std::lock_guard<std::mutex> lock(mutex);
 
-	//Store play rate
+	//Store play rate. Le resampler, lui, est ouvert par PlayFrame d'après la
+	//fréquence portée par la trame : c'est elle qui fait foi, pas cette
+	//déclaration, qui peut la précéder.
 	playRate = rate;
-
-	//If we already had an open resampler
-	if (swr)
-		//Close it
-		swr_free(&swr);
-
-	//if rates are different (OpenResampler retourne NULL si égaux)
-	swr = OpenResampler(playRate,nativeRate);
 
 	//Exit
 	return true;
@@ -148,6 +170,7 @@ int PipeAudioOutput::StopPlaying()
 	std::lock_guard<std::mutex> lock(mutex);
 	//Close resampler
 	if (swr) swr_free(&swr);
+	swrInRate = 0;
 
 	//Exit
 	return true;

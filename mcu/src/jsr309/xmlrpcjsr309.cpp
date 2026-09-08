@@ -64,6 +64,13 @@ xmlrpc_value* MediaSessionCreate(xmlrpc_env *env, xmlrpc_value *param_array, voi
 	int queueId;
         xmlrpc_parse_value(env, param_array, "(si)", &str,&queueId);
 
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
 	//Parse string
 	nameParser.Parse((BYTE*)str,strlen(str));
 
@@ -935,6 +942,13 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 	xmlrpc_value *map;
 	xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&map);
 
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
 	//Get the rtp map
 	Properties properties;
 
@@ -1302,7 +1316,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//les codecs SANS fmtp (valeur ""). La PRÉSENCE de la clé est le signal
 	//d'acceptation — c'est la seule source dont le contrôleur SIP dispose pour
 	//connaître l'ensemble accepté, donc filtrer les vides ferait disparaître PCMU,
-	//PCMA, G722 et T140 de ses SDP. Contrat : xmlrpc_jsr309_api.md §6.7 (qui l'énonce
+	//PCMA, G722 et T140 de ses SDP. Contrat : JSR-309-API.md §6.7 (qui l'énonce
 	//correctement) et nego_fmtp.md §5.2/§8-E, dont la formulation initiale disait
 	//l'inverse et a été corrigée le 2026-08-05 pour se caler sur ce code.
 	xmlrpc_value* fmtpStruct = xmlrpc_struct_new(env);
@@ -2840,6 +2854,53 @@ xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, voi
 	}	
 }
 
+/**
+ * SetupDataChannel(sessionId, endpointId, media, remoteSctpPort)
+ *   -> [localSctpPort, maxMessageSize, streamId]
+ *
+ * Les paramètres SCTP d'une jambe texte-sur-data-channel. Le contrôleur nous
+ * donne le `a=sctp-port` du pair et repart avec les nôtres, qu'il publie dans
+ * son SDP : ce que le serveur sait de lui-même, c'est à lui qu'on le demande.
+ * `streamId` vaut -1 tant que le canal n'est pas ouvert — il ne sert qu'à un
+ * `a=dcmap`. À appeler APRÈS ConfigureMediaConnection avec proto = SCTP.
+ */
+xmlrpc_value* SetupDataChannel(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	std::shared_ptr<MediaSession> session;
+
+	int sessionId;
+	int endPointId;
+	int media;
+	int remoteSCTPPort;
+
+	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endPointId,&media,&remoteSCTPPort);
+
+	if(env->fault_occurred)
+		return 0;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	std::shared_ptr<Endpoint> endpoint = session->GetEndpoint(endPointId);
+
+	if (endpoint == NULL)
+		return xmlerror(env,"Could not retrieve endpoint.");
+
+	WORD  localSCTPPort  = 0;
+	DWORD maxMessageSize = 0;
+	int   streamId       = -1;
+
+	if (!endpoint->SetupDataChannel((MediaFrame::Type) media,(WORD) remoteSCTPPort,
+					localSCTPPort,maxMessageSize,streamId))
+		return xmlerror(env,"Could not setup data channel.");
+
+	xmlrpc_value* arr = xmlrpc_build_value(env,"(iii)",
+					       (int) localSCTPPort,(int) maxMessageSize,streamId);
+
+	return xmlok(env,arr);
+}
+
 xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
@@ -3002,6 +3063,7 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"VideoTranscoderDettach",		VideoTranscoderDettach},
 	{"GetMediaCandidates",			GetMediaCandidates},	
 	{"ConfigureMediaConnection",	ConfigureMediaConnection},
+	{"SetupDataChannel",		SetupDataChannel},
 	{NULL,NULL}
 };
 

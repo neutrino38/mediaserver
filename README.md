@@ -28,7 +28,7 @@ The codebase is mostly C++ (in `mcu/`) around a shared conference engine (`MCU` 
 
 The mediaserver exposes three XML-RPC interfaces
 
-- a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [xmlrpc_jsr309_api.md](design/xmlrpc_jsr309_api.md).
+- a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [JSR-309-API.md](docs/JSR-309-API.md).
 
 - a specialized MCU API, oriented around conferences, participants and video mosaics. It is documented in [MCU-API.md](docs/MCU-API.md).
 
@@ -40,7 +40,9 @@ The mediaserver exposes three XML-RPC interfaces
 |---|---|
 | [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md) | **Configuration réseau, par cas d'usage** : IP publique portée par l'hôte, IP publique nattée 1:1, deux adresses (publique + interne). Ports à ouvrir, vérification, diagnostic. À lire avant tout déploiement. |
 | [MCU-API.md](docs/MCU-API.md) | API XML-RPC MCU (conférences, participants, mosaïques) |
-| [xmlrpc_jsr309_api.md](design/xmlrpc_jsr309_api.md) | API XML-RPC JSR-309 |
+| [JSR-309-API.md](docs/JSR-309-API.md) | API XML-RPC JSR-309 |
+| [RATE-CONTROL.md](docs/RATE-CONTROL.md) | Contrôle de débit : estimation, feedback RTCP, lissage, images clés |
+| [CODECS.md](docs/CODECS.md) | Codecs et paramètres `fmtp` négociés |
 | [TEST.md](TEST.md) | Suite de tests du binaire `mcu` |
 
 
@@ -263,7 +265,7 @@ internalv6 : indisponible
 > [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).**
 >
 > Côté contrôleur, le paramètre `profile` de `StartSending`/`StartReceiving` est
-> décrit dans `MCU-API.md` §6.7 bis et `xmlrpc_jsr309_api.md` §6.7 bis.
+> décrit dans `MCU-API.md` §6.7 bis et `JSR-309-API.md` §6.7 bis.
 
 ### Média
 
@@ -307,7 +309,7 @@ Trace dans `/var/log/mcu.log` :
 contrôleur** : une file par appel/conférence isole les objets entre eux ; une
 file partagée (cas du client Java `jsr309impl`, et du montage historique décrit
 dans `MCU-API.md` §7.2) les emporte *tous ensemble*. Détail du contrat dans
-`xmlrpc_jsr309_api.md` §5 et `MCU-API.md` §5.
+`JSR-309-API.md` §5 et `MCU-API.md` §5.
 
 
 ### WebRTC — WebSocket sécurisé (wss://)

@@ -286,7 +286,7 @@ historique.
 ### 5.2 Retour enrichi de `EndpointStartReceiving`
 
 Compatibilité ascendante calquée sur le « gap sourceName » (§6.1 de
-`xmlrpc_jsr309_api.md`) : `returnVal[0]` reste le port ; on **ajoute** un second
+`JSR-309-API.md`) : `returnVal[0]` reste le port ; on **ajoute** un second
 élément.
 
 ```
@@ -456,7 +456,7 @@ Pair ──INVITE + SDP offer──▶ contrôleur SIP ──▶ mediaserver
 
 > Correction du brouillon : « appel entrant = StartSending en premier » est
 > **inexact**. `StartReceiving` reste avant `StartSending` dans les deux cas
-> (cf. `xmlrpc_jsr309_api.md` §9). Le vrai distinguo est la **disponibilité du
+> (cf. `JSR-309-API.md` §9). Le vrai distinguo est la **disponibilité du
 > fmtp distant** au moment du `StartReceiving` : connue dès l'offer en entrant,
 > seulement à l'answer en sortant.
 
@@ -540,7 +540,7 @@ immédiate) du sens émission (phase 5, dépendant de ce câblage).
   (préfixe retiré) vers `Port::StoreCodecProperties` (stockage `codecProperties`
   du négociateur) ; les clés transport continuent vers `RTPSession` (qui ignore
   codec.*). Même convention que `VideoStream::SetRTPProperties` côté MCU.
-- Doc : `xmlrpc_jsr309_api.md` (§6.7, cycle de vie, §9.0/§9.1/§9.2) mis à jour et
+- Doc : `JSR-309-API.md` (§6.7, cycle de vie, §9.0/§9.1/§9.2) mis à jour et
   **`CODECS.md` créé** (clés `codec.*` + défauts par codec, limites, support).
 - Build vert (`install.ksh localcompile`, rm des .o car headers non suivis).
 

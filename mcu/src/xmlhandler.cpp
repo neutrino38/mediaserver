@@ -9,12 +9,35 @@ xmlrpc_value* xmlerror (xmlrpc_env *env,const char *msg)
 {
 	//Send error
 	Error("Error processing xml cmd [\"%s\"]\n",msg);
+
+	//xmlrpc_build_value ASSERE et abort() le processus si l'env porte deja une
+	//faute. Or presque tous les appelants arrivent ici justement parce qu'un
+	//xmlrpc_parse_value vient d'echouer : une requete mal typee tuait donc le
+	//mediaserver, depuis /mcu comme depuis /jsr309. La faute est deja dite dans
+	//`msg` et dans la trace ci-dessus, on peut la solder ici.
+	if (env->fault_occurred)
+	{
+		xmlrpc_env_clean(env);
+		xmlrpc_env_init(env);
+	}
+
 	//Exit
 	return xmlrpc_build_value(env,"{s:i,s:s}","returnCode",0,"errorMsg",msg);
 }
 
 xmlrpc_value* xmlok (xmlrpc_env *env,xmlrpc_value *array)
 {
+	//Meme piege que xmlerror, par un autre chemin : la faute vient d'un parse
+	//que le handler n'a pas teste (xmlparsemap, par exemple). Repondre
+	//« returnCode 1 » serait mentir — le handler n'a pas lu ce qu'il croit avoir
+	//lu — donc on repond une erreur.
+	if (env->fault_occurred)
+	{
+		if (array!=NULL)
+			xmlrpc_DECREF(array);
+		return xmlerror(env,"Fault occurred building the response");
+	}
+
 	//Si es null ponemos uno vacio
 	if (array==NULL)
 		array = xmlrpc_build_value(env,"()");
@@ -36,14 +59,32 @@ int xmlparsemap(xmlrpc_env *env, xmlrpc_value *map, Properties & props)
 	const char *strVal;
 	int sz = xmlrpc_struct_size(env,map);
 
+	//Un parametre qui n'est pas une struct laisse `sz` indetermine : boucler
+	//dessus lisait une taille inventee.
+	if (env->fault_occurred)
+		return 0;
+
 	for (int i=0;i<sz;i++)
 	{
 		xmlrpc_struct_read_member(env,map,i,&key,&val);
+		if (env->fault_occurred)
+			return i;
+
 		xmlrpc_parse_value(env,key,"s",&strKey);
 		xmlrpc_parse_value(env,val,"s",&strVal);
-		props[strKey] = strVal;
+
+		//Un membre qui n'est pas une paire de chaines laisse strKey et strVal
+		//NON INITIALISES : les inserer lisait deux pointeurs sauvages. On rend
+		//ce qui a ete lu ; la faute reste sur l'env, ou l'appelant la verra.
+		bool bad = env->fault_occurred;
+		if (!bad)
+			props[strKey] = strVal;
+
 		xmlrpc_DECREF(key);
 		xmlrpc_DECREF(val);
+
+		if (bad)
+			return i;
 	}
 	return sz;
 }

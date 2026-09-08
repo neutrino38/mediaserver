@@ -1,4 +1,4 @@
-// Lot 4 (rate_control_plan.md) — le générateur de rapports d'arrivée
+// Le générateur de rapports d'arrivée
 // transport-cc. Ce que NOUS devons au pair : sans ces rapports, son estimateur
 // émetteur lit notre silence comme un RTT infini et recule jusqu'à son plancher.
 // Horloge passée en paramètre : aucune de ces suites ne dépend du temps réel.

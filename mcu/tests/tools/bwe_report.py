@@ -9,8 +9,8 @@ marqueurs ecrit par netem_scenario.sh, et rend :
   - bwe.csv      : la serie d'estimation, une ligne par trace "BWE: estimation"
   - events.csv   : detections, feedback emis, changements d'etat, pertes, RTT
   - bwe.svg      : un graphe par patte (estimation vs debit entrant + marqueurs)
-  - un verdict par critere d'acceptation du lot 3, sur la sortie standard
-  - avec --markdown, le bloc pret a coller en annexe D de rate-control.md
+  - un verdict par critere d'acceptation, sur la sortie standard
+  - avec --markdown, le bloc pret a coller dans le compte rendu de seance
 
 Bibliotheque standard uniquement (python >= 3.6) : la machine de mesure n'a ni
 matplotlib ni gnuplot, et on ne veut rien y installer.
@@ -28,7 +28,7 @@ import re
 import sys
 from datetime import datetime
 
-# Bornes de l'estimateur, cf. rate_control_plan.md lot 1.3 (kb/s).
+# Bornes de l'estimateur, cf. docs/RATE-CONTROL.md (kb/s).
 DEFAULT_MAX_KBPS = 30000
 DEFAULT_MIN_KBPS = 16
 

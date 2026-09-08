@@ -20,7 +20,7 @@ static const QWORD kInitializationMs = 5000;
 RemoteRateEstimator::RemoteRateEstimator() : bitrateAcu(1000)
 {
 	//Not last estimate
-	//Bornes realignees (rate-control.md, annexe B) : l'ancien plancher 128000
+	//Bornes realignees (docs/RATE-CONTROL.md) : l'ancien plancher 128000
 	//interdisait d'annoncer un reseau lent, l'ancien plafond 1280000000
 	//(coquille probable) n'en etait pas un — temoin : 30 Mb/s, plancher 16 kb/s
 	//(arbitrage A1 : en-dessous, mieux vaut geler l'image).
@@ -208,6 +208,9 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	}
 
 	DWORD estimation = estimated ? GetEstimatedBitrateUnlocked() : 0;
+	//Capturé sous le verrou ÉCRIVAIN, comme l'estimation : l'état pourrait
+	//changer entre le relâchement et la notification.
+	const bool congestion = (state == Decrease);
 
 	//Unloc
 	lock.Unlock();
@@ -232,7 +235,7 @@ void RemoteRateEstimator::Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool 
 	lock.IncUse();
 	for (Listener* l : listeners)
 		//Send it
-		l->onTargetBitrateRequested(estimation);
+		l->onTargetBitrateRequested(estimation, congestion);
 	lock.DecUse();
 }
 
@@ -459,7 +462,7 @@ void RemoteRateEstimator::Update(RemoteRateControl::BandwidthUsage usage, bool r
 		currentBitRate = maxConfiguredBitRate;
 
 	//Formats : DWORD -> %u, long double -> cast double + %f ("%llf" n'existe pas,
-	//les valeurs affichees etaient fausses — rate-control.md §4, "traces").
+	//les valeurs affichees etaient fausses).
 	//"stream=" nomme la patte (tag du participant / nom de l'endpoint) : sans lui
 	//un appel a deux pattes melange deux series dans le meme journal et le
 	//depouillement du lot 3 (mcu/tests/tools/) ne peut pas les separer.
@@ -555,6 +558,15 @@ DWORD RemoteRateEstimator::GetEstimatedBitrateUnlocked() const
 	return bitrateAcu.IsInWindow() ? currentBitRate : 0;
 }
 
+DWORD RemoteRateEstimator::GetIncomingBitrate()
+{
+	//Meme verrou lecteur que GetEstimatedBitrate : l'accumulateur est ecrit par
+	//le thread qui recoit les paquets.
+	lock.IncUse();
+	DWORD incoming = bitrateAcu.IsInWindow() ? (DWORD)bitrateAcu.GetInstantAvg() : 0;
+	lock.DecUse();
+	return incoming;
+}
 DWORD RemoteRateEstimator::GetEstimatedBitrate()
 {
 	//Lecteur : trois threads lisent sans verrou jusqu'ici (revue rate-control)

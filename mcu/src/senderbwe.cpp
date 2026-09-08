@@ -88,6 +88,7 @@ SenderBWE::SenderBWE()
 	//Bornes du lot 1 (arbitrage A1) : en dessous de 16 kb/s mieux vaut geler
 	minConfiguredBitrate = 16000;
 	maxConfiguredBitrate = 30000000;
+	atCeiling = false;
 }
 
 void SenderBWE::TraceEstimate(QWORD nowUs, bool changed)
@@ -391,7 +392,7 @@ void SenderBWE::UpdateDelayEstimate(QWORD nowUs)
 		case Decrease:
 		{
 			//La descente porte sur le debit ACQUITTE, pas sur notre propre
-			//estimation (l'ecart qui empechait la convergence, rate-control.md §5.2)
+			//estimation (docs/RATE-CONTROL.md)
 			DWORD decreased = (DWORD)(Beta * ackedBps + 0.5);
 			if (decreased > 5000)
 				decreased -= 5000;
@@ -433,6 +434,16 @@ bool SenderBWE::UpdateTarget(DWORD bitrate, QWORD nowUs)
 	bitrate = ClampBitrate(bitrate);
 	bool changed = bitrate != lossBasedTarget;
 	lossBasedTarget = bitrate;
+
+	//Sur le FRONT seulement : a ce plafond l'estimateur peut rester des minutes,
+	//une trace par rapport serait du bruit. Sans transport-cc il y monte des
+	//qu'il n'y a pas de perte : le voir ici dit que la borne codee en dur (cf.
+	//RTPSession::VideoSenderEstimateMaxBps) est ce qui le tient, pas le lien.
+	const bool ceiling = bitrate >= maxConfiguredBitrate;
+	if (ceiling && !atCeiling)
+		Log("-BWE-TX: limite codee en dur de %u kbit/s atteinte, l'estimateur d'emission ne montera pas plus haut [%s]\n",
+		    maxConfiguredBitrate / 1000, eventSource ? eventSource->GetName() : "");
+	atCeiling = ceiling;
 	return changed;
 }
 
@@ -539,6 +550,11 @@ bool SenderBWE::UpdateFractionLost(BYTE fractionLost, QWORD nowUs)
 	DWORD before = GetEstimatedBitrate();
 	if (!lossBasedTarget && delayInitialized)
 		lossBasedTarget = delayCurrentBitrate;
+	//Sans controleur de delai (pas de transport-cc), la cible s'amorce sur le
+	//debit reellement emis. Mesure pas encore prete : elle reste a 0 et le
+	//prochain RR reessaie.
+	else if (!lossBasedTarget)
+		lossBasedTarget = GetSentBitrate();
 	UpdateLossEstimate(nowUs);
 	DWORD after = GetEstimatedBitrate();
 	TraceEstimate(nowUs, after != before);

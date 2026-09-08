@@ -60,7 +60,7 @@ BIN   = ../bin/$(TAG)
 # H263/H263+/MPEG4 entierement fournis par libmedkit (FfVideoDecoder/FfVideoEncoder). Repertoire mcu supprime.
 
 JSR309DIR=jsr309
-JSR309OBJ=JSR309Event.o WSEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSession.o \
+JSR309OBJ=JSR309Event.o WSEndpoint.o DCEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSession.o \
     JSR309Manager.o RTPMultiplexer.o xmlrpcjsr309.o AudioDecoderWorker.o \
     AudioEncoderWorker.o AudioMixerResource.o VideoDecoderWorker.o VideoEncoderWorker.o \
     VideoMixerResource.o RTPMultiplexerSmoother.o Recorder.o AudioTranscoder.o Joinable.o
@@ -79,27 +79,26 @@ DOCSHARINGOBJ= remoteratecontrol.o uploadhandler.o http.o appmixer.o
 MOTELIDIR=moteli
 MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 
+# Data channels WebRTC : la pile SCTP (usrsctp), DCEP et le T.140 par dessus.
+# Trois couches qui ne connaissent ni ICE, ni DTLS, ni UDP, ni RTP — le porteur
+# est une RTPSession, et c'est elle qui les branche (docs/conception/T140-DC).
+SCTPDIR=sctp
+SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o t140bridge.o
+
 OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
 # libmedkit tirent la classe Logo de l'archive).
-OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o mediagateway.o mediabridgesession.o 
-OBJS+=xmlrpcmediagateway.o textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o audiodecoder.o textencoder.o mp4recorder.o rtmpmp4stream.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
+OBJS+=mosaic.o mosaiccompositor.o partedmosaic.o asymmetricmosaic.o pipmosaic.o overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.o FLVEncoder.o xmlrpcbroadcaster.o 
+OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinput.o pipetextoutput.o mp4player.o mp4streamer.o audioencoder.o textencoder.o mp4recorder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o sidebar.o \
       vad.o dtls.o VideoTranscoder.o remoterateestimator.o eventstreaminghandler.o videopipe.o redcodec.o shareddocmixer.o mcustatushandler.o dtmfmessage.o transportfeedback.o sentpackethistory.o trendlinedetector.o senderbwe.o
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
-OBJS+=ipaddress.o addressprofiles.o stunclient.o
+OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o
 
-OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ)
-TARGETS=mcu rtmptest mediagw
-
-OBJS2=mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o 
-OBJS2+=overlay.o amf.o rtmpmessage.o rtmpchunk.o rtmpstream.o rtmpconnection.o  rtmpserver.o broadcaster.o broadcastsession.o rtmpflvstream.o flvrecorder.omediagateway.o mediabridgesession.o mcustatushandler.o
-OBJS2+=xmlrpcmediagateway.o textstream.o pipetextinput.o pipetextoutput.o audioencoder.o audiodecoder.o textencoder.o rtmpnetconnection.o rtmpclientconnection.o avcdescriptor.o RTPSmoother.o rtp.o fecdecoder.o vad.o 
-OBJS2+=remoterateestimator.o eventstreaminghandler.o VideoTranscoder.o videopipe.o redcodec.o
-OBJS2+=ipaddress.o addressprofiles.o stunclient.o
-OBJS2+= $(JSR309OBJ) $(DOCSHARINGOBJ)
+OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ)
+TARGETS=mcu rtmptest
 
 ifeq ($(FLASHSTREAMER),yes)
 	OBJS+= flash.o xmlrpcflash.o 
@@ -131,6 +130,15 @@ ifeq ($(ASAN),yes)
 	LDFLAGS += -fsanitize=address
 endif
 
+# TSAN=yes : detecteur de courses (ThreadSanitizer). Meme usage qu'ASAN, meme
+# piege sur le melange d'objets : passer TAG=tsan pour les isoler du build
+# normal (make tests TSAN=yes TAG=tsan). libmedkit et libbfcp ne sont pas
+# instrumentes : une course INTERNE a ces bibliotheques ne sera pas vue.
+ifeq ($(TSAN),yes)
+	OPTS    += -fsanitize=thread -fno-omit-frame-pointer
+	LDFLAGS += -fsanitize=thread
+endif
+
 OBJSMCU = $(OBJS) main.o
 OBJSRTMPTEST = $(OBJS) rtmptest.o
 OBJSWSTEST = $(OBJS) wstest.o
@@ -138,7 +146,6 @@ OBJSWSTEST = $(OBJS) wstest.o
 BUILDOBJSMCU = $(addprefix $(BUILD)/,$(OBJSMCU))
 BUILDOBJSRTMPTEST= $(addprefix $(BUILD)/,$(OBJSRTMPTEST))
 BUILDOBJSWSTEST= $(addprefix $(BUILD)/,$(OBJSWSTEST))
-BUILDOBJSMEDIAGW= $(addprefix $(BUILD)/,$(OBJS2))
 BUILDOBJSFS= $(addprefix $(BUILD)/,$(OBJSFS)) 
 BUILDOBJSFSCLIENT= $(addprefix $(BUILD)/,$(OBJSFSCLIENT))
 
@@ -149,6 +156,7 @@ VPATH  =  %.o $(BUILD)/
 VPATH +=  %.c src/
 VPATH +=  %.cpp src/
 VPATH +=  %.cpp src/$(JSR309DIR)
+VPATH +=  %.cpp src/$(SCTPDIR)
 
 ifeq ($(MOTELI),yes)
     VPATH +=  %.cpp src/$(MOTELIDIR)
@@ -161,7 +169,22 @@ endif
 MAGICKCFLAGS    := $(shell pkg-config --cflags Magick++)
 MAGICKLIBS      := $(shell pkg-config --libs Magick++)
 
-INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) -I$(BFCPINCLUDE)
+# usrsctp : pile SCTP en espace utilisateur (paquet systeme, depot EPEL 9), pour
+# le texte T.140 sur data channel WebRTC. Elle ne touche aucune socket : on lui
+# injecte les datagrammes dechiffres par DTLS et elle en rend par callback, donc
+# SCTP sur DTLS sur UDP. usrsctp-devel fournit son pkg-config.
+SCTPCFLAGS      := $(shell pkg-config --cflags usrsctp)
+SCTPLIBS        := $(shell pkg-config --libs usrsctp)
+
+# Repli explicite et bruyant, comme pour libmedkit : des flags vides donneraient
+# une erreur — un en-tete introuvable — sans rapport visible avec sa cause.
+ifeq ($(strip $(SCTPLIBS)),)
+$(warning pkg-config n'a pas resolu usrsctp : repli sur -lusrsctp.)
+$(warning Installer la dependance : ./install.ksh prereq)
+SCTPLIBS := -lusrsctp
+endif
+
+INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCTPCFLAGS) -I$(BFCPINCLUDE)
 
 ###################################
 # libmedkit + ffmpeg, par pkg-config
@@ -213,7 +236,7 @@ endif
 # AlmaLinux 9. Les codecs que ces branches liaient en direct (-lx264, -lvpx,
 # -lspeex, -lfdk-aac, -lg722_1, -lopencore-amr*) arrivent tous par libavcodec,
 # via libmedkit.
-LDFLAGS += -lsrtp2 -lmp4v2 $(MAGICKLIBS) -lbz2 -ldl -lz
+LDFLAGS += -lsrtp2 -lmp4v2 $(MAGICKLIBS) $(SCTPLIBS) -lbz2 -ldl -lz
 
 # xmlrpc-c : paquet systeme (xmlrpc-c-devel, depot crb) lie dynamiquement, bati
 # avec le backend libxml2 — xmlParseChunk vient donc de la libxml2 systeme
@@ -299,9 +322,6 @@ rtmptest: $(OBJSRTMPTEST)
 wstest: mkdirs $(OBJSWSTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSWSTEST) $(LDFLAGS) $(VADLD)
 
-mediagw:  $(OBJS2) maingw.o
-	$(CXX) -o $(BIN)/$@ $(OBJSMEDIAGW) maingw.o $(LDFLAGS)
-	
 flashstreamer: $(OBJSFS) $(OBJS)
 	g++ $(GNASHLD) -o $(BIN)/$@ $(BUILDOBJSFS) $(BUILDOBJS) $(GNASHBASE)/backend/.libs/libgnashagg.a  /usr/lib/libagg.a  $(LDFLAGS)
 
@@ -348,8 +368,8 @@ check-ipv6: tests/runtests
 	./tests/runtests --gtest_filter='IPv6*' --gtest_also_run_disabled_tests
 
 # Suite contrôle de débit (chantier rate-control, cf. tests/test_rate_control.cpp).
-# Tableau de bord du chantier : joue AUSSI les tests DISABLED_ (caractérisation
-# des défauts de rate-control.md §3, leves un a un par le lot 1 du plan).
+# Joue AUSSI les tests DISABLED_ (caractérisation de défauts levés un a un).
+# Les mécanismes sous test sont décrits dans docs/RATE-CONTROL.md.
 check-ratecontrol: tests/runtests
 	./tests/runtests --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
 
@@ -358,7 +378,13 @@ check-ratecontrol: tests/runtests
 check-senderbwe: tests/runtests
 	./tests/runtests --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:TransportFeedbackGenerator*:TransportCCWiring*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
 
-.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe
+# Suite « transcodeurs sans thread » (jsr309_transcode_sans_thread.md).
+# Tableau de bord du chantier : caracterisation, chemins inline audio/video,
+# pont, et les scenarios de recette jouables sans appel reel.
+check-transcoder: tests/runtests
+	./tests/runtests --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
+
+.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe check-transcoder
 
 ############################################
 # Dependances generees automatiquement (headers -> objets)

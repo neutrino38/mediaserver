@@ -8,6 +8,8 @@
 #ifndef RTPMULTIPLEXERSMOOTHER_H
 #define	RTPMULTIPLEXERSMOOTHER_H
 
+#include <atomic>
+
 #include "config.h"
 #include "worker.h"
 #include "waitqueue.h"
@@ -32,6 +34,13 @@ protected:
 	//Corps du Worker
 	virtual int Run();
 
+	//Nouveau run d'encodage SANS redémarrer le lisseur : la base de temps de
+	//l'encodeur repart de zéro, donc la RFC 3550 veut une nouvelle identité de
+	//source. Depuis le lot 4, une renégociation ne passe plus par Stop/Start —
+	//c'est le chemin des paquets qui rouvre l'encodeur, et c'est lui qui doit
+	//annoncer le nouveau run.
+	void RenewSSRC() { ssrc = random(); }
+
 private:
 	//Pacer a budget, meme mecanique que RTPSmoother (cf. son en-tete) : chaque
 	//paquet porte son temps de passage sur le fil et `nextSendUs` les enchaine,
@@ -40,7 +49,11 @@ private:
 	//Etalement maximal d'UNE image : borne de LATENCE (cf. RTPSmoother)
 	static const QWORD MaxSpreadUs = 200000;
 
-	bool		inited;
+	//Lu par le thread du lisseur (condition de boucle) et ecrit par le plan de
+	//controle : atomique, sinon -O3 est libre de hisser la lecture hors de la
+	//boucle et le join de Stop() n'en revient jamais. Meme motif que
+	//Worker::running.
+	std::atomic<bool> inited;
 	QWORD		nextSendUs;
 	WaitQueue<RTPPacketSched*> queue;
 	//SSRC du run d'encodage courant, posé sur chaque paquet produit. Tiré à

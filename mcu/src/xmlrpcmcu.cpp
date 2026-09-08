@@ -1351,7 +1351,7 @@ xmlrpc_value* SetMute(xmlrpc_env *env, xmlrpc_value *param_array, void *user_dat
 
 	//Salimos
 	if(!res)
-		return xmlerror(env,"Could not start playback");
+		return xmlerror(env,"Could not set mute: participant not found");
 
 	//Devolvemos el resultado
 	return xmlok(env);
@@ -1518,6 +1518,13 @@ xmlrpc_value* StartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *use
 	    xmlrpc_parse_value(env, param_array, "(iiisiS)", &confId,&partId,&media,&sendIp,&sendPort,&rtpMap);
 	
 	}
+
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
 	
 	//Get the rtp map
 	RTPMap map;
@@ -2088,6 +2095,13 @@ MCU *mcu = (MCU *)user_data;
 
 	}
 
+	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
+	//lire est ce qui suit immediatement. Sans cette garde on suivait des
+	//pointeurs sauvages, puis on construisait la reponse sur un env en faute —
+	//ce qui ASSERE dans xmlrpc-c et abort() le processus (recette 2026-09-02).
+	if (env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
 	//Get the rtp map
 	RTPMap map;
 
@@ -2267,6 +2281,50 @@ xmlrpc_value* ConfigureParticipantMediaConnection(xmlrpc_env *env, xmlrpc_value 
 	snprintf(url,sizeof(url),"%s/mcu/%d/%s",base.c_str(),confId,token);
 
 	xmlrpc_value* ret = xmlrpc_build_value(env,"(s)",url);
+	return xmlok(env,ret);
+}
+
+/**
+ * SetupParticipantDataChannel
+ *
+ * Les parametres SCTP de la jambe texte d'un participant, apres l'avoir basculee
+ * sur un data channel (ConfigureParticipantMediaConnection avec proto=SCTP=5).
+ * Le controleur donne le `a=sctp-port` du pair et repart avec les notres : ce
+ * que le serveur sait de lui-meme, c'est a lui qu'on le demande, pas a une
+ * constante recopiee dans le controleur.
+ *
+ * Params (iiii) : confId, partId, media (TEXT=2 seul accepte), remoteSctpPort
+ * (0 = le defaut 5000 de RFC 8841).
+ * Retour (iii) : notre sctp-port, max-message-size, et le flux du canal — ce
+ * dernier a -1 tant que le canal n'est pas ouvert, il ne sert qu'a un a=dcmap.
+ */
+xmlrpc_value* SetupParticipantDataChannel(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	int media;
+	int remoteSCTPPort;
+	xmlrpc_parse_value(env, param_array, "(iiii)", &confId,&partId,&media,&remoteSCTPPort);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred: bad arguments");
+
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	WORD  localSCTPPort  = 0;
+	DWORD maxMessageSize = 0;
+	int   streamId       = -1;
+
+	if (!conf->SetupParticipantDataChannel(partId,(MediaFrame::Type)media,(WORD)remoteSCTPPort,
+					       localSCTPPort,maxMessageSize,streamId))
+		return xmlerror(env,"Could not setup data channel");
+
+	xmlrpc_value* ret = xmlrpc_build_value(env,"(iii)",
+					       (int) localSCTPPort,(int) maxMessageSize,streamId);
 	return xmlok(env,ret);
 }
 
@@ -2626,6 +2684,7 @@ XmlHandlerCmd mcuCmdList[] =
 	{"StartReceiving",StartReceiving},
 	{"StopReceiving",StopReceiving},
 	{"ConfigureParticipantMediaConnection",ConfigureParticipantMediaConnection},
+	{"SetupParticipantDataChannel",SetupParticipantDataChannel},
 	{"StartRTPTimeout",StartRTPTimeout},
 	{"SetAudioCodec",SetAudioCodec},
 	{"SetTextCodec",SetTextCodec},	

@@ -9,6 +9,7 @@
 #include "sidebar.h"
 #include <map>
 #include <memory>
+#include <atomic>
 
 class AudioMixer : public VADProxy, public Worker
 {
@@ -59,11 +60,11 @@ private:
 		DWORD		vad;
 	} AudioSource;
 
-	typedef std::map<int,AudioSource *>	Audios;
-	typedef std::map<int,Sidebar *>		Sidebars;
+	typedef std::map<int,std::unique_ptr<AudioSource>>	Audios;
+	typedef std::map<int,std::unique_ptr<Sidebar>>		Sidebars;
 
 private:
-	int		mixingAudio;
+	std::atomic<bool> mixingAudio;
 	Use		lstAudiosUse;
 	
 	Audios		audios;

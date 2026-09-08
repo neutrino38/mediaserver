@@ -9,15 +9,36 @@
  * style maison plutôt que recopiée (arbitrage A5 du plan) :
  *
  *   - une BAISSE de plus de 3 % part TOUT DE SUITE — c'est le message urgent,
- *     le lien sature et le pair doit ralentir ;
+ *     le lien sature et le pair doit ralentir. Seulement si elle vient d'une
+ *     CONGESTION mesurée : l'estimation peut aussi baisser parce qu'elle suit
+ *     l'entrant (plafond glissant 1,5 x), et annoncer cette baisse-là enferme
+ *     un pair obéissant. Mesure du 2026-09-02, appel sans dégradation : Alice
+ *     s'échauffe à 134 kb/s, l'estimation tombe de 2291 à 211 kb/s en une
+ *     seconde sans OverUsing, le TMMBR 211 part comme « urgent », Alice obéit
+ *     et passe en 320x240 pour le reste de l'appel ;
  *   - tout le reste (hausse, ou variation dans le bruit) attend la période de
- *     hausse depuis la dernière annonce — 200 ms par défaut, mais le dialecte
- *     peut l'allonger (SetRaisePolicy) : Linphone reconfigure son encodeur à
- *     CHAQUE TMMBR reçu (msvideoqualitycontroller.c, aucune hystérésis), donc
- *     une hausse par seconde le fait rouvrir en boucle — mesure du 2026-08-22 ;
- *     un pas franc (raiseStepPercent) devance la période ;
+ *     hausse depuis la dernière annonce — 200 ms en REMB, que Chrome attend
+ *     périodique. En TMMBR il n'y a PAS de période : la limite est collante
+ *     (RFC 5104), redire une valeur voisine n'apprend rien au pair, et Linphone
+ *     détruit et recrée son encodeur VP8 à chaque TMMBR de valeur différente
+ *     (msvideoqualitycontroller.c, vp8.c enc_set_configuration) — une trame clé
+ *     toutes les 2,6 s mesurée le 2026-08-30 avec la période de 5 s. Seul un pas
+ *     franc de hausse part, et la baisse n'est « franche » qu'à 10 % (un pas
+ *     d'AIMD vaut 15 %, le bruit du plafond glissant 3 %) ;
+ *   - une HAUSSE que le pair DEPASSE deja ne part pas : ce n'est plus notre
+ *     limite qui le borne mais sa propre negociation, donc monter le plafond ne
+ *     changera rien a ce qu'il emet — alors que le seul fait de recevoir un
+ *     TMMBR de valeur differente lui fait repiocher taille et cadence. Mesure du
+ *     2026-09-02, appel sans degradation : sur 6 annonces, 4 annoncaient plus
+ *     que le debit reellement recu, et chacune a fait basculer la definition de
+ *     la source entre VGA et 720p (0,03 a 0,94 s apres l'envoi) ;
  *   - un plafond venu d'AILLEURS (l'autre patte d'un relais, lot 5) se compose
  *     par min() avec la mesure locale : on annonce le plus contraint des deux.
+ *     Il obéit à la règle du dialecte, comme la mesure, et se compare à ce qui
+ *     a été ANNONCÉ. Ce n'est pas parce que la contrainte vient de l'aval qu'il
+ *     faut la redire à chaque fois qu'elle arrive. Séance du 2026-09-02 : un
+ *     pair qui réémet son TMMBR 9 fois par seconde faisait partir 2099 relais
+ *     identiques en 232 s vers la source, et 6 bascules de définition chez elle.
  *
  * La classe ne connaît ni socket ni horloge : l'appelant lui passe l'instant
  * (getTimeMS() en production, une horloge simulée dans les tests) et reçoit un
@@ -39,34 +60,55 @@ public:
 	static constexpr QWORD SendIntervalMs = 200;
 	//Une annonce ne devance sa période que si elle descend de plus de 3 %.
 	static constexpr QWORD SendThresholdPercent = 103;
-	//Politique de hausse du dialecte TMMBR : au plus une hausse toutes les 5 s,
-	//sauf pas franc de 20 % qui devance la période.
-	static constexpr QWORD TmmbrRaiseIntervalMs  = 5000;
-	static constexpr DWORD TmmbrRaiseStepPercent = 20;
+
+	//Ce qui mérite une annonce, par dialecte.
+	struct Policy
+	{
+		//Période après laquelle une hausse (ou du bruit) part quand même ;
+		//0 = jamais par le temps.
+		QWORD raiseIntervalMs;
+		//Pas de hausse qui part sans attendre ; 0 = aucun.
+		DWORD raiseStepPercent;
+		//Seuil de la baisse franche : lastSent >= bitrate * seuil / 100.
+		DWORD dropThresholdPercent;
+	};
+	static constexpr Policy RembPolicy  = { SendIntervalMs, 0, (DWORD)SendThresholdPercent };
+	static constexpr Policy TmmbrPolicy = { 0, 20, 110 };
 	//Valeur d'« aucun plafond externe » et de « rien encore annoncé ».
 	static constexpr DWORD NoLimit = 0xFFFFFFFF;
+	//Tolérance sur « le pair respecte notre limite » : il faut qu'il la dépasse
+	//de plus de 5 % pour qu'on le déclare tenu par sa propre négociation. En
+	//dessous, il peut être en train de l'appliquer, et la lever l'informe.
+	static constexpr QWORD PeerOverLimitPercent = 105;
 
 	RembThrottler()
 	{
 		Reset();
 	}
 
-	//La cadence de hausse du dialecte : REMB garde le défaut (200 ms, pas de
-	//pas franc), TMMBR passe à (TmmbrRaiseIntervalMs, TmmbrRaiseStepPercent).
-	//Survit à Reset() : c'est une propriété de la négociation, pas de l'état.
-	void SetRaisePolicy(QWORD intervalMs, DWORD stepPercent)
+	//Le dialecte négocié choisit sa politique. Survit à Reset() : c'est une
+	//propriété de la négociation, pas de l'état.
+	void SetPolicy(const Policy& p)
 	{
-		raiseIntervalMs  = intervalMs;
-		raiseStepPercent = stepPercent;
+		policy = p;
 	}
 
 	//Remet l'amortisseur à l'état neuf : la prochaine annonce part sans attendre.
 	void Reset()
 	{
-		lastSent     = NoLimit;
-		lastSendTime = 0;
-		hasSent      = false;
-		maxBitrate   = NoLimit;
+		lastSent      = NoLimit;
+		lastAnnounced = NoLimit;
+		lastSendTime  = 0;
+		hasSent       = false;
+		maxBitrate    = NoLimit;
+		peerBitrate   = 0;
+	}
+
+	//Débit réellement reçu du pair, en bps ; 0 = inconnu, aucun filtrage. Posé
+	//avant la décision, il sert à reconnaître une hausse qui n'apprend rien.
+	void SetPeerBitrate(DWORD bitrate)
+	{
+		peerBitrate = bitrate;
 	}
 
 	/**
@@ -74,19 +116,24 @@ public:
 	 * @param bitrate  la nouvelle estimation, en bps
 	 * @param now      l'instant, en ms
 	 * @param out      [sortie] le débit à annoncer au pair, plafond compris
+	 * @param congestion la baisse vient d'une surutilisation mesurée ; sinon
+	 *                 c'est un suivi de l'entrant, qui n'a rien d'urgent
 	 * @return true s'il faut émettre maintenant
 	 */
-	bool OnEstimateChanged(DWORD bitrate, QWORD now, DWORD& out)
+	bool OnEstimateChanged(DWORD bitrate, QWORD now, DWORD& out, bool congestion = true)
 	{
-		//Une hausse — ou une variation dans le bruit — attend son tour ; seule
-		//une baisse de plus de 3 % devance la période, et un pas franc quand la
-		//politique du dialecte en définit un.
-		if (hasSent
-		    && (QWORD)bitrate * SendThresholdPercent / 100 > (QWORD)lastSent
-		    && now < lastSendTime + raiseIntervalMs
-		    && !(raiseStepPercent
-			 && (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + raiseStepPercent)))
-			return false;
+		if (hasSent)
+		{
+			const bool drop = congestion
+				&& (QWORD)bitrate * policy.dropThresholdPercent / 100 <= (QWORD)lastSent;
+			const bool step = policy.raiseStepPercent
+				&& (QWORD)bitrate * 100 >= (QWORD)lastSent * (100 + policy.raiseStepPercent)
+				&& RaiseIsInformative();
+			const bool period = policy.raiseIntervalMs
+				&& now >= lastSendTime + policy.raiseIntervalMs;
+			if (!drop && !step && !period)
+				return false;
+		}
 
 		//C'est la mesure qui est mémorisée, pas la valeur émise : le plafond
 		//externe est une composition, il ne doit pas faire oublier ce que la
@@ -96,29 +143,64 @@ public:
 		hasSent      = true;
 
 		out = Compose(bitrate);
+		//Ce qui part sur le fil, distinct de la mesure : c'est à lui que le
+		//chemin du plafond se compare.
+		lastAnnounced = out;
 		return true;
 	}
 
 	/**
 	 * Un plafond posé de l'extérieur (la patte opposée d'un relais, lot 5).
-	 * Un plafond qui DESCEND part tout de suite ; un plafond qui remonte, ou
-	 * qui ne mord pas sur la mesure locale, attend la période.
+	 * La décision est celle du DIALECTE NÉGOCIÉ, comme pour la mesure locale, et
+	 * elle se compare à la dernière valeur réellement annoncée : une baisse
+	 * franche part tout de suite, une hausse doit être un pas franc et
+	 * informative, le bruit attend la période s'il y en a une.
 	 * @return true s'il faut émettre maintenant
 	 */
 	bool SetMaxBitrate(DWORD bitrate, QWORD now, DWORD& out)
 	{
 		maxBitrate = bitrate;
 
-		//Rien de neuf à dire au pair si le plafond ne mord pas sur ce qu'on a
-		//déjà annoncé, et que la période n'est pas écoulée.
-		if (hasSent && now < lastSendTime + SendIntervalMs && lastSent <= maxBitrate)
-			return false;
+		const DWORD announce = Compose(lastSent);
 
-		lastSendTime = now;
-		hasSent      = true;
+		if (hasSent)
+		{
+			//Comparé à la dernière valeur ANNONCÉE, pas à la mesure locale.
+			//C'est tout le correctif : comparer à la mesure faisait passer un
+			//plafond bien plus bas qu'elle pour une baisse franche, à chaque
+			//fois qu'il arrivait. Un puits qui réémet son TMMBR 9 fois par
+			//seconde faisait ainsi partir 9 relais par seconde vers la source
+			//— séance du 2026-09-02, 2099 plafonds identiques en 232 s, et
+			//6 bascules de définition chez la source.
+			const bool drop = (QWORD)announce * policy.dropThresholdPercent / 100
+					<= (QWORD)lastAnnounced;
+			const bool step = policy.raiseStepPercent
+				&& (QWORD)announce * 100 >= (QWORD)lastAnnounced * (100 + policy.raiseStepPercent)
+				&& RaiseIsInformative();
+			const bool period = policy.raiseIntervalMs
+				&& now >= lastSendTime + policy.raiseIntervalMs;
+			if (!drop && !step && !period)
+				return false;
+		}
 
-		out = Compose(lastSent);
+		lastSendTime  = now;
+		hasSent       = true;
+		lastAnnounced = announce;
+
+		out = announce;
 		return true;
+	}
+
+	//Une hausse apprend-elle quelque chose au pair ? Non s'il DÉPASSE déjà la
+	//limite qu'on lui a annoncée : le plafond effectif est alors le sien, et
+	//monter le nôtre ne changera pas ce qu'il émet. Vrai quand on ne mesure
+	//rien (on n'invente pas) et quand il respecte la limite, car la lever est
+	//précisément ce qui le libère.
+	bool RaiseIsInformative() const
+	{
+		if (!peerBitrate || lastSent == NoLimit)
+			return true;
+		return (QWORD)peerBitrate * 100 <= (QWORD)lastSent * PeerOverLimitPercent;
 	}
 
 	//Le débit à annoncer pour une mesure locale donnée : le plus contraint de
@@ -133,13 +215,19 @@ public:
 	DWORD GetLastSent()  const { return lastSent;   }
 	DWORD GetMaxBitrate() const { return maxBitrate; }
 
+	//La dernière valeur réellement annoncée au pair, NoLimit tant que rien
+	//n'est parti. Distincte de lastSent, qui est la MESURE locale : sans elle,
+	//un plafond externe constant repartait à chaque appel.
+	DWORD GetLastAnnounced() const { return lastAnnounced; }
+
 private:
 	DWORD	lastSent;
+	DWORD	lastAnnounced;
 	QWORD	lastSendTime;
 	bool	hasSent;
 	DWORD	maxBitrate;
-	QWORD	raiseIntervalMs  = SendIntervalMs;
-	DWORD	raiseStepPercent = 0;
+	DWORD	peerBitrate;
+	Policy	policy = RembPolicy;
 };
 
 #endif	/* REMBTHROTTLER_H */

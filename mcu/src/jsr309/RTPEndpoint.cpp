@@ -12,7 +12,7 @@
 #include "rtpsession.h"
 #include "medkit/codecs.h"
 
-RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role) : Port(type, MediaFrame::RTP), RTPSession(type,this,role)
+RTPEndpoint::RTPEndpoint(MediaFrame::Type type, MediaFrame::MediaRole role, MediaFrame::MediaProtocol proto) : Port(type, proto), RTPSession(type,this,role)
 {
 	//Not reset
 	reseted = false;
@@ -384,12 +384,11 @@ int RTPEndpoint::MultiplexLoop()
         while(receiving)
         {
                 //Get the packet
-			RTPPacket* packet = RTPSession::GetPacket();
+			RTPPacket* packet = RTPSession::GetPacket(0,RTPSession::ConsumerPollMs);
 			//Check packet
 			if (!packet)
 			{
-				//Next
-				msleep(200);
+				//GetPacket a deja attendu : relire le drapeau et repartir.
 				continue;
 			}
 			//Check type
@@ -422,7 +421,6 @@ void* RTPEndpoint::run(void *par)
 	RTPEndpoint *end = (RTPEndpoint *)par;
         //Block signal in thread
 	blocksignals();
-	//Run : la boucle de démultiplexage, PAS Worker::Run() (cf. RTPEndpoint.h)
 	end->MultiplexLoop();
 	//Exit
 	return NULL;
@@ -554,6 +552,12 @@ int RTPEndpoint::RequestUpdate()
 	//Request FIR
 	RequestFPU();
 	return 0;
+}
+
+void RTPEndpoint::AcknowledgeReferencePicture(WORD pictureId)
+{
+	//Le RPSI répond au flux ENTRANT de cette jambe : flux par défaut (ssrc=0)
+	SendReferencePictureSelectionIndication(0,pictureId);
 }
 
  xmlrpc_value* ExternalFIRRequestedEvent::GetXmlValue(xmlrpc_env *env)

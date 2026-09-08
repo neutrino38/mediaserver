@@ -224,7 +224,10 @@ public:
 	}
 
 	void Update() override {}
-	void SetREMB(DWORD estimation) override {}
+	void SetREMB(DWORD estimation) override { rembs.push_back(estimation); }
+
+	// Les limites de débit remontées par l'aval (relais du mode pont).
+	std::vector<DWORD> rembs;
 
 	// Ce que fait RTPMultiplexer::Multiplex côté production.
 	void Publish(RTPPacket &packet)
@@ -269,6 +272,152 @@ TEST_F(VideoBridgingTest, AttachPutsTheTranscoderOnThePathSoBridgingCanHappen)
 	ASSERT_EQ(sizeof(kMagic), sink.received[0].length);
 	EXPECT_EQ(0, memcmp(kMagic, sink.received[0].payload.data(), sizeof(kMagic)));
 
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// La cible du BWE émetteur local suit le même chemin que la limite du pair.
+// En mode pont il n'y a pas d'encodeur : elle remonte à la source, qui est la
+// seule à pouvoir baisser le débit du flux relayé. Sans la surcharge
+// SetSenderEstimate, elle tombait dans le no-op de Joinable et le lien saturé
+// restait saturé (séance netem du 2026-09-01 : image figée, jamais remontée).
+TEST_F(VideoBridgingTest, TheLocalSenderEstimateIsRelayedUpstreamWhenBridging)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	// Passe en mode pont : le puits porte le codec entrant.
+	RTPPacket packet = MakeVideoPacket(VideoCodec::VP8, 42, 90000);
+	source->Publish(packet);
+	ASSERT_EQ(1u, sink.received.size());
+
+	transcoder.SetSenderEstimate(600000);
+
+	ASSERT_EQ(1u, source->rembs.size())
+		<< "en mode pont, l estimation locale doit remonter a la source";
+	EXPECT_EQ(600000u, source->rembs[0])
+		<< "sans consigne negociee (SetCodec jamais appele), la valeur passe telle quelle";
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// En transcodage, l'estimation est absorbée par l'encodeur local : rien ne
+// remonte. Ralentir la source ne réduirait pas ce que NOTRE encodeur émet.
+TEST_F(VideoBridgingTest, TheLocalSenderEstimateStaysLocalWhenTranscoding)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	// Le puits ne sait porter que VP8 ; il arrive du H.264 : décodage.
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	RTPPacket packet = MakeVideoPacket(VideoCodec::H264, 7, 90000);
+	source->Publish(packet);
+	ASSERT_TRUE(sink.received.empty());
+
+	transcoder.SetSenderEstimate(600000);
+
+	EXPECT_TRUE(source->rembs.empty())
+		<< "en transcodage, l estimation ne doit pas remonter a la source";
+
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// La limite du puits (TMMBR/REMB) remonte à la source AUSSI en transcodage :
+// seule la source peut fournir une image plus petite, et ré-encoder du 720p à
+// 140 kb/s donne une image inexploitable. Mais elle ne descend JAMAIS sous le
+// plancher de la sonde — c'est ce qui empêche le verrou de la séance netem du
+// 2026-09-02 (source tombée en 160x120, trames de 2 paquets, sonde invisible au
+// pair, limite du pair figée 3 min 18 s).
+TEST_F(VideoBridgingTest, TheSinkLimitRelayedWhenTranscodingNeverFallsBelowTheProbeFloor)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	// Consigne large : c'est le plancher qu'on veut observer, pas le plafond.
+	// La cadence effective est encore 0 ici — le codec n'a pas ouvert — donc
+	// c'est la consigne de 20 im/s qui donne le plancher.
+	Properties props;
+	ASSERT_EQ(1, transcoder.SetCodec(VideoCodec::VP8, CIF, 20, 2500, 200, props));
+
+	// Le puits ne sait porter que VP8 ; il arrive du H.264 : transcodage.
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+	RTPPacket packet = MakeVideoPacket(VideoCodec::H264, 7, 90000);
+	source->Publish(packet);
+	ASSERT_TRUE(sink.received.empty());
+
+	// 3 paquets pleins par image à 20 im/s, plus 25 % : 810 kb/s.
+	const DWORD floor = ((DWORD)BitrateProbe::Floor(20))*1000;
+	ASSERT_EQ(810000u, floor);
+
+	// Sous le plancher : c'est le plancher qui est relayé.
+	transcoder.SetREMB(140000);
+	ASSERT_EQ(1u, source->rembs.size())
+		<< "en transcodage la limite du puits doit remonter a la source";
+	EXPECT_EQ(floor, source->rembs[0])
+		<< "une limite sous le plancher rendrait nos trames invisibles au pair";
+
+	// Au-dessus du plancher et sous la consigne : la valeur passe telle quelle.
+	transcoder.SetREMB(1200000);
+	ASSERT_EQ(2u, source->rembs.size());
+	EXPECT_EQ(1200000u, source->rembs[1]);
+
+	// Au-dessus de la consigne négociée : c'est elle qui borne.
+	transcoder.SetREMB(3000000);
+	ASSERT_EQ(3u, source->rembs.size());
+	EXPECT_EQ(2500000u, source->rembs[2])
+		<< "un puits ne peut pas autoriser plus que la negociation de la patte";
+
+	transcoder.Dettach();
+	transcoder.RemoveListener(&sink);
+	transcoder.End();
+}
+
+// En mode pont il n'y a PAS de plancher : la limite relayée est le débit du flux
+// lui-même, la relever noierait le puits.
+TEST_F(VideoBridgingTest, TheRelayedSinkLimitHasNoFloorWhenBridging)
+{
+	VideoTranscoder transcoder(name);
+	ASSERT_EQ(1, transcoder.Init(false, /*allowBridging=*/true));
+
+	Properties props;
+	ASSERT_EQ(1, transcoder.SetCodec(VideoCodec::VP8, CIF, 20, 2500, 200, props));
+
+	RecordingSink sink({ VideoCodec::VP8 });
+	transcoder.AddListener(&sink);
+	auto source = std::make_shared<FakeSource>();
+	ASSERT_EQ(1, transcoder.Attach(source));
+
+	// Le puits porte le codec entrant : pont.
+	RTPPacket packet = MakeVideoPacket(VideoCodec::VP8, 42, 90000);
+	source->Publish(packet);
+	ASSERT_EQ(1u, sink.received.size());
+
+	// PushSourceBitrateLimit a déjà poussé la consigne au basculement.
+	const size_t before = source->rembs.size();
+
+	transcoder.SetREMB(140000);
+
+	ASSERT_EQ(before + 1, source->rembs.size());
+	EXPECT_EQ(140000u, source->rembs.back())
+		<< "en pont la limite du puits est le debit du flux : aucun plancher";
+
+	transcoder.Dettach();
 	transcoder.RemoveListener(&sink);
 	transcoder.End();
 }

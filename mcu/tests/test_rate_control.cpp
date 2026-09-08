@@ -1,8 +1,8 @@
 /**
  * test_rate_control.cpp — caractérisation du contrôle de débit (lot 0).
  *
- * Harnais du chantier rate-control (diagnostic : rate-control.md, plan :
- * rate_control_plan.md). Les classes sous test — RemoteRateEstimator et
+ * Harnais du contrôle de débit (mécanismes : docs/RATE-CONTROL.md).
+ * Les classes sous test — RemoteRateEstimator et
  * RemoteRateControl — sont pures : on les nourrit de paquets synthétiques à
  * horloge SIMULÉE via l'overload Update(ssrc, now, ts, size, mark), et on
  * observe l'estimation par un Listener de capture.
@@ -58,7 +58,7 @@ const DWORD kTargetBps  = kFrameBytes * 8 * 1000 / kFrameMs; // ~303 kb/s
 class BitrateCapture : public RemoteRateEstimator::Listener
 {
 public:
-	void onTargetBitrateRequested(DWORD bitrate) override { targets.push_back(bitrate); }
+	void onTargetBitrateRequested(DWORD bitrate, bool) override { targets.push_back(bitrate); }
 	std::vector<DWORD> targets;
 };
 
@@ -101,7 +101,7 @@ TEST(RateControlEstimator, LEstimationSuitUnFluxRegulier)
 	const DWORD ssrc = 0x1234;
 
 	// 75 s simulées : le premier tick AIMD n'arrive qu'après le retard initial
-	// de 500 + 60 000 ms (rate-control.md, annexe B), puis un tick par seconde.
+	// de 500 + 60 000 ms, puis un tick par seconde.
 	FeedRegular(estimator, ssrc, /*from=*/100000, /*durationMs=*/75000);
 
 	DWORD estimation = estimator.GetEstimatedBitrate();
@@ -569,59 +569,282 @@ TEST(RateControlThrottler, LePlafondSurvitAUneMesureBasse)
 	EXPECT_EQ(2000000u, out);
 }
 
-// ─── Politique de hausse du dialecte TMMBR (mesure alice_bob_1, 2026-08-22) ───
-// Linphone reconfigure son encodeur à CHAQUE TMMBR reçu (msvideoqualitycontroller.c,
-// aucune hystérésis d'amplitude) : nos hausses AIMD à une par seconde le
-// faisaient rouvrir en boucle. En dialecte TMMBR, une hausse attend 5 s — sauf
-// pas franc de 20 % — et une baisse franche part toujours immédiatement.
-
-TEST(RateControlThrottler, EnDialecteTMMBRUneHausseAttendCinqSecondes)
+// LE test de régression du relais. Le plafond se comparait à la MESURE locale :
+// un plafond bien plus bas qu'elle passait pour une baisse franche à chaque fois
+// qu'il arrivait, période ou pas. Séance netem du 2026-09-02 : le puits
+// réémettait son TMMBR 9 fois par seconde, toujours la même valeur, et chacun
+// repartait en relais vers la source — 2099 en 232 s, et 6 bascules de
+// définition chez elle. La répétition périodique du plafond reste assurée par
+// SendSenderReport, qui recompose sans rouvrir la décision.
+TEST(RateControlThrottler, UnPlafondIdentiqueNeRepartPasEnTMMBR)
 {
 	RembThrottler throttler;
-	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-				 RembThrottler::TmmbrRaiseStepPercent);
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
 	DWORD out = 0;
 
-	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(108712, 1010, out));
+	ASSERT_EQ(108712u, out);
 
-	// La rampe AIMD réelle : ~+8 % par seconde. Aucune ne doit partir avant 5 s.
-	EXPECT_FALSE(throttler.OnEstimateChanged(1080000, 2000, out));
-	EXPECT_FALSE(throttler.OnEstimateChanged(1166000, 3000, out));
-	EXPECT_FALSE(throttler.OnEstimateChanged(1160000, 4000, out))
-		<< "une variation dans le bruit a devancé la période de hausse";
+	// 232 s du régime mesuré : 9 plafonds identiques par seconde.
+	int sent = 0;
+	for (QWORD now = 1120; now < 1010 + 232000; now += 111)
+		if (throttler.SetMaxBitrate(108712, now, out))
+			sent++;
 
-	EXPECT_TRUE(throttler.OnEstimateChanged(1259000, 6001, out));
-	EXPECT_EQ(1259000u, out);
+	EXPECT_EQ(0, sent) << "une valeur deja annoncee n'apprend rien au pair";
+	EXPECT_EQ(108712u, throttler.GetLastAnnounced());
 }
 
-TEST(RateControlThrottler, EnDialecteTMMBRUnPasFrancDevanceLaPeriode)
+// Le plafond obéit à la même asymétrie que la mesure : une baisse franche part
+// tout de suite, une hausse doit être un pas franc, le bruit ne part jamais.
+TEST(RateControlThrottler, EnTMMBRLePlafondSuitLaMemeAsymetrieQueLaMesure)
 {
 	RembThrottler throttler;
-	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-				 RembThrottler::TmmbrRaiseStepPercent);
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(500000, 1010, out));
+	ASSERT_EQ(500000u, out);
+
+	// +5 % : dans le bruit. Rien ne part, même longtemps après — le TMMBR est
+	// collant, il n'y a pas de période en dialecte TMMBR.
+	EXPECT_FALSE(throttler.SetMaxBitrate(525000, 60000, out));
+
+	// +40 % : pas franc, ça part.
+	ASSERT_TRUE(throttler.SetMaxBitrate(700000, 61000, out));
+	EXPECT_EQ(700000u, out);
+
+	// -15 % : baisse franche, immédiate.
+	ASSERT_TRUE(throttler.SetMaxBitrate(595000, 61100, out));
+	EXPECT_EQ(595000u, out);
+}
+
+// ─── Politique du dialecte TMMBR (mesures alice_bob_1 2026-08-22, §7.9 2026-08-30) ──
+// Linphone détruit et recrée son encodeur VP8 à CHAQUE TMMBR de valeur différente
+// (msvideoqualitycontroller.c → vp8.c enc_set_configuration) : une trame clé par
+// annonce. Le TMMBR est collant (RFC 5104), donc aucune raison de redire une valeur
+// voisine, jamais : seul un pas franc de hausse part, et une baisse n'est franche
+// qu'à 10 % (un pas d'AIMD vaut 15 %, le bruit du plafond glissant 3 %).
+
+TEST(RateControlThrottler, EnDialecteTMMBRLeBruitNEmetJamais)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(4500000, 1000, out));
+
+	// 60 s d'estimations qui oscillent de ±5 % autour de 4,5 Mb/s, une par
+	// seconde : c'est le régime mesuré le 2026-08-30 (pair auto-limité, plafond
+	// à 1,5 x l'entrant). Avec la période de 5 s, une annonce partait toutes les
+	// 5 s et Linphone produisait une trame clé toutes les 2,6 s.
+	const DWORD values[] = { 4600000, 4400000, 4550000, 4290000, 4700000, 4450000 };
+	for (int i = 0; i < 60; i++)
+		EXPECT_FALSE(throttler.OnEstimateChanged(values[i % 6], 2000 + i * 1000, out))
+			<< "annonce partie à t=" << 2000 + i * 1000 << " pour " << values[i % 6];
+}
+
+TEST(RateControlThrottler, EnDialecteTMMBRSeulUnPasFrancDeHaussePart)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
 	DWORD out = 0;
 
 	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
 
-	// +19 % : sous le pas franc, attend la période.
+	// +19 % : sous le pas franc, ne part pas — même après 10 s.
 	EXPECT_FALSE(throttler.OnEstimateChanged(1190000, 2000, out));
-	// +20 % : le pas franc part sans attendre.
-	EXPECT_TRUE(throttler.OnEstimateChanged(1200000, 2100, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(1190000, 12000, out))
+		<< "le temps seul a fait partir une hausse en TMMBR";
+	// +20 % : part sans attendre.
+	EXPECT_TRUE(throttler.OnEstimateChanged(1200000, 12100, out));
 	EXPECT_EQ(1200000u, out);
+}
+
+TEST(RateControlThrottler, EnDialecteTMMBRUneBaisseDansLeBruitNEmetPas)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+
+	// -5 % : bruit du plafond glissant, pas une congestion.
+	EXPECT_FALSE(throttler.OnEstimateChanged(950000, 1200, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(950000, 9000, out));
+	// -10 % : franche, part tout de suite.
+	EXPECT_TRUE(throttler.OnEstimateChanged(900000, 9100, out));
+	EXPECT_EQ(900000u, out);
 }
 
 TEST(RateControlThrottler, EnDialecteTMMBRUneBaisseFranchePartToujoursImmediatement)
 {
 	RembThrottler throttler;
-	throttler.SetRaisePolicy(RembThrottler::TmmbrRaiseIntervalMs,
-				 RembThrottler::TmmbrRaiseStepPercent);
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
 	DWORD out = 0;
 
 	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
 
 	EXPECT_TRUE(throttler.OnEstimateChanged(850000, 1200, out))
-		<< "une baisse de 15 % (un pas d'AIMD) retenue par la période de hausse";
+		<< "une baisse de 15 % (un pas d'AIMD) retenue";
 	EXPECT_EQ(850000u, out);
+}
+
+// Le dialecte REMB garde ses seuils : une baisse de 5 % part, une hausse attend
+// 200 ms puis part. Chrome attend des annonces périodiques et n'a pas le défaut
+// de Linphone.
+// ─── La hausse inerte (mesure du 2026-09-02) ────────────────────────────────
+// Appel SANS dégradation : 6 TMMBR en 6 min, dont 4 annonçaient PLUS que le
+// débit réellement reçu du pair. Chacune a fait basculer la définition de la
+// source entre VGA et 720p, 0,03 à 0,94 s après l'envoi. Quand le pair dépasse
+// déjà la limite annoncée, c'est sa propre négociation qui le borne : monter le
+// plafond ne change rien à ce qu'il émet, et ne lui coûte qu'un repiochage.
+
+TEST(RateControlThrottler, UneHausseQueLePairDepasseDejaNEmetPas)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	// Première annonce : 2,21 Mb/s, comme la séance.
+	ASSERT_TRUE(throttler.OnEstimateChanged(2213936, 1000, out));
+
+	// Le pair produit 2,46 Mb/s : il dépasse ce qu'on lui a annoncé, donc notre
+	// limite ne le borne pas.
+	throttler.SetPeerBitrate(2462000);
+
+	// Un pas franc de hausse (+26 %) qui, sans le garde, serait parti.
+	EXPECT_FALSE(throttler.OnEstimateChanged(2784745, 6000, out))
+		<< "hausse inerte : le pair est deja au-dela";
+	EXPECT_FALSE(throttler.OnEstimateChanged(3384364, 12000, out))
+		<< "et elle reste inerte plus haut encore";
+}
+
+// Le garde ne doit pas créer de cliquet : quand le pair RESPECTE la limite, la
+// lever est justement ce qui le libère.
+TEST(RateControlThrottler, UneHausseQuiLibereLePairPartToujours)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(500000, 1000, out));
+
+	// Le pair s'y tient : c'est NOTRE limite qui le borne.
+	throttler.SetPeerBitrate(500000);
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 6000, out))
+		<< "sans cela, le pair resterait enferme a 500 kb/s";
+	EXPECT_EQ(1000000u, out);
+}
+
+// Sans mesure du pair, on ne filtre rien : le garde ne doit pas changer le
+// comportement là où il n'a pas d'information.
+TEST(RateControlThrottler, SansMesureDuPairLaHaussePartCommeAvant)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2213936, 1000, out));
+	// SetPeerBitrate jamais appelé : aucune mesure.
+	EXPECT_TRUE(throttler.OnEstimateChanged(2784745, 6000, out));
+}
+
+// Une baisse franche reste urgente, même quand le pair dépasse la limite : elle
+// dit au pair de ralentir, c'est le message qui ne doit jamais être retenu.
+TEST(RateControlThrottler, UneBaisseFranchePartMemeQuandLePairDepasse)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2213936, 1000, out));
+	throttler.SetPeerBitrate(2462000);
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(800000, 6000, out));
+	EXPECT_EQ(800000u, out);
+}
+
+// ─── La baisse qui n'est qu'un suivi (mesure du 2026-09-02) ───────────────────
+// L'estimation de réception suit l'entrant (plafond 1,5 x). Quand le pair
+// s'échauffe, elle s'effondre sur son débit d'échauffement SANS congestion.
+// Annoncer cet effondrement comme « urgent » enferme un pair obéissant : Alice
+// est passée en 320x240 à 08:17:35 et n'en est jamais ressortie.
+
+TEST(RateControlThrottler, UneBaisseSansCongestionNEstPasUrgente)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	// 2291 kb/s annoncés à l'échauffement (accumulateur gonflé par la trame clé).
+	ASSERT_TRUE(throttler.OnEstimateChanged(2291280, 1000, out));
+
+	// Une seconde plus tard le plafond glissant suit l'entrant à 134 kb/s :
+	// 1,5 x 134 + 10 = 211. État Increase, aucun OverUsing.
+	EXPECT_FALSE(throttler.OnEstimateChanged(211060, 2026, out, /*congestion=*/false))
+		<< "un suivi de l entrant n est pas un ordre de ralentir";
+}
+
+TEST(RateControlThrottler, UneBaisseDeCongestionResteUrgente)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2291280, 1000, out));
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1500000, 2026, out, /*congestion=*/true))
+		<< "le lien sature : le pair doit l apprendre tout de suite";
+	EXPECT_EQ(1500000u, out);
+}
+
+// Après un suivi non annoncé, la référence reste la dernière valeur ÉMISE : la
+// remontée du pair se juge contre elle, et part dès qu'elle la dépasse d'un pas.
+TEST(RateControlThrottler, ApresUnSuiviLaRemonteeSeJugeContreLaDerniereAnnonce)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2291280, 1000, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(211060, 2026, out, false));
+
+	// Le pair a fini de s'échauffer, l'estimation remonte : 2,3 Mb/s n'est
+	// qu'à +0,4 % de la dernière annonce, rien à dire ; 2,8 Mb/s est un pas.
+	throttler.SetPeerBitrate(2000000);
+	EXPECT_FALSE(throttler.OnEstimateChanged(2300000, 9000, out, false));
+	EXPECT_TRUE(throttler.OnEstimateChanged(2800000, 10000, out, false));
+	EXPECT_EQ(2800000u, out);
+}
+
+// En REMB il y a une période : un suivi part à la période comme n'importe quelle
+// variation, il perd seulement son passe-droit d'urgence.
+TEST(RateControlThrottler, EnREMBUnSuiviAttendLaPeriodeAuLieuDePartirToutDeSuite)
+{
+	RembThrottler throttler;	// RembPolicy par défaut
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(1000000, 1050, out, false))
+		<< "dans la periode, sans congestion : on attend";
+	EXPECT_TRUE(throttler.OnEstimateChanged(1000000, 1250, out, false))
+		<< "la periode ecoulee, la variation part normalement";
+}
+
+TEST(RateControlThrottler, LeDialecteREMBGardeSesSeuils)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::RembPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(1000000, 1000, out));
+	EXPECT_TRUE(throttler.OnEstimateChanged(950000, 1010, out));
+	EXPECT_FALSE(throttler.OnEstimateChanged(960000, 1100, out));
+	EXPECT_TRUE(throttler.OnEstimateChanged(960000, 1211, out));
 }
 
 // Le champ REMB annonce le NOMBRE de SSRC qu'il porte : la valeur était écrite
@@ -687,7 +910,7 @@ class ReentrantCapture : public RemoteRateEstimator::Listener
 public:
 	ReentrantCapture(RemoteRateEstimator& estimator) : estimator(estimator) {}
 
-	void onTargetBitrateRequested(DWORD bitrate) override
+	void onTargetBitrateRequested(DWORD bitrate, bool) override
 	{
 		estimator.GetSSRCs(ssrcs);
 		estimated = estimator.GetEstimatedBitrate();
@@ -745,7 +968,7 @@ TEST(RateControlEstimator, UnListenerPeutInterrogerLEstimateurDepuisLaNotificati
 class SlowCapture : public RemoteRateEstimator::Listener
 {
 public:
-	void onTargetBitrateRequested(DWORD bitrate) override
+	void onTargetBitrateRequested(DWORD bitrate, bool) override
 	{
 		notifying = true;
 		usleep(300000);
@@ -935,8 +1158,7 @@ TEST(RateControlThreshold, UneVraieCongestionResteVueEnRegionNearMax)
 // ---------------------------------------------------------------------------
 // Suite RateControlJitter — la gigue ne doit pas mentir. Le critere de la seance
 // est « faux positifs <= 10 % des echantillons » ; un test le prononce plus
-// durement : ZERO bascule sur une gigue sans derive. Conception : lot 3bis de
-// rate_control_plan.md.
+// durement : ZERO bascule sur une gigue sans derive.
 // ---------------------------------------------------------------------------
 
 // Gigue deterministe. Pas de rand() : un test doit se rejouer a l'identique, et
@@ -1097,7 +1319,7 @@ void FeedLossPhase(RemoteRateControl& ctrl, QWORD& time, QWORD& ts,
 
 // ---------------------------------------------------------------------------
 // Suite RateControlLoss — le chemin de perte (UpdateLost), que ni l'escalier ni
-// la gigue n'exercent. Conception : lot 3bis de rate_control_plan.md.
+// la gigue n'exercent.
 // ---------------------------------------------------------------------------
 
 // Un seul test couvrait ce chemin, et il vérifiait une ABSENCE de détection : le

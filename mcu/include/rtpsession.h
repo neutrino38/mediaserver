@@ -1,6 +1,7 @@
 #ifndef _RTPSESSION_H_
 #define _RTPSESSION_H_
-#include "worker.h"
+#include "pollhandler.h"
+#include "wait.h"
 #include <sys/socket.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -22,15 +23,19 @@
 #include "remoterateestimator.h"
 #include "rembthrottler.h"
 #include "dtls.h"
+#include <atomic>
+
 #include "ipaddress.h"
 #include "addressprofiles.h"
 
 
 
+class RtpSessionSet;
+
 class RTPSession : 
 	public RemoteRateEstimator::Listener,
 	public DTLSConnection::Listener,
-	public Worker
+	public PollHandler
 {
 public:
 	class Listener
@@ -107,7 +112,7 @@ public:
 	~RTPSession();
 	//M-6 : enregistrement différé d'un listener géré par shared_ptr
 	//(RTPParticipant). Une fois appelé, prend le pas sur le pointeur brut du
-	//constructeur (utilisé tel quel par MediaBridgeSession, non converti).
+	//constructeur.
 	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
 	int Init();
 	//Adresse à lier par les sockets média, AVANT Init : c'est elle qui décide de
@@ -231,9 +236,27 @@ public:
 	
 	void CancelGetPacket();
 	
+	//Période de relecture du drapeau d'arrêt par un consommateur, donc la borne
+	//qu'il passe à GetPacket. Assez courte pour qu'un StopReceiving réponde,
+	//assez longue pour que l'attente ne coûte rien.
+	static const DWORD ConsumerPollMs = 200;
+
+	//Bornes de l'estimateur d'ÉMISSION d'une session vidéo (arbitrage
+	//mainteneur 2026-09-02). Plancher : sous 128 kb/s une consigne vidéo n'est
+	//plus une régulation. Plafond : sans transport-cc l'estimateur monte de
+	//+8 %/s tant qu'il n'y a pas de perte, jusqu'au défaut de 30 Mb/s — un
+	//chiffre qui ne veut rien dire et qui rend la redescente lente. 6 Mb/s
+	//couvre du 1080p de bonne qualité. RÈGLE : ce plafond doit rester
+	//SUPÉRIEUR à la plus haute consigne vidéo négociée, sinon c'est lui qui
+	//bride l'encodeur, en silence, sur toute jambe sans transport-cc.
+	static const DWORD VideoSenderEstimateMinBps = 128000;
+	static const DWORD VideoSenderEstimateMaxBps = 6000000;
+
 	// Multi stream
-	RTPPacket* GetPacket();
-	RTPPacket* GetPacket(DWORD & ssrc);
+	//`timeoutMs` borne l'attente ; `ssrc` 0 = flux par défaut. Rend NULL sur
+	//expiration, sur annulation, ou quand le flux demandé n'existe pas encore —
+	//dans ce dernier cas APRÈS avoir attendu sa naissance, jamais en sondant.
+	RTPPacket* GetPacket(DWORD ssrc, DWORD timeoutMs);
 	void CancelGetPacket(DWORD & ssrc);
 	
 	void ResetPacket(bool clear) { if (defaultStream != NULL) defaultStream->Reset(clear) ;};
@@ -281,11 +304,58 @@ public:
 	int SetLocalCryptoSDES(const char* suite, const char* key64);
 	int SetRemoteCryptoSDES(const char* suite, const char* key64,int keyRank=0);
 	int SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint);
+
+	//Consommateur des données APPLICATIVES du DTLS, et sa cadence. C'est par là
+	//qu'un data channel WebRTC (RFC 8831) se greffe : la session reste le porteur
+	//— ICE, DTLS, socket, latch d'adresse, thread poll — et ne connaît ni SCTP ni
+	//T.140. Elle livre des octets et bat la mesure, rien de plus.
+	class ApplicationListener : public DTLSConnection::ApplicationListener
+	{
+	public:
+		//Période d'appel de onApplicationTick, en ms. 0 (défaut) = pas de
+		//cadence. Une pile SCTP en espace utilisateur n'a pas de thread : ses
+		//retransmissions et ses heartbeats sont battus par la boucle poll de la
+		//session, ce qui garde tout le chemin sur un seul thread — l'objet SSL
+		//n'est pas concurrent.
+		virtual DWORD GetApplicationTickMs() { return 0; }
+		//Écoulement RÉEL depuis le dernier appel : le poll rend la main plus tôt
+		//sur un paquet entrant, plus tard sous charge.
+		virtual void  onApplicationTick(DWORD elapsedMs) {}
+	};
+
+	//À poser AVANT Init, qui démarre la boucle. NULL retire le consommateur, qui
+	//doit alors le faire avant de mourir : la session ne le possède pas.
+	void SetDTLSApplicationListener(ApplicationListener* listener);
+	//Chiffre et émet un bloc applicatif vers le pair latché. À n'appeler QUE
+	//depuis le thread de la session : l'objet SSL n'est pas concurrent, et cette
+	//boucle le lit à chaque datagramme entrant.
+	int  SendDTLSApplicationData(const BYTE* data,DWORD size);
+	//Réveille le réacteur qui bat cette session, sans attendre un paquet entrant.
+	//Un porteur de data channel en a besoin : la pile SCTP a produit des
+	//datagrammes, et c'est ce thread — le seul qui ait le droit de chiffrer — qui
+	//les vide.
+	void WakeUp();
+
+	//Réacteur qui bat cette session, à poser AVANT Init. Refusé après, parce que
+	//End() doit se retirer du groupe où Init l'a inscrite, et pas d'un autre.
+	//Jamais posé = réacteur par défaut du processus (RtpSessionSet::Default).
+	bool SetPollGroup(RtpSessionSet* group);
+	//Le canal applicatif est-il ouvert ? Une jambe sans RTP n'a pas de profil
+	//SRTP, donc onDTLSSetup ne lui dit jamais rien : c'est ainsi qu'un porteur de
+	//data channel sait qu'il peut commencer à écrire.
+	bool IsDTLSHandshakeCompleted() const { return dtls.IsHandshakeCompleted(); }
+
 	int SetLocalSTUNCredentials(const char* username, const char* pwd);
 	int SetRemoteSTUNCredentials(const char* username, const char* pwd);
 	int SetProperties(const Properties& properties);
 	int RequestFPU();
 	int RequestFPU(DWORD & ssrc);
+	//Acquittement positif d'une trame de référence décodée (RPSI, RFC 4585
+	//§6.3.3) : c'est ce qui évite à un émetteur msvp8 de forcer une trame clé
+	//toutes les 3 s. pictureId = la valeur telle que reçue dans le payload
+	//descriptor (RFC 7741 §5.1, VP9 identique) : bit 0x8000 posé -> bit
+	//string de 2 octets réseau, sinon 1 octet. ssrc=0 -> flux par défaut.
+	int SendReferencePictureSelectionIndication(DWORD ssrc, WORD pictureId);
 	
 	int SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD overhead);
 	//Envoie un TMMBR au pair (borne son débit d'émission, en bps) et arme la
@@ -304,7 +374,7 @@ public:
 	//dans le dialecte négocié. Rend 0 si rien n'est parti (rien de neuf à dire).
 	int SetMaxReceiveBitrate(DWORD bitrate);
 
-	virtual void onTargetBitrateRequested(DWORD bitrate);
+	virtual void onTargetBitrateRequested(DWORD bitrate, bool congestion);
 	virtual void onDTLSSetup(DTLSConnection::Suite suite,BYTE* localMasterKey,DWORD localMasterKeySize,BYTE* remoteMasterKey,DWORD remoteMasterKeySize);
 private:
 	//Le champ REMB (identifiant 'REMB' + débit + SSRC couverts) prêt à être
@@ -314,10 +384,13 @@ private:
 	int SetLocalCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len);
 	void SetRTT(DWORD rtt);
-	void Start();
 	void Stop();
+	//Le réacteur effectif : celui qu'on a posé, sinon celui du processus.
+	RtpSessionSet* Group();
 	int  ReadRTP();
 	int  ReadRTCP();
+	//Checks ICE de la socket média ; `stun` appartient à l'appelant.
+	void ProcessSTUN(STUNMessage* stun,const IPEndpoint& from_addr);
 	//Trace agrégée d'un paquet reçu dont le payload type n'est pas négocié (cf.
 	//unknownPtCount). Rend toujours 0 : l'appelant jette le paquet.
 	int  OnUnknownPayloadType(BYTE type, DWORD ssrc, const IPEndpoint& from);
@@ -334,13 +407,37 @@ private:
 
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
 
-	//Corps du thread hérité de Worker : la boucle poll des sockets RTP/RTCP.
-	//`override` EXPLICITE, et non décoratif : une classe dérivée qui déclarerait
-	//un `int Run()` le remplacerait silencieusement, et la boucle poll ne
-	//tournerait plus du tout pour elle. C'est arrivé avec RTPEndpoint (corrigé le
-	//2026-08-12 en renommant sa boucle en MultiplexLoop). Le mot-clé ne l'empêche
-	//pas côté dérivé, mais il documente le contrat au bon endroit.
-	int Run() override;
+	//Un flux vient d'apparaître : réveille les GetPacket qui attendent sa
+	//naissance.
+	void OnStreamsChanged();
+
+	//--- PollHandler : ce que le réacteur appelle (docs/conception/RTP-REACTOR) ---
+	//
+	//Privées : personne ne les appelle sur une RTPSession, seul le réacteur les
+	//atteint par l'interface. Elles portent ensemble ce que faisait la boucle
+	//`poll` de la session : lecture RTP/RTCP, cadence transport-cc, amorçage NAT,
+	//checks ICE, handshake DTLS client, tick applicatif, watchdog d'inactivité.
+	int  GetPollFds(pollfd* fds, int max) override;
+	int  GetNextTimeoutMs(QWORD nowUs) override;
+	void OnPollEvents(const pollfd* fds, int count, QWORD nowUs) override;
+	void OnPeriodic(QWORD nowUs) override;
+	void OnPollError(short revents) override;
+
+	//Conditions des travaux périodiques. Extraites parce qu'elles servent DEUX
+	//fois par tour : pour borner l'attente, puis pour décider du travail. Les
+	//fonctions Drive* les revérifient elles-mêmes — c'est ce qui rend inoffensif
+	//un appel plus fréquent que nécessaire (§2 de la conception).
+	bool IsDrivingDTLSClient() const;
+	bool IsDrivingICEChecks()  const;
+	bool IsNATPriming()        const;
+	//La plus proche de deux échéances, -1 valant « aucune ».
+	static int Sooner(int waitMs,int candidateMs);
+
+	//Bornes d'attente de la boucle : watchdog, cadence des retransmissions du
+	//handshake DTLS client et des checks ICE, rapports transport-cc en attente.
+	static const int PollTimeoutMs		= 1000;
+	static const int DtlsPollTimeoutMs	= 250;
+	static const int TransportFeedbackPollMs = 25;
 
 	//P2 (offreur WebRTC) : pilotage du handshake DTLS en rôle CLIENT
 	void FlushDTLS();                    //vide write_bio DTLS vers sendAddr
@@ -465,10 +562,10 @@ private:
 	int 	simRtcpSocket;
 	int 	simPort;
 	int	simRtcpPort;
-	//[RTP, RTCP, eventfd de reveil du Wait herite (Worker)]
-	pollfd	ufds[3];
 	bool	inited;
 	bool	running;
+	//Réacteur posé par le propriétaire de la jambe, NULL = celui du processus.
+	RtpSessionSet* pollGroup;
 
 	//Watchdog d'inactivité (gap 5) : horodatage de la dernière activité (paquet reçu
 	//OU instant d'armement), seuil d'inactivité en ms (0 = désactivé), drapeau
@@ -487,6 +584,14 @@ private:
 	bool	dtlsClientStarted;
 	timeval	dtlsClientStart;
 	bool	dtlsClientFailed;
+	//Consommateur des données applicatives DTLS (data channel), et horodatage du
+	//dernier battement de sa cadence. ATOMIQUE : le consommateur se retire depuis
+	//le thread de contrôle pendant que la boucle le lit, et une lecture déchirée
+	//entre « il y a une cadence » et « appelle-le » déréférençait NULL.
+	//Contrat de durée de vie : le consommateur doit survivre à la boucle, ou
+	//l'arrêter avant de se retirer.
+	std::atomic<ApplicationListener*> appListener;
+	timeval	lastAppTick;
 	bool	encript;
 	bool	decript;
 	srtp_t	sendSRTPSession;
@@ -534,6 +639,8 @@ private:
 	//redémarrage ICE — SetRemoteSTUNCredentials avec un mot de passe DIFFÉRENT —
 	//puisque la paire validée ne vaut plus rien pour la nouvelle session.
 	bool	iceOwnsSendAddr;
+	//Trace « mot de passe ICE local manquant » : une fois, pas un check sur deux.
+	bool	iceMissingLocalPwdReported;
 	//P5 : anti-rebond one-shot de l'événement « média établi » (premier paquet RTP/SRTP
 	//reçu). Remis à false par ArmRTPReceivedNotification() à chaque StartReceiving.
 	bool	rtpReceivedNotified;
@@ -720,6 +827,12 @@ private:
 	RTPOrderedPackets	rtxs;
 	Use				rtxUse;
 	Use				streamUse;
+	//Naissance d'un flux : `GetPacket` attend cet événement au lieu de sonder
+	//quand le SSRC demandé n'a pas encore de flux — le premier paquet reçu le
+	//crée. Le compteur est lu AVANT la recherche, donc un flux né entre les deux
+	//est vu par le prédicat de l'attente : aucun réveil n'est perdu.
+	::Wait				streamWait;
+	std::atomic<DWORD>		streamGeneration{0};
     bool        	resetRequested;
 	
 	DWORD			lastSendSSRC;

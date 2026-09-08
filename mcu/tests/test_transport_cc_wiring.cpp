@@ -1,6 +1,6 @@
 /**
  * test_transport_cc_wiring.cpp — le branchement transport-cc de bout en bout
- * (lot 4 de rate_control_plan.md).
+ * (docs/RATE-CONTROL.md).
  *
  * Les suites `TransportFeedbackWire` et `TransportFeedbackGenerator` éprouvent
  * le format et l'accumulateur en isolation, et elles passaient toutes alors que

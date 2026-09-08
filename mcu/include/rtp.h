@@ -1242,15 +1242,28 @@ public:
            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
          *
          */
-        BYTE padding;
-        BYTE type;
-        DWORD length;
+        BYTE padding;   // PB : nombre de BITS de bourrage en fin de FCI (RFC 4585 §6.3.3)
+        BYTE type;      // payload type (7 bits) du flux concerné
+        DWORD length;   // longueur du bit string, en octets
         BYTE *payload;
 
         ReferencePictureSelectionField()
         {
+            padding = 0;
+            type = 0;
             payload = NULL;
             length = 0;
+        }
+
+        //Construction pour l'émission : bourrage calculé pour aligner le FCI
+        //sur 32 bits (bit string de 2 octets -> PB=0, de 1 octet -> PB=8)
+        ReferencePictureSelectionField( BYTE payloadType, const BYTE *bitString, DWORD len )
+        {
+            type = payloadType & 0x7F;
+            length = len;
+            payload = (BYTE *)malloc( len );
+            memcpy( payload, bitString, len );
+            padding = ( ( 4 - ( 2 + len ) % 4 ) % 4 ) * 8;
         }
 
         ~ReferencePictureSelectionField()
@@ -1258,36 +1271,37 @@ public:
             if( payload ) free( payload );
         }
 
-        virtual DWORD GetSize() { return 2 + length + padding; }
+        virtual DWORD GetSize() { return 2 + length + padding / 8; }
         virtual DWORD Parse( BYTE *data, DWORD size )
         {
             if( size < 2 ) return 0;
             //Get values
             padding = data[0];
-            type = data[1];
-            if( size < 2 + padding ) return 0;
+            type = data[1] & 0x7F;
+            //PB compte des BITS ; un bit string RPSI est fait d'octets entiers
+            //(VP8/VP9 : PictureID), donc un PB non multiple de 8 est invalide
+            if( padding % 8 || DWORD( padding / 8 ) > size - 2 ) return 0;
             //Set length
-            length = size - padding - 2;
+            length = size - 2 - padding / 8;
             //allocate
             payload = (BYTE *)malloc( length );
             //Copy payload
             memcpy( payload, data + 2, length );
-            //Copy
-            return 2 + padding + length;
+            //Le champ consomme tout le reste du paquet
+            return size;
         }
         virtual DWORD Serialize( BYTE *data, DWORD size )
         {
-            if( size < 2 + padding + length ) return 0;
+            if( size < GetSize() ) return 0;
             //Set
             data[0] = padding;
             data[1] = type & 0x7F;
-            set2( data, 6, length );
             //copy payload
             memcpy( data + 2, payload, length );
             //Fill padding
-            memset( data + 2 + length, 0, padding );
+            memset( data + 2 + length, 0, padding / 8 );
             //return size
-            return 2 + padding + length;
+            return GetSize();
         }
     };
 

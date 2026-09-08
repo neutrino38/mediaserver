@@ -2,7 +2,7 @@ Name:      %name
 Version:   %version
 #Ne pas enlever le .ives a la fin de la release !
 #Cela est utilise par les scripts de recherche de package.
-Release:   3.ives%{?dist}
+Release:   1.ives%{?dist}
 Summary:   [IVeS] librairies partag꦳ pour asterisk de Fontventa.
 Vendor:    IVeS / Fontventa
 Group:     Applications/Internet
@@ -10,13 +10,13 @@ License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, webrtc-audio-processing, libsrtp
-Requires:  openssl-libs >= 3.0, xmlrpc-c
+Requires:  openssl-libs >= 3.0, xmlrpc-c, usrsctp
 BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
 BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: gsm-devel
 BuildRequires: webrtc-audio-processing-devel, libsrtp-devel
-BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel
+BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel, usrsctp-devel
 BuildRequires: systemd-rpm-macros
 %{?systemd_requires}
 

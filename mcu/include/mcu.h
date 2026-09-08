@@ -72,6 +72,10 @@ public:
 	int GetConferenceId(const std::wstring& tag);
 	int DeleteConference(int confId);
 	int GetConferenceList(ConferencesInfo& lst);
+	//Charge instantanée, pour /status/general. Distincte de GetConferenceList,
+	//qui journalise son entrée et sa sortie : un statut interrogé en boucle par
+	//une supervision remplirait /var/log/mcu.log à lui seul.
+	void GetLoad(int& conferences,int& participants);
 
 	/** Conference events*/
 	virtual void onParticipantRequestFPU(MultiConf *conf,int partId);

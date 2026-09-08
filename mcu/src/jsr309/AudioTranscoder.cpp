@@ -11,6 +11,8 @@ AudioTranscoder::AudioTranscoder(const std::wstring & name) : tag(name)
 {
     state = 0;
     recCodec = -1;
+    allowBridging = false;
+    nativeRate = 0;
 }
 
 AudioTranscoder::~AudioTranscoder()
@@ -22,11 +24,13 @@ int AudioTranscoder::Init(bool allowBriding)
 {
     int ret = 1;
     this->allowBridging = allowBriding;
-    ret = encoder.Init(&pipe);
+    //Encodeur POUSSÉ : plus de PipeAudioInput entre le décodeur et lui. La trame
+    //décodée traverse l'encodeur sur le thread de la source (lot 3).
+    ret = encoder.Init();
     if (ret > 0)
     {
-        // This will init the pipe too
-        ret = decoder.Init(&pipe);
+        // Le décodeur nous livre ses trames : nous sommes son AudioOutput.
+        ret = decoder.Init((AudioOutput*)this);
         if ( !ret )
         {
             Error("-JSR309 AudioTranscoder: failed to init audio decoder.");
@@ -54,8 +58,28 @@ int AudioTranscoder::End()
     //appels du contrôleur. Même correctif que VideoTranscoder (bad033e).
     UnlistenSource();
     decoder.End();
-    pipe.End();
     encoder.End();
+    return 1;
+}
+
+//── AudioOutput : la sortie du décodeur EST l'entrée de l'encodeur ───────────
+//Le thread qui a livré le paquet RTP porte toute la chaîne, décodage compris :
+//PlayFrame s'exécute donc sous le verrou de multiplexage du port source.
+int AudioTranscoder::PlayFrame(SamplesPtr samples)
+{
+    return encoder.EncodeSamples(samples);
+}
+
+int AudioTranscoder::StartPlaying(DWORD samplerate)
+{
+    //Le décodeur annonce la fréquence native du flux. Rien à ouvrir : la trame
+    //porte la sienne, et c'est l'encodeur qui rééchantillonne vers la sienne.
+    nativeRate = samplerate;
+    return 1;
+}
+
+int AudioTranscoder::StopPlaying()
+{
     return 1;
 }
              

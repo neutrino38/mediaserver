@@ -322,6 +322,31 @@ TEST(SenderBWETest, LesPertesMoyennesNeFontRien)
 	EXPECT_EQ(before, bwe.GetEstimatedBitrate());
 }
 
+TEST(SenderBWETest, SansTransportCCLesPertesFortesFontDescendre)
+{
+	// Défaut A : sans transport-cc, l'estimateur ne reçoit aucun
+	// ProcessFeedback. Seuls arrivent les paquets émis (SendPacket) et la
+	// fraction perdue des RR. Un RR à 20 % de pertes doit amorcer la cible sur
+	// le débit émis puis la faire descendre, au lieu de rendre 0 pour toujours.
+	SenderBWE bwe;
+	bwe.UpdateRTT(50);
+	const double sendBps = 1000000;
+	const QWORD intervalUs = (QWORD)(kPacketBytes * 8e6 / sendBps);
+	QWORD now = 1000000;
+	for (QWORD end = now + 1000000; now < end; now += intervalUs)
+		bwe.UpdateSentBitrate(now, kPacketBytes);
+	DWORD sent = bwe.GetSentBitrate();
+	ASSERT_GT(sent, 0u) << "la mesure du débit émis n'est pas prête après 1 s";
+	EXPECT_EQ(0u, bwe.GetEstimatedBitrate()) << "une cible sans aucun rapport";
+
+	// 20 % de pertes (51/256) : descente x(512-51)/512 ~ -10 % du débit émis
+	bwe.UpdateFractionLost(51, now);
+	ASSERT_TRUE(bwe.HasEstimate()) << "la cible reste à 0 sans transport-cc";
+	DWORD after = bwe.GetEstimatedBitrate();
+	EXPECT_LT(after, sent);
+	EXPECT_GE(after, (DWORD)(sent * 0.85));
+}
+
 TEST(SenderBWETest, LEstimationResteBornee)
 {
 	SenderBWE bwe;

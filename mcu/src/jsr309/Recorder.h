@@ -78,13 +78,12 @@ private:
 	RTPDepacketizer* video;
 	RTPDepacketizer* audio;
 	//Transcodage vers AAC des codecs audio que le conteneur MP4 n'accepte pas.
-	//Le PCM décodé est accumulé dans pcmFifo : l'encodeur ffmpeg exige des
-	//appels avec une trame complète (1024 échantillons) en entrée.
+	//L'encodeur accumule lui-même jusqu'à sa trame complète (1024 échantillons
+	//pour l'AAC) : rien à réassembler ici.
 	AudioDecoder*	audioDecoder;
 	AudioEncoder*	audioEncoder;
 	DWORD		audioRate;
 	QWORD		audioSamples;
-	std::vector<SWORD> pcmFifo;
 	//Décodage de la redondance T.140 (RFC 4103)
 	RedundentCodec	redCodec;
 	TextForwarder	textForwarder;

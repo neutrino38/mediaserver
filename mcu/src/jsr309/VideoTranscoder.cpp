@@ -6,8 +6,8 @@
  */
 
 #include "VideoTranscoder.h"
-#include "videopipe.h"
 #include "tools.h"
+#include <cstdlib>
 
 VideoTranscoder::VideoTranscoder(std::wstring &name)
 {
@@ -23,6 +23,19 @@ VideoTranscoder::VideoTranscoder(std::wstring &name)
 	allowBridging = false;
 	//Aucune demande d'intra relayée pour l'instant
 	setZeroTime(&lastSourceFPU);
+	//Aucune cadence mesurée, aucune poussée
+	lastPts = 0;
+	hasLastPts = false;
+	gapCount = 0;
+	gapIndex = 0;
+	gapSum = 0;
+	lowTicks = 0;
+	appliedFps = 0;
+	setZeroTime(&lastFpsApply);
+	lastEncodedUs = 0;
+	decimator.Reset();
+	frameIndex = 0;
+	lastDecimationLogUs = 0;
 }
 
 VideoTranscoder::~VideoTranscoder()
@@ -38,12 +51,11 @@ int VideoTranscoder::Init(bool adaptative, bool allowBridging)
 	Log("-Init VideoTranscoder [%ls,encoder:%p,decoder:%p,bridging:%d]\n",
 	    tag.c_str(),&encoder,&decoder,allowBridging);
 
-	//Init pipe
-	pipe.Init();
-	//Start encoder
-	encoder.Init(&pipe);
-	//Star decoder
-	decoder.Init(&pipe);
+	//Encodeur POUSSÉ : plus de VideoPipe entre le décodeur et lui, donc plus de
+	//thread d'encodage ni de duplication d'image à cadence constante (§3.3).
+	encoder.Init();
+	//Le décodeur nous livre ses images : nous sommes son VideoOutput.
+	decoder.Init((VideoOutput*)this);
 	//Inited
 	inited = true;
         encoder.UseInputSize(adaptative);
@@ -65,6 +77,18 @@ int VideoTranscoder::SetCodec(VideoCodec::Type codec,int mode,int fps,int bitrat
             properties.erase(std::string("useInputSize"));
         }
 	ret = encoder.SetCodec(codec,mode,fps,bitrate,intraPeriod, properties);
+	//Nouvelle consigne : la cadence mesurée d'avant ne la borne plus. La fenêtre
+	//repart, l'encodeur retourne à la consigne, et la mesure la rabaissera si la
+	//source est vraiment plus lente (§3.6).
+	if (ret)
+	{
+		ResetFrameRateWindow();
+		appliedFps = 0;
+		encoder.SetMeasuredFrameRate(0);
+		//Autre codec, autre coût par image : le pas repart de 1.
+		decimator.Reset();
+		frameIndex = 0;
+	}
 	//Consigne changée alors que le pont est établi : l'encodeur qui l'aurait
 	//appliquée n'est pas dans le chemin, la re-pousser à la source.
 	if (ret && state == 2)
@@ -83,8 +107,6 @@ int VideoTranscoder::End()
 	//End encoder and decoder
 	encoder.End();
 	decoder.End();
-	//End pipe
-	pipe.End();
 	//Not inited
 	inited = false;
 	//OK
@@ -118,21 +140,77 @@ void VideoTranscoder::SetREMB(DWORD estimation)
 {
 	//En mode pont, l'encodeur n'est pas dans le chemin : seule la source peut
 	//baisser le débit du flux relayé. La demande du puits (TMMBR/REMB, en bps)
-	//remonte donc à l'amont, bornée par la consigne négociée de la patte
-	//émettrice — le puits ne peut pas « autoriser » plus que sa négociation.
+	//remonte donc à l'amont.
 	if (state == 2)
 	{
-		DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
-		if (cap && estimation > cap)
-			estimation = cap;
-
-		if (std::shared_ptr<Joinable> j = joined.lock())
-			j->SetREMB(estimation);
+		RelayToSource(estimation);
 		return;
 	}
 
-	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe la limite.
+	//Transcodage (ou mode encore inconnu) : l'encodeur absorbe la limite...
 	encoder.SetREMB(estimation);
+
+	//...et la source en est prévenue AUSSI, pour qu'elle choisisse une taille
+	//d'image adaptée au débit : ré-encoder du 720p à 140 kb/s donne une image
+	//inexploitable. Le plancher de RelayToSource est ce qui empêche cette
+	//prévenance de se retourner en verrou.
+	RelayToSource(estimation);
+}
+
+void VideoTranscoder::RelayToSource(DWORD estimation)
+{
+	DWORD relayed = estimation;
+
+	//PLANCHER, en transcodage seulement. Une source tenue trop bas rend une
+	//image trop petite pour que nos trames vers le puits fassent 3 paquets, or
+	//c'est ce seuil que l'estimateur d'un pair Linphone exige pour mesurer
+	//quoi que ce soit : la sonde qui doit lever sa limite devient invisible, et
+	//sa limite ne se lève plus jamais. Séance netem du 2026-09-02 : 108 kb/s
+	//relayés, source en 160x120, sonde à 485 kb/s qui n'émet que 240, limite du
+	//pair figée 3 min 18 s dont 30 s sur un lien restauré.
+	//En mode pont il n'y a pas de plancher : la limite EST le débit du flux
+	//relayé, la relever noierait le puits.
+	if (state != 2)
+	{
+		//La cadence EFFECTIVE est celle de nos trames, donc celle du plancher.
+		//Elle vaut 0 tant que l'encodeur n'a pas ouvert son codec : la consigne
+		//prend alors le relais, sans quoi le plancher tomberait à 40 kb/s et ne
+		//protégerait plus rien.
+		int fps = encoder.GetEffectiveFps();
+		if (fps <= 0)
+			fps = encoder.GetConfiguredFps();
+
+		DWORD floor = ((DWORD)BitrateProbe::Floor(fps))*1000;
+		if (relayed < floor)
+			relayed = floor;
+	}
+
+	//Consigne négociée de la patte émettrice : un puits ne peut pas
+	//« autoriser » plus que ce que sa propre négociation prévoit. Elle passe
+	//APRÈS le plancher — une consigne basse l'emporte sur lui.
+	DWORD cap = ((DWORD)encoder.GetBitrate())*1000;	//kbps -> bps
+	if (cap && relayed > cap)
+		relayed = cap;
+
+	if (std::shared_ptr<Joinable> j = joined.lock())
+		j->SetREMB(relayed);
+}
+
+void VideoTranscoder::SetSenderEstimate(DWORD estimation)
+{
+	//En mode pont, l'encodeur n'est pas dans le chemin : même réponse que pour
+	//la limite du pair — seule la source peut baisser le débit du flux relayé.
+	//SetREMB porte déjà ce relais amont, borné par la consigne négociée.
+	if (state == 2)
+	{
+		SetREMB(estimation);
+		return;
+	}
+
+	//Transcodage (ou mode encore inconnu) : deuxième champ à côté de la limite
+	//du pair, le chemin des paquets prend le min des deux
+	//(cf. VideoEncoderMultiplexerWorker::SetSenderEstimate).
+	encoder.SetSenderEstimate(estimation);
 }
 
 void VideoTranscoder::RemoveListener(Joinable::Listener *listener)
@@ -220,8 +298,241 @@ void VideoTranscoder::onRTPPacket(RTPPacket &packet)
 			break;
 	}
 }
+//── VideoOutput : la sortie du décodeur EST l'entrée de l'encodeur ───────────
+//Le thread qui a livré le paquet RTP porte toute la chaîne : NextFrame s'exécute
+//sous le verrou de multiplexage du port source, décodage compris.
+int VideoTranscoder::NextFrame(PictPtr pic)
+{
+	if (!pic || !pic->GetAVFrame())
+		return 0;
+
+	//Cadence RÉELLE, mesurée sur l'horodatage RTP que le décodeur a posé sur
+	//l'image — pas sur son heure d'arrivée (§3.6).
+	MeasureFrameRate((DWORD)pic->GetAVFrame()->pts);
+
+	//Décimation : une image sur k quand l'encodeur ne tient pas la cadence de
+	//la source. Comptée sur TOUTES les images reçues, pour que les images
+	//gardées soient régulièrement espacées.
+	frameIndex++;
+	const int step = decimator.GetStep();
+	if (step > 1 && (frameIndex % (DWORD)step) != 0)
+		return 1;
+
+	//Cadence de SORTIE bornée par la consigne : c'est ce que faisait le
+	//GrabFrame(1/fps) du thread supprimé.
+	if (!DueForEncoding())
+		return 1;
+
+	//Coût de l'encodage, mesuré sur le thread qui le paie : c'est ce que ce
+	//transcodeur ajoute au thread de démux de la source, et ce qu'il peut sauter.
+	const QWORD before = getTime();
+	const int encoded = encoder.EncodePicture(pic);
+	const QWORD after = getTime();
+
+	if (encoded)
+	{
+		const QWORD budget = SourceFrameBudgetUs();
+		if (budget)
+		{
+			const bool changed = decimator.Observe(after - before, budget, after);
+			if (changed)
+				ApplyDecimatedFrameRate();
+			LogDecimation(changed);
+		}
+	}
+	return 1;
+}
+
+void VideoTranscoder::ApplyDecimatedFrameRate()
+{
+	const QWORD budget = decimator.GetBudgetUs();
+	if (!budget)
+		return;
+
+	//Cadence réellement livrée à l'encodeur : celle de la source, divisée par
+	//le pas. Un encodeur réglé à 20 im/s qui n'en reçoit que 7 émet 7/20 de son
+	//débit : c'est le débit par image qu'il faut recaler, donc la cadence.
+	int output = (int)(1000000ULL/budget) / decimator.GetStep();
+	if (output < 1)
+		output = 1;
+
+	if (output == appliedFps)
+		return;
+
+	appliedFps = output;
+	getUpdDifTime(&lastFpsApply);
+	encoder.SetMeasuredFrameRate(output);
+}
+
+QWORD VideoTranscoder::SourceFrameBudgetUs() const
+{
+	if (gapCount < BudgetMinGaps || !gapSum)
+		return 0;
+	//Écart moyen en ticks 90 kHz → µs.
+	return gapSum*1000000ULL/(90000ULL*(QWORD)gapCount);
+}
+
+void VideoTranscoder::LogDecimation(bool changed)
+{
+	const int step = decimator.GetStep();
+	const QWORD now = getTime();
+
+	if (!changed)
+	{
+		//Rappel périodique tant que des images sont sautées : un appel long
+		//doit le montrer dans le log, pas seulement à l'instant du changement.
+		if (step == 1 || !lastDecimationLogUs || now - lastDecimationLogUs < DecimationLogPeriodUs)
+			return;
+	}
+	lastDecimationLogUs = now;
+
+	const unsigned costMs = (unsigned)(decimator.GetCostUs()/1000);
+	const unsigned budgetMs = (unsigned)(decimator.GetBudgetUs()/1000);
+	const int sourceFps = decimator.GetBudgetUs() ? (int)(1000000ULL/decimator.GetBudgetUs()) : 0;
+
+	if (step == 1)
+	{
+		Log("-VideoTranscoder: encodeur de nouveau dans les temps [%ls] : %u ms par image pour un budget de %u ms (source %d im/s) -> toutes les images encodees\n",
+		    tag.c_str(), costMs, budgetMs, sourceFps);
+		return;
+	}
+
+	Log("-VideoTranscoder: encodeur trop lent [%ls] : %u ms par image pour un budget de %u ms (source %d im/s) -> 1 image sur %d encodee, encodeur recale a %d im/s%s\n",
+	    tag.c_str(), costMs, budgetMs, sourceFps, step, appliedFps ? appliedFps : sourceFps/step,
+	    decimator.IsSaturated() ? " (PAS MAXIMAL : l'encodeur lui-meme est trop lent)" : "");
+}
+
+//Taille native du flux entrant : l'encodeur la suit quand useInputSize est armé.
+//En mode tiré c'est le VideoInput qui la porte ; ici, c'est nous.
+int VideoTranscoder::SetVideoSize(int width,int height)
+{
+	encoder.SetNativeSize((DWORD)width,(DWORD)height);
+	return 0;
+}
+
+void VideoTranscoder::ResetFrameRateWindow()
+{
+	hasLastPts = false;
+	gapCount = 0;
+	gapIndex = 0;
+	gapSum = 0;
+	lowTicks = 0;
+}
+
+//§3.6 — estime `fpsMesure = 90000 x (nombre d'écarts) / (somme des écarts)` sur
+//les 30 derniers écarts, et ne pousse la valeur à l'encodeur que si la fenêtre
+//est PLEINE, si elle s'écarte de plus de 25 % de celle en vigueur, et au plus
+//une fois toutes les 5 s — chaque application coûte une trame clé.
+void VideoTranscoder::MeasureFrameRate(DWORD pts)
+{
+	if (!hasLastPts)
+	{
+		lastPts = pts;
+		hasLastPts = true;
+		return;
+	}
+
+	//Arithmétique modulo 2^32 : le rebouclage normal de l'horodatage RTP passe
+	//sans bruit, un vrai saut arrière donne un écart énorme et vide la fenêtre.
+	const DWORD gap = pts - lastPts;
+	lastPts = pts;
+
+	//Une PAUSE n'est pas une cadence. Un mute vidéo laisse passer plusieurs
+	//secondes sans image : compter ce temps ferait tomber la mesure vers 0,
+	//rouvrir l'encodeur à 1 im/s, et la reprise serait encodée à 1 im/s. Un saut
+	//non monotone (changement de SSRC, onResetStream) est traité pareil : ce qui
+	//précède ne dit rien de ce qui suit.
+	if (gap == 0 || gap > FpsPauseTicks)
+	{
+		ResetFrameRateWindow();
+		//L'encodeur GARDE son fps d'avant la pause : c'est la seule valeur connue.
+		return;
+	}
+
+	if (gapCount == FpsWindow)
+		gapSum -= gaps[gapIndex];
+	else
+		gapCount++;
+
+	gaps[gapIndex] = gap;
+	gapSum += gap;
+	gapIndex = (gapIndex + 1) % FpsWindow;
+
+	//Fenêtre incomplète : rien n'est appliqué. Après une pause, il faut donc
+	//30 images à la NOUVELLE cadence avant qu'elle produise le moindre effet.
+	if (gapCount < FpsWindow || gapSum == 0)
+		return;
+
+	int measured = (int)((90000ULL*(QWORD)FpsWindow + gapSum/2) / gapSum);
+	//Ce que l'encodeur reçoit vraiment : la cadence de la source divisée par
+	//le pas de décimation. C'est sur cette cadence-là que son débit par image
+	//et sa période intra doivent être calés.
+	measured /= decimator.GetStep();
+	if (measured < 1)
+		measured = 1;
+
+	//Hystérésis : la valeur en vigueur est celle déjà poussée, à défaut la
+	//consigne (l'encodeur y tourne tant que rien n'a été mesuré).
+	const int inforce = appliedFps ? appliedFps : encoder.GetConfiguredFps();
+	if (inforce <= 0)
+		return;
+	if (abs(measured - inforce)*4 <= inforce)
+	{
+		lowTicks = 0;
+		return;
+	}
+
+	//Une BAISSE n'est appliquée que si elle dure. Une source qui creuse à
+	//11 im/s trois secondes puis revient à 15 coûtait deux trames clés, et
+	//chez le pair 0,5 à 1 s de gigue à chaque fois — jusqu'à une fausse
+	//congestion (séance du 2026-09-02). Une hausse s'applique tout de suite :
+	//l'encodeur sous-utilise sinon son budget par image.
+	if (measured < inforce)
+	{
+		lowTicks += gap;
+		if (lowTicks < FpsDropHoldTicks)
+			return;
+	}
+	else
+		lowTicks = 0;
+
+	//Au plus une application toutes les 5 s.
+	if (getDifTime(&lastFpsApply) < 5000000)
+		return;
+
+	Log("-VideoTranscoder: cadence source mesuree %d im/s, appliquee a l'encodeur [%ls, en vigueur %d im/s]\n",
+	    measured, tag.c_str(), inforce);
+
+	appliedFps = measured;
+	lowTicks = 0;
+	getUpdDifTime(&lastFpsApply);
+	encoder.SetMeasuredFrameRate(measured);
+}
+
+//Borne la cadence de SORTIE à la consigne, et à elle seule : la cadence MESURÉE
+//décrit ce que la source envoie, écarter des images sur elle jetterait
+//précisément celles qui la produisent. Tolérance de 10 % pour absorber la gigue
+//d'une source qui émet déjà à la consigne.
+bool VideoTranscoder::DueForEncoding()
+{
+	const int cap = encoder.GetConfiguredFps();
+	if (cap <= 0)
+		return true;
+
+	const QWORD periodUs = 1000000/(QWORD)cap;
+	const QWORD now = getTime();
+
+	if (lastEncodedUs && now > lastEncodedUs && now - lastEncodedUs < periodUs - periodUs/10)
+		return false;
+
+	lastEncodedUs = now;
+	return true;
+}
+
 void VideoTranscoder::onResetStream()
 {
+	//Nouveau flux : les écarts d'avant ne disent rien de la cadence qui suit.
+	ResetFrameRateWindow();
 	decoder.onResetStream();
 }
 void VideoTranscoder::onEndStream()
@@ -315,6 +626,16 @@ int VideoTranscoder::Attach(const std::shared_ptr<Joinable> & join)
 	//Nouvelle source = nouveau flux : ne pas bloquer sa première demande
 	//d'intra sur le compteur de la précédente.
 	setZeroTime(&lastSourceFPU);
+	//... ni la juger sur la cadence de la précédente : l'encodeur repart de la
+	//consigne, la mesure la rabaissera si besoin (§3.6).
+	ResetFrameRateWindow();
+	appliedFps = 0;
+	setZeroTime(&lastFpsApply);
+	lastEncodedUs = 0;
+	decimator.Reset();
+	frameIndex = 0;
+	lastDecimationLogUs = 0;
+	encoder.SetMeasuredFrameRate(0);
 
 	//Le décodeur n'est plus alimenté par la source mais à la main, depuis
 	//onRTPPacket, quand l'arbitrage retombe sur le transcodage. Il faut donc

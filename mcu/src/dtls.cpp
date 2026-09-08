@@ -6,6 +6,11 @@
 #define SRTP_MASTER_SALT_LENGTH 14
 #define SRTP_MASTER_LENGTH (SRTP_MASTER_KEY_LENGTH + SRTP_MASTER_SALT_LENGTH)
 
+//Taille maximale d'un record TLS en clair (RFC 5246). Un record DTLS tient dans
+//un datagramme UDP, donc en pratique on est bien en dessous ; ce qui compte est
+//qu'aucun record ne puisse être livré en deux morceaux.
+#define MAX_DTLS_APPLICATION_DATA 16384
+
 
 /* Initialize static data. */
 std::string DTLSConnection::certfile("mcu.crt");
@@ -207,6 +212,7 @@ DTLSConnection::DTLSConnection(Listener& listener) : listener(listener)
 	write_bio		     = NULL;		/*!< Memory buffer for writing */
 	inited			     = false;
 	remoteHash		     = UNKNOWN_HASH;
+	appListener		     = NULL;
 	//Reset remote fingerprint
 	memset(remoteFingerprint,0,EVP_MAX_MD_SIZE);
 }
@@ -401,6 +407,28 @@ void DTLSConnection::onSSLInfo(int where, int ret)
 		/* Any further connections will be existing since this is now established */
 		connection = CONNECTION_EXISTING;
 
+		//L'authentification du pair d'abord, et sans condition : l'empreinte du
+		//certificat qu'on vient de voir contre celle qu'a annoncée la
+		//signalisation. Elle échoue -> aucune clé n'est posée, donc rien ne se
+		//déchiffre : la jambe est fermée.
+		if (!VerifyRemoteFingerprint())
+			return;
+
+		//Les clés SRTP ensuite, et seulement si le pair a bien négocié
+		//l'extension use_srtp (RFC 5764) : une jambe qui ne porte que des données
+		//applicatives — un data channel — ne sélectionne aucun profil, et il n'y
+		//a alors aucune clé à exporter. Le nom du profil est journalisé : si une
+		//jambe RTP arrivait ici sans profil, la ligne le dirait tout de suite.
+		SRTP_PROTECTION_PROFILE* profile = SSL_get_selected_srtp_profile(ssl);
+
+		if (!profile)
+		{
+			Log("-DTLSConnection::onSSLInfo() | no SRTP profile negotiated, application data only\n");
+			return;
+		}
+
+		Debug("-DTLSConnection::onSSLInfo() | SRTP profile [%s]\n",profile->name);
+
 		/* Use the keying material to set up key/salt information */
 		SetupSRTP();
 	}
@@ -436,12 +464,10 @@ int DTLSConnection::HandleTimeout()
 	return DTLSv1_handle_timeout(ssl);
 }
 
-int DTLSConnection::SetupSRTP()
+int DTLSConnection::VerifyRemoteFingerprint()
 {
-/* This is defined in openssl/srtp.h */
-#ifdef HEADER_D1_SRTP_H
 	if (! DTLSConnection::hasDTLS)
-		return Error("-DTLSConnection::SetupSRTP() | no DTLS\n");
+		return Error("-DTLSConnection::VerifyRemoteFingerprint() | no DTLS\n");
 
 	X509* certificate;
 	unsigned char fingerprint[EVP_MAX_MD_SIZE];
@@ -449,14 +475,8 @@ int DTLSConnection::SetupSRTP()
 	const EVP_MD* hash_function;
 	std::string hash_str;
 
-	BYTE material[SRTP_MASTER_LENGTH * 2];
-	BYTE localMasterKey[SRTP_MASTER_LENGTH];
-	BYTE remoteMasterKey[SRTP_MASTER_LENGTH];
-	BYTE *local_key, *local_salt, *remote_key, *remote_salt
-;
-
 	if (!(certificate = SSL_get_peer_certificate(ssl)))
-		return Error("-DTLSConnection::SetupSRTP() | no certificate was provided by the peer\n");
+		return Error("-DTLSConnection::VerifyRemoteFingerprint() | no certificate was provided by the peer\n");
 
 	switch (remoteHash)
 	{
@@ -482,19 +502,32 @@ int DTLSConnection::SetupSRTP()
 			break;
 		default:
 			X509_free(certificate);
-			return Error("-DTLSConnection::SetupSRTP() | unknown remote hash, cannot verify remote fingerprint\n");
+			return Error("-DTLSConnection::VerifyRemoteFingerprint() | unknown remote hash, cannot verify remote fingerprint\n");
 	}
 
 	if (!X509_digest(certificate, hash_function, fingerprint, &size) || !size || memcmp(fingerprint, remoteFingerprint, size))
 	{
 		X509_free(certificate);
-		return Error("-DTLSConnection::SetupSRTP() | fingerprint in remote SDP does not match that of peer certificate (hash %s)\n", hash_str.c_str());
+		return Error("-DTLSConnection::VerifyRemoteFingerprint() | fingerprint in remote SDP does not match that of peer certificate (hash %s)\n", hash_str.c_str());
 	}
 
-	Debug("-DTLSConnection::SetupSRTP() | fingerprint in remote SDP matches that of peer certificate (hash %s)\n", hash_str.c_str());
+	Debug("-DTLSConnection::VerifyRemoteFingerprint() | fingerprint in remote SDP matches that of peer certificate (hash %s)\n", hash_str.c_str());
 	X509_free(certificate);
 
-	/* Produce key information and set up SRTP */
+	return 1;
+}
+
+int DTLSConnection::SetupSRTP()
+{
+/* This is defined in openssl/srtp.h */
+#ifdef HEADER_D1_SRTP_H
+	if (! DTLSConnection::hasDTLS)
+		return Error("-DTLSConnection::SetupSRTP() | no DTLS\n");
+
+	BYTE material[SRTP_MASTER_LENGTH * 2];
+	BYTE localMasterKey[SRTP_MASTER_LENGTH];
+	BYTE remoteMasterKey[SRTP_MASTER_LENGTH];
+	BYTE *local_key, *local_salt, *remote_key, *remote_salt;
 
 	if (! SSL_export_keying_material(ssl, material, SRTP_MASTER_LENGTH * 2, "EXTRACTOR-dtls_srtp", 19, NULL, 0, 0))
 		return Error("-DTLSConnection::SetupSRTP() | Unable to extract SRTP keying material from DTLS-SRTP negotiation on RTP instance \n");
@@ -538,6 +571,31 @@ int DTLSConnection::SetupSRTP()
 #endif
 }
 
+//Chiffre un bloc applicatif. Il attend ensuite dans write_bio : c'est
+//l'appelant qui l'émet, par Read() puis son propre sendto — le DTLS ne connaît
+//pas de socket ici.
+int DTLSConnection::WriteApplicationData(const BYTE* data,DWORD size)
+{
+	if (! DTLSConnection::hasDTLS)
+		return Error("-DTLSConnection::WriteApplicationData() | no DTLS\n");
+
+	if (! inited)
+		return Error("-DTLSConnection::WriteApplicationData() | SSL not yet ready\n");
+
+	//Avant la fin du handshake il n'y a pas de canal applicatif : le pair n'est
+	//pas encore authentifié, et SSL_write pousserait dans le flight en cours.
+	if (! SSL_is_init_finished(ssl))
+		return Error("-DTLSConnection::WriteApplicationData() | handshake not finished\n");
+
+	int len = SSL_write(ssl, data, (int) size);
+
+	if (len <= 0)
+		return Error("-DTLSConnection::WriteApplicationData() | SSL_write failed [err:%d]\n",
+				SSL_get_error(ssl,len));
+
+	return len;
+}
+
 int DTLSConnection::Write(BYTE *buffer,int size)
 {
 	if (! DTLSConnection::hasDTLS)
@@ -549,7 +607,20 @@ int DTLSConnection::Write(BYTE *buffer,int size)
 
 	BIO_write(read_bio, buffer, size);
 
-	SSL_read(ssl, buffer, size);
+	//Un record entrant peut libérer plusieurs blocs applicatifs, et SSL_read n'en
+	//rend qu'un par appel : on boucle. Le tampon est LOCAL — celui de l'appelant
+	//porte encore le datagramme entrant, dont il se sert au retour, et SSL_read
+	//écrivait dedans. Sa taille est celle d'un record TLS en clair : un record
+	//plus grand serait coupé en deux appels, et le pair SCTP recevrait deux
+	//moitiés de datagramme.
+	BYTE app[MAX_DTLS_APPLICATION_DATA];
+	int len;
+
+	while ((len = SSL_read(ssl, app, sizeof(app))) > 0)
+	{
+		if (appListener)
+			appListener->onDTLSApplicationData(app,(DWORD)len);
+	}
 
 	// Check if the peer sent close alert or a fatal error happened.
 	if (SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN) {

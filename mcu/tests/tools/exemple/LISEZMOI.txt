@@ -15,5 +15,5 @@ exercer le regroupement par thread et rappeler pourquoi --stream est necessaire 
 sans lui, la patte temoin est jugee contre des marqueurs qui ne la concernent pas
 et produit des KO qui ne veulent rien dire.
 
-Ne pas confondre avec un resultat : les vraies mesures vont en annexe D de
-rate-control.md.
+Ne pas confondre avec un resultat : les vraies mesures vont dans le compte
+rendu de seance.

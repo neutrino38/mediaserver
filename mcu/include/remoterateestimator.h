@@ -24,7 +24,11 @@ public:
 		virtual ~Listener(){};
 	public:
 		//Interface
-		virtual void onTargetBitrateRequested(DWORD bitrate) = 0;
+		//`congestion` : la baisse vient d'une surutilisation mesurée (état
+		//Decrease). Sinon l'estimation ne fait que SUIVRE ce que le pair envoie
+		//(plafond glissant 1,5 x l'entrant) : ce n'est pas un signal, et
+		//l'annoncer à un pair obéissant l'enferme à son débit d'échauffement.
+		virtual void onTargetBitrateRequested(DWORD bitrate, bool congestion) = 0;
 	};
 public:
 	enum State {
@@ -58,10 +62,14 @@ public:
 	void UpdateRTT(DWORD ssrc,DWORD rtt, QWORD now);
 	void UpdateLost(DWORD ssrc,DWORD lost, QWORD now);
 	//La taille vient du paquet lui-meme (GetSize()) : le 3e parametre qui
-	//recevait un horodatage a disparu (rate-control.md §3.1).
+	//recevait un horodatage a disparu.
 	void Update(DWORD ssrc, RTPTimedPacket* packet);
 	void Update(DWORD ssrc,QWORD now,QWORD ts,DWORD size, bool mark);
 	DWORD GetEstimatedBitrate();
+	//Debit REELLEMENT recu du pair, en bps ; 0 si la fenetre de mesure n'est pas
+	//pleine. Il dit si la limite qu'on a annoncee borne encore le pair, ou s'il
+	//est deja tenu par sa propre negociation (cf. RembThrottler).
+	DWORD GetIncomingBitrate();
 	void GetSSRCs(std::list<DWORD> &ssrcs);
 	void SetTemporalMaxLimit(DWORD limit);
 	void SetTemporalMinLimit(DWORD limit);
