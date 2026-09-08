@@ -52,6 +52,14 @@ il n'existe pas de session hors réacteur.
    bat.** Les membres se détruisent dans l'ordre inverse de leur déclaration :
    déclaré après, le réacteur mourrait avant ses sessions, et le retrait
    qu'`End()` fait porterait sur un objet détruit.
+3. **Un thread consommateur est un `std::thread` membre, et son `Stop*` le
+   joint INCONDITIONNELLEMENT.** Chaque `Start*` réaffecte le membre, et
+   réaffecter un `std::thread` joignable appelle `std::terminate()` : un join
+   posé seulement quand l'état de la tâche s'y prête tue le processus dès que
+   le corps du thread a rendu la main tout seul — ce que fait chaque `Send*`
+   quand son codec ne s'ouvre pas. Le drapeau d'état (`TaskState`, `receiving`)
+   est **atomique** : le thread le lit en condition de boucle, le plan de
+   contrôle l'écrit. Garde-fous : `mcu/tests/test_consumer_threads.cpp`.
 
 ## 3. Ce que le thread du réacteur porte
 
