@@ -491,16 +491,30 @@ int VideoStream::SendVideo()
 
 	//Comprobamos que se haya creado correctamente
 	if (videoEncoder == NULL)
+	{
+		//L'état revient à TaskIdle sur TOUTES les sorties du corps, pas
+		//seulement la sortie de boucle : sinon StartSending, qui exige
+		//TaskIdle, refuse « bad state » à vie sur ce stream.
+		sendingVideo = TaskIdle;
 		//error
 		return Error("Can't create video encoder\n");
+	}
 
 	//Comrpobamos que tengamos video de entrada
 	if (videoInput == NULL)
+	{
+		sendingVideo = TaskIdle;
+		delete videoEncoder;
 		return Error("No video input");
+	}
 
 	//Iniciamos el tama�o del video
 	if (!videoInput->StartVideoCapture(videoGrabWidth,videoGrabHeight,videoFPS))
+	{
+		sendingVideo = TaskIdle;
+		delete videoEncoder;
 		return Error("Couldn't set video capture\n");
+	}
 
 	//Start at 80%
 	int current = videoBitrate*0.8;

@@ -430,8 +430,14 @@ int AudioStream::SendAudio()
 
 	//Creamos el codec de audio
 	if ((codec = AudioCodecFactory::CreateEncoder(audioCodec,audioProperties))==NULL)
+	{
+		//L'état revient à TaskIdle sur TOUTES les sorties du corps, pas
+		//seulement la sortie de boucle : sinon StartSending, qui exige
+		//TaskIdle, refuse « bad state » à vie sur ce stream.
+		sendingAudio = TaskIdle;
 		//Error
 		return Error("Could not create audio codec\n");
+	}
 
 	//Get codec rate
 	DWORD rate = codec->TrySetRate(audioInput->GetNativeRate());
