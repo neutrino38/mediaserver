@@ -12,6 +12,7 @@
 #include "t140bridge.h"
 #include "t140datachannel.h"
 #include "task.h"
+#include "wait.h"
 #include <deque>
 
 //Le flux texte d'un participant de conférence. Deux transports possibles, et une
@@ -112,6 +113,13 @@ private:
 	//réaffecter un std::thread joignable appelle std::terminate().
 	std::thread	recTextThread;
 	std::thread	sendTextThread;
+
+	//Cadence de la boucle d'émission quand aucune trame n'arrive. `TextInput`
+	//n'honore son timeout que s'il est INITÉ : sinon GetFrame rend NULL tout de
+	//suite, et la boucle émettrait un keep-alive par tour. C'est cette attente
+	//qui tient la cadence, et StopSending l'annule — un msleep ne le permet pas.
+	//Réarmée par StartSending : Cancel est collant.
+	Wait		sendWait;
 
 	//Controlamos si estamos mandando o no. Atomiques : le thread de la tâche les
 	//lit en condition de boucle, le plan de contrôle les écrit.

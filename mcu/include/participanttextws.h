@@ -2,6 +2,7 @@
 #define PARTICIPANTTEXTWS_H
 
 #include "worker.h"
+#include <atomic>
 #include <pthread.h>
 #include <list>
 #include <memory>
@@ -85,9 +86,14 @@ private:
 	//policy): an unbounded queue on a stream nobody may ever read is a leak.
 	static const size_t maxPendingFrames = 32;
 	static const QWORD  maxPendingAgeMs  = 5000;
+
+	//Idle wake-up of the pull loop. Nothing is sent when it expires: this is
+	//the pacing of an empty leg, not a keepalive.
+	static const DWORD  PullIdleMs       = 10000;
 	std::list<std::pair<QWORD,std::string>> pending;
 
-	TaskState	pulling;
+	//Atomique : le thread de tirage le lit en condition de boucle, End() l'écrit.
+	std::atomic<TaskState>	pulling;
 };
 
 #endif /* PARTICIPANTTEXTWS_H */

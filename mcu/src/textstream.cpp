@@ -13,6 +13,11 @@
 static BYTE BOMUTF8[]			= {0xEF,0xBB,0xBF};
 static BYTE LOSTREPLACEMENT[]		= {0xEF,0xBF,0xBD};
 
+//Réveil de la boucle d'émission sur data channel quand le texte se tait. Rien
+//n'est émis à l'expiration — SCTP est fiable, il n'y a pas de keep-alive à
+//envoyer ; seul l'arrêt a besoin de la réveiller.
+static const DWORD DataChannelIdleMs	= 25000;
+
 /**********************************
 * TextStream
 *	Constructor
@@ -232,6 +237,7 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 		bridge.Start();
 
 		sendingText = TaskStarting;
+		sendWait.Reset();
 		sendTextThread = std::thread(&TextStream::SendText,this);
 
 		Log("<StartSending text sur data channel [%d]\n",sendingText.load());
@@ -263,6 +269,7 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 	sendingText = TaskStarting;
 
 	//Start thread
+	sendWait.Reset();
 	sendTextThread = std::thread(&TextStream::SendText,this);
 
 	Log("<StartSending text [%d]\n",sendingText.load());
@@ -401,6 +408,10 @@ int TextStream::StopSending()
 
 		//Cancel grab if any
 		textInput->Cancel();
+
+		//Et l'attente de cadence, sinon l'arrêt attend la fin de l'intervalle
+		//de keep-alive courant — jusqu'à 25 s.
+		sendWait.Cancel();
 	}
 
 	//Même postcondition inconditionnelle que StopReceiving, et pour la même raison.
@@ -529,11 +540,20 @@ int TextStream::SendTextOverDataChannel()
 
 	while (sendingText == TaskRunning)
 	{
-		TextFrame* frame = textInput->GetFrame(25000);
+		TextFrame* frame = textInput->GetFrame(DataChannelIdleMs);
 
 		//Expiration ou annulation : rien a dire.
 		if (!frame)
+		{
+			//Le pipe non inité rend NULL sans attendre : sans cette attente,
+			//la boucle tourne à vide sur un cœur. Le drapeau est relu AVANT
+			//d'attendre : l'arrêt le pose puis annule l'attente, et sans
+			//cette relecture le thread peut se glisser entre les deux et
+			//dormir l'intervalle entier.
+			if (sendingText == TaskRunning)
+				sendWait.WaitSignal(DataChannelIdleMs);
 			continue;
+		}
 
 		if (!muted && frame->GetLength())
 			bridge.SendText(frame->GetData(),frame->GetLength());
@@ -577,6 +597,7 @@ int TextStream::SendText()
         TextFrame *frame = NULL;
 
         //Get frame
+        const QWORD waitedFrom = getTime();
         frame = textInput->GetFrame(timeout);
 
         //Calculate last frame time
@@ -585,7 +606,21 @@ int TextStream::SendText()
             lastTime = frame->GetTimeStamp();
         else
 	{
-	    msleep(200);
+	    //Le pipe n'a peut-être pas attendu du tout (non inité) : compléter
+	    //l'intervalle ici, sinon un keep-alive part à chaque tour — l'ancien
+	    //msleep(200) valait 200 MICROsecondes, soit ~5000 paquets/s.
+	    //Drapeau relu AVANT d'attendre : StopSending le pose puis annule
+	    //l'attente, et sans cette relecture le thread peut se glisser entre
+	    //les deux et dormir l'intervalle entier — 25 s de join.
+	    const QWORD waitedMs = (getTime() - waitedFrom)/1000;
+	    if (sendingText == TaskRunning && waitedMs < timeout)
+		sendWait.WaitSignal((DWORD)(timeout - waitedMs));
+
+	    //Annulé pendant l'attente : ne pas émettre un keep-alive de plus
+	    //pendant l'arrêt. La condition de boucle nous sort.
+	    if (sendingText != TaskRunning)
+		continue;
+
             //Update last send time with timeout
             lastTime += timeout;
 	}

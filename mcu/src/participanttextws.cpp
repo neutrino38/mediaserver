@@ -59,19 +59,35 @@ int ParticipantTextWS::End()
 
 int ParticipantTextWS::PullText()
 {
-	pulling = TaskRunning;
+	//Do NOT overwrite a TaskStopping that End() posted while this thread was
+	//starting: the flag would go back to TaskRunning, the loop would never
+	//exit and StopThread() would join forever.
+	if (pulling == TaskStarting)
+		pulling = TaskRunning;
 
 	while (pulling == TaskRunning)
 	{
 		//The per-leg mix destined to this participant. Blocks up to the
 		//timeout; Cancel() (from End) unblocks it with NULL.
-		TextFrame *frame = mixerInput->GetFrame(10000);
+		TextFrame *frame = mixerInput->GetFrame(PullIdleMs);
 
 		if (!frame)
+		{
 			//Timeout or cancel. No keepalive on the WebSocket side: WS
 			//has no RTP idle semantics, and the historical clients never
 			//expected one (jsr309_text_over_wss.md §5.5).
+			//
+			//`TextInput::GetFrame` only honours its timeout while the pipe
+			//is inited: a pipe the text mixer has ended returns NULL at
+			//once, and this loop would then spin on a core. StopThread()
+			//cancels this wait, so the stop stays prompt.
+			//Flag re-read BEFORE waiting: End() posts TaskStopping and
+			//then cancels the wait; without this the thread can slip
+			//between the two and sleep the whole interval.
+			if (pulling == TaskRunning)
+				wait.WaitSignal(PullIdleMs);
 			continue;
+		}
 
 		//A lone BOM is T.140 keepalive plumbing, not conversation — do
 		//not wake the browser up for it.
