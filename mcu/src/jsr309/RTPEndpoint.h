@@ -8,6 +8,8 @@
 #ifndef RTPENDPOINT_H
 #define	RTPENDPOINT_H
 
+#include <thread>
+
 #include "rtpsession.h"
 #include "RTPMultiplexer.h"
 #include "Joinable.h"
@@ -70,7 +72,7 @@ public:
 	}
 	
 private:
-	//Corps du thread de démultiplexage (pthread créé par StartReceiving).
+	//Corps du thread de démultiplexage, lancé par StartReceiving.
 	int MultiplexLoop();
 
 	//Bascule le PT d'émission sur `wanted`, ou rend false si la rtpMap de sortie
@@ -79,15 +81,14 @@ private:
 	//renégociation, et RTPSession::SetSendingCodec journalise une Error par appel.
 	bool TrySendingCodec(DWORD wanted);
 
-	//Funciones propias
-	static void *run(void *par);
-
 private:
 	//Sentinelle « aucun codec » de `codec` et d'`unmappedCodec` : c'est déjà celle
 	//qu'onResetStream écrit.
 	static const DWORD NoCodec = (DWORD)-1;
 
-	pthread_t thread;
+	//Thread de démultiplexage. Postcondition de StopReceiving : plus joignable —
+	//réaffecter un std::thread joignable appelle std::terminate().
+	std::thread thread;
 	DWORD codec;
 	DWORD timestamp;
 	DWORD freq;

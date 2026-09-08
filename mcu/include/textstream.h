@@ -1,8 +1,9 @@
 #ifndef _TEXTSTREAM_H_
 #define _TEXTSTREAM_H_
 
-#include <pthread.h>
+#include <atomic>
 #include <memory>
+#include <thread>
 #include "config.h"
 #include "medkit/codecs.h"
 #include "rtpsession.h"
@@ -81,9 +82,6 @@ private:
         RedundentCodec redCodec;
 
 private:
-	//Funciones propias
-	static void *startSendingText(void *par);
-	static void *startReceivingText(void *par);
 	TextCodec* CreateTextCodec(TextCodec::Type type);
 	//Los objectos gordos
 public:
@@ -110,13 +108,15 @@ private:
 	TextCodec::Type textCodec;
 	BYTE		t140Codec;
 	
-	//Las threads
-	pthread_t 	recTextThread;
-	pthread_t 	sendTextThread;
+	//Las threads. Postcondition de StopReceiving/StopSending : plus joignables —
+	//réaffecter un std::thread joignable appelle std::terminate().
+	std::thread	recTextThread;
+	std::thread	sendTextThread;
 
-	//Controlamos si estamos mandando o no
-	enum TaskState	sendingText;
-	enum TaskState 	receivingText;
+	//Controlamos si estamos mandando o no. Atomiques : le thread de la tâche les
+	//lit en condition de boucle, le plan de contrôle les écrit.
+	std::atomic<enum TaskState>	sendingText;
+	std::atomic<enum TaskState>	receivingText;
 
 	bool		muted;
 };

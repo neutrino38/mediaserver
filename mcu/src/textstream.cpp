@@ -201,30 +201,6 @@ int TextStream::SetRTPProperties(const Properties& properties)
 	return rtp.SetProperties(properties);
 }
 /***************************************
-* startSendingText
-*	Helper function
-***************************************/
-void * TextStream::startSendingText(void *par)
-{
-	TextStream *conf = (TextStream *)par;
-	blocksignals();
-	Log("SendTextThread [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->SendText());
-}
-
-/***************************************
-* startReceivingText
-*	Helper function
-***************************************/
-void * TextStream::startReceivingText(void *par)
-{
-	TextStream *conf = (TextStream *)par;
-	blocksignals();
-	Log("RecvTextThread [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->RecText());
-}
-
-/***************************************
 * StartSending
 *	Comienza a mandar a la ip y puertos especificados
 ***************************************/
@@ -256,9 +232,9 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 		bridge.Start();
 
 		sendingText = TaskStarting;
-		createPriorityThread(&sendTextThread,startSendingText,this,1);
+		sendTextThread = std::thread(&TextStream::SendText,this);
 
-		Log("<StartSending text sur data channel [%d]\n",sendingText);
+		Log("<StartSending text sur data channel [%d]\n",sendingText.load());
 		return 1;
 	}
 
@@ -287,9 +263,9 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 	sendingText = TaskStarting;
 
 	//Start thread
-	createPriorityThread(&sendTextThread,startSendingText,this,1);
+	sendTextThread = std::thread(&TextStream::SendText,this);
 
-	Log("<StartSending text [%d]\n",sendingText);
+	Log("<StartSending text [%d]\n",sendingText.load());
 
 	return 1;
 }
@@ -336,7 +312,7 @@ int TextStream::StartReceiving(RTPMap& rtpMap)
 	receivingText= TaskStarting;
 
 	//Create thread
-	createPriorityThread(&recTextThread,startReceivingText,this,1);
+	recTextThread = std::thread(&TextStream::RecText,this);
 
 	//Log
 	Log("<StartReceiving text [%d]\n",recTextPort);
@@ -395,10 +371,13 @@ int TextStream::StopReceiving()
 
 		//Cancel rtp
 		rtp.CancelGetPacket();
-		
-		//Y unimos
-		pthread_join(recTextThread,NULL);
 	}
+
+	//Join INCONDITIONNEL : RecText peut avoir rendu la main sans que personne
+	//n'ait posé TaskStopping, et StartReceiving réaffecte le membre — réaffecter
+	//un std::thread joignable appelle std::terminate().
+	if (recTextThread.joinable())
+		recTextThread.join();
 
 	Log("<StopReceiving Text\n");
 
@@ -422,10 +401,11 @@ int TextStream::StopSending()
 
 		//Cancel grab if any
 		textInput->Cancel();
-
-		//Y esperamos
-		pthread_join(sendTextThread,NULL);
 	}
+
+	//Même postcondition inconditionnelle que StopReceiving, et pour la même raison.
+	if (sendTextThread.joinable())
+		sendTextThread.join();
 
 	Log("<StopSending Text\n");
 
@@ -444,6 +424,11 @@ int TextStream::RecText()
 	DWORD		lastSeq = RTPPacket::MaxExtSeqNum;
 
 	Log(">RecText\n");
+
+	//SIGINT et SIGUSR1 restent au thread principal.
+	blocksignals();
+	Log("RecvTextThread [%d]\n",getpid());
+
 	rtp.ResetPacket(false);
 	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
 	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
@@ -518,7 +503,7 @@ int TextStream::RecText()
 
 	receivingText = TaskIdle;
 	//Salimos
-	pthread_exit(0);
+	return 0;
 }
 
 /*******************************************
@@ -564,6 +549,11 @@ int TextStream::SendTextOverDataChannel()
 
 int TextStream::SendText()
 {
+    //SIGINT et SIGUSR1 restent au thread principal. Posé AVANT la bascule de
+    //dialecte : les deux boucles tournent sur ce thread.
+    blocksignals();
+    Log("SendTextThread [%d]\n",getpid());
+
     //Data channel : autre dialecte, autre boucle.
     if (transport == MediaFrame::SCTP)
         return SendTextOverDataChannel();
@@ -687,7 +677,7 @@ int TextStream::SendText()
 	//Salimos
 	Log("<SendText\n");
 	sendingText = TaskIdle;
-	pthread_exit(0);
+	return 0;
 }
 
 MediaStatistics TextStream::GetStatistics()

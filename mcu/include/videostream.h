@@ -83,7 +83,6 @@ protected:
 	int RecVideo();
 
 private:
-	static void* startReceivingVideo(void *par);
 
 	//Listners
 	Listener* listener;

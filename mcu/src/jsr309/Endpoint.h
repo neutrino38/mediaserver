@@ -8,6 +8,7 @@
 #ifndef ENDPOINT_H
 #define	ENDPOINT_H
 
+#include <atomic>
 #include <memory>
 #include <map>
 #include <string>
@@ -110,8 +111,13 @@ public:
 	    std::weak_ptr<Joinable> joined;
 	    MediaFrame::Type type;
 		MediaFrame::MediaProtocol proto;
-	    bool sending;
-	    bool receiving;
+	    //Atomiques : `receiving` est la condition de boucle du thread de
+	    //démultiplexage de RTPEndpoint, et le plan de contrôle l'écrit depuis un
+	    //autre thread. En bool nu, `-O3` peut hisser la lecture hors de la boucle —
+	    //le thread ne sort plus, le join de StopReceiving n'en revient jamais.
+	    //C'est le défaut trouvé par TSan sur RTPMultiplexerSmoother::inited.
+	    std::atomic<bool> sending;
+	    std::atomic<bool> receiving;
 	    bool portinited;
 	    MediaStatistics stats;
 	    // Propriétés locales de codec (clés « <codec>.<param> », préfixe codec.

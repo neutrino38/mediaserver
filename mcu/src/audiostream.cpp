@@ -131,30 +131,6 @@ int AudioStream::SetRTPProperties(const Properties& properties)
 	return rtp.SetProperties(properties);
 }
 /***************************************
-* startSendingAudio
-*	Helper function
-***************************************/
-void * AudioStream::startSendingAudio(void *par)
-{
-	AudioStream *conf = (AudioStream *)par;
-	blocksignals();
-	Log("SendAudioThread [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->SendAudio());
-}
-
-/***************************************
-* startReceivingAudio
-*	Helper function
-***************************************/
-void * AudioStream::startReceivingAudio(void *par)
-{
-	AudioStream *conf = (AudioStream *)par;
-	blocksignals();
-	Log("RecvAudioThread [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->RecAudio());
-}
-
-/***************************************
 * StartSending
 *	Comienza a mandar a la ip y puertos especificados
 ***************************************/
@@ -191,9 +167,9 @@ int AudioStream::StartSending(char *sendAudioIp,int sendAudioPort,RTPMap& rtpMap
 	sendingAudio=TaskStarting;
 
 	//Start thread
-	createPriorityThread(&sendAudioThread,startSendingAudio,this,1);
+	sendAudioThread = std::thread(&AudioStream::SendAudio,this);
 
-	Log("<StartSending audio [%d]\n",sendingAudio);
+	Log("<StartSending audio [%d]\n",sendingAudio.load());
 
 	return 1;
 }
@@ -227,7 +203,7 @@ int AudioStream::StartReceiving(RTPMap& rtpMap)
 	receivingAudio = TaskStarting;
 
 	//Create thread
-	createPriorityThread(&recAudioThread,startReceivingAudio,this,1);
+	recAudioThread = std::thread(&AudioStream::RecAudio,this);
 
 	//Log
 	Log("<StartReceiving audio [%d]\n",recAudioPort);
@@ -272,10 +248,13 @@ int AudioStream::StopReceiving()
 
 		//Cancel rtp
 		rtp.CancelGetPacket();
-		
-		//Y unimos
-		pthread_join(recAudioThread,NULL);
 	}
+
+	//Join INCONDITIONNEL : RecAudio rend la main sur une erreur d'initialisation
+	//sans que personne n'ait posé TaskStopping, et StartReceiving réaffecte le
+	//membre — réaffecter un std::thread joignable appelle std::terminate().
+	if (recAudioThread.joinable())
+		recAudioThread.join();
 
 	Log("<StopReceiving Audio\n");
 
@@ -299,10 +278,12 @@ int AudioStream::StopSending()
 
 		//Cancel
 		audioInput->CancelRecFrame();
-
-		//Y esperamos
-		pthread_join(sendAudioThread,NULL);
 	}
+
+	//Même postcondition inconditionnelle que StopReceiving, et pour la même
+	//raison : SendAudio sort tout de suite si le codec ne s'ouvre pas.
+	if (sendAudioThread.joinable())
+		sendAudioThread.join();
 
 	Log("<StopSending Audio\n");
 
@@ -323,6 +304,10 @@ int AudioStream::RecAudio()
 	DWORD		lastTime=0;
 
 	Log(">RecAudio\n");
+
+	//SIGINT et SIGUSR1 restent au thread principal.
+	blocksignals();
+	Log("RecvAudioThread [%d]\n",getpid());
 	
 	//Inicializamos el tiempo
 	gettimeofday(&before,NULL);
@@ -417,7 +402,7 @@ int AudioStream::RecAudio()
 	receivingAudio = TaskIdle;
 	//Salimos
 	Log("<RecAudio\n");
-	pthread_exit(0);
+	return 0;
 }
 
 /*******************************************
@@ -435,6 +420,10 @@ int AudioStream::SendAudio()
 	DWORD		frameTime=0;
 
 	Log(">SendAudio\n");
+
+	//SIGINT et SIGUSR1 restent au thread principal.
+	blocksignals();
+	Log("SendAudioThread [%d]\n",getpid());
 
 	//Obtenemos el tiempo ahora
 	gettimeofday(&before,NULL);
@@ -560,7 +549,7 @@ int AudioStream::SendAudio()
 		
 	}
 
-	Log("-SendAudio cleanup[%d]\n",sendingAudio);
+	Log("-SendAudio cleanup[%d]\n",sendingAudio.load());
 
 	//Paramos de grabar por si acaso
 	audioInput->StopRecording();
@@ -573,7 +562,7 @@ int AudioStream::SendAudio()
 	sendingAudio = TaskIdle;
 	//Salimos
         Log("<SendAudio\n");
-	pthread_exit(0);
+	return 0;
 }
 
 MediaStatistics AudioStream::GetStatistics()
