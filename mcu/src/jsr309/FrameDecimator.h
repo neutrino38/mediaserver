@@ -18,10 +18,10 @@
  * `budget` l'écart moyen entre deux images de la source. La part utilisable
  * laisse au décodage et au démux ce qui n'est pas de l'encodage.
  *
- * Asymétrie voulue : le pas MONTE tout de suite (le RTPBuffer jette après
- * 500 ms, il n'y a pas le temps d'attendre) et ne REDESCEND qu'après
- * RecoveryUs de coût continûment sous le seuil (chaque changement de cadence
- * coûte une trame clé à la réouverture de l'encodeur).
+ * Asymétrie voulue : le pas MONTE dès que le coût sort de la bande morte (le
+ * RTPBuffer jette après 500 ms, il n'y a pas le temps d'attendre) et ne
+ * REDESCEND qu'après RecoveryUs de coût continûment sous le seuil (chaque
+ * changement de cadence coûte une trame clé à la réouverture de l'encodeur).
  */
 #ifndef FRAMEDECIMATOR_H
 #define FRAMEDECIMATOR_H
@@ -56,6 +56,14 @@ public:
 	//74 réouvertures de x264 en 20 min, une trame clé toutes les 16 s.
 	static constexpr QWORD DownShareNum = 7;
 	static constexpr QWORD DownShareDen = 10;
+	//Bande morte de la montée : le coût doit dépasser la part utilisable de
+	//10 % pour que le pas monte. Sans elle, 0,2 ms de dépassement suffisait
+	//(appel du 2026-09-01 : 33 ms pour 32,8 ms utilisables, 4 traces par
+	//minute pendant 23 min, sortie à 12 im/s au lieu de 24). Cette marge ne
+	//peut pas accumuler de retard : 11/10 de la part utilisable reste 88 % du
+	//budget d'une image, donc l'encodeur suit toujours la source.
+	static constexpr QWORD UpShareNum = 11;
+	static constexpr QWORD UpShareDen = 10;
 
 	FrameDecimator() { Reset(); }
 
@@ -91,10 +99,12 @@ public:
 			return false;
 
 		const QWORD usable = budgetUs*UsableShareNum/UsableShareDen;
-		const int neededUp = StepFor(usable);
-		if (neededUp > step)
+		//La bande morte décide s'il faut bouger ; le pas retenu, lui, ramène
+		//le coût sous la part utilisable pleine, pour rendre au décodage et au
+		//démux le cinquième qui leur est réservé.
+		if (StepFor(usable*UpShareNum/UpShareDen) > step)
 		{
-			step = neededUp;
+			step = StepFor(usable);
 			belowSinceUs = 0;
 			return true;
 		}

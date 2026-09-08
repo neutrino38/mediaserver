@@ -705,33 +705,31 @@ face au `RTPSmoother` de `RTPSession`.
   périmètre, à traiter ailleurs. `include/RTPSmoother.h` (lisseur de
   `RTPSession`) porte le MÊME `bool inited` non atomique — non touché ici.
 
-## 7 bis. Reste à faire : la bande morte de la montée du pas
+## 7 bis. La bande morte de la montée du pas
 
-Mesuré le 2026-09-01, appel JSR-309 transcodé H.264 ↔ VP8 de 27 min, 720p,
-x264 `veryfast` mono-thread. Défaut réel, **non corrigé**.
+Le pas ne monte que si le coût dépasse la part utilisable de **10 %**
+(`FrameDecimator::UpShareNum/UpShareDen`). Le pas retenu, lui, ramène le coût
+sous la part utilisable **pleine** : la bande morte décide s'il faut bouger,
+pas de combien.
 
-### Ce que le journal dit
+Cette marge ne peut pas accumuler de retard. `11/10 × 4/5 = 88 %` du budget
+d'une image : l'encodeur reste plus rapide que la source, donc le thread de
+démux ne prend pas de retard et le `RTPBuffer` ne jette rien.
+
+L'asymétrie du motif est conservée : la descente demande 30 % de marge **et**
+`RecoveryUs` de calme, la montée ne demande que 10 % et part tout de suite —
+le `RTPBuffer` jette après 500 ms, il n'y a pas le temps d'attendre.
+
+### Ce que mesurait l'appel du 2026-09-01, sans cette bande morte
+
+Appel JSR-309 transcodé H.264 ↔ VP8 de 27 min, 720p, x264 `veryfast`
+mono-thread.
 
 ```
 -VideoTranscoder: encodeur trop lent [video transcoder outbound] :
  33 ms par image pour un budget de 41 ms (source 24 im/s)
  -> 1 image sur 2 encodee, encodeur recale a 12 im/s
 ```
-
-33 ms sous un budget de 41 ms, et pourtant le pas monte. C'est correct : le
-seuil n'est pas le budget mais la **part utilisable**, qui réserve un cinquième
-au décodage et au démux du même thread.
-
-```
-usable = 41 × UsableShareNum/UsableShareDen = 41 × 4/5 = 32,8 ms
-StepFor(32,8)                              = ceil(33 / 32,8) = 2
-```
-
-Le pas bascule donc pour **0,2 ms** de dépassement. Et pour redescendre il faut
-`32,8 × DownShareNum/DownShareDen = 23 ms` tenus `RecoveryUs` (3 s) — qu'un
-encodeur oscillant entre 25 et 34 ms n'atteint jamais.
-
-### Ce que cela produit
 
 | Mesure sur 27 min | Valeur |
 |---|---|
@@ -741,27 +739,33 @@ encodeur oscillant entre 25 et 34 ms n'atteint jamais.
 | `Got Intra` | 183 |
 | Paquets jetés par le `RTPBuffer` | **0** |
 
-Ce n'est pas un transitoire : c'est le régime permanent. Symptôme observé côté
-pair : environ une seconde de latence vidéo au démarrage, qui se résorbe
-lentement. La lenteur est la somme de quatre délais délibérés qui s'ajoutent :
-`MinSamples` (8 images) avant la première décision, `FpsWindow` (30 images)
-avant qu'une cadence puisse être appliquée, 5 s minimum entre deux
-applications, `RecoveryUs` (3 s) avant qu'un pas redescende.
+Ce n'était pas un transitoire : c'était le régime permanent. Le seuil de montée
+valait alors exactement la part utilisable :
 
-### Le défaut
+```
+usable = 41 × UsableShareNum/UsableShareDen = 41 × 4/5 = 32,8 ms
+StepFor(32,8)                              = ceil(33 / 32,8) = 2
+```
 
-**La montée du pas n'a aucune bande morte**, alors que la descente en a 30 %.
-L'asymétrie est voulue — le `RTPBuffer` jette après 500 ms, il n'y a pas le
-temps d'attendre — et ce motif reste bon. Mais il n'exige pas une marge
-**nulle** : 500 ms à 25 im/s, c'est douze images de mou, de quoi confirmer une
-montée sur deux ou trois échantillons.
+Le pas basculait pour **0,2 ms** de dépassement. Et pour redescendre il fallait
+`32,8 × DownShareNum/DownShareDen = 23 ms` tenus `RecoveryUs` (3 s) — qu'un
+encodeur oscillant entre 25 et 34 ms n'atteint jamais. Avec la bande morte, le
+seuil vaut 36,1 ms et ce régime reste au pas 1.
 
-### Options
+### Ce que la bande morte ne corrige pas
+
+La première décision reste lente : `MinSamples` (8 images), `FpsWindow`
+(30 images) avant qu'une cadence puisse être appliquée, 5 s minimum entre deux
+applications, `RecoveryUs` (3 s) avant qu'un pas redescende. Quatre délais
+délibérés qui s'ajoutent. Le pair voyait environ une seconde de latence vidéo
+au démarrage, qui se résorbait lentement.
+
+### Options écartées
 
 | Option | Verdict |
 |---|---|
-| **Bande morte sur la montée** : monter le pas seulement si `costUs > usable × 11/10`, ou après 2 à 3 échantillons consécutifs au-dessus du seuil | **Retenue.** Local à `FrameDecimator::Observe`, couvert par `mcu/tests/test_frame_decimator.cpp` |
 | `UsableShare` de 4/5 à 9/10 | Écartée : déplace le seuil sans le stabiliser, et prend la marge qui protège des pics de décodage |
+| Confirmer la montée sur 2 à 3 échantillons consécutifs | Écartée : même effet que la bande morte, mais le pas n'est plus une fonction du seul coût moyen — donc plus difficile à tester et à lire dans le journal |
 | `thread_count` > 1 pour libx264 | Écartée sur la seule lecture d'un journal : le mono-thread est un choix assumé pour un mixeur chargé (`h264/h264encoder.cpp`) |
 
 ### Ce qui a été vérifié et écarté comme cause
@@ -774,8 +778,23 @@ au-delà de VGA, `tune zerolatency`, `forced-idr`, `ref=1`, `subme` réduit,
 
 Le chantier « moins de threads RTP » (`docs/conception/RTP-REACTOR/SPEC.md`) est
 hors de cause : sur la même séance, zéro alerte du réacteur et zéro paquet jeté
-par le `RTPBuffer`. Le même régime est d'ailleurs documenté dans l'en-tête de
-`FrameDecimator.h` au 2026-08-29, avant ce chantier.
+par le `RTPBuffer`.
+
+### Tests
+
+`mcu/tests/test_frame_decimator.cpp`, en temps simulé :
+
+- `UnCoutDansLaBandeMorteNeMontePas` — le régime du 2026-09-01 (30-34 ms pour
+  32,8 ms utilisables) pendant vingt minutes : **aucun** changement de pas ;
+- `AuDelaDeLaBandeMorteLePasMonteUneSeuleFois` — 42 ms dépassent la bande
+  morte, le pas monte une fois, et l'hystérésis de descente reste celle des
+  7/10.
+
+### Reste : la recette en appel réel
+
+Rejouer le 720p transcodé de la séance du 2026-09-01. Critères : aucune trace
+« encodeur trop lent » tant que le coût tient sous 88 % du budget, cadence de
+sortie égale à celle de la source, `OpenCodec` stable après le démarrage.
 
 ## 8. Ce que ce plan ne fait pas
 
