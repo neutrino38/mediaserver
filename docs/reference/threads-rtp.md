@@ -44,7 +44,7 @@ Une session dont personne ne fixe le groupe tombe dans le **groupe par défaut**
 du processus, créé à la demande. C'est le repli des tests et de `Broadcaster` :
 il n'existe pas de session hors réacteur.
 
-### Deux règles d'écriture, et elles mordent
+### Les règles d'écriture, et elles mordent
 
 1. **`SetPollGroup()` s'appelle AVANT `Init()`.** Après, il est refusé : la
    session est déjà inscrite ailleurs.
@@ -75,6 +75,21 @@ il n'existe pas de session hors réacteur.
    `Disconnect()`. Garde-fous :
    `RtmpThreads.RTMPConnectionStopNeLiberePasLeDescripteur` et
    `RtmpThreads.RTMPClientConnectionFermeSesTroisDescripteursApresLeJoin`.
+5. **Un conteneur partagé se lit sous le verrou qui le mute.** Un verrou ne
+   protège que les accès qui le prennent. `RTMPConnection` insère ses chunk
+   output streams sous le verrou écrivain, et quatre envois lisaient la même
+   map sans rien prendre : le thread de lecture descendait l'arbre pendant que
+   le thread média le rebalançait. Le cache de `RTMPCachedPipedMediaStream`
+   portait le même défaut, son `push_back` échappant au verrou que `Clear()` et
+   `AddMediaListener()` prennent. Garde-fou :
+   `mcu/tests/test_rtmp_container_races.cpp`, qui ne prouve rien sans TSan.
+
+   **Corollaire, et il porte loin.** Ces lectures sont des lecteurs `Use`
+   (`IncUse`), et c'est sûr uniquement parce qu'`IncUse` est RÉENTRANT :
+   `RTMPConnection::onStreamReset` tient déjà un `IncUse` quand il appelle
+   `SendControlMessage`. Remplacer ce `Use` par un `std::mutex` non récursif
+   fait donc deadlocker ce chemin. C'est la raison pour laquelle `use.h` reste
+   ici.
 
 ## 3. Ce que le thread du réacteur porte
 
