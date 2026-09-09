@@ -103,8 +103,7 @@ TARGETS=mcu rtmptest
 ifeq ($(FLASHSTREAMER),yes)
 	OBJS+= flash.o xmlrpcflash.o 
 	OBJSFS   = flashstreamer.o FlashPlayer.o FlashSoundHandler.o $(OBJS)
-	OBJSFSCLIENT = xmlrpcclient.o xmlrpcflashclient.o
-	TARGETS += flashstreamer flashclient testflash
+	TARGETS += flashstreamer
 endif
 
 # VAD via le paquet systeme webrtc-audio-processing (module APM).
@@ -147,8 +146,7 @@ OBJSWSTEST = $(OBJS) wstest.o
 BUILDOBJSMCU = $(addprefix $(BUILD)/,$(OBJSMCU))
 BUILDOBJSRTMPTEST= $(addprefix $(BUILD)/,$(OBJSRTMPTEST))
 BUILDOBJSWSTEST= $(addprefix $(BUILD)/,$(OBJSWSTEST))
-BUILDOBJSFS= $(addprefix $(BUILD)/,$(OBJSFS)) 
-BUILDOBJSFSCLIENT= $(addprefix $(BUILD)/,$(OBJSFSCLIENT))
+BUILDOBJSFS= $(addprefix $(BUILD)/,$(OBJSFS))
 
 ###################################
 #Compilacion condicional
