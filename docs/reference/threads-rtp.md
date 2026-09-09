@@ -59,7 +59,10 @@ il n'existe pas de session hors réacteur.
    le corps du thread a rendu la main tout seul — ce que fait chaque `Send*`
    quand son codec ne s'ouvre pas. Le drapeau d'état (`TaskState`, `receiving`)
    est **atomique** : le thread le lit en condition de boucle, le plan de
-   contrôle l'écrit. Garde-fous : `mcu/tests/test_consumer_threads.cpp`.
+   contrôle l'écrit. La règle vaut hors des jambes RTP : les objets RTMP
+   (`FLVEncoder`, `RTMPParticipant`, `RTMPConnection`) la suivent aussi.
+   Garde-fous : `mcu/tests/test_consumer_threads.cpp` et
+   `mcu/tests/test_rtmp_threads.cpp`.
 
 ## 3. Ce que le thread du réacteur porte
 

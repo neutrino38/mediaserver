@@ -99,30 +99,6 @@ int FLVEncoder::End()
 	return 1;
 }
 
-/***************************************
-* startencodingAudio
-*	Helper function
-***************************************/
-void * FLVEncoder::startEncodingAudio(void *par)
-{
-	FLVEncoder *enc = (FLVEncoder *)par;
-	blocksignals();
-	Log("Encoding FLV audio [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)enc->EncodeAudio());
-}
-
-/***************************************
-* startencodingAudio
-*	Helper function
-***************************************/
-void * FLVEncoder::startEncodingVideo(void *par)
-{
-	FLVEncoder *enc = (FLVEncoder *)par;
-	blocksignals();
-	Log("Encoding FLV video [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)enc->EncodeVideo());
-}
-
 DWORD FLVEncoder::AddMediaListener(RTMPMediaStream::Listener *listener)
 {
 	//Call parent
@@ -257,13 +233,13 @@ int FLVEncoder::StartEncoding()
 	SendMetaData(meta);
 
 	//Start audio thread
-	createPriorityThread(&encodingAudioThread,startEncodingAudio,this,1);
+	encodingAudioThread = std::thread(&FLVEncoder::EncodeAudio,this);
 	//Start video thread
-	createPriorityThread(&encodingVideoThread,startEncodingVideo,this,1);
+	encodingVideoThread = std::thread(&FLVEncoder::EncodeVideo,this);
 	//Start text thread
 	textEncoder.StartEncoding();
 
-	Log("<Start encoding FLV [%d]\n",encodingAudio);
+	Log("<Start encoding FLV [%d]\n",encodingAudio.load());
 
 	return 1;
 }
@@ -287,8 +263,14 @@ int FLVEncoder::StopEncoding()
 		//Cancel grab audio
 		if ( audioInput != NULL)
 			audioInput->CancelRecFrame();
-		pthread_join(encodingAudioThread,NULL);
 	}
+
+	//Postcondition inconditionnelle, comme VideoStream::StopSending : le corps
+	//peut être sorti de lui-même (erreur d'ouverture de codec) sans que le
+	//drapeau soit retombé, et StartEncoding RÉAFFECTE le membre — réaffecter
+	//un std::thread joignable appelle std::terminate().
+	if (encodingAudioThread.joinable())
+		encodingAudioThread.join();
 
 	//Esperamos a que se cierren las threads de envio
 	if (encodingVideo)
@@ -299,9 +281,11 @@ int FLVEncoder::StopEncoding()
 		//Cancel frame cpature
 		if ( videoInput != NULL)
 			videoInput->CancelGrabFrame();
-		//Y esperamos
-		pthread_join(encodingVideoThread,NULL);	
 	}
+
+	//Même postcondition inconditionnelle que pour l'audio.
+	if (encodingVideoThread.joinable())
+		encodingVideoThread.join();
 	
 	//Esperamos a que se cierren las threads de text
 	textEncoder.StopEncoding();
@@ -317,7 +301,8 @@ int FLVEncoder::StopEncoding()
 *******************************************/
 int FLVEncoder::EncodeAudio()
 {
-	Log(">Encode Audio\n");
+	blocksignals();
+	Log(">Encode Audio [%d]\n",getpid());
 	use.IncUse();
 
 	//L'encodeur AAC S'OUVRE DANS SON CONSTRUCTEUR, à la fréquence portée par
@@ -541,12 +526,14 @@ int FLVEncoder::EncodeAudio()
 
 	use.DecUse();
 	//Exit
-	pthread_exit(0);
+	return 0;
 }
 
 int FLVEncoder::EncodeVideo()
 {
 	timeval prev;
+	blocksignals();
+	Log(">Encode Video [%d]\n",getpid());
 	use.IncUse();
 	//Allocate media frame
 	RTMPVideoFrame frame(0,262143);

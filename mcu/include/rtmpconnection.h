@@ -1,7 +1,8 @@
 #ifndef _RTMPCONNECTION_H_
 #define _RTMPCONNECTION_H_
-#include <pthread.h>
+#include <atomic>
 #include <sys/poll.h>
+#include <thread>
 #include "config.h"
 #include "wait.h"
 #include "rtmp.h"
@@ -57,8 +58,6 @@ protected:
 	int Run();
 	void PingRequest();
 private:
-	static  void* run(void *par);
-        static  void* runw(void *par);
 	void ParseData(BYTE *data,const DWORD size);
 	DWORD SerializeChunkData(BYTE *data,const DWORD size);
 	int WriteData();
@@ -86,7 +85,9 @@ private:
 	pollfd ufds[1];
         pollfd ufwrite[1];
 	bool inited;
-	bool running;
+	//Condition de boucle des deux corps, baissée par Stop() depuis un autre
+	//thread : atomique, sinon -O3 peut hisser la lecture hors de la boucle.
+	std::atomic<bool> running;
 	State state;
 
 	RTMPHandshake01 s01;
@@ -115,8 +116,8 @@ private:
 	DWORD maxChunkSize;
 	DWORD maxOutChunkSize;
 
-	pthread_t thread;
-        pthread_t threadw;
+	std::thread thread;
+	std::thread threadw;
         Use lock;
 	//Réveil du thread writer (données à sérialiser / arrêt). Remplace un
 	//couple mutex/cond dont le mutex n'était JAMAIS initialisé (UB latent).

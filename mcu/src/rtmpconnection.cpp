@@ -43,7 +43,6 @@ RTMPConnection::RTMPConnection(Listener *listener)
 	inited = false;
 	running = false;
 	socket = FD_INVALID;
-	thread = 0;
 	//Set initial time
 	gettimeofday(&startTime,0);
 	//Create output chunk streams for control
@@ -94,8 +93,8 @@ void RTMPConnection::Start()
 	running = true;
 	
 	//Create thread
-	createPriorityThread(&thread,run,this,0);
-        createPriorityThread(&threadw,runw,this,0);
+	thread  = std::thread(&RTMPConnection::Run,this);
+	threadw = std::thread(&RTMPConnection::WriteData,this);
 }
 
 void RTMPConnection::Stop()
@@ -132,21 +131,15 @@ int RTMPConnection::End()
 	//Stop just in case
 	Stop();
 
-	//If running
-	if (thread)
-	{
-		//Wait for server thread to close
-		pthread_join(thread,NULL);
-		//No thread
-		thread = 0;
-	}
+	//Postcondition inconditionnelle : les deux corps sortent aussi d'eux-mêmes
+	//(le pair ferme, poll rend une erreur) sans passer par Stop(), et Init()
+	//RÉAFFECTE les membres — réaffecter un std::thread joignable appelle
+	//std::terminate().
+	if (thread.joinable())
+		thread.join();
 
-        if (threadw)
-        {
-		pthread_join(threadw,NULL);
-		//No thread
-		threadw = 0;
-        }
+	if (threadw.joinable())
+		threadw.join();
 
 	//If got application
 	if (app)
@@ -171,47 +164,16 @@ int RTMPConnection::End()
 	return 1;
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-void * RTMPConnection::run(void *par)
-{
-        Log("-RTMP Connecttion Thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTMPConnection *con = (RTMPConnection *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)con->Run());
-}
-
-void * RTMPConnection::runw(void *par)
-{
-        Log("-RTMP Write Connecttion Thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTMPConnection *con = (RTMPConnection *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)con->WriteData());
-}
-
-
 /***************************
  * Run
  * 	Server running thread 
  ***************************/
 int RTMPConnection::Run()
 {
+	//Block signals to avoid exiting on SIGUSR1
+	blocksignals();
 
-	Log(">Run connection [%p]\n",this);
+	Log(">Run connection [%p,pid:%d]\n",this,getpid());
 
 	//Set values for polling
 	ufds[0].fd = socket;
@@ -881,6 +843,11 @@ void RTMPConnection::ParseData(BYTE *data,const DWORD size)
  ***********************/
 int RTMPConnection::WriteData()
 {
+	//Block signals to avoid exiting on SIGUSR1
+	blocksignals();
+
+	Log(">Write connection [%p,pid:%d]\n",this,getpid());
+
     //Write data buffer
     
     DWORD len;
