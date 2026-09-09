@@ -512,8 +512,12 @@ bool RTMPCachedPipedMediaStream::SendMediaFrame(RTMPMediaFrame *frame)
 	if (frame->GetType()==RTMPMediaFrame::Video && ((RTMPVideoFrame*)frame)->GetFrameType()==RTMPVideoFrame::INTRA)
 		//Clear cache
 		Clear();
+	//Lock cache
+	use.WaitUnusedAndLock();
 	//Append to queue
 	cached.push_back(frame->Clone());
+	//Unlock
+	use.Unlock();
 	//Call parent
 	return RTMPPipedMediaStream::SendMediaFrame(frame);
 }

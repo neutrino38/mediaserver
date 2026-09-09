@@ -1264,7 +1264,9 @@ void RTMPConnection::SendCommand(DWORD streamId,const wchar_t* name,AMFData *par
 	//Get timestamp
 	QWORD ts = getDifTime(&startTime)/1000;
 	//Append message to command stream
+	lock.IncUse();
 	chunkOutputStreams[3]->SendMessage(new RTMPMessage(streamId,ts,cmd));
+	lock.DecUse();
 	//We have new data to send
 	SignalWriteNeeded();
 }
@@ -1279,7 +1281,9 @@ void RTMPConnection::SendCommandResponse(DWORD streamId,const wchar_t* name,QWOR
 	//Get timestamp
 	QWORD ts = getDifTime(&startTime)/1000;
 	//Append message to command stream
+	lock.IncUse();
 	chunkOutputStreams[3]->SendMessage(new RTMPMessage(streamId,ts,cmd));
+	lock.DecUse();
 	//We have new data to send
 	SignalWriteNeeded();
 }
@@ -1309,7 +1313,9 @@ void RTMPConnection::SendControlMessage(RTMPMessage::Type type,RTMPObject* msg)
 		}
 	}
 	//Append message to control stream
+	lock.IncUse();
 	chunkOutputStreams[2]->SendMessage(new RTMPMessage(0,ts,type,msg));
+	lock.DecUse();
 	//We have new data to send
 	SignalWriteNeeded();
 }
@@ -1451,7 +1457,9 @@ void RTMPConnection::onMetaData(DWORD streamId,RTMPMetaData *meta)
 		ts = getDifTime(&startTime)/1000;
 
 	//Append to the comand trunk	
+	lock.IncUse();
 	chunkOutputStreams[3]->SendMessage(new RTMPMessage(streamId,ts,meta->Clone()));
+	lock.DecUse();
 	//Signal frames
 	SignalWriteNeeded();
 }
