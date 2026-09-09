@@ -99,21 +99,20 @@ void RTMPConnection::Start()
 
 void RTMPConnection::Stop()
 {
-	//If got socket
-	if (running)
-	{
-		//Not running;
-		running = false;
+	//Idempotent : Stop() vient du thread de lecture (onDisconnect du serveur),
+	//de l'application ou de End().
+	if (!running.exchange(false))
+		return;
 
-		//Close socket
+	//Reveille les deux corps SANS liberer le numero de descripteur : la lecture
+	//voit une fin de flux, l'ecriture un EPIPE. Un close() ici serait une course
+	//- entre lui et le poll()/write() suivant, le numero peut etre reattribue a
+	//une autre connexion, a qui les deux threads parleraient. C'est End(), apres
+	//les join(), qui ferme.
+	if (socket != FD_INVALID)
 		shutdown(socket,SHUT_RDWR);
-		//Will cause poll to return
-		close(socket);
-		//No socket
-		socket = FD_INVALID;
 
-                writeWait.Cancel(); // reveille le writer : la connexion s'arrete
-	}
+	writeWait.Cancel(); // reveille le writer : la connexion s'arrete
 }
 
 int RTMPConnection::End()
@@ -140,6 +139,14 @@ int RTMPConnection::End()
 
 	if (threadw.joinable())
 		threadw.join();
+
+	//Seul close() de la classe, et il vient apres les deux join() : plus aucun
+	//thread ne peut utiliser le descripteur ni voir son numero reattribue.
+	if (socket != FD_INVALID)
+	{
+		close(socket);
+		socket = FD_INVALID;
+	}
 
 	//If got application
 	if (app)

@@ -63,6 +63,15 @@ il n'existe pas de session hors réacteur.
    (`FLVEncoder`, `RTMPParticipant`, `RTMPConnection`) la suivent aussi.
    Garde-fous : `mcu/tests/test_consumer_threads.cpp` et
    `mcu/tests/test_rtmp_threads.cpp`.
+4. **Le descripteur se ferme APRÈS les `join()`, jamais pendant.** `close()`
+   rend le numéro au noyau, qui alloue toujours le plus petit libre : la
+   connexion acceptée juste après le reprend, et un thread pas encore sorti
+   parle alors au socket d'un autre client. L'arrêt se fait donc en deux temps.
+   `shutdown(fd, SHUT_RDWR)` réveille `poll()`, fait rendre 0 à `read()` et
+   EPIPE à `write()`, sans libérer le numéro ; `close()` vient après les
+   `join()`, une seule fois, dans le `End()` de l'objet. Modèle :
+   `RTMPConnection::Stop()` / `End()`. Garde-fou :
+   `RtmpThreads.RTMPConnectionStopNeLiberePasLeDescripteur`.
 
 ## 3. Ce que le thread du réacteur porte
 

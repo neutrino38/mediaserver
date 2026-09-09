@@ -21,6 +21,8 @@
  */
 #include <gtest/gtest.h>
 
+#include <csignal>
+
 #include "log.h"
 
 namespace {
@@ -35,6 +37,11 @@ public:
 		// Passer GTEST_MCU_DEBUG=1 dans l'environnement pour tout tracer.
 		const char* dbg = getenv("GTEST_MCU_DEBUG");
 		Logger::EnableDebug(dbg && dbg[0]=='1');
+
+		// Comme main.cpp : écrire dans un socket que le pair a fermé est un cas
+		// NORMAL de fin de connexion. Sans cette ligne, le SIGPIPE par défaut tue
+		// le binaire de test là où le serveur, lui, continue.
+		signal(SIGPIPE, SIG_IGN);
 	}
 };
 

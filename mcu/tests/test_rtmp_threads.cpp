@@ -19,6 +19,7 @@
 
 #include <chrono>
 #include <dirent.h>
+#include <fcntl.h>
 #include <memory>
 #include <sys/socket.h>
 #include <thread>
@@ -87,6 +88,16 @@ public:
 	}
 	virtual void onDisconnect(RTMPConnection* con) { disconnected++; }
 	int disconnected = 0;
+};
+
+// Stop() est protected : seul RTMPServer l'appelle en production (depuis
+// onDisconnect et depuis son thread d'acceptation). On l'expose pour tester le
+// protocole d'arret lui-meme.
+class TestableConnection : public RTMPConnection
+{
+public:
+	using RTMPConnection::RTMPConnection;
+	using RTMPConnection::Stop;
 };
 
 } // namespace
@@ -189,7 +200,7 @@ TEST(RtmpThreads, RTMPParticipantRendSesThreadsDEmissionAChaqueCycle)
 
 // Init() démarre les deux threads (lecture et écriture) et End() les joint.
 // Un socketpair suffit : le pair n'envoie jamais rien, donc la lecture reste
-// dans son poll jusqu'à ce que Stop() ferme le descripteur.
+// dans son poll jusqu'à ce que Stop() coupe le socket.
 TEST(RtmpThreads, RTMPConnectionJointSesDeuxThreadsAChaqueCycle)
 {
 	ConnectionSpy spy;
@@ -222,4 +233,78 @@ TEST(RtmpThreads, RTMPConnectionJointSesDeuxThreadsAChaqueCycle)
 
 	EXPECT_EQ(before, SettledThreadCount())
 		<< "un thread de RTMPConnection n'a pas ete joint";
+}
+
+// Stop() reveille les deux threads sans FERMER le descripteur : tant qu'ils ne
+// sont pas joints, ils peuvent encore appeler poll(), read() et write() dessus.
+// Un close() la rend le NUMERO au noyau, qui alloue toujours le plus petit
+// libre : la connexion acceptee juste apres le reprend, et les deux threads de
+// celle-ci parlent alors au socket d'un autre client.
+TEST(RtmpThreads, RTMPConnectionStopNeLiberePasLeDescripteur)
+{
+	ConnectionSpy spy;
+	TestableConnection connection(&spy);
+
+	int fds[2];
+	ASSERT_EQ(socketpair(AF_UNIX,SOCK_STREAM,0,fds), 0);
+	ASSERT_EQ(connection.Init(fds[0]), 1);
+
+	connection.Stop();
+
+	EXPECT_NE(fcntl(fds[0],F_GETFD), -1)
+		<< "Stop() a ferme le descripteur alors que les deux threads l'utilisent encore";
+
+	// Le numero n'est pas retombe dans le pot commun : un descripteur cree
+	// maintenant ne peut pas etre celui de la connexion en cours d'arret.
+	const int probe = dup(fds[1]);
+	ASSERT_GE(probe, 0);
+	EXPECT_NE(probe, fds[0])
+		<< "le numero a ete rendu au noyau : la prochaine connexion l'aurait recupere";
+	close(probe);
+
+	// End() joint les deux threads, PUIS ferme.
+	const long endMs = TimedMs([&] { connection.End(); });
+	EXPECT_LT(endMs, kStopBudgetMs) << "l'arret n'a pas rendu la main";
+
+	errno = 0;
+	EXPECT_EQ(fcntl(fds[0],F_GETFD), -1) << "End() n'a pas ferme le descripteur";
+	EXPECT_EQ(errno, EBADF);
+
+	close(fds[1]);
+
+	// Les deux threads viennent d'etre joints, mais leur entree dans
+	// /proc/self/task peut survivre un instant a leur mort : on attend qu'elle
+	// disparaisse, sinon c'est la suite suivante qui compte nos threads.
+	SettledThreadCount();
+}
+
+// C'est le shutdown() qui reveille le poll() de la lecture, pas le close() : le
+// thread doit sortir de lui-meme, donc signaler la deconnexion, bien avant les
+// 30 s de timeout du poll. Stop() est de plus idempotent : il vient du thread de
+// lecture, de l'application et de End(), parfois en meme temps.
+TEST(RtmpThreads, RTMPConnectionStopRepeteReveilleLaLectureUneSeuleFois)
+{
+	ConnectionSpy spy;
+	TestableConnection connection(&spy);
+
+	int fds[2];
+	ASSERT_EQ(socketpair(AF_UNIX,SOCK_STREAM,0,fds), 0);
+	ASSERT_EQ(connection.Init(fds[0]), 1);
+
+	connection.Stop();
+	connection.Stop();
+	connection.Stop();
+
+	const long endMs = TimedMs([&] { connection.End(); });
+	EXPECT_LT(endMs, kStopBudgetMs)
+		<< "la lecture n'est pas sortie de son poll() : le reveil n'a pas eu lieu";
+
+	EXPECT_EQ(spy.disconnected, 1);
+
+	close(fds[1]);
+
+	// Les deux threads viennent d'etre joints, mais leur entree dans
+	// /proc/self/task peut survivre un instant a leur mort : on attend qu'elle
+	// disparaisse, sinon c'est la suite suivante qui compte nos threads.
+	SettledThreadCount();
 }
