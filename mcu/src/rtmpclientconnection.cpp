@@ -51,7 +51,9 @@ RTMPClientConnection::RTMPClientConnection(const std::wstring& tag)
 	//Not inited
 	inited = false;
 	running = false;
+	disconnectFired = false;
 	fd = FD_INVALID;
+	wakeup_socket[0] = wakeup_socket[1] = FD_INVALID;
 	//Set initial time
 	gettimeofday(&startTime,0);
 
@@ -74,6 +76,33 @@ RTMPClientConnection::~RTMPClientConnection()
 	delete(chunkOutputStreams[3]);
 	delete(chunkOutputStreams[4]);
 	delete(chunkOutputStreams[5]);
+}
+
+void RTMPClientConnection::FireDisconnected()
+{
+	//La fin est constatee a trois endroits : le serveur qui refuse la
+	//connexion, le thread de lecture qui sort, et Disconnect(). Le listener
+	//n'en entend parler qu'une fois.
+	if (listener && !disconnectFired.exchange(true))
+		listener->onDisconnected(this);
+}
+
+void RTMPClientConnection::CloseSockets()
+{
+	if (fd != FD_INVALID)
+	{
+		close(fd);
+		fd = FD_INVALID;
+	}
+
+	for (int i=0;i<2;i++)
+	{
+		if (wakeup_socket[i] != FD_INVALID)
+		{
+			close(wakeup_socket[i]);
+			wakeup_socket[i] = FD_INVALID;
+		}
+	}
 }
 
 int RTMPClientConnection::Connect(const char* server,int port, const char* app,Listener *listener)
@@ -100,10 +129,13 @@ int RTMPClientConnection::Connect(const char* server,int port, const char* app,L
 
 	//If not found
 	if (!host)
+	{
 		//Error : c'est le NOM qu'on a tenté de résoudre qui fait le diagnostic. La
 		//ligne passait `host`, qui vaut NULL ici par construction — le log disait
 		//donc toujours "(null)" au lieu de nommer l'hôte fautif.
+		CloseSockets();
 		return Error("-Could not resolve %s\n",server);
+	}
 	//Set to zero
 	bzero((char *) &addr, sizeof(addr));
 
@@ -114,8 +146,11 @@ int RTMPClientConnection::Connect(const char* server,int port, const char* app,L
 
 	//Connect
 	if (connect(fd,(sockaddr *) &addr,sizeof(addr)) < 0)
+	{
 		//Exit
+		CloseSockets();
 		return Error("Connection error [%d]\n",errno);
+	}
 
 	//I am inited
 	inited = true;
@@ -154,20 +189,21 @@ void RTMPClientConnection::Start()
 
 void RTMPClientConnection::Stop()
 {
-	//If got socket
-	if (fd!=FD_INVALID)
-	{
-		//Not running;
-		running = false;
-		//Close socket
+	//Idempotent : Disconnect() peut venir de plusieurs threads.
+	if (!running.exchange(false))
+		return;
+
+	//Meme protocole que RTMPConnection : shutdown() reveille le poll() sans
+	//liberer le numero de descripteur, dont le thread de lecture se sert encore.
+	//C'est Disconnect(), apres le join(), qui ferme.
+	if (fd != FD_INVALID)
 		shutdown(fd,SHUT_RDWR);
-		//Will cause poll to return
-		close(fd);
-		//No socket
-		fd = FD_INVALID;
+
+	if (wakeup_socket[1] != FD_INVALID)
+	{
+		char dummy = 'x';
+		write(wakeup_socket[1], &dummy, 1);
 	}
-    char dummy = 'x';
-    write(wakeup_socket[1], &dummy, 1);	
 }
 
 int RTMPClientConnection::Disconnect()
@@ -192,11 +228,14 @@ int RTMPClientConnection::Disconnect()
 		thread.join();
 	}
 
+	//Le thread de lecture est sorti : les trois descripteurs peuvent etre fermes.
+	CloseSockets();
+
 	//If got application
 	if (listener)
 	{
 		//Disconnect application
-		listener->onDisconnected(this);
+		FireDisconnected();
 		//NO listener
 		listener = NULL;
 	}
@@ -316,6 +355,12 @@ int RTMPClientConnection::Run()
 	}
 
 	Log("<Run RTMP connection\n");
+
+	//Sorti de lui-meme : le pair a coupe, ou le socket est en erreur. L'etat de
+	//la connexion doit le dire, et le listener l'apprendre - sinon la
+	//republication est morte sans que personne au-dessus ne le sache.
+	running = false;
+	FireDisconnected();
 
 	return 0;
 }
@@ -832,7 +877,7 @@ void RTMPClientConnection::ProcessCommandMessage(DWORD streamId,RTMPCommandMessa
 			}
 
 			//Call listener
-			listener->onDisconnected(this);
+			FireDisconnected();
 		} else {
 			//Call listener
 			listener->onConnected(this);

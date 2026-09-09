@@ -69,9 +69,12 @@ il n'existe pas de session hors réacteur.
    parle alors au socket d'un autre client. L'arrêt se fait donc en deux temps.
    `shutdown(fd, SHUT_RDWR)` réveille `poll()`, fait rendre 0 à `read()` et
    EPIPE à `write()`, sans libérer le numéro ; `close()` vient après les
-   `join()`, une seule fois, dans le `End()` de l'objet. Modèle :
-   `RTMPConnection::Stop()` / `End()`. Garde-fou :
-   `RtmpThreads.RTMPConnectionStopNeLiberePasLeDescripteur`.
+   `join()`, une seule fois, dans le `End()` de l'objet, **et il ferme TOUS**
+   les descripteurs de l'objet, socket de service compris. Modèles :
+   `RTMPConnection::Stop()` / `End()` et `RTMPClientConnection::Stop()` /
+   `Disconnect()`. Garde-fous :
+   `RtmpThreads.RTMPConnectionStopNeLiberePasLeDescripteur` et
+   `RtmpThreads.RTMPClientConnectionFermeSesTroisDescripteursApresLeJoin`.
 
 ## 3. Ce que le thread du réacteur porte
 

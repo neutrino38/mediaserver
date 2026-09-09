@@ -17,16 +17,20 @@
  */
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <dirent.h>
 #include <fcntl.h>
 #include <memory>
+#include <netinet/in.h>
+#include <set>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 
 #include "log.h"
 #include "FLVEncoder.h"
+#include "rtmpclientconnection.h"
 #include "rtmpconnection.h"
 #include "rtmpparticipant.h"
 #include "pipeaudioinput.h"
@@ -98,6 +102,77 @@ class TestableConnection : public RTMPConnection
 public:
 	using RTMPConnection::RTMPConnection;
 	using RTMPConnection::Stop;
+};
+
+// Descripteurs ouverts par le processus. Sert a isoler ceux d'un objet : on
+// compare l'avant et l'apres de sa creation.
+std::set<int> OpenFds()
+{
+	std::set<int> fds;
+	DIR* dir = opendir("/proc/self/fd");
+	if (!dir)
+		return fds;
+	const int self = dirfd(dir);
+	while (struct dirent* e = readdir(dir))
+	{
+		if (e->d_name[0] == '.')
+			continue;
+		const int fd = atoi(e->d_name);
+		if (fd != self)
+			fds.insert(fd);
+	}
+	closedir(dir);
+	return fds;
+}
+
+class ClientSpy : public RTMPClientConnection::Listener
+{
+public:
+	virtual void onConnected(RTMPClientConnection* conn) {}
+	virtual void onNetStreamCreated(RTMPClientConnection* conn,RTMPClientConnection::NetStream* stream) {}
+	virtual void onCommandResponse(RTMPClientConnection* conn,DWORD id,bool isError,AMFData* param) {}
+	virtual void onDisconnected(RTMPClientConnection* conn) { disconnected++; }
+	//Ecrit par le thread de la connexion, lu par le test.
+	std::atomic<int> disconnected{0};
+};
+
+class TestableClientConnection : public RTMPClientConnection
+{
+public:
+	using RTMPClientConnection::RTMPClientConnection;
+	using RTMPClientConnection::Stop;
+};
+
+// Serveur bidon : accepte une connexion et n'echange rien. Le client RTMP
+// enverra son c0/c1, que personne ne lira - c'est sans importance ici.
+class LoopbackServer
+{
+public:
+	bool Listen()
+	{
+		fd = socket(AF_INET,SOCK_STREAM,0);
+		if (fd < 0)
+			return false;
+		sockaddr_in addr;
+		memset(&addr,0,sizeof(addr));
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		addr.sin_port = 0;
+		socklen_t len = sizeof(addr);
+		if (bind(fd,(sockaddr*)&addr,sizeof(addr)) < 0)
+			return false;
+		if (getsockname(fd,(sockaddr*)&addr,&len) < 0)
+			return false;
+		port = ntohs(addr.sin_port);
+		return listen(fd,2) == 0;
+	}
+	~LoopbackServer()
+	{
+		if (fd >= 0)
+			close(fd);
+	}
+	int fd = -1;
+	int port = 0;
 };
 
 } // namespace
@@ -306,5 +381,100 @@ TEST(RtmpThreads, RTMPConnectionStopRepeteReveilleLaLectureUneSeuleFois)
 	// Les deux threads viennent d'etre joints, mais leur entree dans
 	// /proc/self/task peut survivre un instant a leur mort : on attend qu'elle
 	// disparaisse, sinon c'est la suite suivante qui compte nos threads.
+	SettledThreadCount();
+}
+
+/* ------------------------------------------------------------------------- *
+ *                           RTMPClientConnection                             *
+ * ------------------------------------------------------------------------- */
+
+// Meme protocole d'arret que RTMPConnection, sur l'autre sens de la connexion
+// (le mediaserver republie une conference vers un serveur RTMP externe).
+// Une connexion cliente possede TROIS descripteurs : le socket vers le serveur
+// et la paire de reveil du poll(). Stop() n'en ferme aucun - le thread de
+// lecture s'en sert encore - et Disconnect() les ferme tous, apres le join().
+TEST(RtmpThreads, RTMPClientConnectionFermeSesTroisDescripteursApresLeJoin)
+{
+	LoopbackServer server;
+	ASSERT_TRUE(server.Listen());
+
+	ClientSpy spy;
+
+	// Cycle a blanc : la resolution de nom et le chargement des modules NSS
+	// ouvrent des descripteurs qui, eux, ne sont ouverts qu'une fois.
+	{
+		TestableClientConnection warm(L"warmup");
+		ASSERT_EQ(warm.Connect("127.0.0.1",server.port,"test",&spy), 1);
+		const int peer = accept(server.fd,nullptr,nullptr);
+		ASSERT_GE(peer, 0);
+		warm.Disconnect();
+		close(peer);
+	}
+
+	TestableClientConnection connection(L"test");
+
+	const std::set<int> before = OpenFds();
+	ASSERT_EQ(connection.Connect("127.0.0.1",server.port,"test",&spy), 1);
+
+	const int peer = accept(server.fd,nullptr,nullptr);
+	ASSERT_GE(peer, 0);
+
+	std::set<int> owned;
+	for (int fd : OpenFds())
+		if (!before.count(fd) && fd != peer)
+			owned.insert(fd);
+
+	ASSERT_EQ(owned.size(), 3u) << "la connexion n'ouvre plus 3 descripteurs : test a revoir";
+
+	connection.Stop();
+
+	for (int fd : owned)
+		EXPECT_NE(fcntl(fd,F_GETFD), -1)
+			<< "Stop() a ferme le descripteur " << fd
+			<< " alors que le thread de lecture l'utilise encore";
+
+	const long endMs = TimedMs([&] { connection.Disconnect(); });
+	EXPECT_LT(endMs, kStopBudgetMs) << "l'arret n'a pas rendu la main";
+
+	for (int fd : owned)
+	{
+		errno = 0;
+		EXPECT_EQ(fcntl(fd,F_GETFD), -1)
+			<< "Disconnect() a laisse le descripteur " << fd << " ouvert";
+	}
+
+	close(peer);
+
+	// Meme raison que pour les tests de RTMPConnection.
+	SettledThreadCount();
+}
+
+// Quand le pair coupe, le thread de lecture sort de lui-meme : personne
+// n'appelle Disconnect(). L'objet doit quand meme dire qu'il est mort, et le
+// dire UNE fois - sinon la republication est morte en silence.
+TEST(RtmpThreads, RTMPClientConnectionPrevientQuandLePairCoupe)
+{
+	LoopbackServer server;
+	ASSERT_TRUE(server.Listen());
+
+	ClientSpy spy;
+	TestableClientConnection connection(L"test");
+	ASSERT_EQ(connection.Connect("127.0.0.1",server.port,"test",&spy), 1);
+
+	const int peer = accept(server.fd,nullptr,nullptr);
+	ASSERT_GE(peer, 0);
+
+	//Le serveur raccroche.
+	close(peer);
+
+	for (int i = 0; i < 300 && spy.disconnected == 0; i++)
+		std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+	EXPECT_EQ(spy.disconnected, 1) << "le pair a coupe et personne n'a ete prevenu";
+
+	//Et l'arret explicite ne le dit pas une seconde fois.
+	connection.Disconnect();
+	EXPECT_EQ(spy.disconnected, 1) << "l'avis de deconnexion est parti deux fois";
+
 	SettledThreadCount();
 }
