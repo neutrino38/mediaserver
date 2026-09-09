@@ -857,8 +857,11 @@ int RTMPConnection::WriteData()
 
     //Write data buffer
     
-    DWORD len;
-    DWORD pos;
+    //A zero : le premier tour de boucle les LIT (len > 0 && pos < len) avant
+    //de les ecrire. Sur des octets de pile favorables, la connexion emettait
+    //le contenu non initialise de dataout.
+    DWORD len = 0;
+    DWORD pos = 0;
     int   len2;
 
     BYTE dataout[1400];
