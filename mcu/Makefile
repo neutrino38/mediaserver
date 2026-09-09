@@ -132,7 +132,8 @@ endif
 
 # TSAN=yes : detecteur de courses (ThreadSanitizer). Meme usage qu'ASAN, meme
 # piege sur le melange d'objets : passer TAG=tsan pour les isoler du build
-# normal (make tests TSAN=yes TAG=tsan). libmedkit et libbfcp ne sont pas
+# normal (make check TSAN=yes TAG=tsan, qui joue tests/runtests-tsan).
+# libmedkit et libbfcp ne sont pas
 # instrumentes : une course INTERNE a ces bibliotheques ne sera pas vue.
 ifeq ($(TSAN),yes)
 	OPTS    += -fsanitize=thread -fno-omit-frame-pointer
@@ -347,42 +348,50 @@ BUILDOBJSTEST = $(addprefix $(BUILD)/,$(OBJS))
 # make check TEST_PCAP=/chemin/vers.pcap).
 TEST_PCAP    ?= $(abspath tests/fixtures/rtp_rtcp.pcap)
 
+# Le binaire de test est lie contre les objets de $(BUILD) : son nom porte donc
+# le TAG, sauf pour le build par defaut qui garde le chemin documente. Sans ca,
+# `make tests TSAN=yes TAG=tsan` laissait un binaire INSTRUMENTE a l'emplacement
+# du binaire normal : le `make check` suivant le trouvait plus recent que les
+# objets, ne reliait rien, et rejouait toute la suite sous ThreadSanitizer sans
+# le dire (20 minutes de CPU au lieu de 90 s).
+TESTBIN = tests/runtests$(if $(filter-out debug,$(TAG)),-$(TAG),)
+
 # $(BUILD) en prerequis ORDER-ONLY, pas `mkdirs` : celui-ci n'etant pas un fichier,
 # il etait toujours plus recent que tests/runtests et forcait la recompilation de
 # TOUTE la suite gtest a chaque `make check`, meme sans modification.
-tests/runtests: $(OBJS) $(TESTSRCS) | $(BUILD)
+$(TESTBIN): $(OBJS) $(TESTSRCS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) -DTEST_PCAP_FILE='"$(TEST_PCAP)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
-		-o tests/runtests $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
+		-o $(TESTBIN) $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
 
-tests: tests/runtests
+tests: $(TESTBIN)
 
-check: tests/runtests
-	./tests/runtests
+check: $(TESTBIN)
+	./$(TESTBIN)
 
 # Suite IPv6 (tag :ipv6, cf. tests/test_ipv6.cpp).
 # ATTENDUE EN ECHEC tant qu'IPv6 n'est pas implemente : elle n'est PAS jouee par
 # `make check`. Les tests sont prefixes DISABLED_ (exclus par defaut) et leurs
 # suites prefixees IPv6 (selectionnables par filtre) — d'ou les deux options.
-check-ipv6: tests/runtests
-	./tests/runtests --gtest_filter='IPv6*' --gtest_also_run_disabled_tests
+check-ipv6: $(TESTBIN)
+	./$(TESTBIN) --gtest_filter='IPv6*' --gtest_also_run_disabled_tests
 
 # Suite contrôle de débit (chantier rate-control, cf. tests/test_rate_control.cpp).
 # Joue AUSSI les tests DISABLED_ (caractérisation de défauts levés un a un).
 # Les mécanismes sous test sont décrits dans docs/RATE-CONTROL.md.
-check-ratecontrol: tests/runtests
-	./tests/runtests --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
+check-ratecontrol: $(TESTBIN)
+	./$(TESTBIN) --gtest_filter='RateControl*' --gtest_also_run_disabled_tests
 
 # Suite transport-cc : le format de fil, l'historique d'emission, l'estimateur
 # emetteur (lot 6) et le generateur de rapports d'arrivee (lot 4).
-check-senderbwe: tests/runtests
-	./tests/runtests --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:TransportFeedbackGenerator*:TransportCCWiring*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
+check-senderbwe: $(TESTBIN)
+	./$(TESTBIN) --gtest_filter='SenderBWE*:TrendlineDetector*:TransportFeedbackWire*:TransportFeedbackGenerator*:TransportCCWiring*:SentPacketHistoryTest*' --gtest_also_run_disabled_tests
 
 # Suite « transcodeurs sans thread » (jsr309_transcode_sans_thread.md).
 # Tableau de bord du chantier : caracterisation, chemins inline audio/video,
 # pont, et les scenarios de recette jouables sans appel reel.
-check-transcoder: tests/runtests
-	./tests/runtests --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
+check-transcoder: $(TESTBIN)
+	./$(TESTBIN) --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
 
 .PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe check-transcoder
 
