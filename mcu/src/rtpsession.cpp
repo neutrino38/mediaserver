@@ -723,6 +723,29 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	return 1;
 }
 
+void RTPSession::ReplayPendingDTLS()
+{
+	BYTE       packet[MTU];
+	int        len;
+	IPEndpoint from;
+	{
+		std::lock_guard<std::mutex> lock(pendingDtlsMutex);
+		if (!pendingDtlsLen)
+			return;
+		len = pendingDtlsLen;
+		memcpy(packet,pendingDtls,len);
+		from = pendingDtlsFrom;
+		pendingDtlsLen = 0;
+	}
+
+	Log("-RTPSession DTLS: replaying packet received before init from [%s:%d]\n", from.Address().ToString().c_str(), from.Port());
+	if (!dtls.Write(packet,len))
+		return;
+	len = dtls.Read(packet,MTU);
+	if (len>0)
+		sendto(simSocket,packet,len,0,from,from.Len());
+}
+
 int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint)
 {
 	Log("-SetRemoteCryptoDTLS [setup:%s,hash:%s,fingerpritn:%s]\n",setup,hash,fingerprint);
@@ -753,6 +776,9 @@ int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const cha
 
 	//Init DTLS (génère le ClientHello dans write_bio si on est en rôle client)
 	int res = dtls.Init();
+
+	if (res)
+		ReplayPendingDTLS();
 
 	//P2 : si le pair est passive, nous sommes client -> amorcer le handshake dès
 	//maintenant si la destination est déjà connue (StartSending déjà appelé), sinon
@@ -2725,6 +2751,16 @@ int RTPSession::ReadRTP()
 	if (DTLSConnection::IsDTLS(buffer,size))
 	{
 		Log("-RTPSession DTLS: received packet from [%s:%d]\n", from_addr.Address().ToString().c_str(), from_addr.Port());
+		if (!dtls.IsInited())
+		{
+			//Le pair actif a parlé avant SetRemoteCryptoDTLS : jeté, son ClientHello
+			//ne revenait qu'à la retransmission OpenSSL, une seconde plus tard.
+			std::lock_guard<std::mutex> lock(pendingDtlsMutex);
+			memcpy(pendingDtls,buffer,size);
+			pendingDtlsLen  = size;
+			pendingDtlsFrom = from_addr;
+			return 0;
+		}
 		//Feed it
 		if (!dtls.Write(buffer,size))
 		{

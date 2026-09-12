@@ -442,6 +442,7 @@ private:
 	//P2 (offreur WebRTC) : pilotage du handshake DTLS en rôle CLIENT
 	void FlushDTLS();                    //vide write_bio DTLS vers sendAddr
 	void RequestDTLSClientHandshake();   //depuis les setters : réveille le thread Run
+	void ReplayPendingDTLS();
 	void DriveDTLSClientHandshake();     //depuis Run : émet le ClientHello + retransmet
 
 	//P3 (offreur WebRTC) : binding requests STUN sortants vers un pair ICE-lite
@@ -577,6 +578,11 @@ private:
 	bool	rtpTimedOut;
 
 	DTLSConnection dtls;
+	//Datagramme DTLS reçu avant dtls.Init(), rejoué par SetRemoteCryptoDTLS.
+	std::mutex	pendingDtlsMutex;
+	BYTE		pendingDtls[MTU];
+	int		pendingDtlsLen = 0;
+	IPEndpoint	pendingDtlsFrom;
 	//P2 : état du handshake DTLS piloté en rôle client (offreur WebRTC).
 	//dtlsClientStarted = ClientHello déjà émis (on pilote alors les retransmissions) ;
 	//dtlsClientStart   = horodatage de la 1re émission (borne globale) ;
