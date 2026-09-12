@@ -768,6 +768,58 @@ TEST(RateControlThrottler, UneBaisseFranchePartMemeQuandLePairDepasse)
 	EXPECT_EQ(800000u, out);
 }
 
+// ─── Sous un plafond externe, ce qui compte est ce que le pair a ENTENDU ─────
+// Deux cas que la matrice de décision (dialecte × source × variation × pair ×
+// plafond) laissait vides, et qui se comportaient mal : le test de pas franc et
+// le garde « hausse informative » se jugeaient contre la MESURE locale, alors que
+// sous un plafond la valeur annoncée au pair est une autre.
+
+// La mesure locale monte d'un pas franc, mais le plafond borne toujours : la
+// valeur à annoncer est celle que le pair connaît déjà. En TMMBR, la redire lui
+// coûte une trame clé pour rien. La mesure est retenue quand même : c'est elle
+// que la levée du plafond doit rendre.
+TEST(RateControlThrottler, EnTMMBRUneHausseLocaleSousPlafondNeReditPasLePlafond)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(500000, 1010, out));
+	ASSERT_EQ(500000u, out);
+
+	EXPECT_FALSE(throttler.OnEstimateChanged(2600000, 5000, out))
+		<< "un TMMBR de valeur identique au plafond deja annonce est reparti";
+	EXPECT_EQ(500000u, throttler.GetLastAnnounced());
+	EXPECT_EQ(2600000u, throttler.GetLastSent()) << "la mesure doit etre retenue";
+
+	// Levée du plafond : c'est la DERNIÈRE mesure qui part, pas celle d'avant.
+	ASSERT_TRUE(throttler.SetMaxBitrate(RembThrottler::NoLimit, 6000, out));
+	EXPECT_EQ(2600000u, out);
+}
+
+// Le pair émet au-dessus du plafond qu'on lui a annoncé (500 kb/s), mais sous
+// la mesure locale (2 Mb/s). C'est sa propre négociation qui le borne : relever
+// le plafond à 700 ne changera rien à ce qu'il émet, et ne doit pas partir.
+TEST(RateControlThrottler, UneHausseDuPlafondQueLePairDepasseDejaNEmetPas)
+{
+	RembThrottler throttler;
+	throttler.SetPolicy(RembThrottler::TmmbrPolicy);
+	DWORD out = 0;
+
+	ASSERT_TRUE(throttler.OnEstimateChanged(2000000, 1000, out));
+	ASSERT_TRUE(throttler.SetMaxBitrate(500000, 1010, out));
+	throttler.SetPeerBitrate(800000);
+
+	EXPECT_FALSE(throttler.SetMaxBitrate(700000, 5000, out))
+		<< "hausse inerte : le pair depasse deja la limite annoncee";
+
+	// Le pair se range sous la limite annoncée : la relever le libère, ça part.
+	throttler.SetPeerBitrate(500000);
+	ASSERT_TRUE(throttler.SetMaxBitrate(700000, 6000, out));
+	EXPECT_EQ(700000u, out);
+}
+
 // ─── La baisse qui n'est qu'un suivi (mesure du 2026-09-02) ───────────────────
 // L'estimation de réception suit l'entrant (plafond 1,5 x). Quand le pair
 // s'échauffe, elle s'effondre sur son débit d'échauffement SANS congestion.
