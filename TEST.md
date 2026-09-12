@@ -153,8 +153,8 @@ il est **SKIPPÉ** (`GTEST_SKIP`) plutôt qu'échoué.
 
 ## Défauts mis au jour par la suite
 
-Les round-trips ont révélé trois bugs latents (deux corrigés, un caractérisé),
-plus une fuite mémoire trouvée par les tests adverses et corrigée (point 4).
+Les round-trips ont révélé trois bugs latents, tous corrigés, plus une fuite
+mémoire trouvée par les tests adverses et corrigée (point 4).
 
 1. **`AMFNumber::GetNumber` — signe (CORRIGÉ dans `amf.cpp`).** Le facteur de signe
    s'écrivait `(value>>63|1)`, ce qui suppose un décalage *arithmétique*. Or `value`
@@ -171,13 +171,12 @@ plus une fuite mémoire trouvée par les tests adverses et corrigée (point 4).
    `test_rtmp_chunk.cpp` ajoute la transition manquante (retour à la lecture d'un
    en-tête de base fmt 3 pour le chunk de continuation) + un garde-fou anti-boucle.
 
-3. **`AMFNumber::GetNumber` — zéro (NON corrigé, caractérisé).** `SetNumber(0)` stocke
-   bien des bits nuls, mais `GetNumber()` n'a pas de cas spécial et reconstruit
-   `ldexp(2^52, -1075) ≈ 2⁻¹⁰²³` (un dénormal minuscule) au lieu de `0.0`. Un
-   AMFNumber valant 0 ne fait donc **pas** un aller-retour exact. Test
-   `Amf.NumberZeroDecodeQuirk` : il réussit tant que le bug est présent ; s'il se met
-   à échouer, c'est que le décodage de zéro a été corrigé (remplacer alors par un
-   `EXPECT_DOUBLE_EQ(decoded, 0.0)`).
+3. **`AMFNumber::GetNumber` — zéro (CORRIGÉ dans `amf.cpp`).** `SetNumber(0)` stocke
+   des bits nuls, mais `GetNumber()` n'avait pas de cas spécial et reconstruisait
+   `ldexp(2^52, -1075) ≈ 2⁻¹⁰²³` (un dénormal minuscule) au lieu de `0.0`. Zéro a un
+   exposant et une fraction nuls : il n'a pas de bit implicite. Correctif : rendre
+   `±0.0` quand exposant et fraction sont nuls. Non-régression : `Amf.NumberZeroRoundTrip`
+   (les deux signes).
 
 4. **`RTCPCompoundPacket::Parse` — fuite mémoire sur entrée malformée (CORRIGÉE dans
    `rtp.cpp`).** Sur le chemin d'erreur « Wrong rtcp packet size » (champ *length*

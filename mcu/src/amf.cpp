@@ -5,6 +5,7 @@
 #include <cstring>
 #include <strings.h>
 #include <math.h>
+#include <cmath>
 #include "log.h"
 #include "tools.h"
 
@@ -492,6 +493,10 @@ double AMFNumber::GetNumber()
 {
 	if(value+value > 0xFFEULL<<52)
         	return 0.0;
+	//Zéro (des deux signes) : exposant et fraction nuls, pas de bit implicite à
+	//reconstruire — ldexp(2^52, -1075) en ferait un dénormal.
+	if (!(value & ~(1ULL<<63)))
+		return (value>>63) ? -0.0 : 0.0;
 	// Mantisse (bit implicite 1.xxx + 52 bits de fraction), puis application du
 	// signe et de l'exposant biaise (IEEE-754 double). `value` est un uint64_t :
 	// on porte donc la mantisse dans un int64_t signe avant de la negativer, sinon
@@ -507,7 +512,8 @@ void AMFNumber::SetNumber(double d)
 	int e;
 	if     ( !d) 
 	{ 
-		value = 0;
+		//Zéro garde son signe : -0.0 est un double comme un autre.
+		value = (QWORD)std::signbit(d)<<63;
 	} else if(d-d) {
 		value =  0x7FF0000000000000LL + ((QWORD)(d<0)<<63) + (d!=d);
 	} else {

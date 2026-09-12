@@ -9,6 +9,7 @@
  * autonome et déterministe.
  */
 #include <gtest/gtest.h>
+#include <cmath>
 
 #include "amf.h"
 
@@ -73,22 +74,21 @@ TEST(Amf, NumberNegativeRoundTrip)
 	}
 }
 
-// Test de CARACTÉRISATION d'un défaut préexistant NON corrigé : SetNumber(0) stocke
-// des bits nuls, mais GetNumber() n'a pas de cas spécial zéro et reconstruit
-// ldexp(2^52, -1075) ≈ 2^-1023 (dénormal minuscule) ≠ 0.0. Un AMFNumber valant 0 ne
-// fait donc PAS un aller-retour exact. Ce test épingle le comportement actuel ; s'il
-// se met à échouer, c'est que le bug a été corrigé (remplacer alors par un
-// EXPECT_DOUBLE_EQ(decoded, 0.0)). Voir TEST.md.
-TEST(Amf, NumberZeroDecodeQuirk)
+// Zéro a exposant et fraction nuls : il n'a pas de bit implicite à reconstruire.
+// GetNumber le rebâtissait comme un nombre normal et rendait ldexp(2^52, -1075),
+// un dénormal minuscule au lieu de 0.0. Les deux signes doivent revenir exacts.
+TEST(Amf, NumberZeroRoundTrip)
 {
-	AMFNumber in(0.0);
-	AMFParser parser;
-	AMFData* out = RoundTrip(in, parser);
-	ASSERT_NE(out, nullptr);
-	double decoded = ((AMFNumber*)out)->GetNumber();
-	EXPECT_NE(decoded, 0.0) << "le décodage de zéro a peut-être été corrigé "
-				   "(attendu : EXPECT_DOUBLE_EQ(decoded, 0.0))";
-	EXPECT_NEAR(decoded, 0.0, 1e-300); // extrêmement proche de 0, mais pas 0
+	for (double v : {0.0, -0.0})
+	{
+		AMFNumber in(v);
+		AMFParser parser;
+		AMFData* out = RoundTrip(in, parser);
+		ASSERT_NE(out, nullptr);
+		double decoded = ((AMFNumber*)out)->GetNumber();
+		EXPECT_DOUBLE_EQ(decoded, 0.0);
+		EXPECT_EQ(std::signbit(decoded), std::signbit(v)) << "signe de zero perdu";
+	}
 }
 
 TEST(Amf, BooleanRoundTrip)
