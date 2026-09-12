@@ -418,10 +418,12 @@ TEST(VideoEncoderInline, UneSourceA28ImagesNeChangeRien)
 	transcoder.End();
 }
 
-// Une PAUSE n'est pas une cadence. Cinq secondes sans image, puis reprise à la
-// même cadence : ni changement de cadence, ni trame clé de réouverture. Sans
-// cette règle, l'écart de pause tomberait dans la moyenne, l'encodeur rouvrirait
-// à 1 im/s, et la reprise sortirait à une image par seconde.
+// Une PAUSE n'est pas une cadence. Sans la règle, l'écart de pause entre dans la
+// fenêtre : 29 écarts de 33 ms et un de 25 s donnent ~1 im/s, une baisse qui,
+// à elle seule, dépasse la tenue de 20 s et s'applique tout de suite — l'encodeur
+// rouvrirait à 1 im/s et la reprise sortirait à une image par seconde. La pause
+// doit donc dépasser la tenue (FpsDropHoldTicks) pour que le test morde : 5 s
+// passaient sous cette tenue et ne prouvaient plus rien.
 TEST(VideoEncoderInline, UnePauseNeFaitPasTomberLaCadence)
 {
 	Vp8Source vp8;
@@ -441,16 +443,18 @@ TEST(VideoEncoderInline, UnePauseNeFaitPasTomberLaCadence)
 	auto source = std::make_shared<RTPMultiplexer>();
 	ASSERT_EQ(1, transcoder.Attach(source));
 
+	// Tout passe par l'horodatage : la cadence se mesure sur les pts, pas sur
+	// l'heure d'arrivée. Une fenêtre pleine à 30 im/s avant la pause...
 	DWORD timestamp = 0;
-	ASSERT_GT(FeedAt(vp8, *source, 35, 30, timestamp), 20);
-	ASSERT_EQ(30, transcoder.GetEffectiveFps());
+	FeedByTimestamp(vp8, *source, 35, 30, timestamp);
 
-	// Mute vidéo de 5 s : l'horodatage saute, aucune image n'arrive.
-	timestamp += 5 * 90000;
+	// ...un mute vidéo de 25 s, plus long que la tenue d'une baisse...
+	timestamp += 25 * 90000;
 
-	// Reprise à la même cadence : la fenêtre est vide, elle se remplit à
-	// nouveau et rend la MÊME valeur — donc rien à appliquer.
-	ASSERT_GT(FeedAt(vp8, *source, 35, 30, timestamp), 20);
+	// ...et une reprise à la même cadence, fenêtre à nouveau pleine. Quelques
+	// images en temps réel pour que l'encodeur en encode une et relise sa cadence.
+	FeedByTimestamp(vp8, *source, 35, 30, timestamp);
+	ASSERT_GT(FeedAt(vp8, *source, 4, 30, timestamp), 1);
 
 	EXPECT_EQ(30, transcoder.GetEffectiveFps())
 		<< "une pause ne doit pas etre comptee comme un ecart de cadence";
