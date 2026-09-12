@@ -1235,6 +1235,10 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	//au rattrapage, sinon un pair qui change de mapping resterait coincé sur l'ancien.
 	natCorrected = false;
 	natRtcpCorrected = false;
+	//L'observation porte sur l'ancienne cible : gardée, le premier paquet émis
+	//ré-aiguillait dessus et brûlait le one-shot avant que le pair déplacé ne parle.
+	recIP = IPAddress();
+	recPort = 0;
 
 	//Ip y puerto de destino. L'adresse NON SPÉCIFIÉE (0.0.0.0 ou ::) n'en est pas
 	//une : c'est une demande de latch, et la destination doit rester INCONNUE

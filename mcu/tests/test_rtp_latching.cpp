@@ -464,27 +464,15 @@ TEST(RtpLatching, NewRemotePortReopensTheRightToReAim)
 		<< "apres un nouveau SetRemotePort, le rattrapage doit pouvoir rejouer";
 }
 
-// CARACTÉRISATION D'UN DÉFAUT (pas d'un choix de conception) : ce test décrit le
-// comportement actuel, qui CONTREDIT l'intention écrite dans `SetRemotePort`
-// (« On rouvre le droit au rattrapage, sinon un pair qui change de mapping
-// resterait coincé sur l'ancien »).
-//
-// `SetRemotePort` remet `natCorrected` à false mais laisse l'OBSERVATION
-// précédente (`recIP`/`recPort`) en place. Or le média coule en continu : le
-// premier paquet sortant après le re-INVITE arrive avant que le pair déplacé ne
-// se soit manifesté, et `SendPacket` ré-aiguille alors sur l'observation
-// PÉRIMÉE — ce qui reconsomme le one-shot. Quand le nouveau pair se manifeste
-// enfin, `natCorrected` vaut déjà true : plus aucune correction n'est possible
-// et la session reste bloquée sur l'ancien pair, en journalisant en boucle
-// « WARNING Trying to send packet from different ip address than receiving one ».
-//
-// En production la course est quasiment toujours perdue (audio émis toutes les
-// 20 ms contre un pair qui ne parle qu'après son answer).
-//
-// Ce test RÉUSSIT tant que le défaut existe. Correction probable : oublier
-// l'observation (`recIP`/`recPort`) quand le plan de contrôle pose une nouvelle
-// cible. Il faudra alors inverser les deux attentes ci-dessous.
-TEST(RtpLatching, StaleObservationBurnsTheOneShotWhenSendingContinues)
+// Le média coule en continu : le premier paquet sortant après le re-INVITE part
+// AVANT que le pair déplacé ne se soit manifesté. `SetRemotePort` oublie donc
+// l'observation précédente en même temps qu'il rouvre le droit au rattrapage :
+// gardée, elle servait de cible à ce premier paquet et brûlait le one-shot, et le
+// nouveau pair n'était plus jamais suivi (la session journalisait en boucle
+// « WARNING Trying to send packet from different ip address than receiving one »).
+// En production cette course était presque toujours perdue : audio émis toutes
+// les 20 ms contre un pair qui ne parle qu'après son answer.
+TEST(RtpLatching, AMovedPeerIsFollowedEvenWhenSendingContinues)
 {
 	ProbeSocket first;
 	Session sess(/*natLatchProperty=*/true);
@@ -499,8 +487,7 @@ TEST(RtpLatching, StaleObservationBurnsTheOneShotWhenSendingContinues)
 	char reannounced[] = "192.168.255.253";
 	sess.session.SetRemotePort(reannounced, 5002);
 
-	// L'émission continue AVANT que le pair déplacé ne se manifeste : le
-	// rattrapage se rejoue sur l'ancienne source et brûle le one-shot.
+	// L'émission continue AVANT que le pair déplacé ne se manifeste.
 	sess.SendMagic();
 
 	ProbeSocket second;
@@ -509,10 +496,10 @@ TEST(RtpLatching, StaleObservationBurnsTheOneShotWhenSendingContinues)
 	ASSERT_TRUE(second.SendRtpTo(sess.session.GetLocalPort()));
 	second.Drain(150);
 
-	EXPECT_FALSE(sess.ReachesProbeWithin(second, kDenyTimeoutMs))
-		<< "defaut caracterise : le nouveau pair n'est jamais suivi";
-	EXPECT_TRUE(sess.ReachesProbeWithin(first, kExpectTimeoutMs))
-		<< "le media reste bloque sur l'ancien pair";
+	EXPECT_TRUE(sess.ReachesProbeWithin(second, kExpectTimeoutMs))
+		<< "le pair deplace doit etre suivi meme si l'emission n'a pas cesse";
+	EXPECT_FALSE(sess.ReachesProbeWithin(first, kDenyTimeoutMs))
+		<< "le media ne doit plus aller a l'ancien pair";
 }
 
 // CARACTÉRISATION d'une limite du latching, sur le modèle d'`Amf.NumberZeroDecodeQuirk`.

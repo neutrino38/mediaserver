@@ -235,36 +235,27 @@ pas revenir.
    Garde-fou : suite `MosaicFactory`. Le `throw new` jumeau de `PartedMosaic` (devenu
    inatteignable) lève au moins **par valeur**.
 
-## Défauts mis au jour par les tests de latching (NON corrigés, caractérisés)
+## Défauts mis au jour par les tests de latching
 
 Ces deux-là ont été trouvés en écrivant `test_rtp_latching.cpp` : le test attendu
-échouait, et l'analyse a montré que le code — non le test — était en tort. Ils sont
-**épinglés par des tests de caractérisation** qui décrivent le comportement actuel,
-sur le modèle d'`Amf.NumberZeroDecodeQuirk`. Chacun réussit **tant que le défaut
-existe** ; il devient rouge dès qu'on le corrige, ce qui est le signal d'inverser
-ses attentes.
+échouait, et l'analyse a montré que le code — non le test — était en tort.
 
-7. **Un changement de PORT source seul n'est pas relevé**
-   (`RtpLatching.PortOnlyMappingChangeIsNotFollowed`). La source observée n'est
-   relevée que si l'ADRESSE change : `rtpsession.cpp:2097` teste `recIP` seul, donc
-   `recPort` n'est jamais rafraîchi quand le pair garde son IP et rebinde son
+7. **Un changement de PORT source seul n'est pas relevé** (NON corrigé, caractérisé
+   par `RtpLatching.PortOnlyMappingChangeIsNotFollowed`). La source observée n'est
+   relevée que si l'ADRESSE change : `rtpsession.cpp` (`ReadRTP`) teste `recIP` seul,
+   donc `recPort` n'est jamais rafraîchi quand le pair garde son IP et rebinde son
    mapping — ce qu'un NAT symétrique fait couramment. Le média continue vers
-   l'ancien port. Le commentaire de `SendPacket` (« recIP est recalé sur *chaque*
-   paquet de source différente ») décrit l'intention, pas le code.
+   l'ancien port. Le test réussit **tant que la limite existe** ; s'il se met à
+   échouer, c'est qu'elle a été corrigée : inverser alors ses attentes.
 
-8. **L'observation périmée brûle le one-shot après un re-INVITE**
-   (`RtpLatching.StaleObservationBurnsTheOneShotWhenSendingContinues`).
-   `SetRemotePort` remet `natCorrected` à false — l'intention explicite étant
-   qu'« un pair qui change de mapping ne reste pas coincé sur l'ancien » — mais
-   laisse `recIP`/`recPort` pointer sur l'observation précédente. Or le média coule
-   en continu : le premier paquet sortant après le re-INVITE précède la première
-   trame du pair déplacé, `SendPacket` ré-aiguille donc sur l'observation périmée et
-   **reconsomme le one-shot**. Quand le nouveau pair se manifeste, `natCorrected`
-   vaut déjà true : plus aucune correction n'est possible, la session reste bloquée
-   sur l'ancien pair en journalisant en boucle « WARNING Trying to send packet from
-   different ip address than receiving one ». En production la course est presque
-   toujours perdue (audio émis toutes les 20 ms contre un pair qui ne parle qu'après
-   son answer). Le mécanisme de réouverture ne fonctionne que si le pair déplacé se
-   manifeste avant toute ré-émission (`NewRemotePortReopensTheRightToReAim`, cas
-   d'un émetteur au repos). Correction probable : oublier l'observation
-   (`recIP`/`recPort`) quand le plan de contrôle pose une nouvelle cible.
+8. **L'observation périmée brûlait le one-shot après un re-INVITE** (CORRIGÉ dans
+   `RTPSession::SetRemotePort`, gardé par
+   `RtpLatching.AMovedPeerIsFollowedEvenWhenSendingContinues`). `SetRemotePort`
+   remettait `natCorrected` à false mais laissait `recIP`/`recPort` pointer sur
+   l'observation précédente. Or le média coule en continu : le premier paquet
+   sortant après le re-INVITE précédait la première trame du pair déplacé,
+   `SendPacket` ré-aiguillait sur l'observation périmée et reconsommait le
+   one-shot ; le nouveau pair n'était plus jamais suivi. `SetRemotePort` oublie
+   désormais l'observation en même temps qu'il rouvre le droit au rattrapage.
+   Conséquence assumée : après un re-INVITE, le premier paquet du pair — même
+   s'il n'a pas bougé — est vu comme une source nouvelle et demande une image clé.
