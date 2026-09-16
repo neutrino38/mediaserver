@@ -288,9 +288,10 @@ partiel) est dans les rapports de revue ; cette section garde ce qui décide.
   `SetUpTestSuite` partage le fichier. Quatre fichiers de lecture
   (`mp4_read`, `mp4_read_titi`, `mp4_read_order`, `mp4_roundtrip`) ouvrent
   les mêmes fixtures : un seul `test_mp4_reader.cpp`.
-- `Vp8Realtime.UneImage720pCouteMoinsDe33ms` (1,3 s) est une mesure de
-  performance dépendante de la machine : vérifier les options posées sur le
-  contexte, ou la sortir dans une cible `check-perf`.
+- `Vp8Realtime` : la mesure de performance, dépendante de la machine, est
+  `DISABLED_` et jouée par `make check-perf` ; ce qui garde le correctif dans
+  `make check` est un test déterministe qui relit les options temps réel posées
+  sur le contexte libvpx. **Fait.**
 - `MosaicComposition.EveryCompositionTypeComposes` (1,1 s) ne vérifie que
   taille et format : une toile CIF suffit, la géométrie HD reste couverte par
   `SlotsAlwaysFitInsideTheComposite`.
