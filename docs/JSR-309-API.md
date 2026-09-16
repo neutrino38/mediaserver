@@ -764,6 +764,14 @@ Règles du contrat, identiques à celles de l'API MCU (`MCU-API.md` §6.7 bis) :
   du `Start*` qui le porte, et c'est ce qui alloue le port rendu par
   `EndpointStartReceiving`.
 
+Une règle propre à cette API : **un média sans session RTP accepte le profil et
+ne l'applique pas**. Le cas est celui du texte sur WebSocket
+(`ConfigureMediaConnection` avec `protocol = 2`). Ce port écoute sur le serveur
+WebSocket global, réglé au démarrage par `--websocket-host` et
+`--websocket-port`, et cette adresse prime sur celle du profil (§6.12). Il n'y a
+donc rien à y appliquer. Le contrôleur pose le même profil sur toutes les pattes
+de la jambe, texte compris, sans avoir à traiter le texte à part.
+
 `EndpointGetMediaCandidates` suit le profil de la jambe : l'URL rendue porte
 l'adresse annoncée du profil, et un littéral IPv6 y est **encadré de crochets**
 (RFC 3986 §3.2.2) — jamais dans un `c=` ni un `a=candidate:`, où les champs sont
