@@ -9,6 +9,10 @@
  *   - IncUse est RÉENTRANT : un même thread peut compter plusieurs fois ;
  *   - PAS de priorité écrivain : un IncUse passe PENDANT qu'un
  *     WaitUnusedAndLock attend (seule la section tenue le bloque) ;
+ *   - sauf le PASSAGE DE TÉMOIN : à l'instant où le compteur tombe à zéro pour
+ *     un écrivain qui attend, les nouveaux IncUse patientent jusqu'à ce qu'il
+ *     ait pris la main. Sans lui, une boucle de lecture serrée affame
+ *     l'écrivain indéfiniment ;
  *   - une fois WaitUnusedAndLock rendu, les IncUse bloquent jusqu'à Unlock ;
  *   - les écrivains sont sérialisés entre eux (second mutex) ;
  *   - WaitUnusedAndLock(ms) rend 1 = verrouillé, 0 = timeout (tout est
@@ -153,6 +157,65 @@ TEST(UsePrimitive, TimedVariantTimesOutAndReleases)
 	use.Unlock();
 }
 
+// NON-RÉGRESSION : un écrivain ne doit pas être affamé par un lecteur qui
+// reprend sa lecture aussitôt relâchée. C'est la forme exacte de
+// RTPEndpoint::MultiplexLoop — IncUse, attente bornée, DecUse, et on recommence
+// — contre RTPSession::ChangeStream. Sans le passage de témoin, l'écrivain,
+// réveillé depuis un futex, perd la course à chaque tour : mesuré 34 s sur un
+// thread réacteur RTP le 2026-09-18, jusqu'au raccrochage.
+TEST(UsePrimitive, WriterIsNotStarvedByATightReaderLoop)
+{
+	Use use;
+	std::atomic<bool> stop{false};
+	std::atomic<bool> inside{false};
+	std::mutex	  m;
+	std::condition_variable cv;
+
+	//UN lecteur, comme une session RTP n'a qu'un consommateur : prise du
+	//compteur, attente bornée, relâche, et on recommence sans respirer.
+	std::thread reader([&]() {
+		while (!stop)
+		{
+			use.IncUse();
+			inside = true;
+			{
+				std::unique_lock<std::mutex> l(m);
+				cv.wait_for(l, std::chrono::milliseconds(20));
+			}
+			use.DecUse();
+		}
+	});
+
+	int  starved = 0;
+	long worst   = 0;
+
+	for (int round = 0; round < 20; ++round)
+	{
+		//L'écrivain doit arriver PENDANT une lecture : c'est le seul cas où il
+		//doit gagner une course, et le seul où l'ancienne version le perdait.
+		inside = false;
+		while (!inside)
+			std::this_thread::yield();
+
+		Clock::time_point t0 = Clock::now();
+		int  ret = use.WaitUnusedAndLock(2000);
+		long ms  = ElapsedMs(t0);
+
+		if (ms > worst)
+			worst = ms;
+		if (ret != 1 || ms >= 1000)
+			++starved;
+		if (ret)
+			use.Unlock();
+	}
+
+	stop = true;
+	cv.notify_all();
+	reader.join();
+
+	EXPECT_EQ(starved, 0) << "écrivain affamé, pire attente " << worst << " ms";
+}
+
 // Le DecUse pendant l'attente timée débloque avant l'échéance.
 TEST(UsePrimitive, TimedVariantAcquiresWhenFreed)
 {
@@ -187,9 +250,10 @@ TEST(UsePrimitive, StressReadersVsWriters)
 				std::this_thread::yield();
 				--readers;
 				use.DecUse();
-				//Respiration : sans elle, l'absence de priorité écrivain
-				//(sémantique historique préservée) peut affamer l'écrivain
-				//et rendre la durée du test erratique
+				//Respiration : garde la durée du test prévisible avec trois
+				//lecteurs et trente prises de verrou. La boucle SANS
+				//respiration est couverte par
+				//WriterIsNotStarvedByATightReaderLoop.
 				std::this_thread::sleep_for(std::chrono::microseconds(500));
 			}
 		});

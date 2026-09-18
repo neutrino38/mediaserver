@@ -121,6 +121,13 @@ TEST(RtmpCacheRace, UnAbonneRejoueLeCachePendantQuUneTrameLEtend)
 		}
 	});
 
+	//Attendre que le producteur ait vraiment demarre : les tours ci-dessous
+	//prennent le verrou ECRIVAIN, et depuis le passage de temoin de use.h ils
+	//s'enchainent assez vite pour que `stop` parte avant la premiere trame — le
+	//test echouait alors sur un producteur qui n'avait jamais ete ordonnance.
+	while (produced.load() == 0)
+		std::this_thread::yield();
+
 	StubStreamListener listener;
 	for (int i = 0; i < kRounds; ++i)
 	{
