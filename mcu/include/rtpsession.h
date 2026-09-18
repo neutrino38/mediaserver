@@ -241,6 +241,13 @@ public:
 	//assez longue pour que l'attente ne coûte rien.
 	static const DWORD ConsumerPollMs = 200;
 
+	//Borne des prises de verrou ÉCRIVAIN sur la map des flux (AddStream,
+	//ChangeStream) : elles s'exécutent sur le thread réacteur, qui ne doit
+	//jamais attendre sans borne — il bat toutes les jambes de son groupe.
+	//Supérieure à ConsumerPollMs, le temps pendant lequel un consommateur tient
+	//légitimement le verrou lecteur.
+	static const DWORD StreamLockTimeoutMs = 500;
+
 	//Bornes de l'estimateur d'ÉMISSION d'une session vidéo (arbitrage
 	//mainteneur 2026-09-02). Plancher : sous 128 kb/s une consigne vidéo n'est
 	//plus une régulation. Plafond : sans transport-cc l'estimateur monte de
@@ -576,6 +583,10 @@ private:
 	DWORD	rtpTimeout;
 	bool	rtpTimeoutArmed;
 	bool	rtpTimedOut;
+
+	//Dernière plainte de ChangeStream sur le verrou des flux. L'échec se répète
+	//à CHAQUE paquet du nouveau SSRC : sans cadence, la trace devient le défaut.
+	timeval	lastStreamLockError;
 
 	DTLSConnection dtls;
 	//Datagramme DTLS reçu avant dtls.Init(), rejoué par SetRemoteCryptoDTLS.

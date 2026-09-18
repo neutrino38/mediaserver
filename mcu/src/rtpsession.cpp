@@ -295,6 +295,7 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	numSendPackets = 0;
 	//Watchdog d'inactivité RTP désactivé par défaut (gap 5) : ni configuré ni armé
 	setZeroTime(&lastRecv);
+	setZeroTime(&lastStreamLockError);
 	rtpTimeout = 0;
 	rtpTimeoutArmed = false;
 	rtpTimedOut = false;
@@ -4097,7 +4098,7 @@ int RTPSession::SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD ov
 bool RTPSession::AddStream( bool receiving, DWORD ssrc )
 {
     bool created = false;
-    if ( streamUse.WaitUnusedAndLock(500) )
+    if ( streamUse.WaitUnusedAndLock(StreamLockTimeoutMs) )
     {
 	RTPStream* stream = getStream(ssrc);
 	if ( stream == NULL )
@@ -4230,7 +4231,25 @@ bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 	//Cette fonction MUTE la map : verrou ECRIVAIN. Elle n'en prenait aucun,
 	//alors que tout le chemin RTCP l'itere desormais sous le verrou lecteur.
 	//Appelee depuis onNewStream, ou ReadRTP a deja relache son verrou lecteur.
-	streamUse.WaitUnusedAndLock();
+	//
+	//BORNEE, parce qu'elle s'execute sur le THREAD REACTEUR : une attente sans
+	//borne y rend sourdes TOUTES les jambes du groupe, et le pair ne le voit
+	//que comme une image noire (docs/reference/threads-rtp.md). La borne couvre
+	//un cycle de lecture du consommateur (ConsumerPollMs), qui tient le verrou
+	//lecteur pendant son attente ; meme valeur que AddStream.
+	if (!streamUse.WaitUnusedAndLock(StreamLockTimeoutMs))
+	{
+		//Le renommage n'a pas eu lieu : le paquet courant sera jete faute de
+		//flux, et le suivant du meme SSRC repassera par ici. Donc trace CADENCEE
+		//— une par seconde : sans cela elle sort a la cadence du flux video.
+		if (getDifTime(&lastStreamLockError)>1000000)
+		{
+			getUpdDifTime(&lastStreamLockError);
+			Error("-ChangeStream: verrou indisponible en %u ms, ssrc %x -> %x non renomme [%p]\n",
+				StreamLockTimeoutMs,oldssrc,newssrc,this);
+		}
+		return false;
+	}
 
 	RTPStream* stream = getStream(oldssrc);
 	if (stream != NULL)
