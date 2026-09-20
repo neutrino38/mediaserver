@@ -305,6 +305,10 @@ public:
 		virtual void onWakeupNeeded() = 0;
 	};
 public:
+	//Clé d'acceptation RFC 6455 §1.3 : base64(SHA1(clé + GUID)). Le serveur la
+	//pose dans sa réponse 101, le client compare la sienne à celle reçue.
+	static std::string ComputeAcceptKey(const std::string& secWebSocketKey);
+
 	WebSocketConnection(Listener* listener, uint64_t connId);
 	~WebSocketConnection();
 

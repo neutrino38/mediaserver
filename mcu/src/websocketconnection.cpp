@@ -601,6 +601,25 @@ int WebSocketConnection::on_message_complete (HTTPParser*)
 	return 0;
 }
 
+std::string WebSocketConnection::ComputeAcceptKey(const std::string& secWebSocketKey)
+{
+	std::string concat = secWebSocketKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+	BYTE digest[SHA_DIGEST_LENGTH];
+	char base64[SHA_DIGEST_LENGTH*2];
+
+	//API EVP one-shot (remplace SHA1() deprecie en OpenSSL 3.0)
+	size_t digestLen = 0;
+	EVP_Q_digest(NULL, "SHA1", NULL,
+		     (unsigned char*)concat.c_str(), concat.length(),
+		     digest, &digestLen);
+
+	//Calculate base 64
+	av_base64_encode(base64,SHA_DIGEST_LENGTH*2,digest,SHA_DIGEST_LENGTH);
+
+	return std::string(base64);
+}
+
 void WebSocketConnection::Accept(std::weak_ptr<WebSocket::Listener> wsl)
 {
 	//Store websocket listener
@@ -629,19 +648,8 @@ void WebSocketConnection::Accept(std::weak_ptr<WebSocket::Listener> wsl)
 		if (listener) listener->onWakeupNeeded();
 		return;
 	}
-	//Append
-	secWebSocketKey += "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-	// response
-	BYTE secWebSocketAccept[SHA_DIGEST_LENGTH];
-	char secWebSocketAccept64[SHA_DIGEST_LENGTH*2];
-	//SHA1 response
-	//API EVP one-shot (remplace SHA1() deprecie en OpenSSL 3.0)
-	size_t secWebSocketAcceptLen = 0;
-	EVP_Q_digest(NULL, "SHA1", NULL,
-		     (unsigned char*)secWebSocketKey.c_str(), secWebSocketKey.length(),
-		     secWebSocketAccept, &secWebSocketAcceptLen);
-	//Calculate base 64
-	av_base64_encode(secWebSocketAccept64,SHA_DIGEST_LENGTH*2,secWebSocketAccept,SHA_DIGEST_LENGTH);
+	//Get accept key
+	std::string secWebSocketAccept64 = ComputeAcceptKey(secWebSocketKey);
 
 	//Update
 	response = new HTTPResponse(101,"Switching Protocols",1,1);

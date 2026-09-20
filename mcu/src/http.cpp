@@ -433,6 +433,32 @@ DWORD ContentDisposition::GetSize()
 }
 
 
+std::string HTTPRequest::Serialize()
+{
+	char line[4096];
+
+	snprintf(line,4096,"%s %s HTTP/%d.%d\r\n",method.c_str(),requestURI.c_str(),httpMajor,httpMinor);
+
+	//Create request
+	std::string request(line);
+
+	///For each header
+	for (Headers::iterator it = begin(); it!=end(); ++it)
+	{
+		//get values vector
+		Headers::mapped_type& values = it->second;
+		//For each value
+		for (Headers::mapped_type::iterator vit = values.begin(); vit!=values.end(); ++vit)
+			//Append
+			request += it->first +": "+ (*vit) +"\r\n";
+ 	}
+
+	//Add final \r\n
+	request += "\r\n";
+	//Return serialized request
+	return request;
+}
+
 std::string HTTPResponse::Serialize()
 {
 	char line[4096];

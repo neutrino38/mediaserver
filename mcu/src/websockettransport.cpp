@@ -156,6 +156,11 @@ public:
 		return !pendingOut.empty() || BIO_ctrl_pending(write_bio) > 0;
 	}
 
+	virtual bool IsReady()
+	{
+		return handshakeDone;
+	}
+
 	virtual int GetFd() { return fd; }
 
 	virtual void Shutdown()

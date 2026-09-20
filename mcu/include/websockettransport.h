@@ -53,6 +53,12 @@ public:
 	/** Reste-t-il des octets à pousser sur le socket ? */
 	virtual bool WantsWrite() = 0;
 
+	/** Le transport accepte-t-il des octets applicatifs ? Faux tant qu'un
+	 *  handshake TLS est en cours : `Send` y JETTE ce qu'on lui donne (il
+	 *  n'a pas de tampon avant handshake), ce qui perdrait silencieusement
+	 *  la première écriture. */
+	virtual bool IsReady() = 0;
+
 	/** Ferme le socket (shutdown + close) et l'invalide. Idempotent. */
 	virtual void Shutdown() = 0;
 
@@ -128,6 +134,7 @@ public:
 	}
 
 	virtual bool WantsWrite()				{ return !pendingOut.empty(); }
+	virtual bool IsReady()					{ return fd != FD_INVALID; }
 	virtual int  GetFd()					{ return fd; }
 
 	virtual void Shutdown()
