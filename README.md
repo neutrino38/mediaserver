@@ -85,8 +85,8 @@ This installs (via `dnf`/`yum`): `gsm-devel`, `ffmpeg-devel`,
 This one-shot command:
 
 1. checks that the required `-devel` packages are installed;
-2. builds the few remaining source-only dependencies into `./staticdeps`
-   (`libmp4v2`, `speex`, `libg722_1`);
+2. builds the only remaining source-only dependency into `./staticdeps`
+   (`libmp4v2`);
 3. initialises the git submodules if needed (`libmedikit` = codecs,
    `libbfcp` = BFCP floor control) and builds their archives in-tree;
 4. builds the `mcu` binary.
