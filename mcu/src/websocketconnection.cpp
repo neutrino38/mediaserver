@@ -5,6 +5,8 @@
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <string>
+#include <strings.h>
+#include <ctype.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 extern "C" {
@@ -26,6 +28,8 @@ WebSocketConnection::WebSocketConnection(Listener* listener, uint64_t connId)
 	this->connId   = connId;
 	//Serveur tant qu'Init n'a pas dit le contraire
 	this->role     = Server;
+	this->clientState = NotAClient;
+	this->errorNotified = false;
 
 	//Not inited
 	inited = false;
@@ -86,12 +90,28 @@ int WebSocketConnection::Init(int fd, std::unique_ptr<WebSocketTransport> transp
 	//I am inited
 	inited = true;
 
-	//Start parser
-	parser.Init(this,HTTPParser::HTTP_REQUEST);
+	//Start parser : un client lit une REPONSE, un serveur une requete
+	parser.Init(this,role==Client ? HTTPParser::HTTP_RESPONSE : HTTPParser::HTTP_REQUEST);
 
 	Log("<WebSocket Connection init\n");
 
 	return 1;
+}
+
+int WebSocketConnection::InitClient(int fd, std::unique_ptr<WebSocketTransport> transport,
+				    const std::string& host, const std::string& path,
+				    std::weak_ptr<WebSocket::Listener> wsl)
+{
+	//Poser le listener AVANT d'initialiser : un echec de connexion doit se dire
+	//meme s'il survient avant le 101 (§4.6).
+	this->wsl	  = wsl;
+	this->clientHost  = host;
+	//Une requete HTTP porte toujours un chemin absolu
+	this->clientPath  = path.empty() ? "/" : path;
+	//Le socket est en cours de connexion : on attend POLLOUT
+	this->clientState = Connecting;
+
+	return Init(fd,std::move(transport),Client);
 }
 
 void WebSocketConnection::Close()
@@ -144,6 +164,10 @@ bool WebSocketConnection::HasPendingOutput()
 short WebSocketConnection::GetPollEvents()
 {
 	short ev = POLLIN | POLLERR | POLLHUP;
+	//Une connexion cliente attend POLLOUT tant qu'elle n'a pas emis sa requete :
+	//c'est lui qui dit que le connect() non bloquant est termine.
+	if (clientState==Connecting)
+		ev |= POLLOUT;
 	std::lock_guard<std::mutex> lock(framesMutex);
 	if (HasPendingOutput())
 		ev |= POLLOUT;
@@ -200,6 +224,31 @@ void WebSocketConnection::OnWritable()
 		closeRequested = true;
 		return;
 	}
+
+	//Ouverture cliente : POLLOUT dit seulement que le connect() non bloquant est
+	//termine, SO_ERROR dit s'il a REUSSI. Tant que la requete d'upgrade n'est
+	//pas partie, il n'y a rien d'autre a ecrire.
+	if (clientState==Connecting)
+	{
+		int err = 0;
+		socklen_t errlen = sizeof(err);
+		if (getsockopt(GetFd(),SOL_SOCKET,SO_ERROR,&err,&errlen)<0 || err)
+		{
+			char msg[128];
+			snprintf(msg,sizeof(msg),"connect failed (errno %d)",err);
+			FailClient(msg);
+			return;
+		}
+		//Le transport peut n'etre pas encore pret (handshake TLS en cours) :
+		//`Send` y JETTE ce qu'on lui donne, donc la requete serait perdue en
+		//silence (§4.4). On reessaiera au prochain tour.
+		if (!transport->IsReady())
+			return;
+		//Emettre la poignee de main
+		SendUpgradeRequest();
+		return;
+	}
+
 	//S'il reste des octets à écouler (socket plein), attendre le prochain POLLOUT
 	if (transport->WantsWrite())
 		return;
@@ -247,13 +296,26 @@ bool WebSocketConnection::IsFinished()
 
 void WebSocketConnection::NotifyClose()
 {
-	//If we were opened, notify the websocket listener
-	if (upgraded)
+	//Une connexion cliente notifie TOUJOURS, upgradee ou non : un echec avant le
+	//101 (refus TCP, DNS mort, 404, certificat) laisserait sinon le WSEndpoint
+	//attendre indefiniment un pair qui ne viendra jamais (§4.6).
+	if (!upgraded && !IsClient())
+		return;
+
+	std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
+	if (!wsl2)
+		return;
+
+	//Un client jamais ouvert a echoue, quelle que soit la voie par laquelle le
+	//reacteur l'a constate (POLLERR du connect, pair qui raccroche avant sa
+	//reponse) : onError precede toujours onClose.
+	if (IsClient() && !upgraded && !errorNotified)
 	{
-		std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
-		if (wsl2)
-			wsl2->onClose(this);
+		errorNotified = true;
+		wsl2->onError(this);
 	}
+
+	wsl2->onClose(this);
 }
 
 WebSocketConnection::Frame* WebSocketConnection::GetNextFrame()
@@ -285,9 +347,22 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 
 	if (!upgraded)
 	{
-		//Parse request
-		parser.Execute((char*)data,size);
-	} else {
+		//Parse request (serveur) ou reponse (client)
+		DWORD parsed = parser.Execute((char*)data,size);
+		//Tant que l'ouverture n'est pas faite, rien d'autre a lire
+		if (!upgraded)
+			return;
+		//Le parseur HTTP s'arrete a la fin des en-tetes et rend ce qu'il a
+		//consomme : ce qui suit dans le MEME segment TCP est deja une trame
+		//WebSocket. Un serveur peut coller sa premiere trame T.140 a sa reponse
+		//101 ; ignorer ce reliquat, c'est perdre la premiere phrase du pair.
+		if (parsed>=size)
+			return;
+		data += parsed;
+		size -= parsed;
+	}
+
+	{
 		std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
 		//Process all input
 		while(size)
@@ -528,8 +603,20 @@ void WebSocketConnection::FlushPendingHeader()
 	//Rien en cours
 	if (!parsingHeaderValue)
 		return;
+	if (IsClient())
+	{
+		//Une reponse n'a pas de HTTPRequest ou se poser. Clef normalisee en
+		//minuscules : la casse d'un en-tete HTTP est libre.
+		if (!headerField.empty())
+		{
+			std::string key = headerField;
+			for (size_t i=0;i<key.size();++i)
+				key[i] = tolower(key[i]);
+			responseHeaders[key] = headerValue;
+		}
+	}
 	//La requete existe forcement ici (creee au premier champ d'en-tete)
-	if (request && !headerField.empty())
+	else if (request && !headerField.empty())
 		request->AddHeader(headerField,headerValue);
 	//Pret pour le suivant
 	headerField.clear();
@@ -552,8 +639,10 @@ void WebSocketConnection::EnsureRequest(HTTPParser* parser)
 
 int WebSocketConnection::on_header_field (HTTPParser* parser, const char *at, DWORD length)
 {
-	//L'URL est complete des le premier champ d'en-tete
-	EnsureRequest(parser);
+	//L'URL est complete des le premier champ d'en-tete. Une reponse n'a pas
+	//d'URL ni de methode : EnsureRequest y construirait une requete absurde.
+	if (!IsClient())
+		EnsureRequest(parser);
 	//Un nouveau champ ferme le couple precedent
 	FlushPendingHeader();
 	//Get field (par morceaux, comme l'URL)
@@ -564,8 +653,8 @@ int WebSocketConnection::on_header_field (HTTPParser* parser, const char *at, DW
 
 int WebSocketConnection::on_header_value (HTTPParser*, const char *at, DWORD length)
 {
-	//double check
-	if (!request)
+	//double check (une reponse n'a pas de requete : cf. FlushPendingHeader)
+	if (!request && !IsClient())
 		//Error
 		return 1;
 	//Get value (par morceaux : c'est ainsi qu'une cle Sec-WebSocket-Key coupee
@@ -592,6 +681,16 @@ int WebSocketConnection::on_status_complete (HTTPParser*)
 }
 int WebSocketConnection::on_headers_complete (HTTPParser* parser)
 {
+	if (IsClient())
+	{
+		//Poser le dernier couple (champ, valeur)
+		FlushPendingHeader();
+		//Juger la reponse DES la fin des en-tetes : un 101 n'a pas de corps, et
+		//un echec ne doit pas faire attendre le sien.
+		CheckUpgradeResponse(parser);
+		//1 : il n'y a pas de corps a attendre
+		return 1;
+	}
 	//Une requete sans le moindre en-tete n'est jamais passee par on_header_field
 	EnsureRequest(parser);
 	//Poser le dernier couple (champ, valeur)
@@ -600,6 +699,10 @@ int WebSocketConnection::on_headers_complete (HTTPParser* parser)
 }
 int WebSocketConnection::on_message_complete (HTTPParser*)
 {
+	//Mode client : la reponse a deja ete jugee a la fin des en-tetes
+	if (IsClient())
+		return 0;
+
 	//Une requete que le parseur n'a pas menee jusqu'a son URL ne donne rien a
 	//traiter : ne pas la dereferencer pour le seul plaisir de la tracer.
 	if (!request)
@@ -635,8 +738,141 @@ std::string WebSocketConnection::ComputeAcceptKey(const std::string& secWebSocke
 	return std::string(base64);
 }
 
+std::string WebSocketConnection::GetResponseHeader(const char* name) const
+{
+	//Les clefs ont ete normalisees en minuscules a la reception
+	std::map<std::string,std::string>::const_iterator it = responseHeaders.find(name);
+	return it==responseHeaders.end() ? std::string() : it->second;
+}
+
+void WebSocketConnection::FailClient(const char* reason)
+{
+	//Journaliser la cause : sans cela, un echec avant le 101 est muet (§4.6)
+	Error("-WebSocketConnection: client connection failed: %s [id:%llu,host:%s,path:%s]\n",
+	      reason,(unsigned long long)connId,clientHost.c_str(),clientPath.c_str());
+
+	//Etat terminal
+	clientState = Failed;
+
+	//onError tout de suite ; onClose suivra par NotifyClose, quand le reacteur
+	//retirera la connexion.
+	if (!errorNotified)
+	{
+		errorNotified = true;
+		std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
+		if (wsl2) wsl2->onError(this);
+	}
+
+	//Fermer
+	closeRequested = true;
+}
+
+bool WebSocketConnection::SendUpgradeRequest()
+{
+	//Cle de 16 octets aleatoires en base64 (RFC 6455 §4.1)
+	BYTE nonce[16];
+	char base64[AV_BASE64_SIZE(sizeof(nonce))];
+
+	if (RAND_bytes(nonce,sizeof(nonce))!=1)
+	{
+		FailClient("could not get a random Sec-WebSocket-Key");
+		return false;
+	}
+	av_base64_encode(base64,sizeof(base64),nonce,sizeof(nonce));
+	//Retenue : le Sec-WebSocket-Accept de la reponse doit la confirmer
+	secWebSocketKey = base64;
+
+	HTTPRequest request("GET",clientPath,1,1);
+	request.AddHeader("Host"			, clientHost);
+	request.AddHeader("Upgrade"			, "websocket");
+	request.AddHeader("Connection"			, "Upgrade");
+	request.AddHeader("Sec-WebSocket-Key"		, secWebSocketKey);
+	request.AddHeader("Sec-WebSocket-Version"	, "13");
+
+	const std::string out = request.Serialize();
+
+	int n = transport->Send((BYTE*)out.c_str(),out.length());
+	if (n<0)
+	{
+		FailClient("could not send the upgrade request");
+		return false;
+	}
+	outBytes += n;
+
+	//On attend la reponse
+	clientState = Upgrading;
+
+	Log("-WebSocket client upgrade sent [id:%llu,host:%s,path:%s]\n",
+	    (unsigned long long)connId,clientHost.c_str(),clientPath.c_str());
+
+	return true;
+}
+
+bool WebSocketConnection::CheckUpgradeResponse(HTTPParser* parser)
+{
+	char msg[160];
+
+	//RFC 6455 §4.1 : tout autre code est un echec propre, et le code doit se
+	//lire dans le journal — c'est la seule trace qu'aura l'exploitant.
+	const unsigned short code = parser->GetStatusCode();
+	if (code!=101)
+	{
+		snprintf(msg,sizeof(msg),"server answered %u instead of 101",code);
+		FailClient(msg);
+		return false;
+	}
+
+	if (strcasecmp(GetResponseHeader("upgrade").c_str(),"websocket")!=0)
+	{
+		snprintf(msg,sizeof(msg),"bad Upgrade header \"%s\"",GetResponseHeader("upgrade").c_str());
+		FailClient(msg);
+		return false;
+	}
+
+	//Connection peut porter plusieurs jetons (ex. "keep-alive, Upgrade")
+	std::string connection = GetResponseHeader("connection");
+	for (size_t i=0;i<connection.size();++i)
+		connection[i] = tolower(connection[i]);
+	if (connection.find("upgrade")==std::string::npos)
+	{
+		snprintf(msg,sizeof(msg),"bad Connection header \"%s\"",connection.c_str());
+		FailClient(msg);
+		return false;
+	}
+
+	//La cle d'acceptation prouve que le pair parle bien WebSocket et qu'il
+	//repond a NOTRE requete
+	if (GetResponseHeader("sec-websocket-accept")!=ComputeAcceptKey(secWebSocketKey))
+	{
+		FailClient("bad Sec-WebSocket-Accept");
+		return false;
+	}
+
+	//We are upgraded
+	upgraded = true;
+	clientState = Opened;
+
+	Log("-WebSocket client connected [id:%llu,host:%s,path:%s]\n",
+	    (unsigned long long)connId,clientHost.c_str(),clientPath.c_str());
+
+	//We are opened
+	std::shared_ptr<WebSocket::Listener> wsl2 = this->wsl.lock();
+	if (wsl2) wsl2->onOpen(this);
+
+	return true;
+}
+
 void WebSocketConnection::Accept(std::weak_ptr<WebSocket::Listener> wsl)
 {
+	//Une connexion cliente n'a rien a accepter : son listener est pose par
+	//InitClient, et c'est elle qui demande l'upgrade.
+	if (IsClient())
+	{
+		Error("-WebSocketConnection::Accept called on a client connection [id:%llu]\n",
+		      (unsigned long long)connId);
+		return;
+	}
+
 	//Store websocket listener
 	this->wsl = wsl;
 

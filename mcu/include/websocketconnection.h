@@ -348,6 +348,17 @@ public:
 		Server = 0,
 		Client = 1,
 	};
+
+	//Etapes de l'ouverture d'une connexion cliente (SPEC WS-CLIENT §4.1). Une
+	//connexion serveur reste a NotAClient.
+	enum ClientState
+	{
+		NotAClient	= 0,
+		Connecting	= 1,	//connect() non bloquant en cours
+		Upgrading	= 2,	//requete GET emise, on attend la reponse
+		Opened		= 3,	//101 verifie
+		Failed		= 4,	//echec avant l'ouverture
+	};
 public:
 	//Clé d'acceptation RFC 6455 §1.3 : base64(SHA1(clé + GUID)). Le serveur la
 	//pose dans sa réponse 101, le client compare la sienne à celle reçue.
@@ -359,8 +370,19 @@ public:
 	//Le serveur fournit le transport (clair ou TLS) déjà choisi.
 	int Init(int fd, std::unique_ptr<WebSocketTransport> transport, Role role = Server);
 
-	Role GetRole() const	{ return role;		}
-	bool IsClient() const	{ return role==Client;	}
+	//Mode client : le socket est DEJA en cours de connexion (connect() non
+	//bloquant lance par l'appelant, cf. §4.5) ; la requete d'upgrade part au
+	//premier POLLOUT, une fois le transport pret. `host` est la valeur de
+	//l'en-tete Host (hote[:port]), `path` le chemin avec sa query.
+	//Le listener est fourni ICI : en mode client personne n'appelle Accept(),
+	//et un echec avant le 101 doit deja pouvoir se dire.
+	int InitClient(int fd, std::unique_ptr<WebSocketTransport> transport,
+		       const std::string& host, const std::string& path,
+		       std::weak_ptr<WebSocket::Listener> wsl);
+
+	Role GetRole() const		{ return role;		}
+	bool IsClient() const		{ return role==Client;	}
+	ClientState GetClientState() const { return clientState;	}
 	int End();
 
 	//Weksocket (appelables depuis n'importe quel thread — thread-safe)
@@ -387,6 +409,11 @@ private:
 	//Reassemblage des chaines que le parseur HTTP rend par morceaux
 	void FlushPendingHeader();
 	void EnsureRequest(HTTPParser* parser);
+	//Ouverture cliente
+	bool SendUpgradeRequest();
+	bool CheckUpgradeResponse(HTTPParser* parser);
+	void FailClient(const char* reason);
+	std::string GetResponseHeader(const char* name) const;
 public:
 
 	//---- Interface pilotée par le thread serveur (boucle poll() unique) --------
@@ -408,6 +435,21 @@ private:
 	Listener* listener;
 	uint64_t  connId;
 	Role      role;
+
+	//Etat de l'ouverture cliente, et ce qu'elle a besoin de retenir : la cible
+	//(pour l'en-tete Host et la ligne de requete) et la cle tiree au sort, que
+	//le Sec-WebSocket-Accept recu doit confirmer.
+	ClientState clientState;
+	std::string clientHost;
+	std::string clientPath;
+	std::string secWebSocketKey;
+	//En-tetes de la reponse, clefs en MINUSCULES : la casse d'un en-tete HTTP
+	//est libre, et le pair n'est plus notre serveur. Ils ne peuvent pas se poser
+	//sur `request` (il n'y en a pas pour une reponse) ni sur `response` (qui est
+	//la sortie du mode serveur).
+	std::map<std::string,std::string> responseHeaders;
+	//onError n'est emis qu'une fois, quel que soit le chemin d'echec
+	bool errorNotified;
 
 	std::unique_ptr<WebSocketTransport> transport;
 

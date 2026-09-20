@@ -1,7 +1,8 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **lots 0 et 1 faits** — les coutures (§6) et le masquage selon le
-> rôle (§4.3). Branche : `feat/wss-client`.
+> Statut : **lots 0, 1 et 2 faits** — les coutures (§6), le masquage selon le
+> rôle (§4.3) et l'ouverture cliente en clair (§4.1, §4.2, §4.6).
+> Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur en XML-RPC.
@@ -94,6 +95,12 @@ Une seule classe, `WebSocketConnection`, porte les deux rôles. Un booléen
 Le listener est fourni **à la création** en mode client : il n'y a pas
 d'`Accept()`, puisque personne ne demande rien.
 
+L'entrée est `WebSocketConnection::InitClient(fd, transport, host, path, wsl)`.
+Le socket qu'elle reçoit est **déjà en cours de connexion** : `connect()` non
+bloquant appartient à l'appelant (le réacteur, au lot 3). La connexion demande
+alors POLLOUT, lit `SO_ERROR` — POLLOUT arrive que le `connect()` ait réussi ou
+échoué — puis émet sa requête dès que le transport est prêt.
+
 ### 4.2 La poignée de main cliente
 
 Requête émise :
@@ -133,8 +140,9 @@ clé au sort par trame (`RAND_bytes`).
   la clé est non nulle, et une trame cliente non masquée fait fermer le pair.
 
 Durcissement symétrique : un client qui reçoit une trame masquée ferme
-(RFC 6455 §5.1). Ce versant n'est **pas encore exercé** par un test : il faut
-une connexion cliente ouverte, donc la poignée de main du lot 2.
+(RFC 6455 §5.1). Ce versant est exercé par le lot 2, qui apporte la connexion
+cliente ouverte dont il avait besoin
+(`WsClientHandshake.UneTrameMasqueeDuServeurFermeLaConnexion`).
 
 ### 4.4 Transport TLS client
 
@@ -261,23 +269,27 @@ MOTELI v2 du dépôt elixip (`apps/elixip2/priv/proto/moteli_*.proto`).
 
 Ils sont tous vérifiés, et chacun est une panne silencieuse s'il est manqué.
 
-1. **Le reliquat après le 101.** `ProcessData`
-   (`websocketconnection.cpp:276`) ignore la valeur de retour de
+1. **Le reliquat après le 101.** `ProcessData` ignorait la valeur de retour de
    `HTTPParser::Execute`. Côté serveur c'est sans conséquence : le client
    attend le 101 avant d'écrire. Côté client, **le serveur peut coller sa
    première trame T.140 au 101 dans le même segment TCP** — et cette trame
-   serait perdue. Le reliquat doit passer au chemin « trames ».
-2. **`Send` avant handshake TLS jette les octets** (§4.4).
+   serait perdue. Le reliquat passe au chemin « trames », pour les deux rôles —
+   tenu au lot 2.
+2. **`Send` avant handshake TLS jette les octets** (§4.4) : la connexion n'émet
+   sa requête qu'une fois `IsReady()` vrai — tenu au lot 2, à exercer au lot 4.
 3. **Le ClientHello ne part pas tout seul** (§4.4).
-4. **L'échec avant upgrade ne notifie personne** (§4.6).
+4. **L'échec avant upgrade ne notifie personne** (§4.6) — tenu au lot 2 :
+   `NotifyClose` notifie toujours une connexion cliente, et `onError` précède
+   `onClose` quelle que soit la voie de l'échec.
 5. **Le masque repart de zéro à chaque fragment** (§4.3) — tenu au lot 1.
 6. **Le pong doit être masqué** lui aussi : il passe par `Append` — tenu au
    lot 1.
 7. **DNS dans le réacteur = toutes les jambes gelées** (§4.5).
-8. **`EnsureRequest`** (`websocketconnection.cpp:527`) construit un
-   `HTTPRequest` à partir de `parser->GetMethodStr()` : sans objet pour une
-   réponse. Le mode client accumule ses en-têtes ailleurs, et lit le code de
-   statut par un accesseur à ajouter (`httpparser.h:282` est privé).
+8. **`EnsureRequest`** construit un `HTTPRequest` à partir de
+   `parser->GetMethodStr()` : sans objet pour une réponse. Le mode client
+   accumule ses en-têtes ailleurs — dans une map à clefs minuscules, la casse
+   d'un en-tête HTTP étant libre — et lit le code de statut par
+   `HTTPParser::GetStatusCode` (lot 0). Tenu au lot 2.
 
 ## 6. Lots
 
