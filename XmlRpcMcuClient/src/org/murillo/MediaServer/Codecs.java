@@ -191,17 +191,25 @@ public class Codecs {
         
     }
 
+    /*
+     * These values are NOT payload types: they are the media server codec ids,
+     * sent as is in the rtpMap of EndpointStartSending/EndpointStartReceiving.
+     * They MUST match the server enums AudioCodec::Type, VideoCodec::Type,
+     * TextCodec::Type and AppCodec::Type in
+     * third_party/fontventa/libmedikit/medkit/codecs.h -- a value that differs
+     * is a codec the server does not know, and the leg stays silent.
+     * A codec the server does not implement has no constant here: declaring it
+     * would offer in SDP what nothing can encode or decode.
+     */
     public static final Integer PCMU    = 0;
     public static final Integer PCMA    = 8;
     public static final Integer GSM     = 3;
     public static final Integer AMR     = 118;
-    public static final Integer AMR_WB  = 119;
-    public static final Integer G726    = 120;
+    public static final Integer AMR_WB  = 120;
     public static final Integer G722    = 9;
-    public static final Integer G7221   = 97;
     public static final Integer NELLY11 = 131;
     public static final Integer SPEEX16 = 117;
-    public static final Integer OPUS    = 111;
+    public static final Integer OPUS    = 98;
     public static final Integer TELEFONE_EVENT = 100;
 
     public static final Integer H263_1996    = 34;
@@ -209,14 +217,14 @@ public class Codecs {
     public static final Integer MPEG4        = 104;
     public static final Integer H264         = 99;
     public static final Integer SORENSON     = 100;
-    public static final Integer VP6          = 102;
+    public static final Integer VP6          = 106;
     public static final Integer VP8          = 107;
 
     public static final Integer ULPFEC       = 108;
     public static final Integer RED          = 109;
 
-    public static final Integer T140RED      = 96;
-    public static final Integer T140         = 98;
+    public static final Integer T140RED      = 105;
+    public static final Integer T140         = 106;
 
     public static final Integer BFCP         = 150;
 
@@ -256,9 +264,7 @@ public class Codecs {
             if (name.equalsIgnoreCase("SPEEX"))       return SPEEX16;
             if (name.equalsIgnoreCase("AMR"))         return AMR;
             if (name.equalsIgnoreCase("AMR-WB"))      return AMR_WB;
-            if (name.equalsIgnoreCase("G726"))        return G726;
             if (name.equalsIgnoreCase("G722"))        return G722;
-            if (name.equalsIgnoreCase("G7221"))       return G7221;
             if (name.equalsIgnoreCase("NELLY11"))     return NELLY11;
             if (name.equalsIgnoreCase("opus"))        return OPUS;
             if (name.equalsIgnoreCase("telephone-event"))       return TELEFONE_EVENT;
@@ -297,9 +303,7 @@ public class Codecs {
             if (codec==SPEEX16)    return "SPEEX";
             if (codec==AMR)        return "AMR";
             if (codec==AMR_WB)     return "AMR-WB";
-            if (codec==G726)       return "G726";
             if (codec==G722)       return "G722";
-            if (codec==G7221)       return "G7221";
             if (codec==NELLY11)    return "NELLY11";
             if (codec==OPUS)       return "OPUS";
             if (codec==TELEFONE_EVENT)    return "telephone-event";
@@ -337,9 +341,7 @@ public class Codecs {
             if (codec==SPEEX16)         return 16000;
             if (codec==AMR)             return 8000;
             if (codec==AMR_WB)          return 16000;
-            if (codec==G726)            return 8000;
             if (codec==G722)            return 8000;
-            if (codec==G7221)           return 16000;
             if (codec==NELLY11)         return 11000;
             if (codec==OPUS)            return 48000;
             if (codec==TELEFONE_EVENT)  return 8000;
