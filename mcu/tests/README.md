@@ -64,6 +64,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_websocket_http_hardening.cpp` | `WebSocketHandshake` | — (poignée de main envoyée octet par octet : URL et en-têtes doivent être réassemblés) |
 | `test_ws_client_seams.cpp` | `WsClientSeams` | — (coutures du mode client WebSocket : code de statut, reliquat, sérialisation de la requête, transport prêt) |
 | `test_ws_client_handshake.cpp` | `WsClientHandshake` | — (connexion WebSocket **sortante** : poignée de main contre le vrai serveur, trame collée au 101, échec avant le 101, masquage sur le fil) |
+| `test_ws_client_connect.cpp` | `WsClientConnect` | — (`WebSocketServer::Connect` : une URL `ws://` devient une jambe ouverte, en v4 et en v6 entre crochets ; chemin et query sur le fil ; échec synchrone sans notification, port fermé notifié) |
 | `test_rate_control.cpp` | `RateControlEstimator`, `RateControlDetector`, `RateControlThrottler`, `RateControlRemb` | — (contrôle de débit, chantier rate-control : les 7 caractérisations du lot 0 ont été levées par le lot 1, les 20 tests sont des garde-fous joués par `make check` ; `make check-ratecontrol` reste le raccourci de la suite) |
 
 ## `tools/` — ce qui n'est pas un test

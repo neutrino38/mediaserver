@@ -207,7 +207,6 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | 100 | TELEPHONE_EVENT |
 | 117 | SPEEX16 |
 | 118 | AMR |
-| 119 | G7221 |
 | 120 | AMRWB |
 | 130 | NELLY8 |
 | 131 | NELLY11 |

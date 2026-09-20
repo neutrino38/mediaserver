@@ -1,7 +1,8 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **lots 0, 1 et 2 faits** — les coutures (§6), le masquage selon le
-> rôle (§4.3) et l'ouverture cliente en clair (§4.1, §4.2, §4.6).
+> Statut : **lots 0 à 3 faits** — les coutures (§6), le masquage selon le
+> rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2, §4.6) et son pilotage
+> par le réacteur depuis une URL (§4.5).
 > Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
@@ -175,26 +176,41 @@ Deux pièges, et ils se paient comptant :
 
 Dans la map du réacteur existant, avec les connexions entrantes. `Connect` est
 appelé depuis le thread XML-RPC ; la map, elle, reste la **propriété exclusive
-du thread réacteur** (invariant écrit en `websocketserver.h:53`). D'où :
+du thread réacteur** (invariant écrit en `websocketserver.h`). D'où :
 
 ```c++
 bool WebSocketServer::Connect(const std::string& url,
-                              std::weak_ptr<WebSocket::Listener> listener,
-                              const ClientOptions& options);
+                              std::weak_ptr<WebSocket::Listener> listener);
 ```
 
-1. Le thread appelant **parse l'URL** (`http_parser_parse_url`) et **résout le
-   DNS** (`IPAddress::Resolve`, A et AAAA). La résolution ne doit jamais avoir
-   lieu dans le réacteur : un DNS lent y gèlerait **toutes** les jambes WS du
-   serveur — le même piège que le callback bloquant du réacteur RTP
+1. Le thread appelant **parse l'URL** (`http_parser_parse_url`), **résout le
+   DNS** (`IPAddress::Resolve`, A et AAAA), **crée la socket** et lance le
+   `connect()` non bloquant. La résolution ne doit jamais avoir lieu dans le
+   réacteur : un DNS lent y gèlerait **toutes** les jambes WS du serveur — le
+   même piège que le callback bloquant du réacteur RTP
    (`docs/reference/threads-rtp.md`).
-2. Il pousse une demande dans une file protégée par mutex, puis `wait.Signal()`.
-3. Le réacteur crée la socket, lance `connect()` non bloquant, insère la
-   connexion dans la map. Elle est alors pilotée comme les autres.
+2. Il pousse le descripteur dans une file protégée par mutex, puis
+   `wait.Signal()`.
+3. Le réacteur **adopte** le socket : il crée la connexion, l'initialise par
+   `InitClient` et l'insère dans la map. Elle est alors pilotée comme les autres.
+
+Le socket est ouvert par l'appelant, et non par le réacteur : c'est ce qui rend
+**tout échec synchrone**. URL illisible, schéma inconnu, hôte introuvable,
+famille indisponible — `Connect` rend `false` et n'a notifié personne, ce qui
+est exact : il n'y a pas de jambe. Le seul échec asynchrone restant est celui
+que le `connect()` ne peut pas voir tout de suite (le pair n'écoute pas), et
+celui-là se dit au listener (§4.6). Le réacteur n'a ainsi jamais à notifier un
+`WebSocket::Listener` avec un `WebSocket*` nul.
 
 Un littéral IPv6 dans l'URL s'écrit entre crochets (RFC 3986 §3.2.2) ; le
-parseur d'URL les retire, `IPAddress` les remet quand il faut. Le port par
-défaut est 80 en `ws://`, 443 en `wss://`.
+parseur d'URL les retire, l'en-tête `Host` les remet. Le port par défaut est 80
+en `ws://`, 443 en `wss://`. Le fragment (`#…`) n'est jamais émis (RFC 3986
+§3.5).
+
+Tant que le lot 4 n'est pas là, **`wss://` est refusé** au lieu de partir en
+clair : une jambe que le contrôleur a demandée chiffrée ne doit pas se dégrader
+à son insu (`WsClientConnect.LeSchemaWssEstRefuseAuLieuDePartirEnClair`, à
+remplacer par son contraire au lot 4).
 
 ### 4.6 L'échec doit se voir
 
@@ -284,8 +300,20 @@ Ils sont tous vérifiés, et chacun est une panne silencieuse s'il est manqué.
 5. **Le masque repart de zéro à chaque fragment** (§4.3) — tenu au lot 1.
 6. **Le pong doit être masqué** lui aussi : il passe par `Append` — tenu au
    lot 1.
-7. **DNS dans le réacteur = toutes les jambes gelées** (§4.5).
-8. **`EnsureRequest`** construit un `HTTPRequest` à partir de
+7. **DNS dans le réacteur = toutes les jambes gelées** (§4.5) — tenu au lot 3 :
+   l'URL, le DNS et le `connect()` sont au thread appelant, le réacteur ne
+   reçoit qu'un descripteur.
+8. **`IPAddress::Resolve` écarte ce qui n'est pas ANNONÇABLE** — loopback,
+   link-local, multicast (`ipaddress.h`). C'est la politique de l'adresse qu'on
+   **publie** dans un SDP, appliquée ici à une **destination**. Un littéral
+   court-circuite le filtre, donc `ws://127.0.0.1:9090/` et `ws://[::1]:9090/`
+   marchent ; un **nom** qui ne se résout qu'en loopback, lui, échoue :
+   `ws://localhost:9090/` rend « cannot resolve localhost (errno 2) ». L'échec
+   est bruyant, jamais silencieux. En appel réel l'URL vient de
+   `GetMediaCandidates`, donc annonçable par construction — mais la recette §7
+   se fait en loopback : y écrire l'adresse, pas le nom. `RTPSession::SetRemoteHost`
+   a exactement le même travers. Cf. §9.4.
+9. **`EnsureRequest`** construit un `HTTPRequest` à partir de
    `parser->GetMethodStr()` : sans objet pour une réponse. Le mode client
    accumule ses en-têtes ailleurs — dans une map à clefs minuscules, la casse
    d'un en-tête HTTP étant libre — et lit le code de statut par
@@ -300,7 +328,7 @@ Chaque lot compile, passe `cd mcu && make check`, et se livre seul.
 | 0 | `HTTPParser::GetStatusCode`, `HTTPRequest::Serialize`, `WebSocketTransport::IsReady`, calcul `Sec-WebSocket-Accept` factorisé | aucun changement de comportement ; `make check` inchangé |
 | 1 | Masquage client dans `Frame` + refus des trames masquées reçues côté client | test unitaire dans `test_websocket_frame.cpp` |
 | 2 | Mode client de `WebSocketConnection` en clair : connect, upgrade, 101, reliquat, `onError` | test d'intégration en-processus contre `TextEchoWebsocketHandler` |
-| 3 | `WebSocketServer::Connect` : file de demandes, URL, DNS hors réacteur, IPv4 et IPv6 | test sur `127.0.0.1` **et** `[::1]`, plus un cas « port fermé » |
+| 3 ✔ | `WebSocketServer::Connect` : file de demandes, URL, DNS hors réacteur, IPv4 et IPv6 | `tests/test_ws_client_connect.cpp` : `127.0.0.1` **et** `[::1]`, chemin + query, port fermé, URL inutilisable |
 | 4 | Transport TLS client | test avec un certificat auto-signé jetable, sur le modèle de `dtlsfixture.h` |
 | 5 | `WSEndpoint::Connect`, reconnexion bornée, U+FFFD, `GetMediaCandidates` | test de pontage RTP ↔ WS sortant |
 | 6 | XML-RPC `ConnectMediaConnection`, événements, `docs/JSR-309-API.md`, `README.md`, protobuf MOTELI côté elixip | appel XML-RPC réel |
@@ -348,3 +376,9 @@ Un seul mediaserver suffit : il tient les deux bouts.
 3. **Erreur d'authentification** : si le serveur distant répond 401 ou 403,
    faut-il retenter ? La proposition est non — une erreur d'autorisation ne se
    résout pas par la répétition.
+4. **Nom d'hôte en loopback** (piège 8) : faut-il que `IPAddress::Resolve`
+   sache résoudre une **destination** — filtre « annonçable » désactivé — ou
+   laisse-t-on `ws://localhost/` échouer ? La proposition est d'ouvrir le
+   filtre par un paramètre, ce qui réparerait du même coup
+   `RTPSession::SetRemoteHost`. Hors périmètre du lot 3 : il ne touche pas à
+   une classe partagée sans arbitrage.

@@ -25,7 +25,7 @@ Le serveur HTTP interne écoute par défaut sur le port **8080**
 |-----|---------|------|
 | `POST http://<host>:8080/jsr309` | XML-RPC | Appels de commande (cette API) |
 | `GET  http://<host>:8080/events/jsr309/<queueId>` | HTTP *chunked* | Flux d'événements asynchrones (voir §5) |
-| `ws://<host>:9090/jsr309` | WebSocket | Transport média WebRTC/WS (hors périmètre de ce document) |
+| `ws://<host>:9090/jsr309/<sessionId>/<token>` | WebSocket | Transport média du texte sur WebSocket (`--websocket-port`, `wss://` avec `--websocket-secure`). Le `token` vient de `ConfigureMediaConnection` (§6.12) |
 
 Le `POST /jsr309` est un XML-RPC standard :
 
@@ -163,6 +163,11 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | 2 | WS (WebSocket) |
 | 3 | TCP (MSRP, BFCP…) |
 | 4 | UDP |
+| 5 | SCTP (data channel WebRTC, RFC 8841) |
+
+Une jambe `SCTP` reste ICE + DTLS + UDP : seul ce qui circule à l'intérieur
+change. Elle se configure par `ConfigureMediaConnection` puis
+`SetupDataChannel` (§6.12).
 
 ### `MediaFrame::MediaRole` — rôle du flux vidéo
 | Valeur | Nom |
@@ -171,7 +176,7 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | 1 | VIDEO_SLIDES |
 
 ### `AudioCodec::Type`
-(`mcu/include/codecs.h`)
+(`third_party/fontventa/libmedikit/medkit/codecs.h`)
 
 | Valeur | Nom |
 |--------|-----|
@@ -185,7 +190,6 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | 100 | TELEPHONE_EVENT |
 | 117 | SPEEX16 |
 | 118 | AMR |
-| 119 | G7221 |
 | 120 | AMRWB |
 | 130 | NELLY8 |
 | 131 | NELLY11 |
@@ -202,6 +206,7 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | 107 | VP8 |
 | 108 | ULPFEC |
 | 109 | RED |
+| 110 | AV1 |
 
 ### `TextCodec::Type`
 | Valeur | Nom |
@@ -213,6 +218,15 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | Valeur | Nom |
 |--------|-----|
 | 150 | BFCP |
+
+> **Ces tables donnent des identifiants de fil, pas des capacités.** Un codec y
+> figure parce que le serveur sait le nommer, pas parce qu'il sait le traiter —
+> et les deux directions ne coïncident pas (VP6 se décode, ne s'encode pas).
+> Ce que le serveur sait faire, **on le lui demande** : `GET /status/general`
+> rend les codecs audio et vidéo **par direction**
+> (`docs/reference/status-http.md`). Ne pas en tenir une seconde liste côté
+> contrôleur : une liste recopiée dérive, et le prix est connu — un appel
+> AV1 ↔ AV1 mort en 488 avec un audio parfait des deux côtés.
 
 ### `Mosaic::Type` — type de composition vidéo
 (`mcu/include/mosaic.h`)
@@ -741,7 +755,7 @@ dit laquelle employer, **appel par appel** :
 
 Chaque profil porte **deux adresses** : celle que le serveur **lie** (donc
 l'interface qu'il emprunte) et celle qu'il **annonce** — la ligne `c=` du SDP et
-les candidats rendus par `EndpointGetMediaCandidates`. Elles ne diffèrent que
+les candidats rendus par `GetMediaCandidates`. Elles ne diffèrent que
 pour `publicv4` derrière NAT. **Configuration serveur** (`--public-ip`, `--nat`,
 `--internal-ip`, `--default-profile`, par cas d'usage) :
 `NETWORK-CONFIGURATION.md`.
@@ -772,7 +786,7 @@ WebSocket global, réglé au démarrage par `--websocket-host` et
 donc rien à y appliquer. Le contrôleur pose le même profil sur toutes les pattes
 de la jambe, texte compris, sans avoir à traiter le texte à part.
 
-`EndpointGetMediaCandidates` suit le profil de la jambe : l'URL rendue porte
+`GetMediaCandidates` suit le profil de la jambe : l'URL rendue porte
 l'adresse annoncée du profil, et un littéral IPv6 y est **encadré de crochets**
 (RFC 3986 §3.2.2) — jamais dans un `c=` ni un `a=candidate:`, où les champs sont
 séparés par des espaces.
@@ -867,12 +881,13 @@ d'exprimer `intraPeriod` en nombre d'images pour la cadence `fps` qu'il négocie
 Une pause de la source (mute vidéo) n'est jamais lue comme une cadence : rien ne
 sort tant que rien n'entre, et l'encodeur garde la cadence d'avant la pause.
 
-### 6.12 Connexions média génériques (WebRTC / ICE)
+### 6.12 Connexions média génériques (WebRTC / ICE / data channel)
 
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
 | `GetMediaCandidates` | `i sessionId, i endpointId, i protocol, i media` | `[ string url ]` |
 | `ConfigureMediaConnection` | `i sessionId, i endpointId, i media, i role, i protocol, s token, s expectedPayload` | `[]` |
+| `SetupDataChannel` | `i sessionId, i endpointId, i media, i remoteSctpPort` | `[ int localSctpPort, int maxMessageSize, int streamId ]` |
 
 - `protocol` = `MediaFrame::MediaProtocol`, `media` = `MediaFrame::Type`,
   `role` = `MediaFrame::MediaRole` (§4).
@@ -895,7 +910,29 @@ sort tant que rien n'entre, et l'encodeur garde la cadence d'avant la pause.
   média/protocole. Côté exploitation (NAT, réseau interne, ports) :
   `NETWORK-CONFIGURATION.md`.
 - `ConfigureMediaConnection` : `token` d'association de la connexion,
-  `expectedPayload` = payload attendu.
+  `expectedPayload` = payload attendu. Il décide de la **nature du port**, donc
+  il doit précéder `EndpointStartReceiving`. Un `protocol = 2` (WS) exige un
+  `token` non vide : c'est lui que le navigateur présentera dans l'URL.
+- **L'URL qu'ouvre le navigateur** (transport WS) est
+  `ws://<host>:9090/jsr309/<sessionId>/<token>`, `wss://` si le serveur écoute
+  en TLS (`--websocket-secure`). `GetMediaCandidates` en rend l'**origine**
+  (`<schéma>://<host>:<port>`, et il rend bien `wss` quand le serveur est en
+  TLS) ; le chemin `/jsr309/<sessionId>/<token>` est au contrôleur. Session
+  inconnue ou token inconnu : **404**. URL sans `sessionId` ni token : **400**.
+- **`SetupDataChannel`** — les paramètres SCTP d'une jambe texte sur data
+  channel (`protocol = 5`). Le contrôleur donne le `a=sctp-port` du pair et
+  repart avec les siens, qu'il publie dans son SDP :
+  - `localSctpPort` → `a=sctp-port` de la réponse ;
+  - `maxMessageSize` → `a=max-message-size` ;
+  - `streamId` vaut **-1 tant que le canal n'est pas ouvert** ; il ne sert qu'à
+    un `a=dcmap` (RFC 8864) et peut être ignoré.
+
+  À appeler **après** `ConfigureMediaConnection` avec `protocol = 5`, et avant
+  de publier le SDP. La suite est la séquence habituelle d'une jambe chiffrée
+  (fingerprint DTLS, credentials STUN, `StartReceiving`, `StartSending`) : une
+  jambe data channel reste ICE + DTLS + UDP. Ces deux valeurs sont des
+  propriétés du serveur — les recopier dans la configuration du contrôleur, ce
+  serait la même faute que recopier une liste de codecs (§4).
 
 ---
 

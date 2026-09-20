@@ -1,4 +1,5 @@
 #include "ipaddress.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -155,6 +156,10 @@ init:
 		//Libère les connexions fermées au tour précédent (grâce d'un tour)
 		recentlyClosed.clear();
 
+		//Adopte les connexions SORTANTES demandées depuis un autre thread, avant
+		//de bâtir le jeu de poll : elles y entrent dès ce tour-ci.
+		DrainPendingConnects();
+
 		//Construit le jeu de poll : [écoute, réveil, connexions...]
 		std::vector<pollfd>   ufds;
 		std::vector<uint64_t> ids;   //connId aligné aux entrées « connexion »
@@ -295,6 +300,175 @@ void WebSocketServer::CreateConnection(int fd)
 	connections[id] = conn;
 }
 
+namespace {
+
+//Un champ d'URL tel que le parseur l'a délimité, "" s'il est absent.
+std::string UrlField(const std::string& url,const http_parser_url& parsed,int field)
+{
+	if (!(parsed.field_set & (1<<field)))
+		return std::string();
+	return url.substr(parsed.field_data[field].off,parsed.field_data[field].len);
+}
+
+std::string ToLower(const std::string& in)
+{
+	std::string out = in;
+	for (size_t i=0;i<out.size();++i)
+		out[i] = tolower(out[i]);
+	return out;
+}
+
+} // namespace
+
+/**************************
+ * Connect
+ * 	Ouvre une connexion WebSocket sortante (cf. websocketserver.h)
+ **************************/
+bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener)
+{
+	//Sans réacteur, personne ne piloterait la connexion : l'échouer tout de
+	//suite vaut mieux que de la laisser dormir dans la file.
+	if (!inited)
+		return Error("-WebSocketServer::Connect: server is not running [url:%s]\n",url.c_str());
+
+	http_parser_url parsed;
+	memset(&parsed,0,sizeof(parsed));
+	if (http_parser_parse_url(url.c_str(),url.length(),0,&parsed))
+		return Error("-WebSocketServer::Connect: cannot parse url [url:%s]\n",url.c_str());
+
+	//Le schéma décide du transport ET du port par défaut (RFC 6455 §3)
+	const std::string schema = ToLower(UrlField(url,parsed,UF_SCHEMA));
+	if (schema=="wss")
+		//Pas de repli silencieux en clair : une jambe que le contrôleur a
+		//demandée chiffrée ne doit jamais partir en clair à son insu.
+		return Error("-WebSocketServer::Connect: wss:// is not supported yet [url:%s]\n",url.c_str());
+	if (schema!="ws")
+		return Error("-WebSocketServer::Connect: unsupported scheme \"%s\" [url:%s]\n",schema.c_str(),url.c_str());
+
+	//Le parseur d'URL retire les crochets d'un littéral v6 (RFC 3986 §3.2.2) :
+	//`host` est ici une adresse ou un nom, jamais "[...]".
+	const std::string host = UrlField(url,parsed,UF_HOST);
+	if (host.empty())
+		return Error("-WebSocketServer::Connect: no host in url [url:%s]\n",url.c_str());
+
+	const WORD port = (parsed.field_set & (1<<UF_PORT)) ? parsed.port : 80;
+
+	//Une requête HTTP porte toujours un chemin absolu, query comprise. Le
+	//fragment reste chez nous : il n'est jamais émis sur le fil (RFC 3986 §3.5).
+	std::string path = UrlField(url,parsed,UF_PATH);
+	if (path.empty())
+		path = "/";
+	const std::string query = UrlField(url,parsed,UF_QUERY);
+	if (!query.empty())
+		path += "?" + query;
+
+	//DNS ICI, dans le thread appelant : A et AAAA, ordre déterministe.
+	int err = 0;
+	const std::list<IPAddress> addresses = IPAddress::Resolve(host,err,AF_INET);
+	if (addresses.empty())
+		return Error("-WebSocketServer::Connect: cannot resolve \"%s\" (errno %d) [url:%s]\n",host.c_str(),err,url.c_str());
+
+	//En-tête Host : l'hôte tel qu'il a été demandé, crochets rendus à un
+	//littéral v6, et le port sauf s'il est celui du schéma (RFC 7230 §5.4).
+	std::string hostHeader = host.find(':')==std::string::npos ? host : "["+host+"]";
+	if (port!=80)
+		hostHeader += ":" + std::to_string(port);
+
+	//Le socket et le connect() non bloquant appartiennent à l'appelant : ainsi
+	//TOUT échec synchrone se dit par la valeur de retour, et le réacteur n'a
+	//qu'un descripteur à adopter.
+	int fd = FD_INVALID;
+	int lastErrno = 0;
+	for (std::list<IPAddress>::const_iterator it=addresses.begin();it!=addresses.end() && fd==FD_INVALID;++it)
+	{
+		const IPEndpoint to = it->To(port);
+
+		int sock = socket(it->Family(),SOCK_STREAM,0);
+		if (sock<0)
+		{
+			lastErrno = errno;
+			continue;
+		}
+
+		//Non bloquant AVANT connect() : le réacteur ne doit jamais attendre un pair
+		int fsflags = fcntl(sock,F_GETFL,0);
+		fcntl(sock,F_SETFL, fsflags | O_NONBLOCK);
+
+		//EINPROGRESS est le cas NORMAL : la fin du connect() se lit au premier
+		//POLLOUT, par SO_ERROR (WebSocketConnection::OnWritable).
+		if (connect(sock,to,to.Len())<0 && errno!=EINPROGRESS)
+		{
+			lastErrno = errno;
+			close(sock);
+			continue;
+		}
+
+		Log("-Outgoing connection [fd:%d,to:%s,path:%s]\n",sock,to.ToString().c_str(),path.c_str());
+		fd = sock;
+	}
+
+	if (fd==FD_INVALID)
+		return Error("-WebSocketServer::Connect: cannot connect to \"%s\" (errno %d) [url:%s]\n",host.c_str(),lastErrno,url.c_str());
+
+	PendingConnect request;
+	request.fd	 = fd;
+	request.host	 = hostHeader;
+	request.path	 = path;
+	request.listener = listener;
+
+	{
+		std::lock_guard<std::mutex> lock(pendingMutex);
+		pendingConnects.push_back(request);
+	}
+
+	//Réveiller le réacteur : il adoptera le socket au prochain tour de boucle
+	onWakeupNeeded();
+
+	return true;
+}
+
+/**************************
+ * DrainPendingConnects
+ * 	Adopte les connexions sortantes demandées depuis un autre thread
+ **************************/
+void WebSocketServer::DrainPendingConnects()
+{
+	std::list<PendingConnect> requests;
+
+	{
+		std::lock_guard<std::mutex> lock(pendingMutex);
+		//Sortir la file du verrou : la création d'une connexion notifie, et un
+		//callback qui rappellerait Connect() se bloquerait lui-même.
+		requests.swap(pendingConnects);
+	}
+
+	for (std::list<PendingConnect>::const_iterator it=requests.begin();it!=requests.end();++it)
+		CreateClientConnection(*it);
+}
+
+/*************************
+ * CreateClientConnection
+ * 	Enveloppe un socket sortant dans une connexion pilotée par le réacteur
+ *************************/
+void WebSocketServer::CreateClientConnection(const PendingConnect& request)
+{
+	//Identité stable (pas le fd, réutilisable)
+	uint64_t id = ++nextConnId;
+
+	std::shared_ptr<WebSocketConnection> conn = std::make_shared<WebSocketConnection>(this, id);
+
+	Log("-Outgoing connection adopted [fd:%d,id:%llu,host:%s,path:%s]\n",
+	    request.fd,(unsigned long long)id,request.host.c_str(),request.path.c_str());
+
+	//Le listener est posé ICI : en mode client personne n'appelle Accept(), et
+	//un échec avant le 101 doit déjà pouvoir se dire.
+	conn->InitClient(request.fd, std::make_unique<WebSocketPlainTransport>(),
+			 request.host, request.path, request.listener);
+
+	//Store it
+	connections[id] = conn;
+}
+
 /**************************
  * CloseConnection
  * 	Ferme et retire une connexion de la map
@@ -355,6 +529,18 @@ int WebSocketServer::End()
 	//Détruire les connexions restantes
 	connections.clear();
 	recentlyClosed.clear();
+
+	//Les sockets sortants que le réacteur n'a pas eu le temps d'adopter ne sont
+	//possédés par aucune connexion : les fermer ici, sinon ils fuient.
+	{
+		std::lock_guard<std::mutex> lock(pendingMutex);
+		for (std::list<PendingConnect>::iterator it=pendingConnects.begin();it!=pendingConnects.end();++it)
+		{
+			shutdown(it->fd,SHUT_RDWR);
+			close(it->fd);
+		}
+		pendingConnects.clear();
+	}
 
 	Log("<End WebSocket Server\n");
 	return 0;
