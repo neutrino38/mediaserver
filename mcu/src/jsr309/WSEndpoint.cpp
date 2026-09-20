@@ -305,20 +305,31 @@ int WSEndpoint::SendFrame(TextFrame &frame)
 	if ( frame.GetLength() == 3 && memcmp(frame.GetData(), BOMUTF8, 3) == 0)
 	{
 		TextFrame bom(getDifTime(&clock)/1000, BOMUTF8,3);
+		//Avant le Multiplex : place apres, cette trace ne dit rien quand le
+		//Multiplex ne rend pas la main, ce qui est justement le cas a voir.
+		Debug("BOM ping pong.\n");
 		if (useRed)
 		{
 			RTPRedundantPacket *packet = RedCodec->Encode( &bom, payloadType);
-			Multiplex(*packet);
-			delete packet;
+			if (packet)
+			{
+				packet->SetSeqNum(pseudoSeqNum++);
+				packet->SetSeqCycles(pseudoSeqCycle);
+				if (pseudoSeqNum == 0) pseudoSeqCycle++;
+				Multiplex(*packet);
+				delete packet;
+			}
 		}
 		else
 		{
 			RTPPacket packet(MediaFrame::Text, TextCodec::T140);
 			packet.SetTimestamp(getDifTime(&clock)/1000);
 			packet.SetPayload(BOMUTF8,3);
-			Multiplex(packet);			
+			packet.SetSeqNum(pseudoSeqNum++);
+			packet.SetSeqCycles(pseudoSeqCycle);
+			if (pseudoSeqNum == 0) pseudoSeqCycle++;
+			Multiplex(packet);
 		}
-		Debug("BOM ping pong.\n");
 	}
 	
     //Verrouiller la référence le temps de l'envoi (thread-safe vs destruction)

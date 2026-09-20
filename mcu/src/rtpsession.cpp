@@ -295,6 +295,7 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	numSendPackets = 0;
 	//Watchdog d'inactivité RTP désactivé par défaut (gap 5) : ni configuré ni armé
 	setZeroTime(&lastRecv);
+	setZeroTime(&lastStreamLockError);
 	rtpTimeout = 0;
 	rtpTimeoutArmed = false;
 	rtpTimedOut = false;
@@ -723,6 +724,29 @@ int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 	return 1;
 }
 
+void RTPSession::ReplayPendingDTLS()
+{
+	BYTE       packet[MTU];
+	int        len;
+	IPEndpoint from;
+	{
+		std::lock_guard<std::mutex> lock(pendingDtlsMutex);
+		if (!pendingDtlsLen)
+			return;
+		len = pendingDtlsLen;
+		memcpy(packet,pendingDtls,len);
+		from = pendingDtlsFrom;
+		pendingDtlsLen = 0;
+	}
+
+	Log("-RTPSession DTLS: replaying packet received before init from [%s:%d]\n", from.Address().ToString().c_str(), from.Port());
+	if (!dtls.Write(packet,len))
+		return;
+	len = dtls.Read(packet,MTU);
+	if (len>0)
+		sendto(simSocket,packet,len,0,from,from.Len());
+}
+
 int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint)
 {
 	Log("-SetRemoteCryptoDTLS [setup:%s,hash:%s,fingerpritn:%s]\n",setup,hash,fingerprint);
@@ -753,6 +777,9 @@ int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const cha
 
 	//Init DTLS (génère le ClientHello dans write_bio si on est en rôle client)
 	int res = dtls.Init();
+
+	if (res)
+		ReplayPendingDTLS();
 
 	//P2 : si le pair est passive, nous sommes client -> amorcer le handshake dès
 	//maintenant si la destination est déjà connue (StartSending déjà appelé), sinon
@@ -1209,6 +1236,10 @@ int RTPSession::SetRemotePort(char *ip,int sendPort)
 	//au rattrapage, sinon un pair qui change de mapping resterait coincé sur l'ancien.
 	natCorrected = false;
 	natRtcpCorrected = false;
+	//L'observation porte sur l'ancienne cible : gardée, le premier paquet émis
+	//ré-aiguillait dessus et brûlait le one-shot avant que le pair déplacé ne parle.
+	recIP = IPAddress();
+	recPort = 0;
 
 	//Ip y puerto de destino. L'adresse NON SPÉCIFIÉE (0.0.0.0 ou ::) n'en est pas
 	//une : c'est une demande de latch, et la destination doit rester INCONNUE
@@ -2725,6 +2756,16 @@ int RTPSession::ReadRTP()
 	if (DTLSConnection::IsDTLS(buffer,size))
 	{
 		Log("-RTPSession DTLS: received packet from [%s:%d]\n", from_addr.Address().ToString().c_str(), from_addr.Port());
+		if (!dtls.IsInited())
+		{
+			//Le pair actif a parlé avant SetRemoteCryptoDTLS : jeté, son ClientHello
+			//ne revenait qu'à la retransmission OpenSSL, une seconde plus tard.
+			std::lock_guard<std::mutex> lock(pendingDtlsMutex);
+			memcpy(pendingDtls,buffer,size);
+			pendingDtlsLen  = size;
+			pendingDtlsFrom = from_addr;
+			return 0;
+		}
 		//Feed it
 		if (!dtls.Write(buffer,size))
 		{
@@ -4057,7 +4098,7 @@ int RTPSession::SendTempMaxMediaStreamBitrateNotification(DWORD bitrate,DWORD ov
 bool RTPSession::AddStream( bool receiving, DWORD ssrc )
 {
     bool created = false;
-    if ( streamUse.WaitUnusedAndLock(500) )
+    if ( streamUse.WaitUnusedAndLock(StreamLockTimeoutMs) )
     {
 	RTPStream* stream = getStream(ssrc);
 	if ( stream == NULL )
@@ -4190,7 +4231,25 @@ bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 	//Cette fonction MUTE la map : verrou ECRIVAIN. Elle n'en prenait aucun,
 	//alors que tout le chemin RTCP l'itere desormais sous le verrou lecteur.
 	//Appelee depuis onNewStream, ou ReadRTP a deja relache son verrou lecteur.
-	streamUse.WaitUnusedAndLock();
+	//
+	//BORNEE, parce qu'elle s'execute sur le THREAD REACTEUR : une attente sans
+	//borne y rend sourdes TOUTES les jambes du groupe, et le pair ne le voit
+	//que comme une image noire (docs/reference/threads-rtp.md). La borne couvre
+	//un cycle de lecture du consommateur (ConsumerPollMs), qui tient le verrou
+	//lecteur pendant son attente ; meme valeur que AddStream.
+	if (!streamUse.WaitUnusedAndLock(StreamLockTimeoutMs))
+	{
+		//Le renommage n'a pas eu lieu : le paquet courant sera jete faute de
+		//flux, et le suivant du meme SSRC repassera par ici. Donc trace CADENCEE
+		//— une par seconde : sans cela elle sort a la cadence du flux video.
+		if (getDifTime(&lastStreamLockError)>1000000)
+		{
+			getUpdDifTime(&lastStreamLockError);
+			Error("-ChangeStream: verrou indisponible en %u ms, ssrc %x -> %x non renomme [%p]\n",
+				StreamLockTimeoutMs,oldssrc,newssrc,this);
+		}
+		return false;
+	}
 
 	RTPStream* stream = getStream(oldssrc);
 	if (stream != NULL)

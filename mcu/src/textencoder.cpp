@@ -79,7 +79,7 @@ int TextEncoder::StartEncoding()
 	//Start thread
 	StartThread();
 
-	Log("<StartSending text [%d]\n",encodingText);
+	Log("<StartSending text [%d]\n",encodingText.load());
 
 	return 1;
 }
@@ -140,8 +140,19 @@ int TextEncoder::Encode()
 
 		//Check framce
 		if (!frame)
+		{
+			//`GetFrame(0)` n'attend indéfiniment que si le pipe est INITÉ :
+			//un pipe que le mixeur texte a terminé rend NULL tout de suite,
+			//et cette boucle tournerait à vide sur un cœur. StopEncoding
+			//annule cette attente (StopThread), l'arrêt reste immédiat.
+			//Drapeau relu AVANT d'attendre : StopEncoding le baisse puis
+			//annule l'attente, et sans cette relecture le thread peut se
+			//glisser entre les deux et dormir l'intervalle entier.
+			if (encodingText)
+				wait.WaitSignal(IdleWaitMs);
 			//next one
 			continue;
+		}
 
 		//If it has content
 		if (frame->GetWLength())
@@ -175,7 +186,9 @@ int TextEncoder::Encode()
 	//Salimos
         Log("<Encode Text\n");
 	
-	pthread_exit(0);
+	//Corps d'un Worker, donc d'un std::thread : il RETOURNE. Un pthread_exit
+	//ici déroule le thread par-dessous l'enveloppe de std::thread.
+	return 0;
 }
 
 bool TextEncoder::AddListener(MediaFrame::Listener *listener)

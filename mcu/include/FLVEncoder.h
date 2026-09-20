@@ -1,7 +1,8 @@
 #ifndef _FLVENCODER_H_
 #define _FLVENCODER_H_
+#include <atomic>
 #include <mutex>
-#include <pthread.h>
+#include <thread>
 #include "wait.h"
 #include "video.h"
 #include "text.h"
@@ -52,25 +53,20 @@ protected:
 	int EncodeVideo();
 
 private:
-	//Funciones propias
-	static void *startEncodingAudio(void *par);
-	static void *startEncodingVideo(void *par);
-
-private:
 	typedef std::set<MediaFrame::Listener*> MediaFrameListeners;
 
 	
 private:
 	AudioCodec::Type	audioCodec;
 	AudioInput*		audioInput;
-	pthread_t		encodingAudioThread;
-	int			encodingAudio;
+	std::thread		encodingAudioThread;
+	std::atomic<int>	encodingAudio;
 	Properties		audioProperties;
 
 	VideoCodec::Type	videoCodec;
 	VideoInput*		videoInput;
-	pthread_t		encodingVideoThread;
-	int			encodingVideo;
+	std::thread		encodingVideoThread;
+	std::atomic<int>	encodingVideo;
 
 	// Text is entirely managed by text encoder
 	TextEncoder		textEncoder;

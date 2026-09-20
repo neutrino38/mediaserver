@@ -164,6 +164,13 @@ TEST(StunClientServer, UnLitteralV6ExigeDesCrochets)
 	EXPECT_FALSE(StunClient::ParseServer("[2001:db8::1", server, error))
 		<< "crochet fermant manquant";
 	EXPECT_NE(std::string::npos, error.find("crochet")) << error;
+
+	//Bien formé, mais le NAT servi est IPv4 seulement : le refus doit le dire,
+	//et non prétendre que l'adresse « n'a pas d'adresse IPv4 » à résoudre.
+	EXPECT_FALSE(StunClient::ParseServer("[2001:db8::1]:3478", server, error));
+	EXPECT_NE(std::string::npos, error.find("IPv6")) << error;
+	EXPECT_FALSE(StunClient::ParseServer("::1", server, error));
+	EXPECT_NE(std::string::npos, error.find("IPv6")) << error;
 }
 
 TEST(StunClientServer, RefuseCeQuiNeSeResoutPas)

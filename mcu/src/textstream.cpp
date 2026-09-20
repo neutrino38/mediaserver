@@ -13,6 +13,11 @@
 static BYTE BOMUTF8[]			= {0xEF,0xBB,0xBF};
 static BYTE LOSTREPLACEMENT[]		= {0xEF,0xBF,0xBD};
 
+//Réveil de la boucle d'émission sur data channel quand le texte se tait. Rien
+//n'est émis à l'expiration — SCTP est fiable, il n'y a pas de keep-alive à
+//envoyer ; seul l'arrêt a besoin de la réveiller.
+static const DWORD DataChannelIdleMs	= 25000;
+
 /**********************************
 * TextStream
 *	Constructor
@@ -201,30 +206,6 @@ int TextStream::SetRTPProperties(const Properties& properties)
 	return rtp.SetProperties(properties);
 }
 /***************************************
-* startSendingText
-*	Helper function
-***************************************/
-void * TextStream::startSendingText(void *par)
-{
-	TextStream *conf = (TextStream *)par;
-	blocksignals();
-	Log("SendTextThread [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->SendText());
-}
-
-/***************************************
-* startReceivingText
-*	Helper function
-***************************************/
-void * TextStream::startReceivingText(void *par)
-{
-	TextStream *conf = (TextStream *)par;
-	blocksignals();
-	Log("RecvTextThread [%d]\n",getpid());
-	pthread_exit((void *)(intptr_t)conf->RecText());
-}
-
-/***************************************
 * StartSending
 *	Comienza a mandar a la ip y puertos especificados
 ***************************************/
@@ -256,9 +237,10 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 		bridge.Start();
 
 		sendingText = TaskStarting;
-		createPriorityThread(&sendTextThread,startSendingText,this,1);
+		sendWait.Reset();
+		sendTextThread = std::thread(&TextStream::SendText,this);
 
-		Log("<StartSending text sur data channel [%d]\n",sendingText);
+		Log("<StartSending text sur data channel [%d]\n",sendingText.load());
 		return 1;
 	}
 
@@ -287,9 +269,10 @@ int TextStream::StartSending(char *sendTextIp,int sendTextPort,RTPMap& rtpMap)
 	sendingText = TaskStarting;
 
 	//Start thread
-	createPriorityThread(&sendTextThread,startSendingText,this,1);
+	sendWait.Reset();
+	sendTextThread = std::thread(&TextStream::SendText,this);
 
-	Log("<StartSending text [%d]\n",sendingText);
+	Log("<StartSending text [%d]\n",sendingText.load());
 
 	return 1;
 }
@@ -336,7 +319,7 @@ int TextStream::StartReceiving(RTPMap& rtpMap)
 	receivingText= TaskStarting;
 
 	//Create thread
-	createPriorityThread(&recTextThread,startReceivingText,this,1);
+	recTextThread = std::thread(&TextStream::RecText,this);
 
 	//Log
 	Log("<StartReceiving text [%d]\n",recTextPort);
@@ -395,10 +378,13 @@ int TextStream::StopReceiving()
 
 		//Cancel rtp
 		rtp.CancelGetPacket();
-		
-		//Y unimos
-		pthread_join(recTextThread,NULL);
 	}
+
+	//Join INCONDITIONNEL : RecText peut avoir rendu la main sans que personne
+	//n'ait posé TaskStopping, et StartReceiving réaffecte le membre — réaffecter
+	//un std::thread joignable appelle std::terminate().
+	if (recTextThread.joinable())
+		recTextThread.join();
 
 	Log("<StopReceiving Text\n");
 
@@ -423,9 +409,14 @@ int TextStream::StopSending()
 		//Cancel grab if any
 		textInput->Cancel();
 
-		//Y esperamos
-		pthread_join(sendTextThread,NULL);
+		//Et l'attente de cadence, sinon l'arrêt attend la fin de l'intervalle
+		//de keep-alive courant — jusqu'à 25 s.
+		sendWait.Cancel();
 	}
+
+	//Même postcondition inconditionnelle que StopReceiving, et pour la même raison.
+	if (sendTextThread.joinable())
+		sendTextThread.join();
 
 	Log("<StopSending Text\n");
 
@@ -444,6 +435,11 @@ int TextStream::RecText()
 	DWORD		lastSeq = RTPPacket::MaxExtSeqNum;
 
 	Log(">RecText\n");
+
+	//SIGINT et SIGUSR1 restent au thread principal.
+	blocksignals();
+	Log("RecvTextThread [%d]\n",getpid());
+
 	rtp.ResetPacket(false);
 	//Ne PAS ecraser un TaskStopping que StopReceiving/StopSending vient de poser
 	//pendant que ce thread demarrait : le drapeau repartait a TaskRunning, la
@@ -518,7 +514,7 @@ int TextStream::RecText()
 
 	receivingText = TaskIdle;
 	//Salimos
-	pthread_exit(0);
+	return 0;
 }
 
 /*******************************************
@@ -544,11 +540,20 @@ int TextStream::SendTextOverDataChannel()
 
 	while (sendingText == TaskRunning)
 	{
-		TextFrame* frame = textInput->GetFrame(25000);
+		TextFrame* frame = textInput->GetFrame(DataChannelIdleMs);
 
 		//Expiration ou annulation : rien a dire.
 		if (!frame)
+		{
+			//Le pipe non inité rend NULL sans attendre : sans cette attente,
+			//la boucle tourne à vide sur un cœur. Le drapeau est relu AVANT
+			//d'attendre : l'arrêt le pose puis annule l'attente, et sans
+			//cette relecture le thread peut se glisser entre les deux et
+			//dormir l'intervalle entier.
+			if (sendingText == TaskRunning)
+				sendWait.WaitSignal(DataChannelIdleMs);
 			continue;
+		}
 
 		if (!muted && frame->GetLength())
 			bridge.SendText(frame->GetData(),frame->GetLength());
@@ -564,6 +569,11 @@ int TextStream::SendTextOverDataChannel()
 
 int TextStream::SendText()
 {
+    //SIGINT et SIGUSR1 restent au thread principal. Posé AVANT la bascule de
+    //dialecte : les deux boucles tournent sur ce thread.
+    blocksignals();
+    Log("SendTextThread [%d]\n",getpid());
+
     //Data channel : autre dialecte, autre boucle.
     if (transport == MediaFrame::SCTP)
         return SendTextOverDataChannel();
@@ -587,6 +597,7 @@ int TextStream::SendText()
         TextFrame *frame = NULL;
 
         //Get frame
+        const QWORD waitedFrom = getTime();
         frame = textInput->GetFrame(timeout);
 
         //Calculate last frame time
@@ -595,7 +606,21 @@ int TextStream::SendText()
             lastTime = frame->GetTimeStamp();
         else
 	{
-	    msleep(200);
+	    //Le pipe n'a peut-être pas attendu du tout (non inité) : compléter
+	    //l'intervalle ici, sinon un keep-alive part à chaque tour — l'ancien
+	    //msleep(200) valait 200 MICROsecondes, soit ~5000 paquets/s.
+	    //Drapeau relu AVANT d'attendre : StopSending le pose puis annule
+	    //l'attente, et sans cette relecture le thread peut se glisser entre
+	    //les deux et dormir l'intervalle entier — 25 s de join.
+	    const QWORD waitedMs = (getTime() - waitedFrom)/1000;
+	    if (sendingText == TaskRunning && waitedMs < timeout)
+		sendWait.WaitSignal((DWORD)(timeout - waitedMs));
+
+	    //Annulé pendant l'attente : ne pas émettre un keep-alive de plus
+	    //pendant l'arrêt. La condition de boucle nous sort.
+	    if (sendingText != TaskRunning)
+		continue;
+
             //Update last send time with timeout
             lastTime += timeout;
 	}
@@ -687,7 +712,7 @@ int TextStream::SendText()
 	//Salimos
 	Log("<SendText\n");
 	sendingText = TaskIdle;
-	pthread_exit(0);
+	return 0;
 }
 
 MediaStatistics TextStream::GetStatistics()

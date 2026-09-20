@@ -171,30 +171,53 @@ TEST(FrameDecimator, LeBudgetSuitLaCadenceDeLaSource)
 	EXPECT_EQ(3, fast.GetStep());
 }
 
-// L'appel du 2026-08-29 : x264 720p à 31-34 ms par image pour 32 ms utilisables.
-// Le coût oscille de part et d'autre du seuil de montée ; avec un seul seuil le
-// pas battait 1↔2 toutes les 16 s, une trame clé à chaque fois. Il doit monter à
-// 2 une fois, puis ne plus bouger tant que le coût ne tient pas dans 7/10.
-TEST(FrameDecimator, UnCoutSurLeSeuilNeFaitPasBattreLePas)
+// L'appel du 2026-09-01 : x264 720p à 30-34 ms par image pour 32,8 ms
+// utilisables. Sans bande morte à la montée, 0,2 ms de dépassement faisait
+// monter le pas — 4 traces « encodeur trop lent » par minute pendant 23 min et
+// une sortie à 12 im/s au lieu de 24, en régime permanent. Un coût qui reste
+// sous le budget de la source ne doit RIEN changer.
+TEST(FrameDecimator, UnCoutDansLaBandeMorteNeMontePas)
 {
 	FrameDecimator d;
 	QWORD now = 1000000;
-	const QWORD budget24Fps = 41000;	// 32,8 ms utilisables, comme dans l'appel
+	const QWORD budget24Fps = 41000;	// 32,8 ms utilisables, 36,0 ms de bande morte
 
-	// Le coût réel oscille lentement autour du seuil : ~6 s au-dessus, ~6 s en
-	// dessous — plus long que les 3 s de calme, qui ne protègent donc pas.
-	// Vingt minutes de ce régime.
+	// Le coût oscille lentement de part et d'autre de la part utilisable :
+	// ~6 s au-dessus, ~6 s en dessous. Vingt minutes de ce régime.
 	int changes = 0;
 	for (int cycle = 0; cycle < 100; ++cycle)
 	{
 		changes += Feed(d, 146, 34000, budget24Fps, now);
 		changes += Feed(d, 146, 30000, budget24Fps, now);
 	}
+	EXPECT_EQ(0, changes) << "aucun changement de pas dans la bande morte";
+	EXPECT_EQ(1, d.GetStep());
+}
+
+// Au-delà de la bande morte, le pas monte — une fois — et ne bat pas quand le
+// coût retombe entre le seuil de descente et la part utilisable.
+TEST(FrameDecimator, AuDelaDeLaBandeMorteLePasMonteUneSeuleFois)
+{
+	FrameDecimator d;
+	QWORD now = 1000000;
+	const QWORD budget24Fps = 41000;	// 32,8 utilisables, 36,0 à la montée, 22,9 à la descente
+
+	int changes = Feed(d, 40, 42000, budget24Fps, now);
+	EXPECT_EQ(1, changes) << "42 ms depasse la bande morte";
+	EXPECT_EQ(2, d.GetStep());
+
+	// Le coût retombe sous la part utilisable, mais pas sous 7/10 : vingt
+	// minutes de ce régime ne font pas battre le pas.
+	for (int cycle = 0; cycle < 100; ++cycle)
+	{
+		changes += Feed(d, 146, 30000, budget24Fps, now);
+		changes += Feed(d, 146, 42000, budget24Fps, now);
+	}
 	EXPECT_EQ(1, changes) << "une seule montee, aucune redescente";
 	EXPECT_EQ(2, d.GetStep());
 
-	// Le coût tombe franchement sous 7/10 de la part utilisable (23 ms) : là,
-	// et seulement là, le pas redescend — après les 3 s d'usage.
+	// Sous 7/10 de la part utilisable (23 ms), et seulement là, le pas
+	// redescend — après les 3 s d'usage.
 	changes = Feed(d, 100, 15000, budget24Fps, now);
 	EXPECT_EQ(1, changes);
 	EXPECT_EQ(1, d.GetStep());

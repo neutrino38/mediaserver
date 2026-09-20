@@ -135,6 +135,17 @@ public:
 				return false;
 		}
 
+		out = Compose(bitrate);
+
+		//Sous un plafond qui borne, la mesure peut bouger sans que la valeur
+		//annoncée change : en dialecte collant, la redire n'apprend rien au pair.
+		//La mesure est retenue quand même, c'est elle que rend la levée du plafond.
+		if (hasSent && !policy.raiseIntervalMs && out == lastAnnounced)
+		{
+			lastSent = bitrate;
+			return false;
+		}
+
 		//C'est la mesure qui est mémorisée, pas la valeur émise : le plafond
 		//externe est une composition, il ne doit pas faire oublier ce que la
 		//patte mesure réellement.
@@ -142,7 +153,6 @@ public:
 		lastSendTime = now;
 		hasSent      = true;
 
-		out = Compose(bitrate);
 		//Ce qui part sur le fil, distinct de la mesure : c'est à lui que le
 		//chemin du plafond se compare.
 		lastAnnounced = out;
@@ -195,12 +205,13 @@ public:
 	//limite qu'on lui a annoncée : le plafond effectif est alors le sien, et
 	//monter le nôtre ne changera pas ce qu'il émet. Vrai quand on ne mesure
 	//rien (on n'invente pas) et quand il respecte la limite, car la lever est
-	//précisément ce qui le libère.
+	//précisément ce qui le libère. La limite est ce qui a été ANNONCÉ, pas la
+	//mesure locale : sous un plafond externe, les deux divergent.
 	bool RaiseIsInformative() const
 	{
-		if (!peerBitrate || lastSent == NoLimit)
+		if (!peerBitrate || lastAnnounced == NoLimit)
 			return true;
-		return (QWORD)peerBitrate * 100 <= (QWORD)lastSent * PeerOverLimitPercent;
+		return (QWORD)peerBitrate * 100 <= (QWORD)lastAnnounced * PeerOverLimitPercent;
 	}
 
 	//Le débit à annoncer pour une mesure locale donnée : le plus contraint de

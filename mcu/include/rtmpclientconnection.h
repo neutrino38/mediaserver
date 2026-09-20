@@ -7,6 +7,7 @@
 #include "rtmpmessage.h"
 #include "rtmpstream.h"
 #include "rtmpapplication.h"
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <map>
@@ -50,6 +51,9 @@ public:
 		virtual void onConnected(RTMPClientConnection* conn) = 0;
 		virtual void onNetStreamCreated(RTMPClientConnection* conn,NetStream *stream) = 0;
 		virtual void onCommandResponse(RTMPClientConnection* conn,DWORD id,bool isError,AMFData* param) = 0;
+		//Appele une seule fois, depuis le thread de la connexion quand elle
+		//meurt d'elle-meme : le listener ne doit ni la detruire ni appeler
+		//Disconnect() ici, il attendrait son propre thread.
 		virtual void onDisconnected(RTMPClientConnection* conn) = 0;
 	};
 public:
@@ -87,6 +91,8 @@ private:
 	void ParseData(BYTE *data,const DWORD size);
 	DWORD SerializeChunkData(BYTE *data,const DWORD size);
 	int WriteData(BYTE *data,const DWORD size);
+	void CloseSockets();
+	void FireDisconnected();
 
 	void ProcessControlMessage(DWORD messageStremId,BYTE type,RTMPObject* msg);
 	void ProcessCommandMessage(DWORD messageStremId,RTMPCommandMessage* cmd);
@@ -156,7 +162,11 @@ private:
 	int wakeup_socket[2]; // write signal
 	pollfd ufds[2];
 	bool inited;
-	bool running;
+	//Condition de boucle du thread de lecture, baissee par Stop() depuis un
+	//autre thread : atomique, comme dans RTMPConnection.
+	std::atomic<bool> running;
+	//L'avis de deconnexion part une seule fois, du thread qui constate la fin.
+	std::atomic<bool> disconnectFired;
 	State state;
 
 	RTMPHandshake01 c01;

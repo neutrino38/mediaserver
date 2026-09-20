@@ -4,6 +4,11 @@
 static BYTE BOMUTF8[]			= {0xEF,0xBB,0xBF};
 static BYTE LOSTREPLACEMENT[]		= {0xEF,0xBF,0xBD};
 
+//Au dela, ce n'est plus une perte mais un flux qui repart (emetteur redemarre,
+//source changee) : on marque le trou sans ecrire un caractere par paquet
+//manquant. Le nombre de marques envoyees pour un paquet doit rester borne.
+static const DWORD MaxLostReplacements	= 16;
+
 
 RedundentCodec::RedundentCodec()
 {
@@ -19,11 +24,16 @@ bool RedundentCodec::Decode(RTPRedundantPacket * red, TextOutput * textOutput)
     //Get extended sequence number
     DWORD seq = red->GetExtSeqNum();
 
+    //Number of redundant blocks carried by this packet
+    DWORD redundantCount = red->GetRedundantCount();
+
     //Lost packets since last one
     DWORD lost = 0;
 
-    //If not first
-    if (lastSeq!=RTPPacket::MaxExtSeqNum)
+    //Le calcul est non signe : un numero de sequence qui ne progresse pas
+    //(duplique, reordonne, ou jamais pose par l'emetteur) rendrait 2^32-1
+    //pertes, donc une boucle de 4 milliards de tours qui bloque le thread.
+    if (lastSeq!=RTPPacket::MaxExtSeqNum && seq>lastSeq)
             //Calculate losts
             lost = seq-lastSeq-1;
 
@@ -33,12 +43,17 @@ bool RedundentCodec::Decode(RTPRedundantPacket * red, TextOutput * textOutput)
     DWORD ts = timeStamp;
 
     //Check if we have any red pacekt
-    if (red->GetRedundantCount()>0)
+    if (redundantCount>0)
             //Get the timestamp of first redundant packet
             ts = red->GetRedundantTimestamp(0);
 
+    //Lost packets the redundancy cannot recover, bounded
+    DWORD unrecovered = (lost>redundantCount) ? lost-redundantCount : 0;
+    if (unrecovered>MaxLostReplacements)
+            unrecovered = MaxLostReplacements;
+
     //For each lonot recoveredt packet send a mark
-    for (int i=red->GetRedundantCount();i<lost;i++)
+    for (DWORD i=0;i<unrecovered;i++)
     {
 
             //Create frame of lost replacement
@@ -48,11 +63,11 @@ bool RedundentCodec::Decode(RTPRedundantPacket * red, TextOutput * textOutput)
     }
 
     //If we have lost too many
-    if (lost>red->GetRedundantCount())
+    if (lost>redundantCount)
             //Get what we have available only
-            lost = red->GetRedundantCount();
+            lost = redundantCount;
     //Fore each recovered packet
-    for (int i=red->GetRedundantCount()-lost;i<red->GetRedundantCount();i++)
+    for (DWORD i=redundantCount-lost;i<redundantCount;i++)
     {
             //Create frame from recovered data
             TextFrame frame(red->GetRedundantTimestamp(i),red->GetRedundantPayloadData(i),red->GetRedundantPayloadSize(i));

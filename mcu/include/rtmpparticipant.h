@@ -7,8 +7,10 @@
 
 #ifndef RTMPPARTICIPANT_H
 #define	RTMPPARTICIPANT_H
-#include <mutex>
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 #include "rtmpstream.h"
 #include "medkit/codecs.h"
@@ -70,7 +72,6 @@ public:
 protected:
 	int RecVideo();
 	int RecAudio();
-	int SendText();
 	int SendVideo();
 	int SendAudio();
 
@@ -96,12 +97,6 @@ private:
 	int StartReceivingText();
 	int StopReceivingText();
 
-	static void* startReceivingVideo(void *par);
-	static void* startReceivingAudio(void *par);
-
-	static void* startSendingVideo(void *par);
-	static void* startSendingAudio(void *par);
-	static void* startSendingText(void *par);
 private:
 	RTMPMediaStream		*attached;
 	//Protège les lectures/écritures du pointeur `attached` (H-6). Indépendant
@@ -127,21 +122,22 @@ private:
 	DWORD RecVideoHeight;
 
 	//Las threads
-	pthread_t 	recVideoThread;
-	pthread_t 	recAudioThread;
-	pthread_t 	sendTextThread;
-	pthread_t 	sendVideoThread;
-	pthread_t 	sendAudioThread;
+	std::thread	recVideoThread;
+	std::thread	recAudioThread;
+	std::thread	sendVideoThread;
+	std::thread	sendAudioThread;
 	//Cadence de la boucle d'envoi vidéo, réveillée par StopSendingVideo
 	::Wait		pacer;
 
 	//Controlamos si estamos mandando o no
-	bool	sendingVideo;
-	bool 	receivingVideo;
-	bool	sendingAudio;
-	bool	receivingAudio;
-	bool	sendingText;
-	bool	inited;
+	std::atomic<bool>	sendingVideo;
+	std::atomic<bool>	receivingVideo;
+	std::atomic<bool>	sendingAudio;
+	std::atomic<bool>	receivingAudio;
+	//sendingText ne porte plus de thread : c'est le seul aiguillage du texte
+	//entrant (onMetaData), lu sur le thread de la connexion RTMP.
+	std::atomic<bool>	sendingText;
+	std::atomic<bool>	inited;
 	bool	sendFPU;
 	timeval	first;
 

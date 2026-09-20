@@ -429,19 +429,55 @@ la session est détruite d'office si la file cesse d'être lue (§5).
 
 `media` = `MediaFrame::Type` (§4).
 
-#### Médias enregistrés (MP4)
+#### Médias enregistrés et choix du conteneur
 
-Le Recorder attaché à un endpoint enregistre les **trois médias** dans le MP4 :
+**Le conteneur du fichier suit l'extension** du nom passé à `RecorderRecord` :
+`.mp4`, `.mov`, `.3gp`, `.mkv`, `.mka`, `.webm`. Une extension que le serveur ne
+sait pas muxer fait **échouer `RecorderRecord`** ; il n'y a pas de conteneur par
+défaut.
 
-- **Vidéo** : H.264 tel quel (piste `avc1` + hint track RTP). L'enregistrement
-  vidéo démarre à la première I-frame reçue.
-- **Audio** : PCMU/PCMA écrits tels quels ; **tout autre codec (Opus, G.722,
-  AMR…) est transcodé en AAC-LC** à la fréquence native du décodeur
-  (Opus → AAC mono 48 kHz). Aucune configuration côté client.
-- **Texte temps réel** : T.140 nu ou **T140RED (RFC 4103)** — la redondance est
-  décodée (récupération des paquets perdus), les keepalives (BOM UTF-8, trames
-  vides) sont filtrés. Écrit en piste **sous-titres 3GPP (`tx3g`)**, timestamps
-  recalés sur l'axe temps de l'enregistrement.
+Ce choix décide de ce qui s'enregistre **sans transcodage**, car chaque muxer a
+ses codecs :
+
+Les colonnes listent les codecs **reçus en RTP** qui atteignent le fichier sans
+être retouchés.
+
+| Conteneur | Audio tel quel | Vidéo tel quel | Texte |
+|---|---|---|---|
+| `.mp4` | Opus | H.264, MPEG-4, AV1 | `tx3g` |
+| `.mov` | PCMU, PCMA, L16 | H.264, MPEG-4, H.263, AV1 | `tx3g` |
+| `.3gp` | aucun | H.264, MPEG-4, H.263 | `tx3g` |
+| `.mkv`, `.mka` | PCMU, PCMA, L16, G.722, Opus | H.264, MPEG-4, H.263, VP8, AV1 | `S_TEXT/UTF8` |
+| `.webm` | Opus | VP8, AV1 | aucun |
+
+- **Vidéo** : jamais transcodée. Un codec absent de la colonne = **pas de piste
+  vidéo** dans le fichier (trace `le conteneur … ne porte pas la vidéo …`).
+- **Audio** : tout le reste est **transcodé en AAC-LC** à la fréquence du
+  décodeur (Opus → AAC mono 48 kHz), ce que portent tous les conteneurs sauf
+  `.webm` — là, un appel non-Opus donne un fichier **sans piste audio**.
+- **Texte** : T.140 écrit en piste de sous-titres, sauf en `.webm`.
+
+Conséquences pratiques :
+
+- un appel **PCMU en `.mp4`** est transcodé en AAC (ce muxer refuse tous les
+  codecs télécom) ; le même appel en **`.mkv`** est enregistré tel quel ;
+- un appel **VP8** ne s'enregistre qu'en `.mkv` ou `.webm` ;
+- l'**AMR** est toujours transcodé, même là où le conteneur l'accepterait : sa
+  charge utile RTP n'est pas la trame codée (en-tête CMR + TOC).
+
+L'enregistrement vidéo démarre à la **première I-frame** reçue ; le serveur en
+réclame une à la source tant qu'elle n'est pas arrivée. Pour le texte, la
+redondance **T140RED (RFC 4103)** est décodée (récupération des paquets perdus)
+et les keepalives (BOM UTF-8, trames vides) sont filtrés ; les timestamps sont
+recalés sur l'axe temps de l'enregistrement.
+
+> **Les `RecorderAttachTo…` doivent précéder `RecorderRecord`.** Le fichier
+> déclare toutes ses pistes avant d'écrire sa première trame — le format ne
+> permet pas d'en ouvrir une ensuite. Un média attaché **après** le début de
+> l'enregistrement n'a donc aucune piste où aller, et il est perdu sans erreur.
+> Le serveur laisse 2 s à l'audio et à la vidéo attachés pour livrer leur
+> premier paquet (c'est lui qui porte le codec) ; passé ce délai, le fichier
+> s'écrit sans eux.
 
 #### Paramètres optionnels de `RecorderRecord`
 
@@ -454,7 +490,7 @@ Le Recorder attaché à un endpoint enregistre les **trois médias** dans le MP4
   **Désactivation automatique** : si aucune source vidéo n'est attachée au
   recorder, ou si la vidéo attachée n'a pas été négociée (pas de
   `EndpointStartReceiving(Video)`), le serveur force `waitVideo=0` de lui-même
-  — sinon le MP4 resterait vide. Trace : `Recorder: no negotiated video
+  — sinon le fichier resterait vide. Trace : `Recorder: no negotiated video
   source, disabling waitVideo`.
 - **`echoVideo`** (6e, `0`/`1`, défaut `0`) : le Recorder **renvoie en écho
   chaque paquet vidéo reçu vers l'endpoint source** (l'appelant se voit pendant
@@ -727,6 +763,14 @@ Règles du contrat, identiques à celles de l'API MCU (`MCU-API.md` §6.7 bis) :
 - **poser le profil avant de publier le port** : le serveur l'applique au moment
   du `Start*` qui le porte, et c'est ce qui alloue le port rendu par
   `EndpointStartReceiving`.
+
+Une règle propre à cette API : **un média sans session RTP accepte le profil et
+ne l'applique pas**. Le cas est celui du texte sur WebSocket
+(`ConfigureMediaConnection` avec `protocol = 2`). Ce port écoute sur le serveur
+WebSocket global, réglé au démarrage par `--websocket-host` et
+`--websocket-port`, et cette adresse prime sur celle du profil (§6.12). Il n'y a
+donc rien à y appliquer. Le contrôleur pose le même profil sur toutes les pattes
+de la jambe, texte compris, sans avoir à traiter le texte à part.
 
 `EndpointGetMediaCandidates` suit le profil de la jambe : l'URL rendue porte
 l'adresse annoncée du profil, et un littéral IPv6 y est **encadré de crochets**

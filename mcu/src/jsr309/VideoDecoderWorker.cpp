@@ -105,8 +105,11 @@ void VideoDecoderJoinableWorker::DecodePacket(RTPPacket &packet)
 
         //Lost packets since last
         DWORD lost = 0;
-        //If not first
-        if (lastSeq!=RTPPacket::MaxExtSeqNum)
+        //If not first. Le calcul est NON SIGNE : un numero de sequence qui ne
+        //progresse pas (duplique, reordonne, source qui repart) rendrait 2^32-1
+        //pertes, donc un lostCount qui ne redescend plus et un decodeur fige en
+        //attente d'intra. Meme defaut que RedundentCodec::Decode (2026-09-18).
+        if (lastSeq!=RTPPacket::MaxExtSeqNum && seq>lastSeq)
                 //Calculate losts
                 lost = seq-lastSeq-1;
 

@@ -240,7 +240,7 @@ int  RTMPParticipant::StartSendingVideo()
 	sendingVideo=1;
 
 	//Arrancamos los procesos
-	createPriorityThread(&sendVideoThread,startSendingVideo,this,0);
+	sendVideoThread = std::thread(&RTMPParticipant::SendVideo,this);
 
 	return sendingVideo;
 }
@@ -260,11 +260,14 @@ int  RTMPParticipant::StopSendingVideo()
 		Log("-StopSendingVideo: interrupted video input\n");
 		//Cancel sending
 		pacer.Signal();
-
-		//Esperamos
-		Log("-StopSendingVideo: joining videothread %lx\n", sendVideoThread);
-		pthread_join(sendVideoThread,NULL);
 	}
+
+	//Postcondition inconditionnelle : le corps sort aussi de lui-même (erreur
+	//d'ouverture de codec) sans que le drapeau retombe, et StartSendingVideo
+	//RÉAFFECTE le membre — réaffecter un std::thread joignable appelle
+	//std::terminate().
+	if (sendVideoThread.joinable())
+		sendVideoThread.join();
 
 	Log("<StopSendingVideo\n");
 	return 0;
@@ -284,7 +287,7 @@ int  RTMPParticipant::StartReceivingVideo()
 	receivingVideo=1;
 
 	//Arrancamos los procesos
-	createPriorityThread(&recVideoThread,startReceivingVideo,this,0);
+	recVideoThread = std::thread(&RTMPParticipant::RecVideo,this);
 
 	//Logeamos
 	Log("-StartReceivingVideo\n");
@@ -304,10 +307,11 @@ int  RTMPParticipant::StopReceivingVideo()
 
 		//Cancel any pending wait
 		videoFrames.Cancel();
-
-		//Esperamos
-		pthread_join(recVideoThread,NULL);
 	}
+
+	//Même postcondition inconditionnelle que StopSendingVideo.
+	if (recVideoThread.joinable())
+		recVideoThread.join();
 
 	Log("<StopReceivingVideo\n");
 
@@ -327,7 +331,7 @@ int  RTMPParticipant::StartSendingAudio()
 	sendingAudio=1;
 
 	//Arrancamos los procesos
-	createPriorityThread(&sendAudioThread,startSendingAudio,this,0);
+	sendAudioThread = std::thread(&RTMPParticipant::SendAudio,this);
 
 	return sendingAudio;
 }
@@ -344,10 +348,11 @@ int  RTMPParticipant::StopSendingAudio()
 
 		//Cancel grab audio
 		audioInput->CancelRecFrame();
-		
-		//Esperamos
-		pthread_join(sendAudioThread,NULL);
 	}
+
+	//Même postcondition inconditionnelle que StopSendingVideo.
+	if (sendAudioThread.joinable())
+		sendAudioThread.join();
 
 	Log("<StopSendingAudio\n");
 
@@ -368,7 +373,7 @@ int  RTMPParticipant::StartReceivingAudio()
 	audioFrames.Reset();
 
 	//Arrancamos los procesos
-	createPriorityThread(&recAudioThread,startReceivingAudio,this,0);
+	recAudioThread = std::thread(&RTMPParticipant::RecAudio,this);
 
 	//Logeamos
 	Log("-StartReceivingAudio\n");
@@ -388,28 +393,15 @@ int  RTMPParticipant::StopReceivingAudio()
 
 		//Cancel any pending wait
 		audioFrames.Cancel();
-
-		//Esperamos
-		pthread_join(recAudioThread,NULL);
 	}
+
+	//Même postcondition inconditionnelle que StopSendingVideo.
+	if (recAudioThread.joinable())
+		recAudioThread.join();
 
 	Log("<StopReceivingAudio\n");
 
 	return 1;
-}
-
-void* RTMPParticipant::startSendingText(void *par)
-{
-	Log("RecTextThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	RTMPParticipant *sess = (RTMPParticipant *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)(intptr_t)sess->SendText());
 }
 
 int  RTMPParticipant::StartSendingText()
@@ -440,81 +432,11 @@ int  RTMPParticipant::StopSendingText()
 	return 1;
 }
 
-/**************************************
-* startReceivingVideo
-*	Function helper for thread
-**************************************/
-void* RTMPParticipant::startReceivingVideo(void *par)
-{
-	Log("RecVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	RTMPParticipant *sess = (RTMPParticipant *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)(intptr_t)sess->RecVideo());
-}
-
-/**************************************
-* startSendingVideo
-*	Function helper for thread
-**************************************/
-void* RTMPParticipant::startSendingVideo(void *par)
-{
-	Log("SendVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	RTMPParticipant *sess = (RTMPParticipant *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)(intptr_t)sess->SendVideo());
-}
-
-/**************************************
-* startReceivingAudio
-*	Function helper for thread
-**************************************/
-void* RTMPParticipant::startReceivingAudio(void *par)
-{
-	Log("RecVideoThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	RTMPParticipant *sess = (RTMPParticipant *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)(intptr_t)sess->RecAudio());
-}
-
-
-/**************************************
-* startSendingAudio
-*	Function helper for thread
-**************************************/
-void* RTMPParticipant::startSendingAudio(void *par)
-{
-	Log("SendAudioThread [%d]\n",getpid());
-
-	//Obtenemos el objeto
-	RTMPParticipant *sess = (RTMPParticipant *)par;
-
-	//Bloqueamos las se�a�es
-	blocksignals();
-
-	//Y ejecutamos
-	pthread_exit( (void *)(intptr_t)sess->SendAudio());
-}
 
 int RTMPParticipant::SendVideo()
 {
+	blocksignals();
+	Log("SendVideoThread [%d]\n",getpid());
 	timeval t;
 	timeval prev;
 	bool skipOne = false;
@@ -710,11 +632,13 @@ int RTMPParticipant::SendVideo()
 
 	//Salimos
 	use.DecUse();
-	pthread_exit(0);
+	return 0;
 }
 
 int RTMPParticipant::SendAudio()
 {
+	blocksignals();
+	Log("SendAudioThread [%d]\n",getpid());
 	use.IncUse();
 	Log(">RTMP Participant send audio\n");
 
@@ -850,51 +774,13 @@ int RTMPParticipant::SendAudio()
 
 	//Exit
 	use.DecUse();
-	pthread_exit(0);
-}
-
-int RTMPParticipant::SendText()
-{
-	use.IncUse();
-	Log(">SendText\n");
-
-	//Mientras tengamos que capturar
-	while(sendingText)
-	{
-		//Text frame
-		TextFrame *frame = NULL;
-
-		//Get frame
-		frame = textInput->GetFrame(0);
-
-		//Create new timestamp associated to latest media time
-		RTMPMetaData *meta = new RTMPMetaData(frame->GetTimeStamp());
-
-		//Add text name
-		meta->AddParam(new AMFString(L"onText"));
-		//Set data
-		meta->AddParam(new AMFString(frame->GetWChar()));
-
-		//Debug
-		Log("Got T140 frame\n");
-		meta->Dump();
-
-		//Check receiver
-		SendMetaData(meta);
-
-		//Delete frame
-		delete(frame);
-	}
-
-	Log("<SendText\n");
-
-	//Salimos
-	use.DecUse();
-	pthread_exit(0);
+	return 0;
 }
 
 int RTMPParticipant::RecVideo()
 {
+	blocksignals();
+	Log("RecVideoThread [%d]\n",getpid());
 	VideoDecoder *decoder = NULL;
 	use.IncUse();
 	// Use member change by mute
@@ -1100,6 +986,8 @@ int RTMPParticipant::RecVideo()
 
 int RTMPParticipant::RecAudio()
 {
+	blocksignals();
+	Log("RecAudioThread [%d]\n",getpid());
 	use.IncUse();
 	AudioCodec::Type rtmpAudioCodec;
 	AudioDecoder *rtmpAudioDecoder = NULL;

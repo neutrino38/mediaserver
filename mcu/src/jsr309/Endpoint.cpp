@@ -882,13 +882,25 @@ bool Endpoint::SetAddressProfile(MediaFrame::Type media, const char* profile, st
 	if (!profile || !*profile)
 		return true;
 
-	RTPEndpoint* rtp = GetRTPEndpoint(media,role);
+	std::shared_ptr<Port> p = GetPort(media, role);
 
-	if (!rtp)
+	if (!p)
 	{
-		error = "pas de session RTP pour ce media";
+		error = "media inconnu pour cet endpoint";
 		return false;
 	}
+
+	//A port with no RTP session has no address of its own: a WebSocket port
+	//(text over WS) listens on the server-wide listener, set once at startup by
+	//--websocket-host/--websocket-port, and that host is the one GetMediaCandidates
+	//gives precedence to. So there is nothing for a profile to apply here: accept
+	//it and do nothing. Refusing it killed the text section of every call, since
+	//the contract has the controller put the SAME profile on every port of the leg
+	//(docs/JSR-309-API.md §6.7 bis).
+	RTPEndpoint* rtp = GetRTPEndpoint(media, role);
+
+	if (!rtp)
+		return true;
 
 	return rtp->SetAddressProfile(profile,error);
 }

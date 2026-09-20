@@ -254,7 +254,9 @@ int AudioEncoderWorker::Encode()
 	//Salimos
         Log("<Encode Audio\n");
 	
-	pthread_exit(0);
+	//Corps d'un Worker, donc d'un std::thread : il RETOURNE. Un pthread_exit
+	//ici déroule le thread par-dessous l'enveloppe de std::thread.
+	return 0;
 }
 
 bool AudioEncoderWorker::AddListener(MediaFrame::Listener *listener)

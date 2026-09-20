@@ -16,6 +16,15 @@
  *    WaitUnusedAndLock attend — seule la section effectivement tenue les
  *    bloque (c'est pour ces deux points que std::shared_mutex est
  *    disqualifié : réentrance lecteur indéfinie, préférence écrivain) ;
+ *  - UNE SEULE exception à la ligne précédente, le PASSAGE DE TÉMOIN : quand le
+ *    compteur tombe à zéro alors qu'un écrivain attend, les nouveaux IncUse
+ *    patientent le temps que cet écrivain prenne la main. Sans lui, un écrivain
+ *    réveillé depuis un futex perd la course contre un lecteur qui reprend sa
+ *    lecture dans la microseconde suivante, et il la perd à TOUS les tours :
+ *    c'est ainsi qu'un thread réacteur RTP est resté 34 s dans
+ *    RTPSession::ChangeStream (appel du 2026-09-18). La réentrance n'en souffre
+ *    pas — le témoin n'existe qu'à compteur NUL, donc quand aucun thread ne
+ *    tient de lecture, et un IncUse imbriqué trouve toujours le compteur > 0 ;
  *  - écrivains sérialisés entre eux par le second mutex `lock` ;
  *  - WaitUnusedAndLock RETOURNE EN TENANT mutex+lock (relâchés par Unlock,
  *    depuis le MÊME thread) — d'où le unique_lock::release() ;
@@ -31,7 +40,10 @@ public:
 
 	void IncUse()
 	{
-		std::lock_guard<std::mutex> guard(mutex);
+		std::unique_lock<std::mutex> guard(mutex);
+		//Passage de témoin (cf. en-tête) : un écrivain vient d'être réveillé et
+		//n'a pas encore pris la main. Ne pas lui passer devant.
+		handoffCond.wait(guard, [this] { return !handoff; });
 		cont ++;
 	}
 
@@ -39,6 +51,10 @@ public:
 	{
 		std::lock_guard<std::mutex> guard(mutex);
 		if (cont > 0) cont --;
+		//Dernier lecteur sorti alors qu'un écrivain attend : le témoin lui est
+		//réservé jusqu'à ce qu'il prenne la main.
+		if (cont == 0 && writers > 0)
+			handoff = true;
 		cond.notify_one();
 	}
 
@@ -46,7 +62,12 @@ public:
 	{
 		lock.lock();
 		std::unique_lock<std::mutex> guard(mutex);
+		writers ++;
 		cond.wait(guard, [this] { return cont == 0; });
+		writers --;
+		//Témoin consommé : à partir d'ici c'est `mutex`, tenu jusqu'à Unlock,
+		//qui écarte les lecteurs.
+		handoff = false;
 		//Rester verrouillé au retour : Unlock() relâchera
 		guard.release();
 		return true;
@@ -61,14 +82,20 @@ public:
 	{
 		lock.lock();
 		std::unique_lock<std::mutex> guard(mutex);
+		writers ++;
 
 		if (timeout)
 		{
 			if (!cond.wait_for(guard, std::chrono::milliseconds(timeout),
 					[this] { return cont == 0; }))
 			{
+				writers --;
+				//Témoin rendu : l'écrivain qui l'avait réservé abandonne, les
+				//lecteurs mis en attente pour lui n'ont plus personne à attendre.
+				handoff = false;
 				//Timeout : tout relâcher (le guard relâche mutex)
 				guard.unlock();
+				handoffCond.notify_all();
 				lock.unlock();
 				return 0;
 			}
@@ -76,6 +103,8 @@ public:
 		else
 			cond.wait(guard, [this] { return cont == 0; });
 
+		writers --;
+		handoff = false;
 		//Rester verrouillé au retour : Unlock() relâchera
 		guard.release();
 		return 1;
@@ -85,6 +114,9 @@ public:
 	{
 		mutex.unlock();
 		lock.unlock();
+		//Les lecteurs arrêtés par le témoin attendent sur cette variable, pas
+		//sur `mutex` : sans ce réveil ils dorment jusqu'au prochain DecUse.
+		handoffCond.notify_all();
 	}
 
 private:
@@ -92,7 +124,12 @@ private:
 	//Sérialise les écrivains entre eux (tenu de WaitUnusedAndLock à Unlock)
 	std::mutex		lock;
 	std::condition_variable	cond;
+	//Lecteurs retenus le temps qu'un écrivain réveillé prenne la main
+	std::condition_variable	handoffCond;
 	int			cont = 0;
+	//Écrivains en attente (0 ou 1 : `lock` les sérialise)
+	int			writers = 0;
+	bool			handoff = false;
 };
 
 /**

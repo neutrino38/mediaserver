@@ -21,6 +21,14 @@ PipeTextInput::~PipeTextInput()
 
 void PipeTextInput::Cancel()
 {
+	//SOUS LE VERROU, comme WriteText et comme les autres pipes. Sans lui, le
+	//réveil est PERDU : le lecteur tient le verrou, a déjà lu `inited` à true
+	//et n'est pas encore entré dans cond.wait_for ; notify_all ne trouve alors
+	//aucun waiter, et GetFrame dort son timeout entier — jusqu'à 25 s pour le
+	//flux texte, 10 s pour le pont WebSocket, autant de join qui n'en revient
+	//pas.
+	std::lock_guard<std::mutex> lock(mutex);
+
 	//No estamos iniciados
 	inited.store(false);
 
@@ -107,11 +115,16 @@ int PipeTextInput::End()
 {
 	Log(">PipeTextInput End\n");
 
-	//No estamos iniciados
-	inited.store(false);
+	//Même raison que Cancel() : le réveil se signale sous le verrou.
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	//Terminamos
-	cond.notify_all();
+		//No estamos iniciados
+		inited.store(false);
+
+		//Terminamos
+		cond.notify_all();
+	}
 
 	Log("<PipeTextInput Ended\n");
 

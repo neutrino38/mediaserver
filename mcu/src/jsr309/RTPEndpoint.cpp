@@ -126,7 +126,7 @@ int RTPEndpoint::StartReceiving()
 	ArmRTPReceivedNotification();
 
         //Create thread
-	createPriorityThread(&thread,run,this,1);
+	thread = std::thread(&RTPEndpoint::MultiplexLoop,this);
 
 	//Sedn on reset
 	ResetStream();
@@ -155,8 +155,11 @@ int RTPEndpoint::StopReceiving()
 	//l'attente du jitter buffer (cv), pas dans poll ; c'est le Cancel des streams
 	//(CancelStreams ci-dessus) qui le réveille réellement.
 
-        //Y unimos
-	pthread_join(thread,NULL);
+        //Y unimos. Join INCONDITIONNEL : c'est la postcondition de StopReceiving,
+	//et StartReceiving en dépend — réaffecter un std::thread joignable appelle
+	//std::terminate().
+	if (thread.joinable())
+		thread.join();
 	//Plus personne ne lit : on peut detruire.
 	DeleteStreams();
 
@@ -381,6 +384,10 @@ void RTPEndpoint::onEndStream()
 
 int RTPEndpoint::MultiplexLoop()
 {
+        Log("RTPEndpointThread [%d]\n",getpid());
+        //SIGINT et SIGUSR1 restent au thread principal.
+	blocksignals();
+
         while(receiving)
         {
                 //Get the packet
@@ -412,18 +419,6 @@ int RTPEndpoint::MultiplexLoop()
         }
 
         return 1;
-}
-
-void* RTPEndpoint::run(void *par)
-{
-        Log("RTPEndpointThread [%d]\n",getpid());
-        //Get endpoint
-	RTPEndpoint *end = (RTPEndpoint *)par;
-        //Block signal in thread
-	blocksignals();
-	end->MultiplexLoop();
-	//Exit
-	return NULL;
 }
 
 int RTPEndpoint::Attach(const std::shared_ptr<Joinable> & join)

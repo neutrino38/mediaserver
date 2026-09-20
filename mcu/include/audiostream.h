@@ -1,8 +1,9 @@
 #ifndef _AUDIOSTREAM_H_
 #define _AUDIOSTREAM_H_
 
+#include <atomic>
 #include <mutex>
-#include <pthread.h>
+#include <thread>
 #include <vector>
 #include <memory>
 #include "config.h"
@@ -57,11 +58,6 @@ protected:
 	int RecAudio();
 
 private:
-	//Funciones propias
-	static void *startSendingAudio(void *par);
-	static void *startReceivingAudio(void *par);
-
-
 	Listener* listener;
 
 	//Los objectos gordos
@@ -91,15 +87,17 @@ public:
 private:
 	Properties	 audioProperties;
 	
-	//Las threads
-	pthread_t 	recAudioThread;
-	pthread_t 	sendAudioThread;
+	//Las threads. Postcondition de StopReceiving/StopSending : plus joignables —
+	//réaffecter un std::thread joignable appelle std::terminate().
+	std::thread	recAudioThread;
+	std::thread	sendAudioThread;
 
 	std::mutex mutex;
 
-	//Controlamos si estamos mandando o no
-	enum TaskState 	sendingAudio;
-	enum TaskState 	receivingAudio;
+	//Controlamos si estamos mandando o no. Atomiques : le thread de la tâche les
+	//lit en condition de boucle, le plan de contrôle les écrit.
+	std::atomic<enum TaskState>	sendingAudio;
+	std::atomic<enum TaskState>	receivingAudio;
 	std::vector<DTMFMessage*> dtmfBuffer;
 	
 	bool		muted;

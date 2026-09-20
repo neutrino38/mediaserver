@@ -40,9 +40,8 @@
  * pthread_setschedparam est commenté depuis toujours) — Worker n'en
  * propose donc pas.
  *
- * Conçu pour le chantier wait-primitive-unification ; les sites candidats
- * sont inventoriés dans la fiche mémoire du chantier. AUCUN site n'est
- * encore converti (décision mainteneur 2026-08-11 : classe + tests d'abord).
+ * Les sites qui en dérivent sont la liste des threads porteurs du mcu :
+ * `grep 'public Worker' mcu/include` fait foi.
  */
 
 #ifndef WORKER_H

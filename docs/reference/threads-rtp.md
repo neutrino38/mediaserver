@@ -44,7 +44,7 @@ Une session dont personne ne fixe le groupe tombe dans le **groupe par défaut**
 du processus, créé à la demande. C'est le repli des tests et de `Broadcaster` :
 il n'existe pas de session hors réacteur.
 
-### Deux règles d'écriture, et elles mordent
+### Les règles d'écriture, et elles mordent
 
 1. **`SetPollGroup()` s'appelle AVANT `Init()`.** Après, il est refusé : la
    session est déjà inscrite ailleurs.
@@ -52,6 +52,44 @@ il n'existe pas de session hors réacteur.
    bat.** Les membres se détruisent dans l'ordre inverse de leur déclaration :
    déclaré après, le réacteur mourrait avant ses sessions, et le retrait
    qu'`End()` fait porterait sur un objet détruit.
+3. **Un thread consommateur est un `std::thread` membre, et son `Stop*` le
+   joint INCONDITIONNELLEMENT.** Chaque `Start*` réaffecte le membre, et
+   réaffecter un `std::thread` joignable appelle `std::terminate()` : un join
+   posé seulement quand l'état de la tâche s'y prête tue le processus dès que
+   le corps du thread a rendu la main tout seul — ce que fait chaque `Send*`
+   quand son codec ne s'ouvre pas. Le drapeau d'état (`TaskState`, `receiving`)
+   est **atomique** : le thread le lit en condition de boucle, le plan de
+   contrôle l'écrit. La règle vaut hors des jambes RTP : les objets RTMP
+   (`FLVEncoder`, `RTMPParticipant`, `RTMPConnection`) la suivent aussi.
+   Garde-fous : `mcu/tests/test_consumer_threads.cpp` et
+   `mcu/tests/test_rtmp_threads.cpp`.
+4. **Le descripteur se ferme APRÈS les `join()`, jamais pendant.** `close()`
+   rend le numéro au noyau, qui alloue toujours le plus petit libre : la
+   connexion acceptée juste après le reprend, et un thread pas encore sorti
+   parle alors au socket d'un autre client. L'arrêt se fait donc en deux temps.
+   `shutdown(fd, SHUT_RDWR)` réveille `poll()`, fait rendre 0 à `read()` et
+   EPIPE à `write()`, sans libérer le numéro ; `close()` vient après les
+   `join()`, une seule fois, dans le `End()` de l'objet, **et il ferme TOUS**
+   les descripteurs de l'objet, socket de service compris. Modèles :
+   `RTMPConnection::Stop()` / `End()` et `RTMPClientConnection::Stop()` /
+   `Disconnect()`. Garde-fous :
+   `RtmpThreads.RTMPConnectionStopNeLiberePasLeDescripteur` et
+   `RtmpThreads.RTMPClientConnectionFermeSesTroisDescripteursApresLeJoin`.
+5. **Un conteneur partagé se lit sous le verrou qui le mute.** Un verrou ne
+   protège que les accès qui le prennent. `RTMPConnection` insère ses chunk
+   output streams sous le verrou écrivain, et quatre envois lisaient la même
+   map sans rien prendre : le thread de lecture descendait l'arbre pendant que
+   le thread média le rebalançait. Le cache de `RTMPCachedPipedMediaStream`
+   portait le même défaut, son `push_back` échappant au verrou que `Clear()` et
+   `AddMediaListener()` prennent. Garde-fou :
+   `mcu/tests/test_rtmp_container_races.cpp`, qui ne prouve rien sans TSan.
+
+   **Corollaire, et il porte loin.** Ces lectures sont des lecteurs `Use`
+   (`IncUse`), et c'est sûr uniquement parce qu'`IncUse` est RÉENTRANT :
+   `RTMPConnection::onStreamReset` tient déjà un `IncUse` quand il appelle
+   `SendControlMessage`. Remplacer ce `Use` par un `std::mutex` non récursif
+   fait donc deadlocker ce chemin. C'est la raison pour laquelle `use.h` reste
+   ici.
 
 ## 3. Ce que le thread du réacteur porte
 

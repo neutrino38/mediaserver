@@ -66,11 +66,13 @@ après tout changement dans un transcodeur.
 ```sh
 cd mcu
 make mkdirs TAG=tsan                       # une seule fois
-make tests TSAN=yes TAG=tsan               # objets isoles du build normal
+make tests TSAN=yes TAG=tsan               # objets ET binaire isoles du build normal
 TSAN_OPTIONS="halt_on_error=0 detect_deadlocks=0" \
-  ./tests/runtests --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
-make tests                                 # RE-BATIR le binaire normal ensuite
+  ./tests/runtests-tsan --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
 ```
+
+Le binaire instrumenté s'appelle `tests/runtests-tsan` : il porte le `TAG`, donc
+il ne peut pas être rejoué par mégarde par un `make check` normal.
 
 Le paquet `libtsan` doit être installé. `detect_deadlocks=0` est obligatoire :
 le détecteur d'interblocage de TSan tombe sur son propre `CHECK failed` dans les

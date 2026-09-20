@@ -43,7 +43,6 @@ RTMPConnection::RTMPConnection(Listener *listener)
 	inited = false;
 	running = false;
 	socket = FD_INVALID;
-	thread = 0;
 	//Set initial time
 	gettimeofday(&startTime,0);
 	//Create output chunk streams for control
@@ -94,27 +93,26 @@ void RTMPConnection::Start()
 	running = true;
 	
 	//Create thread
-	createPriorityThread(&thread,run,this,0);
-        createPriorityThread(&threadw,runw,this,0);
+	thread  = std::thread(&RTMPConnection::Run,this);
+	threadw = std::thread(&RTMPConnection::WriteData,this);
 }
 
 void RTMPConnection::Stop()
 {
-	//If got socket
-	if (running)
-	{
-		//Not running;
-		running = false;
+	//Idempotent : Stop() vient du thread de lecture (onDisconnect du serveur),
+	//de l'application ou de End().
+	if (!running.exchange(false))
+		return;
 
-		//Close socket
+	//Reveille les deux corps SANS liberer le numero de descripteur : la lecture
+	//voit une fin de flux, l'ecriture un EPIPE. Un close() ici serait une course
+	//- entre lui et le poll()/write() suivant, le numero peut etre reattribue a
+	//une autre connexion, a qui les deux threads parleraient. C'est End(), apres
+	//les join(), qui ferme.
+	if (socket != FD_INVALID)
 		shutdown(socket,SHUT_RDWR);
-		//Will cause poll to return
-		close(socket);
-		//No socket
-		socket = FD_INVALID;
 
-                writeWait.Cancel(); // reveille le writer : la connexion s'arrete
-	}
+	writeWait.Cancel(); // reveille le writer : la connexion s'arrete
 }
 
 int RTMPConnection::End()
@@ -132,21 +130,23 @@ int RTMPConnection::End()
 	//Stop just in case
 	Stop();
 
-	//If running
-	if (thread)
-	{
-		//Wait for server thread to close
-		pthread_join(thread,NULL);
-		//No thread
-		thread = 0;
-	}
+	//Postcondition inconditionnelle : les deux corps sortent aussi d'eux-mêmes
+	//(le pair ferme, poll rend une erreur) sans passer par Stop(), et Init()
+	//RÉAFFECTE les membres — réaffecter un std::thread joignable appelle
+	//std::terminate().
+	if (thread.joinable())
+		thread.join();
 
-        if (threadw)
-        {
-		pthread_join(threadw,NULL);
-		//No thread
-		threadw = 0;
-        }
+	if (threadw.joinable())
+		threadw.join();
+
+	//Seul close() de la classe, et il vient apres les deux join() : plus aucun
+	//thread ne peut utiliser le descripteur ni voir son numero reattribue.
+	if (socket != FD_INVALID)
+	{
+		close(socket);
+		socket = FD_INVALID;
+	}
 
 	//If got application
 	if (app)
@@ -171,47 +171,16 @@ int RTMPConnection::End()
 	return 1;
 }
 
-/***********************
-* run
-*       Helper thread function
-************************/
-void * RTMPConnection::run(void *par)
-{
-        Log("-RTMP Connecttion Thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTMPConnection *con = (RTMPConnection *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)con->Run());
-}
-
-void * RTMPConnection::runw(void *par)
-{
-        Log("-RTMP Write Connecttion Thread [%d,0x%x]\n",getpid(),par);
-
-	//Block signals to avoid exiting on SIGUSR1
-	blocksignals();
-
-        //Obtenemos el parametro
-        RTMPConnection *con = (RTMPConnection *)par;
-
-        //Ejecutamos
-        pthread_exit((void *)(intptr_t)con->WriteData());
-}
-
-
 /***************************
  * Run
  * 	Server running thread 
  ***************************/
 int RTMPConnection::Run()
 {
+	//Block signals to avoid exiting on SIGUSR1
+	blocksignals();
 
-	Log(">Run connection [%p]\n",this);
+	Log(">Run connection [%p,pid:%d]\n",this,getpid());
 
 	//Set values for polling
 	ufds[0].fd = socket;
@@ -881,10 +850,18 @@ void RTMPConnection::ParseData(BYTE *data,const DWORD size)
  ***********************/
 int RTMPConnection::WriteData()
 {
+	//Block signals to avoid exiting on SIGUSR1
+	blocksignals();
+
+	Log(">Write connection [%p,pid:%d]\n",this,getpid());
+
     //Write data buffer
     
-    DWORD len;
-    DWORD pos;
+    //A zero : le premier tour de boucle les LIT (len > 0 && pos < len) avant
+    //de les ecrire. Sur des octets de pile favorables, la connexion emettait
+    //le contenu non initialise de dataout.
+    DWORD len = 0;
+    DWORD pos = 0;
     int   len2;
 
     BYTE dataout[1400];
@@ -1287,7 +1264,9 @@ void RTMPConnection::SendCommand(DWORD streamId,const wchar_t* name,AMFData *par
 	//Get timestamp
 	QWORD ts = getDifTime(&startTime)/1000;
 	//Append message to command stream
+	lock.IncUse();
 	chunkOutputStreams[3]->SendMessage(new RTMPMessage(streamId,ts,cmd));
+	lock.DecUse();
 	//We have new data to send
 	SignalWriteNeeded();
 }
@@ -1302,7 +1281,9 @@ void RTMPConnection::SendCommandResponse(DWORD streamId,const wchar_t* name,QWOR
 	//Get timestamp
 	QWORD ts = getDifTime(&startTime)/1000;
 	//Append message to command stream
+	lock.IncUse();
 	chunkOutputStreams[3]->SendMessage(new RTMPMessage(streamId,ts,cmd));
+	lock.DecUse();
 	//We have new data to send
 	SignalWriteNeeded();
 }
@@ -1332,7 +1313,9 @@ void RTMPConnection::SendControlMessage(RTMPMessage::Type type,RTMPObject* msg)
 		}
 	}
 	//Append message to control stream
+	lock.IncUse();
 	chunkOutputStreams[2]->SendMessage(new RTMPMessage(0,ts,type,msg));
+	lock.DecUse();
 	//We have new data to send
 	SignalWriteNeeded();
 }
@@ -1474,7 +1457,9 @@ void RTMPConnection::onMetaData(DWORD streamId,RTMPMetaData *meta)
 		ts = getDifTime(&startTime)/1000;
 
 	//Append to the comand trunk	
+	lock.IncUse();
 	chunkOutputStreams[3]->SendMessage(new RTMPMessage(streamId,ts,meta->Clone()));
+	lock.DecUse();
 	//Signal frames
 	SignalWriteNeeded();
 }

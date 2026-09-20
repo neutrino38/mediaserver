@@ -358,7 +358,8 @@ void RTMPServer::onDisconnect(RTMPConnection *con)
 	bool foundCnx = false;
 	Log("-RTMP onDisconnected [%p]\n",con);
 
-	//close socket
+	//Coupe la connexion ; le descripteur, lui, est ferme par End(), une fois
+	//les threads joints, quand CleanZombies() passera.
 	con->Stop();
 	
 	//Lock list
