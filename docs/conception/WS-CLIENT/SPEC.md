@@ -1,6 +1,7 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **conception, rien codé**. Branche prévue : `feat/wss-client`.
+> Statut : **lots 0 et 1 faits** — les coutures (§6) et le masquage selon le
+> rôle (§4.3). Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur en XML-RPC.
@@ -119,23 +120,21 @@ fonction, on ne l'écrit pas deux fois. Tout autre code (401, 404, 500…) est u
 
 ### 4.3 Masquage des trames sortantes
 
-`Frame` (`mcu/include/websocketconnection.h:244`) sait déjà poser un masque
-dans l'en-tête, mais n'a jamais de masque à poser : le serveur l'appelle
-toujours avec `mask = 0`, et le corps n'est jamais chiffré par XOR.
+Le rôle de la connexion (`WebSocketConnection::Role`, posé par `Init`) décide
+seul du masquage. `Frame` prend un booléen `masked` et, en mode client, tire sa
+clé au sort par trame (`RAND_bytes`).
 
-À faire :
+- le XOR s'applique à la construction **et** dans `Append`, que le pong utilise
+  pour recopier le corps du ping au rythme où il arrive ;
+- l'offset du masque compte depuis le début du payload de **cette** trame :
+  `SendMessage(BYTE*,DWORD)` découpe en fragments de 1300 octets avec
+  continuation, et chaque fragment porte son propre masque, qui repart de zéro ;
+- une clé nulle est écartée : `WebSocketFrameHeader` ne pose le bit MASK que si
+  la clé est non nulle, et une trame cliente non masquée fait fermer le pair.
 
-- un masque **aléatoire par trame** ;
-- le XOR appliqué à la construction **et** dans `Append`
-  (`websocketconnection.h:262`), que le pong utilise pour recopier le corps du
-  ping reçu ;
-- l'offset du masque repart de zéro **à chaque trame** :
-  `SendMessage(BYTE*,DWORD)` (`websocketconnection.cpp:449`) découpe en
-  fragments de 1300 octets avec continuation, et chaque fragment porte son
-  propre masque.
-
-Durcissement symétrique : un client qui reçoit une trame masquée doit fermer
-(RFC 6455 §5.1). Le parseur actuel démasque sans se poser la question.
+Durcissement symétrique : un client qui reçoit une trame masquée ferme
+(RFC 6455 §5.1). Ce versant n'est **pas encore exercé** par un test : il faut
+une connexion cliente ouverte, donc la poignée de main du lot 2.
 
 ### 4.4 Transport TLS client
 
@@ -271,8 +270,9 @@ Ils sont tous vérifiés, et chacun est une panne silencieuse s'il est manqué.
 2. **`Send` avant handshake TLS jette les octets** (§4.4).
 3. **Le ClientHello ne part pas tout seul** (§4.4).
 4. **L'échec avant upgrade ne notifie personne** (§4.6).
-5. **Le masque repart de zéro à chaque fragment** (§4.3).
-6. **Le pong doit être masqué** lui aussi : il passe par `Append`.
+5. **Le masque repart de zéro à chaque fragment** (§4.3) — tenu au lot 1.
+6. **Le pong doit être masqué** lui aussi : il passe par `Append` — tenu au
+   lot 1.
 7. **DNS dans le réacteur = toutes les jambes gelées** (§4.5).
 8. **`EnsureRequest`** (`websocketconnection.cpp:527`) construit un
    `HTTPRequest` à partir de `parser->GetMethodStr()` : sans objet pour une

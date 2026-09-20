@@ -24,6 +24,8 @@ WebSocketConnection::WebSocketConnection(Listener* listener, uint64_t connId)
 	//Store listener and identity
 	this->listener = listener;
 	this->connId   = connId;
+	//Serveur tant qu'Init n'a pas dit le contraire
+	this->role     = Server;
 
 	//Not inited
 	inited = false;
@@ -70,9 +72,12 @@ WebSocketConnection::~WebSocketConnection()
 	if (pong)     delete(pong);
 }
 
-int WebSocketConnection::Init(int fd, std::unique_ptr<WebSocketTransport> transport)
+int WebSocketConnection::Init(int fd, std::unique_ptr<WebSocketTransport> transport, Role role)
 {
-	Log(">WebSocket Connection init [fd:%d,id:%llu]\n",fd,(unsigned long long)connId);
+	Log(">WebSocket Connection init [fd:%d,id:%llu,client:%d]\n",fd,(unsigned long long)connId,role==Client);
+
+	//Store role
+	this->role = role;
 
 	//Le serveur fournit le transport (clair ou TLS) ; on l'initialise sur le socket
 	this->transport = std::move(transport);
@@ -316,6 +321,16 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 						return;
 					}
 
+					//RFC 6455 §5.1 : un serveur ne masque jamais, donc un
+					//client qui recoit une trame masquee DOIT fermer.
+					if (IsClient() && header->IsMasked())
+					{
+						Error("-WebSocketConnection: masked frame received from server, closing [id:%llu]\n",
+						      (unsigned long long)connId);
+						closeRequested = true;
+						return;
+					}
+
 					//Check type
 					switch(header->GetOpCode())
 					{
@@ -341,7 +356,7 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 							//Debug
 							Debug("-Received ping\n");
 							//Create new pong frame
-							pong = new Frame(true,WebSocketFrameHeader::Pong,NULL,header->GetPayloadLength());
+							pong = new Frame(true,WebSocketFrameHeader::Pong,NULL,header->GetPayloadLength(),IsClient());
 							break;
 						case WebSocketFrameHeader::Pong:
 							break;
@@ -433,7 +448,7 @@ void WebSocketConnection::ProcessData(BYTE *data,DWORD size)
 void  WebSocketConnection::SendMessage(const std::string& message)
 {
 	//Create new frame
-	Frame *frame = new Frame(true,WebSocketFrameHeader::TextFrame,(BYTE*)message.c_str(),message.length());
+	Frame *frame = new Frame(true,WebSocketFrameHeader::TextFrame,(BYTE*)message.c_str(),message.length(),IsClient());
 
 	{
 		//Lock frames
@@ -480,7 +495,7 @@ void WebSocketConnection::SendMessage(const BYTE* data, const DWORD size)
 			last = (len+pos==size);
 
 			//Create new frame
-			Frame *frame = new Frame(last,code,data+pos,len);
+			Frame *frame = new Frame(last,code,data+pos,len,IsClient());
 
 			//Push frame
 			frames.push_back(frame);

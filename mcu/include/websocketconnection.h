@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <list>
 #include <map>
+#include <openssl/rand.h>
 #include "config.h"
 #include "fifo.h"
 #include "websockets.h"
@@ -237,14 +238,32 @@ class WebSocketConnection :
 	public HTTPParser::Listener,
 	public std::enable_shared_from_this<WebSocketConnection>
 {
-private:
+public:
+	//Une trame prete a ecrire : en-tete puis payload.
+	//RFC 6455 §5.3 : un client masque TOUTES ses trames sortantes avec une cle
+	//tiree par trame, un serveur n'en masque aucune. L'offset du XOR compte
+	//depuis le debut du payload de CETTE trame, donc un message decoupe en
+	//fragments porte un masque par fragment, chacun repartant de zero.
 	class Frame
 	{
 	public:
-		Frame(bool fin,WebSocketFrameHeader::OpCode opCode,const BYTE* data,DWORD size)
+		Frame(bool fin,WebSocketFrameHeader::OpCode opCode,const BYTE* data,DWORD size,bool masked)
 		{
+			this->masked = masked;
+			memset(mask,0,sizeof(mask));
+			//Get masking key
+			if (masked)
+			{
+				if (RAND_bytes(mask,sizeof(mask))!=1)
+					Error("-WebSocketConnection::Frame could not get a random masking key\n");
+				//Une cle nulle laisserait l'en-tete se declarer NON masque
+				//(WebSocketFrameHeader ne pose le bit MASK que si mask!=0), et
+				//le pair fermerait pour trame non masquee.
+				if (!get4(mask,0))
+					mask[0] = 1;
+			}
 			//Create header
-			WebSocketFrameHeader header(fin,opCode,size,0);
+			WebSocketFrameHeader header(fin,opCode,size,masked ? get4(mask,0) : 0);
 			//Calculate total size
 			this->size = size+header.GetSize();
 			//Set values
@@ -253,6 +272,8 @@ private:
 			memcpy(this->data,header.GetData(),header.GetSize());
 			//Set initial length
 			length = header.GetSize();
+			//Remember where the payload starts (mask offset origin)
+			headerSize = header.GetSize();
 			//If we have payload
 			if (data)
 				//Append it
@@ -265,8 +286,19 @@ private:
 			if (size+length>this->size)
 				//Error
 				return Error("-WebSocketConnection::Frame not enoguth length for appending data size:%d,length:%d,data:%d",this->size,length,size);
-			//Copy payload data
-			memcpy(this->data+length,data,size);
+			//Check if it is masked
+			if (masked)
+			{
+				//Position of the appended data inside the payload
+				DWORD pos = length-headerSize;
+				//For each byte
+				for (DWORD i=0;i<size;++i)
+					//XOR
+					this->data[length+i] = data[i] ^ mask[(pos+i) & 0x03];
+			} else {
+				//Copy payload data
+				memcpy(this->data+length,data,size);
+			}
 			//Set length
 			length += size;
 	return true;
@@ -276,13 +308,16 @@ private:
 		{
 			free(data);
 		}
-		
+
 		const BYTE* GetData()	{ return data;	}
 		const DWORD GetSize()	{ return size;	}
 	private:
 		BYTE* data;
 		DWORD size;
 		DWORD length;
+		DWORD headerSize;
+		bool  masked;
+		BYTE  mask[4];
 	};
 public:
 	//Borne de sécurité sur la longueur déclarée d'une trame WS (protège le thread
@@ -305,6 +340,15 @@ public:
 		virtual void onWakeupNeeded() = 0;
 	};
 public:
+	//Role de la connexion sur le fil. Il decide du masquage des trames
+	//sortantes (RFC 6455 §5.3) et du refus des trames masquees entrantes
+	//(§5.1) : un client masque tout et ne doit rien recevoir de masque.
+	enum Role
+	{
+		Server = 0,
+		Client = 1,
+	};
+public:
 	//Clé d'acceptation RFC 6455 §1.3 : base64(SHA1(clé + GUID)). Le serveur la
 	//pose dans sa réponse 101, le client compare la sienne à celle reçue.
 	static std::string ComputeAcceptKey(const std::string& secWebSocketKey);
@@ -313,7 +357,10 @@ public:
 	~WebSocketConnection();
 
 	//Le serveur fournit le transport (clair ou TLS) déjà choisi.
-	int Init(int fd, std::unique_ptr<WebSocketTransport> transport);
+	int Init(int fd, std::unique_ptr<WebSocketTransport> transport, Role role = Server);
+
+	Role GetRole() const	{ return role;		}
+	bool IsClient() const	{ return role==Client;	}
 	int End();
 
 	//Weksocket (appelables depuis n'importe quel thread — thread-safe)
@@ -360,6 +407,7 @@ private:
 	//Le serveur possède la connexion et lui survit → pointeur brut.
 	Listener* listener;
 	uint64_t  connId;
+	Role      role;
 
 	std::unique_ptr<WebSocketTransport> transport;
 
