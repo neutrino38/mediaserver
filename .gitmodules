@@ -4,4 +4,4 @@
 	branch = migration/almalinux_9
 [submodule "third_party/libbfcp"]
 	path = third_party/libbfcp
-	url = git@github.com:InteractiviteVideoEtSystemes/libbfcp.git
+	url = https://github.com/InteractiviteVideoEtSystemes/libbfcp.git
