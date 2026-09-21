@@ -14,6 +14,17 @@ VAD::VAD()
 {
 	//No vad decision yet
 	last = 0;
+#ifdef WEBRTC_APM_1
+	//Create the webrtc audio processing module
+	apm = webrtc::AudioProcessingBuilder().Create();
+	if (apm)
+	{
+		//Enable voice detection: it is reported in the stream statistics
+		webrtc::AudioProcessing::Config config = apm->GetConfig();
+		config.voice_detection.enabled = true;
+		apm->ApplyConfig(config);
+	}
+#else
 	//Create the webrtc audio processing module
 	apm = webrtc::AudioProcessing::Create();
 	if (apm)
@@ -25,7 +36,8 @@ VAD::VAD()
 		//Set aggressive mode (comportement historique)
 		SetMode(VERYAGGRESIVE);
 	}
-	else
+#endif
+	if (!apm)
 	{
 		Error("VAD: could not create webrtc AudioProcessing instance.\n");
 	}
@@ -57,8 +69,27 @@ int VAD::CalcVad(SWORD* buffer,DWORD size,DWORD rate)
 	if (chunk == 0 || size < chunk)
 		return 0;
 
-	webrtc::AudioFrame frame;
 	int voice = 0;
+
+#ifdef WEBRTC_APM_1
+	//L'APM 1.x ecrit le flux traite : il lui faut une sortie a part, le
+	//detecteur ne devant pas toucher l'audio de l'appelant.
+	SWORD processed[480];
+	webrtc::StreamConfig config(rate, 1);
+
+	//Process the buffer in 10ms chunks (le reliquat < 10ms est ignore)
+	for (DWORD off = 0; off + chunk <= size; off += chunk)
+	{
+		//Process it
+		if (apm->ProcessStream(buffer + off, config, config, processed) != webrtc::AudioProcessing::kNoError)
+			continue;
+
+		//Accumulate voice decision
+		if (apm->GetStatistics().voice_detected.value_or(false))
+			voice = 1;
+	}
+#else
+	webrtc::AudioFrame frame;
 
 	//Process the buffer in 10ms chunks (le reliquat < 10ms est ignore)
 	for (DWORD off = 0; off + chunk <= size; off += chunk)
@@ -76,6 +107,7 @@ int VAD::CalcVad(SWORD* buffer,DWORD size,DWORD rate)
 		if (apm->voice_detection()->stream_has_voice())
 			voice = 1;
 	}
+#endif
 
 	//Store and return
 	last = voice;
@@ -87,6 +119,11 @@ bool VAD::SetMode(Mode mode)
 	if (!apm)
 		return false;
 
+#ifdef WEBRTC_APM_1
+	//L'APM 1.x n'expose plus de vraisemblance : voice_detection s'active ou se
+	//desactive, sans reglage d'agressivite. Le mode est donc sans effet ici.
+	return true;
+#else
 	//L'echelle de vraisemblance de l'APM est inverse de l'agressivite :
 	//plus la vraisemblance est haute, moins le VAD est agressif.
 	webrtc::VoiceDetection::Likelihood likelihood;
@@ -108,6 +145,7 @@ bool VAD::SetMode(Mode mode)
 	}
 
 	return apm->voice_detection()->set_likelihood(likelihood) == webrtc::AudioProcessing::kNoError;
+#endif
 }
 
 int VAD::GetVAD()

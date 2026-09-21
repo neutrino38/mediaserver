@@ -22,8 +22,16 @@ public:
 
 #ifdef VADWEBRTC
 
+// Deux APM coexistent selon la distribution, et leurs en-tetes ne se rangent
+// pas au meme endroit : webrtc-audio-processing 0.3 (AlmaLinux 9) publie sous
+// webrtc/, la 1.x (Debian/Ubuntu) a la racine de son propre includedir.
+// WEBRTC_APM_1 est pose par mcu/Makefile selon le module pkg-config trouve.
+#ifdef WEBRTC_APM_1
+#include <modules/audio_processing/include/audio_processing.h>
+#else
 #include <webrtc/modules/audio_processing/include/audio_processing.h>
 #include <webrtc/modules/interface/module_common_types.h>
+#endif
 
 class VAD
 {

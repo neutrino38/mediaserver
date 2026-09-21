@@ -196,10 +196,11 @@ INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCT
 # PKG_CONFIG_PATH, ce dont le portage ffmpeg 9 a besoin (voir, a la racine,
 # ffmpeg9_migration_plan.md).
 #
-# Trois modules restent en propre au mcu, que libmedkit n'utilise pas :
-# libavfilter (mosaiques), libavdevice et libpostproc.
+# Deux modules restent en propre au mcu, que libmedkit n'utilise pas :
+# libavfilter (mosaiques) et libavdevice. libpostproc a ete retire : aucune
+# source du depot ne l'inclut, et Debian/Ubuntu ne le paquetise pas.
 MEDKITPCDIR = $(abspath $(MEDKITDIR))
-PKGMODULES  = libmedkit libavfilter libavdevice libpostproc
+PKGMODULES  = libmedkit libavfilter libavdevice
 PKGCFLAGS  := $(shell PKG_CONFIG_PATH=$(MEDKITPCDIR):$$PKG_CONFIG_PATH pkg-config --cflags $(PKGMODULES) 2>/dev/null)
 PKGLIBS    := $(shell PKG_CONFIG_PATH=$(MEDKITPCDIR):$$PKG_CONFIG_PATH pkg-config --libs   $(PKGMODULES) 2>/dev/null)
 
@@ -211,7 +212,7 @@ ifeq ($(strip $(PKGLIBS)),)
 $(warning pkg-config n'a pas resolu [$(PKGMODULES)] : repli sur les chemins en dur.)
 $(warning Batir d'abord le sous-module : make -C $(MEDKITDIR) all ASTERISK=no)
 PKGCFLAGS := -I$(MEDKITDIR) -I/usr/include/ffmpeg
-PKGLIBS   := $(MEDKITDIR)/libmedkit.a -lavcodec -lswscale -lavformat -lavutil -lswresample -lavfilter -lavdevice -lpostproc
+PKGLIBS   := $(MEDKITDIR)/libmedkit.a -lavcodec -lswscale -lavformat -lavutil -lswresample -lavfilter -lavdevice
 endif
 
 # Les -I de libmedkit passent AVANT -Iinclude/ : les en-tetes du sous-module
