@@ -1057,6 +1057,7 @@ int Endpoint::Port::SwitchJoin(std::shared_ptr<Port> oldPort)
 {
     if (oldPort)
 	{
+	    CopyEventContext(*oldPort);
 	    if (std::shared_ptr<Joinable> oldJoined = oldPort->joined.lock())
 	    {
 		oldPort->Detach();

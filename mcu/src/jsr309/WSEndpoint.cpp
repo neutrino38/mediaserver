@@ -485,6 +485,13 @@ int WSEndpoint::End()
 
 int WSEndpoint::SendFrame(TextFrame &frame)
 {
+	//Un T140block vide n'est pas du texte : c'est le bloc primaire d'un paquet RED
+	//qui n'apporte rien, et le decodeur le livre quand meme. Relaye tel quel, il
+	//fait une frame WebSocket vide par paquet entrant — une toutes les 300 ms et
+	//par appel, mesure le 2026-09-21. Meme garde que DCEndpoint::SendFrame.
+	if (!frame.GetLength())
+		return 0;
+
 	std::string msg( (const char*) frame.GetData(), frame.GetLength());
 	if ( frame.GetLength() == 3 && memcmp(frame.GetData(), BOMUTF8, 3) == 0)
 	{
