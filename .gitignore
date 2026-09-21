@@ -1,5 +1,7 @@
 staticdeps
 *.rpm
+*.deb
+debbuild/
 .vs/
 bin/
 mcu/media/
