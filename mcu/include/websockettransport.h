@@ -170,6 +170,19 @@ public:
 
 	/** Crée une nouvelle instance de transport TLS, ou nullptr si indisponible. */
 	static std::unique_ptr<WebSocketTransport> Create();
+
+	/** Configuration des connexions SORTANTES (wss://), posée au démarrage et lue
+	 *  par WebSocketServer::Connect. `verifyPeer=false` sert les certificats
+	 *  auto-signés de laboratoire, et rien d'autre ; `cafile` ajoute une autorité
+	 *  au magasin du système. Change le contexte client, donc à poser AVANT la
+	 *  première connexion sortante. */
+	static void SetClientConfig(bool verifyPeer, const std::string& cafile);
+	static bool GetClientVerifyPeer();
+
+	/** Crée un transport TLS CLIENT, ou nullptr si le contexte est inutilisable.
+	 *  `host` est l'hôte de l'URL, sans crochets ni port : il porte le SNI et
+	 *  l'identité vérifiée dans le certificat du pair. */
+	static std::unique_ptr<WebSocketTransport> CreateClient(const std::string& host, bool verifyPeer);
 };
 
 #endif /* _WebSocketTransport_H_ */

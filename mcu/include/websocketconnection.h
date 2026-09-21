@@ -355,9 +355,10 @@ public:
 	{
 		NotAClient	= 0,
 		Connecting	= 1,	//connect() non bloquant en cours
-		Upgrading	= 2,	//requete GET emise, on attend la reponse
-		Opened		= 3,	//101 verifie
-		Failed		= 4,	//echec avant l'ouverture
+		TlsHandshake	= 2,	//connect() fait, on attend que le transport soit pret
+		Upgrading	= 3,	//requete GET emise, on attend la reponse
+		Opened		= 4,	//101 verifie
+		Failed		= 5,	//echec avant l'ouverture
 	};
 public:
 	//Clé d'acceptation RFC 6455 §1.3 : base64(SHA1(clé + GUID)). Le serveur la
@@ -410,6 +411,7 @@ private:
 	void FlushPendingHeader();
 	void EnsureRequest(HTTPParser* parser);
 	//Ouverture cliente
+	void SendUpgradeRequestWhenReady();
 	bool SendUpgradeRequest();
 	bool CheckUpgradeResponse(HTTPParser* parser);
 	void FailClient(const char* reason);

@@ -1,8 +1,8 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **lots 0 à 3 faits** — les coutures (§6), le masquage selon le
-> rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2, §4.6) et son pilotage
-> par le réacteur depuis une URL (§4.5).
+> Statut : **lots 0 à 4 faits** — les coutures (§6), le masquage selon le
+> rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2, §4.6), son pilotage
+> par le réacteur depuis une URL (§4.5) et le transport TLS client (§4.4).
 > Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
@@ -69,7 +69,7 @@ existant**. On n'écrit pas de seconde pile.
 | Réacteur mono-thread (`poll` unique, map possédante) | `mcu/src/websocketserver.cpp:137` | réutilisé tel quel |
 | Connexion passive, parseur de trames, ping/pong | `mcu/src/websocketconnection.cpp` | à étendre |
 | Transport clair | `mcu/include/websockettransport.h:68` | réutilisé tel quel |
-| Transport TLS (BIO mémoire, non bloquant) | `mcu/src/websockettransport.cpp` | **serveur seulement** (`SSL_set_accept_state`, l.64) |
+| Transport TLS (BIO mémoire, non bloquant) | `mcu/src/websockettransport.cpp` | serveur **et** client (deux `SSL_CTX`, un par rôle) |
 | Parseur HTTP, mode réponse | `mcu/include/httpparser.h:174` | présent, accesseur de code manquant |
 | Parseur d'URL | `mcu/include/httpparser.h:327` (`http_parser_parse_url`) | présent, inutilisé |
 | Résolution DNS A + AAAA | `mcu/include/ipaddress.h:147` (`IPAddress::Resolve`) | réutilisé tel quel |
@@ -101,6 +101,13 @@ Le socket qu'elle reçoit est **déjà en cours de connexion** : `connect()` non
 bloquant appartient à l'appelant (le réacteur, au lot 3). La connexion demande
 alors POLLOUT, lit `SO_ERROR` — POLLOUT arrive que le `connect()` ait réussi ou
 échoué — puis émet sa requête dès que le transport est prêt.
+
+`SO_ERROR` se lit **avant** toute écriture : sinon c'est l'échec du `write` qui
+parlerait, sans dire pourquoi. Et POLLOUT n'est demandé que dans `Connecting` :
+un socket établi est toujours *writable*, donc le réclamer pendant le handshake
+TLS ferait tourner le réacteur à vide. Au-delà, POLLOUT se demande comme pour
+toute autre connexion — quand il y a quelque chose à écrire, le transport
+compris.
 
 ### 4.2 La poignée de main cliente
 
@@ -147,30 +154,54 @@ cliente ouverte dont il avait besoin
 
 ### 4.4 Transport TLS client
 
-Le transport TLS existant est serveur : `SSL_set_accept_state`
-(`websockettransport.cpp:64`) et `SSL_accept` (l.195), sur un contexte unique
-créé par `ClassInit`. On ajoute une façade cliente :
+Le transport TLS était serveur : `SSL_set_accept_state` et `SSL_accept`, sur un
+contexte unique créé par `ClassInit`. La même classe porte les deux rôles, et la
+façade gagne une entrée cliente :
 
 ```c++
+static void WebSocketTlsTransport::SetClientConfig(bool verifyPeer, const std::string& cafile);
+static bool WebSocketTlsTransport::GetClientVerifyPeer();
 static std::unique_ptr<WebSocketTransport> WebSocketTlsTransport::CreateClient(
         const std::string& host, bool verifyPeer);
 ```
 
-Elle crée un **second** `SSL_CTX` (`TLS_client_method`), avec
-`SSL_CTX_set_default_verify_paths`, `SSL_set_tlsext_host_name` (SNI) et
-`SSL_set1_host` + `SSL_VERIFY_PEER`. `verifyPeer=false` sert les certificats
-auto-signés de laboratoire, et rien d'autre.
+`CreateClient` crée à la demande un **second** `SSL_CTX` (`TLS_client_method`,
+TLS 1.2 minimum, `SSL_CTX_set_default_verify_paths`, plus l'autorité de
+`SetClientConfig` s'il y en a une). Ce contexte est créé depuis le thread
+appelant, donc sous mutex. `SetClientConfig` le **défait** : le magasin
+d'autorités est porté par le contexte, et `SSL_CTX_free` ne libère rien tant
+qu'un `SSL` le référence.
+
+La vérification se pose par connexion, avant `SSL_connect` :
+`SSL_set_tlsext_host_name` (SNI), `X509_VERIFY_PARAM_set1_host` et
+`SSL_set_verify(SSL_VERIFY_PEER)` — sans ce dernier la vérification serait
+décorative, le handshake réussissant quand même. `verifyPeer=false` sert les
+certificats auto-signés de laboratoire, et rien d'autre.
+
+Une **adresse littérale n'est pas un nom** : elle ne se met pas dans un SNI
+(RFC 6066 §3) et se compare aux SAN de type `iPAddress`, par
+`X509_VERIFY_PARAM_set1_ip_asc`. Confondre les deux ferait échouer
+`wss://127.0.0.1/` quoi qu'il arrive, et l'exploitant désarmerait la
+vérification pour de mauvaises raisons.
 
 Deux pièges, et ils se paient comptant :
 
-1. **Le ClientHello doit partir tout seul.** Le handshake actuel ne progresse
-   que depuis `Recv`/`Send`. En mode client, `Init()` doit lancer le handshake
-   puis `Flush()`, sinon rien ne sort et le pair n'a rien à répondre.
-2. **`Send` avant la fin du handshake jette les octets**
-   (`websockettransport.cpp:100-105` : il renvoie 0 sans conserver le tampon).
-   La requête d'upgrade serait perdue en silence. On ajoute
+1. **Le ClientHello doit partir tout seul.** Le handshake ne progressait que
+   depuis `Recv` : rien n'arrive encore sur ce socket, donc rien n'appellerait
+   `Recv`. C'est `Flush()` qui lance le handshake d'une connexion cliente — la
+   première écriture possible est le POLLOUT qui clôt le `connect()`. Le faire
+   depuis `Init()` marcherait aussi, mais écrirait dans un socket encore en
+   cours de connexion, et un échec y serait sans voie de sortie : `Init()` est
+   appelé hors du réacteur et sa valeur de retour n'est lue par personne.
+2. **`Send` avant la fin du handshake jette les octets** (il renvoie 0 sans
+   conserver le tampon). La requête d'upgrade serait perdue en silence. D'où
    `virtual bool IsReady()` au contrat du transport (toujours vrai en clair) :
-   la connexion n'émet sa requête qu'une fois le transport prêt.
+   la connexion n'émet sa requête qu'une fois le transport prêt, et un `Send`
+   court est traité comme un échec.
+
+Un transport dont le handshake a échoué est **condamné** (`broken`) : toute E/S
+ultérieure rend `-1`, donc le réacteur le ferme et le listener l'apprend. Sans
+cela un certificat refusé laisserait une jambe muette.
 
 ### 4.5 Où vit la connexion sortante
 
@@ -207,10 +238,11 @@ parseur d'URL les retire, l'en-tête `Host` les remet. Le port par défaut est 8
 en `ws://`, 443 en `wss://`. Le fragment (`#…`) n'est jamais émis (RFC 3986
 §3.5).
 
-Tant que le lot 4 n'est pas là, **`wss://` est refusé** au lieu de partir en
-clair : une jambe que le contrôleur a demandée chiffrée ne doit pas se dégrader
-à son insu (`WsClientConnect.LeSchemaWssEstRefuseAuLieuDePartirEnClair`, à
-remplacer par son contraire au lot 4).
+Le **schéma décide du transport, et lui seul** : le mode sécurisé du serveur
+(`SetSecure`) ne concerne que ses connexions entrantes. Le transport est
+construit dans le thread appelant, avant même le socket — un contexte TLS
+inutilisable est alors un échec synchrone de plus, et non une jambe muette. Il
+traverse la file jusqu'au réacteur, qui n'a toujours qu'à adopter.
 
 ### 4.6 L'échec doit se voir
 
@@ -270,7 +302,9 @@ l'ouverture, `EndpointDisconnectedEvent` (6) à l'abandon. Elles portent déjà
 sémantique actuelle est « DTLS OK + premier RTP reçu ».
 
 Deux options de ligne de commande, à ajouter aux **deux** tableaux du
-`README.md` :
+`README.md`. Le transport les attend déjà (§4.4) : il ne reste à `main()` qu'un
+appel à `WebSocketTlsTransport::SetClientConfig`, avant la première connexion
+sortante.
 
 | Option | Défaut | Rôle |
 |---|---|---|
@@ -292,8 +326,9 @@ Ils sont tous vérifiés, et chacun est une panne silencieuse s'il est manqué.
    serait perdue. Le reliquat passe au chemin « trames », pour les deux rôles —
    tenu au lot 2.
 2. **`Send` avant handshake TLS jette les octets** (§4.4) : la connexion n'émet
-   sa requête qu'une fois `IsReady()` vrai — tenu au lot 2, à exercer au lot 4.
-3. **Le ClientHello ne part pas tout seul** (§4.4).
+   sa requête qu'une fois `IsReady()` vrai — tenu au lot 2, exercé au lot 4.
+3. **Le ClientHello ne part pas tout seul** (§4.4) — tenu au lot 4 : c'est
+   `Flush()` qui lance le handshake d'une connexion cliente.
 4. **L'échec avant upgrade ne notifie personne** (§4.6) — tenu au lot 2 :
    `NotifyClose` notifie toujours une connexion cliente, et `onError` précède
    `onClose` quelle que soit la voie de l'échec.
@@ -329,7 +364,7 @@ Chaque lot compile, passe `cd mcu && make check`, et se livre seul.
 | 1 | Masquage client dans `Frame` + refus des trames masquées reçues côté client | test unitaire dans `test_websocket_frame.cpp` |
 | 2 | Mode client de `WebSocketConnection` en clair : connect, upgrade, 101, reliquat, `onError` | test d'intégration en-processus contre `TextEchoWebsocketHandler` |
 | 3 ✔ | `WebSocketServer::Connect` : file de demandes, URL, DNS hors réacteur, IPv4 et IPv6 | `tests/test_ws_client_connect.cpp` : `127.0.0.1` **et** `[::1]`, chemin + query, port fermé, URL inutilisable |
-| 4 | Transport TLS client | test avec un certificat auto-signé jetable, sur le modèle de `dtlsfixture.h` |
+| 4 ✔ | Transport TLS client | `tests/test_ws_client_tls.cpp` : ouverture `wss://` et écho, vérification refusée **et** acceptée (autorité jetable de `tests/wstlsfixture.h`), autorité illisible |
 | 5 | `WSEndpoint::Connect`, reconnexion bornée, U+FFFD, `GetMediaCandidates` | test de pontage RTP ↔ WS sortant |
 | 6 | XML-RPC `ConnectMediaConnection`, événements, `docs/JSR-309-API.md`, `README.md`, protobuf MOTELI côté elixip | appel XML-RPC réel |
 | 7 | Recette de bout en bout | §7 |
@@ -376,7 +411,16 @@ Un seul mediaserver suffit : il tient les deux bouts.
 3. **Erreur d'authentification** : si le serveur distant répond 401 ou 403,
    faut-il retenter ? La proposition est non — une erreur d'autorisation ne se
    résout pas par la répétition.
-4. **Nom d'hôte en loopback** (piège 8) : faut-il que `IPAddress::Resolve`
+4. **Délai d'abandon d'une ouverture** : une jambe sortante dont le pair
+   **accepte la connexion TCP puis se tait** reste ouverte indéfiniment, sans un
+   événement pour le dire. Trois cas, tous plausibles : un `wss://` pointé sur
+   un port en clair (le pair attend une requête HTTP, nous attendons un
+   ServerHello), un pair qui n'écrit jamais sa réponse 101, un trou noir réseau.
+   Le réacteur appelle `poll()` sans délai (`-1`) : il n'a aujourd'hui aucune
+   notion d'échéance. Ce n'est pas propre à TLS — le lot 3 avait déjà ce trou,
+   le lot 4 l'élargit. Un délai d'ouverture est la moitié manquante de la
+   politique de reconnexion du §4.7, donc à trancher **avec** elle, au lot 5.
+5. **Nom d'hôte en loopback** (piège 8) : faut-il que `IPAddress::Resolve`
    sache résoudre une **destination** — filtre « annonçable » désactivé — ou
    laisse-t-on `ws://localhost/` échouer ? La proposition est d'ouvrir le
    filtre par un paramètre, ce qui réparerait du même coup

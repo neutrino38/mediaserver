@@ -15,11 +15,9 @@
  *     par la valeur de retour et ne notifie personne — il n'y a pas de jambe ;
  *   - un échec ASYNCHRONE (port fermé) se dit au listener, `onError` puis
  *     `onClose`, depuis le réacteur. Sans cela le WSEndpoint attend
- *     indéfiniment un pair qui ne viendra jamais ;
- *   - `wss://` est REFUSÉ tant que le transport TLS client n'existe pas (lot 4).
- *     Un repli silencieux en clair enverrait en clair une jambe que le
- *     contrôleur a demandée chiffrée : c'est ce test qui l'interdit. Il sera
- *     remplacé par son contraire au lot 4.
+ *     indéfiniment un pair qui ne viendra jamais.
+ *
+ * Le schéma `wss://` a sa propre suite, `tests/test_ws_client_tls.cpp` (lot 4).
  *
  * Le serveur tient ici les DEUX bouts — c'est la recette §7 du SPEC en petit.
  * Les callbacks arrivent sur le thread du réacteur, jamais sur celui du test :
@@ -387,22 +385,6 @@ TEST(WsClientConnect, UneUrlInutilisableEchoueSansNotifier)
 	EXPECT_FALSE(listener->IsOpened());
 	EXPECT_EQ(0, listener->Errors());
 	EXPECT_EQ(0, listener->Closes());
-}
-
-//Tant que le transport TLS client n'existe pas (lot 4), `wss://` ne doit surtout
-//pas partir en clair : le contrôleur a demandé du chiffré. À REMPLACER par son
-//contraire au lot 4.
-TEST(WsClientConnect, LeSchemaWssEstRefuseAuLieuDePartirEnClair)
-{
-	ServerFixture fixture;
-	if (!fixture.Start(39450))
-		GTEST_SKIP() << "Aucun port loopback disponible (sandbox réseau ?)";
-
-	auto listener = std::make_shared<SharedListener>();
-	const std::string secure = "wss://127.0.0.1:" + std::to_string(fixture.Port()) + "/echo";
-
-	EXPECT_FALSE(fixture.Server().Connect(secure, listener));
-	EXPECT_FALSE(listener->IsOpened());
 }
 
 //Sans réacteur, personne ne piloterait la connexion : elle dormirait dans la

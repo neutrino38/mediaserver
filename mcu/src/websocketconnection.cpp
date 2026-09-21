@@ -164,8 +164,10 @@ bool WebSocketConnection::HasPendingOutput()
 short WebSocketConnection::GetPollEvents()
 {
 	short ev = POLLIN | POLLERR | POLLHUP;
-	//Une connexion cliente attend POLLOUT tant qu'elle n'a pas emis sa requete :
-	//c'est lui qui dit que le connect() non bloquant est termine.
+	//Une connexion cliente attend POLLOUT tant que son connect() non bloquant n'a
+	//pas abouti : c'est lui qui le dit. Au-dela, POLLOUT ne se demande QUE s'il y
+	//a quelque chose a ecrire — un socket etabli est toujours writable, et le
+	//reclamer pendant un handshake TLS ferait tourner le reacteur a vide.
 	if (clientState==Connecting)
 		ev |= POLLOUT;
 	std::lock_guard<std::mutex> lock(framesMutex);
@@ -190,6 +192,10 @@ void WebSocketConnection::OnReadable()
 			closeRequested = true;
 			return;
 		}
+		//Un handshake TLS rend 0 tant qu'il court, et il vient peut-etre de
+		//s'achever sur ces octets-la : c'est ce que la requete d'upgrade attend.
+		SendUpgradeRequestWhenReady();
+
 		if (len == 0)
 			//Plus rien de disponible pour l'instant
 			return;
@@ -218,16 +224,9 @@ void WebSocketConnection::OnReadable()
 
 void WebSocketConnection::OnWritable()
 {
-	//Pousser d'abord les octets (chiffrés) en attente côté transport (TLS)
-	if (transport->Flush() < 0)
-	{
-		closeRequested = true;
-		return;
-	}
-
 	//Ouverture cliente : POLLOUT dit seulement que le connect() non bloquant est
-	//termine, SO_ERROR dit s'il a REUSSI. Tant que la requete d'upgrade n'est
-	//pas partie, il n'y a rien d'autre a ecrire.
+	//termine, SO_ERROR dit s'il a REUSSI — et il se lit AVANT toute ecriture,
+	//sinon c'est l'echec du write qui parlerait, sans dire pourquoi.
 	if (clientState==Connecting)
 	{
 		int err = 0;
@@ -239,13 +238,23 @@ void WebSocketConnection::OnWritable()
 			FailClient(msg);
 			return;
 		}
-		//Le transport peut n'etre pas encore pret (handshake TLS en cours) :
-		//`Send` y JETTE ce qu'on lui donne, donc la requete serait perdue en
-		//silence (§4.4). On reessaiera au prochain tour.
-		if (!transport->IsReady())
-			return;
-		//Emettre la poignee de main
-		SendUpgradeRequest();
+		//Le socket est etabli : c'est maintenant au transport de dire quand il est
+		//pret. En clair il l'est deja, et l'etat est traverse dans cet appel-ci.
+		clientState = TlsHandshake;
+	}
+
+	//Pousser d'abord les octets (chiffrés) en attente côté transport (TLS). C'est
+	//aussi ce qui lance le ClientHello d'une connexion sortante chiffree.
+	if (transport->Flush() < 0)
+	{
+		closeRequested = true;
+		return;
+	}
+
+	//Tant que la requete d'upgrade n'est pas partie, il n'y a rien d'autre a ecrire
+	if (clientState==TlsHandshake)
+	{
+		SendUpgradeRequestWhenReady();
 		return;
 	}
 
@@ -767,6 +776,20 @@ void WebSocketConnection::FailClient(const char* reason)
 	closeRequested = true;
 }
 
+void WebSocketConnection::SendUpgradeRequestWhenReady()
+{
+	if (clientState!=TlsHandshake)
+		return;
+
+	//`Send` JETTE les octets applicatifs tant que le handshake TLS n'est pas fini
+	//(§4.4, piege 2) : la requete d'upgrade serait perdue en silence. On attend le
+	//tour suivant — le transport reclame lui-meme le POLLOUT dont il a besoin.
+	if (!transport->IsReady())
+		return;
+
+	SendUpgradeRequest();
+}
+
 bool WebSocketConnection::SendUpgradeRequest()
 {
 	//Cle de 16 octets aleatoires en base64 (RFC 6455 §4.1)
@@ -791,8 +814,10 @@ bool WebSocketConnection::SendUpgradeRequest()
 
 	const std::string out = request.Serialize();
 
+	//Une requete d'upgrade partiellement emise n'est pas une requete : le pair
+	//attendrait une fin de ligne qui ne viendrait jamais.
 	int n = transport->Send((BYTE*)out.c_str(),out.length());
-	if (n<0)
+	if (n<(int)out.length())
 	{
 		FailClient("could not send the upgrade request");
 		return false;

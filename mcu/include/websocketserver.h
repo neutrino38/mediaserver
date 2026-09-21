@@ -80,17 +80,20 @@ private:
 
 
 	//Une connexion sortante demandée par un autre thread : le socket est DÉJÀ en
-	//cours de connexion, il ne reste au réacteur qu'à l'adopter.
+	//cours de connexion et son transport DÉJÀ construit (le choix TLS/clair, lui
+	//aussi, doit pouvoir échouer de façon synchrone) ; il ne reste au réacteur
+	//qu'à l'adopter.
 	struct PendingConnect
 	{
 		int		fd;
 		std::string	host;	//valeur de l'en-tête Host (hôte[:port])
 		std::string	path;	//chemin + query
+		std::unique_ptr<WebSocketTransport> transport;
 		std::weak_ptr<WebSocket::Listener> listener;
 	};
 
 	void CreateConnection(int fd);
-	void CreateClientConnection(const PendingConnect& request);
+	void CreateClientConnection(PendingConnect& request);
 	void DrainPendingConnects();
 	void CloseConnection(uint64_t connId);
 	void DrainWakeup();

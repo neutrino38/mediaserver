@@ -336,14 +336,12 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 	if (http_parser_parse_url(url.c_str(),url.length(),0,&parsed))
 		return Error("-WebSocketServer::Connect: cannot parse url [url:%s]\n",url.c_str());
 
-	//Le schéma décide du transport ET du port par défaut (RFC 6455 §3)
+	//Le schéma décide du transport ET du port par défaut (RFC 6455 §3), et lui
+	//seul : le mode sécurisé du serveur ne concerne que ses connexions entrantes.
 	const std::string schema = ToLower(UrlField(url,parsed,UF_SCHEMA));
-	if (schema=="wss")
-		//Pas de repli silencieux en clair : une jambe que le contrôleur a
-		//demandée chiffrée ne doit jamais partir en clair à son insu.
-		return Error("-WebSocketServer::Connect: wss:// is not supported yet [url:%s]\n",url.c_str());
-	if (schema!="ws")
+	if (schema!="ws" && schema!="wss")
 		return Error("-WebSocketServer::Connect: unsupported scheme \"%s\" [url:%s]\n",schema.c_str(),url.c_str());
+	const bool tls = schema=="wss";
 
 	//Le parseur d'URL retire les crochets d'un littéral v6 (RFC 3986 §3.2.2) :
 	//`host` est ici une adresse ou un nom, jamais "[...]".
@@ -351,7 +349,8 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 	if (host.empty())
 		return Error("-WebSocketServer::Connect: no host in url [url:%s]\n",url.c_str());
 
-	const WORD port = (parsed.field_set & (1<<UF_PORT)) ? parsed.port : 80;
+	const WORD defaultPort = tls ? 443 : 80;
+	const WORD port = (parsed.field_set & (1<<UF_PORT)) ? parsed.port : defaultPort;
 
 	//Une requête HTTP porte toujours un chemin absolu, query comprise. Le
 	//fragment reste chez nous : il n'est jamais émis sur le fil (RFC 3986 §3.5).
@@ -371,8 +370,21 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 	//En-tête Host : l'hôte tel qu'il a été demandé, crochets rendus à un
 	//littéral v6, et le port sauf s'il est celui du schéma (RFC 7230 §5.4).
 	std::string hostHeader = host.find(':')==std::string::npos ? host : "["+host+"]";
-	if (port!=80)
+	if (port!=defaultPort)
 		hostHeader += ":" + std::to_string(port);
+
+	//Le transport est construit ICI, avant tout socket : un contexte TLS
+	//inutilisable est alors un échec SYNCHRONE de plus, et non une jambe muette.
+	//Le SNI et l'identité vérifiée portent l'hôte de l'URL, sans crochets ni port.
+	std::unique_ptr<WebSocketTransport> transport;
+	if (tls)
+	{
+		transport = WebSocketTlsTransport::CreateClient(host,WebSocketTlsTransport::GetClientVerifyPeer());
+		if (!transport)
+			return Error("-WebSocketServer::Connect: no TLS client transport [url:%s]\n",url.c_str());
+	} else {
+		transport = std::make_unique<WebSocketPlainTransport>();
+	}
 
 	//Le socket et le connect() non bloquant appartiennent à l'appelant : ainsi
 	//TOUT échec synchrone se dit par la valeur de retour, et le réacteur n'a
@@ -403,7 +415,7 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 			continue;
 		}
 
-		Log("-Outgoing connection [fd:%d,to:%s,path:%s]\n",sock,to.ToString().c_str(),path.c_str());
+		Log("-Outgoing connection [fd:%d,to:%s,path:%s,%s]\n",sock,to.ToString().c_str(),path.c_str(),tls?"tls":"plain");
 		fd = sock;
 	}
 
@@ -411,14 +423,15 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 		return Error("-WebSocketServer::Connect: cannot connect to \"%s\" (errno %d) [url:%s]\n",host.c_str(),lastErrno,url.c_str());
 
 	PendingConnect request;
-	request.fd	 = fd;
-	request.host	 = hostHeader;
-	request.path	 = path;
-	request.listener = listener;
+	request.fd	  = fd;
+	request.host	  = hostHeader;
+	request.path	  = path;
+	request.transport = std::move(transport);
+	request.listener  = listener;
 
 	{
 		std::lock_guard<std::mutex> lock(pendingMutex);
-		pendingConnects.push_back(request);
+		pendingConnects.push_back(std::move(request));
 	}
 
 	//Réveiller le réacteur : il adoptera le socket au prochain tour de boucle
@@ -442,7 +455,7 @@ void WebSocketServer::DrainPendingConnects()
 		requests.swap(pendingConnects);
 	}
 
-	for (std::list<PendingConnect>::const_iterator it=requests.begin();it!=requests.end();++it)
+	for (std::list<PendingConnect>::iterator it=requests.begin();it!=requests.end();++it)
 		CreateClientConnection(*it);
 }
 
@@ -450,7 +463,7 @@ void WebSocketServer::DrainPendingConnects()
  * CreateClientConnection
  * 	Enveloppe un socket sortant dans une connexion pilotée par le réacteur
  *************************/
-void WebSocketServer::CreateClientConnection(const PendingConnect& request)
+void WebSocketServer::CreateClientConnection(PendingConnect& request)
 {
 	//Identité stable (pas le fd, réutilisable)
 	uint64_t id = ++nextConnId;
@@ -462,7 +475,7 @@ void WebSocketServer::CreateClientConnection(const PendingConnect& request)
 
 	//Le listener est posé ICI : en mode client personne n'appelle Accept(), et
 	//un échec avant le 101 doit déjà pouvoir se dire.
-	conn->InitClient(request.fd, std::make_unique<WebSocketPlainTransport>(),
+	conn->InitClient(request.fd, std::move(request.transport),
 			 request.host, request.path, request.listener);
 
 	//Store it
