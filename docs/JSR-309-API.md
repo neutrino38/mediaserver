@@ -27,6 +27,10 @@ Le serveur HTTP interne écoute par défaut sur le port **8080**
 | `GET  http://<host>:8080/events/jsr309/<queueId>` | HTTP *chunked* | Flux d'événements asynchrones (voir §5) |
 | `ws://<host>:9090/jsr309/<sessionId>/<token>` | WebSocket | Transport média du texte sur WebSocket (`--websocket-port`, `wss://` avec `--websocket-secure`). Le `token` vient de `ConfigureMediaConnection` (§6.12) |
 
+Le texte sur WebSocket va aussi dans l'**autre sens** : avec
+`ConnectMediaConnection` (§6.12), c'est le mediaserver qui se connecte à l'URL
+d'un pair. Il n'y a alors ni token ni URL locale.
+
 Le `POST /jsr309` est un XML-RPC standard :
 
 - `Content-Type: text/xml`
@@ -355,24 +359,34 @@ Le mécanisme se désarme entièrement avec `--event-queue-expires 0`
   `0` = arrêt explicite (`RecorderStop`), `1` = durée max atteinte (voir
   `maxDuration` de `RecorderRecord`), `2` = silence, `3` = DTMF (2/3 non encore
   implémentés).
-- **EndpointDisconnectedEvent** (6) : le **watchdog d'inactivité RTP** n'a plus
-  reçu de paquet depuis le seuil armé (voir `EndpointStartRTPTimeout`, §6.7).
-  `joinableId` = `endpointId`, `media`/`role` selon §4. Émis **une seule fois**
-  par transition actif→inactif.
-- **EndpointConnectedEvent** (7) : signal **« média établi »** pour un média d'un
-  endpoint. Émis **une seule fois par média et par cycle de réception**, lorsque
-  **le premier paquet RTP/SRTP est reçu et validé** ET que **le handshake DTLS est
-  terminé** (ou que le média n'utilise pas DTLS — le succès du déchiffrement SRTP
-  garantit intrinsèquement la fin du handshake). `joinableId` = `endpointId`,
-  `media`/`role` selon §4. Contrairement à un événement de connexion « optimiste »
-  synthétisé par le contrôleur, il atteste d'un **flux média réel** : il **ne se
-  déclenche jamais** sans arrivée effective de média. Il est **ré-armé** par un
-  cycle `EndpointStopReceiving` → `EndpointStartReceiving` (un nouveau flux ré-émet
-  l'événement). Complémentaire de `EndpointDisconnectedEvent` (6) : connexion réelle
-  vs perte d'activité.
+Les deux derniers, **6 et 7**, disent la même chose pour **deux transports** :
+le média d'une jambe est établi, ou il est perdu. `joinableId` = `endpointId`,
+`media`/`role` selon §4.
+
+- **EndpointDisconnectedEvent** (6) : un média d'un endpoint est perdu.
+  - **RTP** : le **watchdog d'inactivité** n'a plus reçu de paquet depuis le
+    seuil armé (voir `EndpointStartRTPTimeout`, §6.7). Émis **une seule fois**
+    par transition actif→inactif.
+  - **Texte sur WebSocket sortant** (§6.12) : une connexion **établie** est
+    tombée. Émis à **chaque** perte, puisque la reprise est indéfinie. Une
+    tentative d'ouverture infructueuse, elle, ne publie rien.
+- **EndpointConnectedEvent** (7) : signal **« média établi »** pour un média
+  d'un endpoint.
+  - **RTP** : émis **une seule fois par média et par cycle de réception**,
+    lorsque **le premier paquet RTP/SRTP est reçu et validé** ET que **le
+    handshake DTLS est terminé** (ou que le média n'utilise pas DTLS — le succès
+    du déchiffrement SRTP garantit intrinsèquement la fin du handshake).
+    Contrairement à un événement de connexion « optimiste » synthétisé par le
+    contrôleur, il atteste d'un **flux média réel** : il **ne se déclenche
+    jamais** sans arrivée effective de média. Il est **ré-armé** par un cycle
+    `EndpointStopReceiving` → `EndpointStartReceiving` (un nouveau flux ré-émet
+    l'événement).
+  - **Texte sur WebSocket sortant** (§6.12) : émis à **chaque** ouverture de la
+    connexion, donc à chaque reprise après une coupure.
 
 Réf. : `mcu/src/jsr309/JSR309Event.h`, `MediaSession.h` (events Player/Recorder),
-`RTPEndpoint.cpp` (ExternalFIR / EndpointDisconnected / EndpointConnected).
+`RTPEndpoint.cpp` (ExternalFIR / EndpointDisconnected / EndpointConnected),
+`WSEndpoint.cpp` (jambe texte sortante).
 
 ---
 
@@ -887,6 +901,7 @@ sort tant que rien n'entre, et l'encodeur garde la cadence d'avant la pause.
 |---------|-----------|-------------|
 | `GetMediaCandidates` | `i sessionId, i endpointId, i protocol, i media` | `[ string url ]` |
 | `ConfigureMediaConnection` | `i sessionId, i endpointId, i media, i role, i protocol, s token, s expectedPayload` | `[]` |
+| `ConnectMediaConnection` | `i sessionId, i endpointId, i media, i role, s url` | `[]` |
 | `SetupDataChannel` | `i sessionId, i endpointId, i media, i remoteSctpPort` | `[ int localSctpPort, int maxMessageSize, int streamId ]` |
 
 - `protocol` = `MediaFrame::MediaProtocol`, `media` = `MediaFrame::Type`,
@@ -933,6 +948,44 @@ sort tant que rien n'entre, et l'encodeur garde la cadence d'avant la pause.
   jambe data channel reste ICE + DTLS + UDP. Ces deux valeurs sont des
   propriétés du serveur — les recopier dans la configuration du contrôleur, ce
   serait la même faute que recopier une liste de codecs (§4).
+
+#### `ConnectMediaConnection` — la jambe texte sortante
+
+Le mediaserver **joue le navigateur** : au lieu d'attendre une connexion sur son
+serveur WebSocket, il se connecte lui-même à `url`. C'est la réponse au pair qui
+n'ouvre jamais de connexion vers nous — une passerelle, un service tiers.
+
+- **Le texte seul.** `media` doit valoir `Text` (2). Tout autre média est
+  refusé : l'audio et la vidéo restent en RTP.
+- **`url`** est `ws://…` ou `wss://…`, chemin et requête compris. Le jeton, s'il
+  y en a un, appartient à l'URL du pair. Le serveur n'en enregistre aucun de son
+  côté : personne n'entrera par **notre** serveur pour cette jambe.
+- Elle **bascule le port en WS elle-même**. Ne pas appeler
+  `ConfigureMediaConnection` avant : celle-ci exigerait un token sans objet ici.
+- **Le succès est asynchrone.** Il dit que la jambe est **armée**, pas qu'elle
+  est ouverte. Seule une URL inutilisable — schéma inconnu, hôte absent, URL
+  illisible — est une faute immédiate, parce qu'elle ne se réparera pas en
+  attendant.
+- **La reprise est indéfinie** : une tentative toutes les 5 s tant que la jambe
+  vit. Un 401 ou un 403 est retenté comme le reste. Seule la fin de la jambe
+  l'arrête (`EndpointDelete`, `MediaSessionDelete`).
+- **Le contrôleur suit l'état par la file d'événements** :
+  `EndpointConnectedEvent` (7) à chaque ouverture, `EndpointDisconnectedEvent`
+  (6) à chaque perte d'une connexion établie (§5). Une **tentative**
+  infructueuse ne publie rien : elle inonderait la file pour un pair qui
+  n'écoute pas.
+- Chaque coupure est une **perte annoncée** (T.140 §5.3) : un U+FFFD part vers
+  le pair RTP quand la connexion tombe, et vers le pair WebSocket à la
+  reconnexion. Le texte reçu pendant la coupure est **perdu**, jamais rejoué.
+- **`GetMediaCandidates` rend l'URL distante** pour cette jambe. Une jambe
+  cliente n'a pas d'écoute locale : publier celle du serveur serait publier une
+  adresse où personne n'entrera.
+- **Prérequis serveur** : le serveur WebSocket doit tourner
+  (`--websocket-port`), même si aucune connexion entrante n'est attendue — c'est
+  son réacteur qui pilote les jambes sortantes. En `wss://`, le certificat du
+  pair est vérifié contre le magasin du système ; `--websocket-client-ca` ajoute
+  une autorité, `--websocket-client-insecure` désactive la vérification
+  (`README.md`).
 
 ---
 

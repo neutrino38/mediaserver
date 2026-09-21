@@ -174,9 +174,11 @@ public:
 	/** Configuration des connexions SORTANTES (wss://), posée au démarrage et lue
 	 *  par WebSocketServer::Connect. `verifyPeer=false` sert les certificats
 	 *  auto-signés de laboratoire, et rien d'autre ; `cafile` ajoute une autorité
-	 *  au magasin du système. Change le contexte client, donc à poser AVANT la
-	 *  première connexion sortante. */
-	static void SetClientConfig(bool verifyPeer, const std::string& cafile);
+	 *  au magasin du système. Elle BÂTIT le contexte client, donc à poser AVANT
+	 *  la première connexion sortante. Renvoie false si le contexte est
+	 *  inutilisable — typiquement un `cafile` illisible : l'appelant le sait au
+	 *  démarrage, et non au premier appel réel. */
+	static bool SetClientConfig(bool verifyPeer, const std::string& cafile);
 	static bool GetClientVerifyPeer();
 
 	/** Crée un transport TLS CLIENT, ou nullptr si le contexte est inutilisable.

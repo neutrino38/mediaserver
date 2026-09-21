@@ -2942,6 +2942,50 @@ xmlrpc_value* ConfigureMediaConnection(xmlrpc_env *env, xmlrpc_value *param_arra
 	return xmlok(env);
 }
 
+/**
+ * ConnectMediaConnection — la jambe texte SORTANTE, celle où le mediaserver
+ * joue le navigateur (docs/conception/WS-CLIENT/SPEC.md §4.8).
+ *
+ * Elle bascule le port en WS puis ouvre la connexion vers `url`. Aucun token
+ * n'est enregistré : personne n'entrera par NOTRE serveur pour cette jambe.
+ * C'est pourquoi elle ne réutilise pas ConfigureMediaConnection, qui exige un
+ * token non vide pour WS.
+ *
+ * Le succès est ASYNCHRONE : il dit que la jambe est armée, pas qu'elle est
+ * ouverte. Seule une URL inutilisable — schéma inconnu, hôte absent — est une
+ * faute immédiate. L'ouverture et chaque perte se disent par la file
+ * d'événements (EndpointConnectedEvent, EndpointDisconnectedEvent).
+ */
+xmlrpc_value* ConnectMediaConnection(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	std::shared_ptr<MediaSession> session;
+
+	int	sessionId;
+	int	endPointId;
+	int	media;
+	int	role;
+	char*	url;
+
+	xmlrpc_parse_value(env, param_array, "(iiiis)", &sessionId, &endPointId, &media, &role, &url);
+
+	if(env->fault_occurred)
+		return 0;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	std::shared_ptr<Endpoint> endpoint = session->GetEndpoint(endPointId);
+
+	if (endpoint == NULL)
+		return xmlerror(env,"Could not retrieve endpoint.");
+
+	if (endpoint->ConnectMediaConnection((MediaFrame::Type) media,(MediaFrame::MediaRole) role, url) != 1)
+		return xmlerror(env,"Could not arm the outgoing media connection.");
+
+	return xmlok(env);
+}
+
 
 /**
  * GetNetworkProfiles — mêmes profils, même contrat que l'API MCU.
@@ -3063,6 +3107,7 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"VideoTranscoderDettach",		VideoTranscoderDettach},
 	{"GetMediaCandidates",			GetMediaCandidates},	
 	{"ConfigureMediaConnection",	ConfigureMediaConnection},
+	{"ConnectMediaConnection",	ConnectMediaConnection},
 	{"SetupDataChannel",		SetupDataChannel},
 	{NULL,NULL}
 };

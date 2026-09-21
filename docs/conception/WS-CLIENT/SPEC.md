@@ -1,10 +1,11 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **lots 0 à 5 faits** — les coutures (§6), le masquage selon le
+> Statut : **lots 0 à 6 faits** — les coutures (§6), le masquage selon le
 > rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2, §4.6), son pilotage
-> par le réacteur depuis une URL (§4.5), le transport TLS client (§4.4), puis la
-> jambe JSR-309 elle-même : `WSEndpoint::Connect`, la reprise, l'U+FFFD et ce
-> que la jambe publie (§4.7). Les quatre points du §9 sont **tranchés**.
+> par le réacteur depuis une URL (§4.5), le transport TLS client (§4.4), la
+> jambe JSR-309 elle-même — `WSEndpoint::Connect`, la reprise, l'U+FFFD et ce
+> que la jambe publie (§4.7) —, puis l'API de contrôle (§4.8). Reste le lot 7,
+> la recette en appel réel. Les cinq points du §9 sont **tranchés**.
 > Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
@@ -353,10 +354,9 @@ sémantique s'élargit en revanche : elle était « DTLS OK + premier RTP reçu 
 Une **tentative** infructueuse ne publie rien : la reprise étant indéfinie, elle
 inonderait la file d'un couple 6/7 toutes les 5 s pour un pair qui n'écoute pas.
 
-Deux options de ligne de commande, à ajouter aux **deux** tableaux du
-`README.md`. Le transport les attend déjà (§4.4) : il ne reste à `main()` qu'un
-appel à `WebSocketTlsTransport::SetClientConfig`, avant la première connexion
-sortante.
+Deux options de ligne de commande portent la confiance du **client** TLS.
+`main()` les passe à `WebSocketTlsTransport::SetClientConfig` avant tout
+démarrage : la première connexion sortante bâtit le contexte, et le lit.
 
 | Option | Défaut | Rôle |
 |---|---|---|
@@ -426,29 +426,36 @@ Chaque lot compile, passe `cd mcu && make check`, et se livre seul.
 | 3 ✔ | `WebSocketServer::Connect` : file de demandes, URL, DNS hors réacteur, IPv4 et IPv6 | `tests/test_ws_client_connect.cpp` : `127.0.0.1` **et** `[::1]`, chemin + query, port fermé, URL inutilisable |
 | 4 ✔ | Transport TLS client | `tests/test_ws_client_tls.cpp` : ouverture `wss://` et écho, vérification refusée **et** acceptée (autorité jetable de `tests/wstlsfixture.h`), autorité illisible |
 | 5 ✔ | `WSEndpoint::Connect`, `Endpoint::ConnectMediaConnection`, reprise indéfinie, U+FFFD, `GetMediaCandidates`, délai d'ouverture | `tests/test_ws_client_endpoint.cpp` : pontage RTP ↔ WS sortant dans les deux sens, coupure annoncée et texte perdu, reprise arrêtée par `End()`, URL inutilisable, cible publiée au lieu de l'écoute, ouverture muette abandonnée |
-| 6 | XML-RPC `ConnectMediaConnection`, événements, `docs/JSR-309-API.md`, `README.md`, protobuf MOTELI côté elixip | appel XML-RPC réel |
-| 7 | Recette de bout en bout | §7 |
+| 6 ✔ | XML-RPC `ConnectMediaConnection`, options TLS client de `main()`, `docs/JSR-309-API.md`, `README.md`, client Java, protobuf MOTELI côté elixip | `tests/test_ws_client_xmlrpc.cpp` : méthode recensée dans la table, ordre des paramètres, jambe armée qui atteint le pair, média non texte, URL inutilisable, identifiants inconnus, appel mal typé |
+| 7 | Recette de bout en bout | appel réel elixip → passerelle WebRTC → écho Asterisk, `docs/maintenance/recette-ws-client.md` |
 
 Les lots 0 à 4 ne touchent pas au JSR-309 : ils sont utiles seuls, et sans
 risque pour l'existant.
 
 ## 7. Recette de bout en bout
 
-Un seul mediaserver suffit : il tient les deux bouts.
+La procédure vit dans **`docs/maintenance/recette-ws-client.md`**, avec les
+traces à observer et la feuille de relevé. Ce qui suit ne dit que la forme
+retenue, et pourquoi.
 
-1. elixip monte deux jambes JSR-309 : la jambe A garde son texte WS en mode
-   serveur (URL publiée), la jambe B reçoit `ConnectMediaConnection` avec
-   l'URL de A.
-2. Vérifier l'événement `EndpointConnectedEvent` sur la jambe B.
-3. Taper du texte des deux côtés ; vérifier qu'il arrive dans les deux sens,
-   caractère par caractère, sans doublon ni perte.
-4. Couper le serveur A ; vérifier `EndpointDisconnectedEvent` et l'U+FFFD reçu
-   côté RTP, puis la reconnexion 5 s plus tard, son
-   `EndpointConnectedEvent` et l'U+FFFD reçu côté WebSocket. Le texte tapé
-   pendant la coupure ne doit **pas** réapparaître.
-5. Refaire en `wss://`, avec puis sans `--websocket-client-insecure`.
-6. Refaire avec une jambe RTP T.140 RED en face de la jambe cliente : c'est le
-   cas réel d'un appel navigateur ↔ terminal SIP.
+La recette est un **appel réel**, piloté par elixip : un fichier `.mp4` à trois
+pistes — audio, vidéo, texte `mov_text` — est joué vers un **écho Asterisk** à
+travers une **passerelle WebRTC**. Le mediaserver y tient le rôle du navigateur :
+audio et vidéo en RTP vers la passerelle, texte par la jambe WebSocket sortante,
+à l'URL qu'un navigateur utiliserait. Un Recorder enregistre ce que l'écho
+renvoie, et le fichier de retour se compare au fichier source.
+
+Cette forme est retenue parce qu'elle donne une **preuve matérielle** : deux
+fichiers à comparer, au lieu d'un opérateur qui tape du texte et juge à l'œil.
+Elle exerce en plus les trois médias du même endpoint, ce qu'aucun test en
+processus ne fait.
+
+Un montage local la précède, sans infrastructure : un seul mediaserver tient les
+deux bouts, la jambe A en mode serveur, la jambe B armée sur l'URL de A. Il
+isole le code du reste ; s'il échoue, la plateforme est inutile.
+
+**Le lot 6 est un prérequis** : sans commande XML-RPC, elixip ne peut pas armer
+la jambe, et les options du TLS client ne sont pas posées.
 
 ## 8. Ce que le chantier ne fait pas
 

@@ -12,6 +12,7 @@
 #include "jsr309/JSR309Manager.h"
 #include "websocketserver.h"
 #include "websockets.h"
+#include "websockettransport.h"
 #include "jsr309/WSEndpoint.h"
 #include "addressprofiles.h"
 #include "stunclient.h"
@@ -177,6 +178,9 @@ int main(int argc,char **argv)
 	bool wsSecure = false;
 	const char *wsCrtFile = NULL;	//NULL → réutilise crtfile
 	const char *wsKeyFile = NULL;	//NULL → réutilise keyfile
+	//WebSocket TLS, côté CLIENT : les jambes texte sortantes (wss://)
+	bool wsClientVerify = true;	//vérifier le certificat du pair
+	const char *wsClientCa = NULL;	//autorité supplémentaire, hors magasin système
 
 	//Get all
 	for(int i=1;i<argc;i++)
@@ -216,6 +220,12 @@ int main(int argc,char **argv)
 				" --websocket-secure Enable secure WebSocket (wss://)\r\n"
 				" --websocket-cert Certificate file (PEM) for wss:// (default: mcu.crt; implies --websocket-secure)\r\n"
 				" --websocket-key  Private key file (PEM) for wss:// (default: mcu.key; implies --websocket-secure)\r\n"
+				" --websocket-client-insecure\r\n"
+				"                  Do not verify the certificate of a wss:// server we connect to\r\n"
+				"                  (outgoing text legs). Testing only\r\n"
+				" --websocket-client-ca\r\n"
+				"                  Extra certificate authority (PEM) trusted for wss:// servers we\r\n"
+				"                  connect to, on top of the system store\r\n"
 				" --vad-period     Set the VAD based conference change period in milliseconds\r\n"
 				" --event-queue-expires\r\n"
 				"                  Grace period, in seconds, before an event queue with no\r\n"
@@ -301,6 +311,12 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--websocket-key")==0 && (i+1<argc))
 			//Private key (PEM) for wss://
 			wsKeyFile = argv[++i];
+		else if (strcmp(argv[i],"--websocket-client-insecure")==0)
+			//Ne pas verifier le certificat d'un serveur wss:// que l'on APPELLE
+			wsClientVerify = false;
+		else if (strcmp(argv[i],"--websocket-client-ca")==0 && (i+1<argc))
+			//Autorite supplementaire pour les serveurs wss:// que l'on appelle
+			wsClientCa = argv[++i];
 #ifdef MOTELI
 		else if (strcmp(argv[i],"--rq-queue")==0 && (i+1<=argc))		
 			queueName = argv[++i];
@@ -697,6 +713,21 @@ int main(int argc,char **argv)
 	} else {
 		Log("-WebSocket in clear mode (ws://)\n");
 	}
+
+	//WebSocket TLS, côté CLIENT : ce que l'on EXIGE d'un serveur wss:// que
+	//l'on appelle (jambes texte sortantes), et non ce que l'on présente. Le
+	//contexte est bâti ICI : une autorité illisible doit se voir au démarrage,
+	//pas au premier appel réel.
+	if (!WebSocketTlsTransport::SetClientConfig(wsClientVerify, wsClientCa ? wsClientCa : ""))
+	{
+		Error("-MCU cannot start: unusable WebSocket client TLS configuration [ca:\"%s\"]\n",
+		      wsClientCa ? wsClientCa : "");
+		goto server_init_failed;
+	}
+	if (!wsClientVerify)
+		Log("-WebSocket client: peer certificate verification DISABLED\n");
+	else if (wsClientCa)
+		Log("-WebSocket client: extra CA [\"%s\"]\n", wsClientCa);
 
 	//Init web socket server
 	if ( ! wsServer.Init(wsPort) ) goto server_init_failed;

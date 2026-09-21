@@ -373,20 +373,76 @@ std::unique_ptr<WebSocketTransport> WebSocketTlsTransport::Create()
 	return std::make_unique<TlsTransportImpl>(g_ssl_ctx);
 }
 
-void WebSocketTlsTransport::SetClientConfig(bool verifyPeer, const std::string& cafile)
+//Bâtit le contexte TLS client depuis g_client_cafile. À appeler g_client_mutex
+//tenu. Rend NULL et journalise la cause si le contexte est inutilisable.
+static SSL_CTX* CreateClientContextLocked()
+{
+	//Idempotent, et nécessaire : un mediaserver qui n'écoute qu'en clair n'a
+	//jamais appelé ClassInit, et peut très bien appeler en wss://.
+	OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
+
+	SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+	if (!ctx)
+	{
+		ERR_print_errors_fp(stderr);
+		Error("-WebSocketTlsTransport: no SSL client context\n");
+		return NULL;
+	}
+
+	//TLS 1.2 minimum, comme le contexte serveur
+	if (!SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION))
+	{
+		SSL_CTX_free(ctx);
+		Error("-WebSocketTlsTransport: could not set minimum TLS version (client)\n");
+		return NULL;
+	}
+
+	//Magasin du système
+	if (!SSL_CTX_set_default_verify_paths(ctx))
+	{
+		ERR_print_errors_fp(stderr);
+		Error("-WebSocketTlsTransport: no system CA store\n");
+	}
+
+	//Une autorité demandée et illisible n'est pas un détail : la jambe serait
+	//refusée plus tard, et personne ne saurait que c'est ce fichier.
+	if (!g_client_cafile.empty() &&
+	    !SSL_CTX_load_verify_locations(ctx, g_client_cafile.c_str(), NULL))
+	{
+		ERR_print_errors_fp(stderr);
+		SSL_CTX_free(ctx);
+		Error("-WebSocketTlsTransport: CA file '%s' unusable\n", g_client_cafile.c_str());
+		return NULL;
+	}
+
+	//Pas de cache de session
+	SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
+
+	Log("-WebSocketTlsTransport: TLS client context ready [ca:\"%s\"]\n", g_client_cafile.c_str());
+	return ctx;
+}
+
+bool WebSocketTlsTransport::SetClientConfig(bool verifyPeer, const std::string& cafile)
 {
 	std::lock_guard<std::mutex> lock(g_client_mutex);
 
 	g_client_verify = verifyPeer;
 	g_client_cafile = cafile;
 
-	//Le magasin d'autorités est porté par le contexte : le refaire à la prochaine
-	//connexion. SSL_CTX_free ne libère rien tant qu'un SSL le référence.
+	//Le magasin d'autorités est porté par le contexte : le refaire MAINTENANT.
+	//Le bâtir à la première connexion sortante laisserait une autorité illisible
+	//dormir jusqu'au premier appel réel — l'exploitant ne verrait sa faute de
+	//frappe qu'en production. SSL_CTX_free ne libère rien tant qu'un SSL le
+	//référence.
 	if (g_client_ctx)
 	{
 		SSL_CTX_free(g_client_ctx);
 		g_client_ctx = NULL;
 	}
+
+	g_client_ctx = CreateClientContextLocked();
+
+	return g_client_ctx != NULL;
 }
 
 bool WebSocketTlsTransport::GetClientVerifyPeer()
@@ -399,52 +455,13 @@ std::unique_ptr<WebSocketTransport> WebSocketTlsTransport::CreateClient(const st
 {
 	std::lock_guard<std::mutex> lock(g_client_mutex);
 
+	//Le contexte vient normalement de SetClientConfig, posé au démarrage. Le
+	//bâtir ici couvre le mediaserver qui n'a jamais configuré son côté client.
 	if (!g_client_ctx)
-	{
-		//Idempotent, et nécessaire : un mediaserver qui n'écoute qu'en clair n'a
-		//jamais appelé ClassInit, et peut très bien appeler en wss://.
-		OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, NULL);
+		g_client_ctx = CreateClientContextLocked();
 
-		SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
-		if (!ctx)
-		{
-			ERR_print_errors_fp(stderr);
-			Error("-WebSocketTlsTransport::CreateClient() | No SSL context\n");
-			return nullptr;
-		}
-
-		//TLS 1.2 minimum, comme le contexte serveur
-		if (!SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION))
-		{
-			SSL_CTX_free(ctx);
-			Error("-WebSocketTlsTransport::CreateClient() | Could not set minimum TLS version\n");
-			return nullptr;
-		}
-
-		//Magasin du système
-		if (!SSL_CTX_set_default_verify_paths(ctx))
-		{
-			ERR_print_errors_fp(stderr);
-			Error("-WebSocketTlsTransport::CreateClient() | No system CA store\n");
-		}
-
-		//Une autorité demandée et illisible n'est pas un détail : la jambe serait
-		//refusée plus tard, et personne ne saurait que c'est ce fichier.
-		if (!g_client_cafile.empty() &&
-		    !SSL_CTX_load_verify_locations(ctx, g_client_cafile.c_str(), NULL))
-		{
-			ERR_print_errors_fp(stderr);
-			SSL_CTX_free(ctx);
-			Error("-WebSocketTlsTransport::CreateClient() | CA file '%s' unusable\n", g_client_cafile.c_str());
-			return nullptr;
-		}
-
-		//Pas de cache de session
-		SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
-
-		g_client_ctx = ctx;
-		Log("-WebSocketTlsTransport: TLS client context ready [ca:\"%s\"]\n", g_client_cafile.c_str());
-	}
+	if (!g_client_ctx)
+		return nullptr;
 
 	return std::make_unique<TlsTransportImpl>(g_client_ctx, true, host, verifyPeer);
 }

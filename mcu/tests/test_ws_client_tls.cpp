@@ -333,7 +333,10 @@ TEST(WsClientTls, UneAutoriteIllisibleEchoueTOutDeSuite)
 	if (!fixture.Start(39650))
 		GTEST_SKIP() << "Aucun port loopback disponible (sandbox réseau ?)";
 
-	WebSocketTlsTransport::SetClientConfig(true, "/nexistepas/ca.crt");
+	//La CONFIGURATION elle-même refuse : c'est ce qui permet à main() de ne pas
+	//démarrer, au lieu de laisser la faute de frappe dormir jusqu'au 1er appel.
+	EXPECT_FALSE(WebSocketTlsTransport::SetClientConfig(true, "/nexistepas/ca.crt"))
+		<< "une autorité illisible doit se voir au moment où on la pose";
 
 	auto listener = std::make_shared<SharedListener>();
 	EXPECT_FALSE(fixture.Server().Connect(fixture.Url("127.0.0.1"), listener))
@@ -342,5 +345,19 @@ TEST(WsClientTls, UneAutoriteIllisibleEchoueTOutDeSuite)
 	EXPECT_EQ(0, listener->Errors()) << "rien n'a été ouvert, donc rien à notifier";
 
 	//Ne pas laisser la configuration cassée aux tests suivants
+	EXPECT_TRUE(WebSocketTlsTransport::SetClientConfig(true, ""));
+}
+
+//Le pendant du test précédent : sans lui, un SetClientConfig qui refuserait
+//TOUT passerait pour bon.
+TEST(WsClientTls, UneConfigurationLisibleEstAcceptee)
+{
+	if (!WsTlsTestCertificate::Ensure())
+		GTEST_SKIP() << "Certificat de test non generable";
+
+	//Le magasin du système seul, puis avec une autorité bien réelle
+	EXPECT_TRUE(WebSocketTlsTransport::SetClientConfig(true, ""));
+	EXPECT_TRUE(WebSocketTlsTransport::SetClientConfig(true, WsTlsTestCertificate::CaFile()));
+
 	WebSocketTlsTransport::SetClientConfig(true, "");
 }

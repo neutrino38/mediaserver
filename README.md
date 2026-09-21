@@ -197,6 +197,7 @@ mcu [-h|--help] [-f] [-d]
     [--http-port <control_port>] [--rtmp-port <port>]
     [--websocket-port <ws_port>] [--websocket-host hôte]
     [--websocket-secure] [--websocket-cert <pem>] [--websocket-key <pem>]
+    [--websocket-client-insecure] [--websocket-client-ca <pem>]
     [--min-rtp-port <min_port>] [--max-rtp-port port]
     [--public-ip <ip>] [--nat <ip>|auto] [--stun-server <hôte[:port]>]
     [--internal-ip <ip>] [--default-profile <profil>]
@@ -316,8 +317,13 @@ dans `MCU-API.md` §7.2) les emporte *tous ensemble*. Détail du contrat dans
 
 Le transport WebSocket (utilisé notamment pour le texte temps réel et le canal
 de signalisation des endpoints Web) peut être servi en TLS (`wss://`). Ces
-options n'affectent **que** le serveur WebSocket ; le média WebRTC (SRTP) est
+options n'affectent **que** le transport WebSocket ; le média WebRTC (SRTP) est
 sécurisé séparément par DTLS (voir ci-dessous).
+
+Deux rôles, à ne pas confondre. Les trois premières options règlent ce que le
+**serveur** présente. Les deux dernières règlent ce que le mediaserver **exige
+d'un serveur qu'il appelle** : une jambe texte sortante en `wss://`
+(`ConnectMediaConnection`, `docs/JSR-309-API.md` §6.12).
 
 | Option | Défaut | Description |
 |---|---|---|
@@ -325,6 +331,8 @@ sécurisé séparément par DTLS (voir ci-dessous).
 | `--websocket-cert fichier` | *(certificat DTLS)* | Certificat PEM présenté pour `wss://`. Implique `--websocket-secure`. À défaut, réutilise le certificat DTLS (`/etc/mediaserver/mcu.crt`). |
 | `--websocket-key fichier` | *(clé DTLS)* | Clé privée PEM pour `wss://`. Implique `--websocket-secure`. À défaut, réutilise la clé DTLS (`/etc/mediaserver/mcu.key`). |
 | `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Utile derrière un proxy / en `wss://`. |
+| `--websocket-client-ca fichier` | *(magasin système)* | Autorité de certification PEM supplémentaire, acceptée pour les serveurs `wss://` que le mediaserver **appelle**. S'ajoute au magasin du système. |
+| `--websocket-client-insecure` | désactivé | Ne **pas** vérifier le certificat des serveurs `wss://` appelés. Pour la mise au point seulement : la jambe devient vulnérable à l'interception. |
 
 
 ### WebRTC — Certificat DTLS-SRTP
