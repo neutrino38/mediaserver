@@ -48,10 +48,13 @@ The mediaserver exposes three XML-RPC interfaces
 
 ## Building
 
-This version is intended to run on RHEL 9 / AlmaLinux 9 servers.
+This version is intended to run on RHEL 9 / AlmaLinux 9 servers. It also builds
+and runs on Debian / Ubuntu, for development (see *Building on Debian /
+Ubuntu* below); only the RPM package targets AlmaLinux 9.
 
 All build steps are driven by the `install.ksh` script at the root of the
-project. It takes a single argument selecting the action to perform.
+project. It takes a single argument selecting the action to perform. It detects
+the distribution family (`rpm` or `dpkg`) and picks the package names itself.
 
 ### 1. Install the build prerequisites
 
@@ -69,9 +72,10 @@ The build links dynamically against system packages. Install them once with:
 ./install.ksh prereq
 ```
 
-This installs (via `dnf`/`yum`): `gsm-devel`, `ffmpeg-devel`,
-`webrtc-audio-processing-devel`, `libsrtp-devel` and `xmlrpc-c-devel`
-(the last one comes from the *crb* repository). `libtool` is also required.
+On AlmaLinux 9 this installs (via `dnf`/`yum`): `ffmpeg-devel`,
+`webrtc-audio-processing-devel`, `libsrtp-devel`, `xmlrpc-c-devel`
+(from the *crb* repository), `usrsctp-devel`, `ImageMagick-c++-devel` and
+`libtool`.
 
 > Note: `ffmpeg-devel` is provided by the RPMFusion (free and non-free)
 > repositories.
@@ -121,6 +125,52 @@ This removes the RPM build tree and the previously generated packages, and
 runs `make clean` for the `mcu` binary **and for both submodules**
 (`libmedikit` and `libbfcp`) — objects, static archives and shared objects —
 so the tree is left in a pristine state.
+
+## Building on Debian / Ubuntu
+
+Development builds are supported on Debian and Ubuntu. The commands are the
+same — `./install.ksh prereq` then `./install.ksh localcompile` — and produce
+the same `bin/debug/mcu`. Four things differ from AlmaLinux 9, and they change
+what the binary does:
+
+- **ffmpeg 8** (Ubuntu 26.04) instead of the IVèS ffmpeg package. Everything
+  builds and the test suite is green, but the codec catalogue is that of the
+  distribution ffmpeg: ask the server itself through `/status/general` rather
+  than assuming it.
+- **webrtc-audio-processing 1.x** instead of 0.3. Its APM no longer exposes a
+  detection likelihood, so `VAD::SetMode()` has **no effect** there: voice
+  detection is either on or off. Video switching driven by VAD is therefore
+  less tunable than on AlmaLinux.
+- **No `libpostproc`** package. Nothing in this repository includes it, so it
+  was removed from the pkg-config modules altogether.
+- **Packaging**: `./install.ksh rpm` targets AlmaLinux 9 and refuses to run
+  here; build a `.deb` instead (see below).
+
+`mp4v2` is still built from source into `./staticdeps`, and its autotools are
+regenerated (`autoreconf -fi`) because the ones committed upstream date from
+automake 1.13 and silently produce a truncated `libtool` script elsewhere.
+
+### The Debian package
+
+```sh
+./install.ksh localcompile      # the package ships bin/debug/mcu
+./install.ksh deb               # -> mcumediaserver_<version>_<arch>.deb
+```
+
+It installs the same files as the RPM, with two Debian conventions: the
+command-line options live in `/etc/default/mediaserver` (the systemd unit reads
+both that file and `/etc/sysconfig/mediaserver`, whichever exists) and the unit
+goes to `/lib/systemd/system`. The `Depends:` field is **computed from the
+binary itself** (its `DT_NEEDED` entries mapped to packages), so it follows the
+ffmpeg version you built against instead of a hand-written list going stale.
+
+The package is unsigned, and no APT repository publishes it: install it with
+`sudo apt install ./mcumediaserver_<version>_<arch>.deb`.
+
+> ⚠️ On Debian and Ubuntu `/etc/hosts` maps the host name to `127.0.1.1`, which
+> is not announceable in an SDP. The server falls back to the first
+> announceable address carried by a network interface. With several interfaces
+> — or behind a NAT — pass `--public-ip <ip>` explicitly.
 
 ## Building the RPM package
 
