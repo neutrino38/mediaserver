@@ -1,6 +1,7 @@
 #include "addressprofiles.h"
 
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <string.h>
 
 #include <mutex>
@@ -403,6 +404,45 @@ bool AddressProfiles::IsLocallyAttached(const IPAddress& addr)
 
 	freeifaddrs(list);
 	return found;
+}
+
+IPAddress AddressProfiles::FirstAnnounceableLocal(int prefer)
+{
+	ifaddrs* list = NULL;
+	if (getifaddrs(&list) != 0)
+		return IPAddress();
+
+	IPAddress preferred;
+	IPAddress fallback;
+
+	for (ifaddrs* p = list; p; p = p->ifa_next)
+	{
+		if (!p->ifa_addr)
+			continue;
+
+		//Une interface éteinte ne porte pas une adresse joignable.
+		if (!(p->ifa_flags & IFF_UP) || !(p->ifa_flags & IFF_RUNNING))
+			continue;
+
+		if (p->ifa_addr->sa_family != AF_INET && p->ifa_addr->sa_family != AF_INET6)
+			continue;
+
+		const IPAddress addr = IPAddress::FromSockaddr(p->ifa_addr);
+		if (!addr.IsAnnounceable())
+			continue;
+
+		if (p->ifa_addr->sa_family == prefer)
+		{
+			preferred = addr;
+			break;
+		}
+
+		if (!fallback.IsSet())
+			fallback = addr;
+	}
+
+	freeifaddrs(list);
+	return preferred.IsSet() ? preferred : fallback;
 }
 
 void AddressProfiles::Reset()
