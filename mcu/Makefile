@@ -106,10 +106,17 @@ ifeq ($(FLASHSTREAMER),yes)
 	TARGETS += flashstreamer
 endif
 
-# VAD via le paquet systeme webrtc-audio-processing (module APM).
-VADINCLUDE = $(shell pkg-config --cflags webrtc-audio-processing)
-VADLD = $(shell pkg-config --libs webrtc-audio-processing)
+# VAD via le paquet systeme webrtc-audio-processing (module APM). Le module
+# pkg-config s'appelle webrtc-audio-processing sur AlmaLinux 9 (APM 0.3) et
+# webrtc-audio-processing-1 sur Debian/Ubuntu (APM 1.x) : on prend celui qui
+# repond. L'API differe entre les deux, vad.cpp se branche sur WEBRTC_APM_1.
+WEBRTCPC := $(shell pkg-config --exists webrtc-audio-processing-1 && echo webrtc-audio-processing-1 || echo webrtc-audio-processing)
+VADINCLUDE = $(shell pkg-config --cflags $(WEBRTCPC))
+VADLD = $(shell pkg-config --libs $(WEBRTCPC))
 OPTS+= -DVADWEBRTC
+ifeq ($(WEBRTCPC),webrtc-audio-processing-1)
+	OPTS+= -DWEBRTC_APM_1
+endif
 
 ifeq ($(MOTELI),yes)
 	OPTS+= -DMOTELI=yes
