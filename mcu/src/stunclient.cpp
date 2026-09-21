@@ -168,8 +168,11 @@ bool StunClient::ParseServer(const char* text, IPEndpoint& out, std::string& err
 		return false;
 	}
 
+	//Un serveur STUN est une DESTINATION : le filtre de l'adresse annoncée n'a
+	//rien à y faire. Il rejetait un nom ne menant qu'à la loopback, alors qu'un
+	//serveur de test local est exactement cela.
 	int                  err = 0;
-	std::list<IPAddress> addrs = IPAddress::Resolve(host.c_str(), err, AF_INET);
+	std::list<IPAddress> addrs = IPAddress::Resolve(host.c_str(), err, AF_INET, IPAddress::Destination);
 
 	IPAddress server;
 	for (std::list<IPAddress>::const_iterator it = addrs.begin(); it != addrs.end(); ++it)

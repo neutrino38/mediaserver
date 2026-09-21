@@ -217,7 +217,8 @@ bool WebSocketServer::Connect(const std::string& url,
 ```
 
 1. Le thread appelant **parse l'URL** (`http_parser_parse_url`), **résout le
-   DNS** (`IPAddress::Resolve`, A et AAAA), **crée la socket** et lance le
+   DNS** (`IPAddress::Resolve` en `Usage::Destination`, A et AAAA, §9.5),
+   **crée la socket** et lance le
    `connect()` non bloquant. La résolution ne doit jamais avoir lieu dans le
    réacteur : un DNS lent y gèlerait **toutes** les jambes WS du serveur — le
    même piège que le callback bloquant du réacteur RTP
@@ -389,16 +390,15 @@ Ils sont tous vérifiés, et chacun est une panne silencieuse s'il est manqué.
 7. **DNS dans le réacteur = toutes les jambes gelées** (§4.5) — tenu au lot 3 :
    l'URL, le DNS et le `connect()` sont au thread appelant, le réacteur ne
    reçoit qu'un descripteur.
-8. **`IPAddress::Resolve` écarte ce qui n'est pas ANNONÇABLE** — loopback,
-   link-local, multicast (`ipaddress.h`). C'est la politique de l'adresse qu'on
-   **publie** dans un SDP, appliquée ici à une **destination**. Un littéral
-   court-circuite le filtre, donc `ws://127.0.0.1:9090/` et `ws://[::1]:9090/`
-   marchent ; un **nom** qui ne se résout qu'en loopback, lui, échoue :
-   `ws://localhost:9090/` rend « cannot resolve localhost (errno 2) ». L'échec
-   est bruyant, jamais silencieux. En appel réel l'URL vient de
-   `GetMediaCandidates`, donc annonçable par construction — mais la recette §7
-   se fait en loopback : y écrire l'adresse, pas le nom. `RTPSession::SetRemoteHost`
-   a exactement le même travers. Cf. §9.4.
+8. **`IPAddress::Resolve` appliquait à une destination la politique de
+   l'adresse annoncée** — loopback, link-local et multicast écartés par
+   `IsAnnounceable()`. Un littéral court-circuitant le filtre,
+   `ws://127.0.0.1:9090/` marchait quand `ws://localhost:9090/` rendait « cannot
+   resolve localhost (errno 2) » : deux écritures du même serveur, une seule
+   acceptée. **Réglé** (§9.5) : `Resolve` prend un `Usage`, et
+   `WebSocketServer::Connect` demande `IPAddress::Destination`, dont le prédicat
+   est `IsUnicastDestination()` — la loopback passe, le multicast non. Le filtre
+   ne concerne toujours que les **noms** : un littéral est rendu tel quel.
 9. **La file d'attente était toujours jetée comme périmée** — relevé au lot 5,
    et il préexistait au chantier. `SendFrame` horodatait chaque trame en attente
    par `getDifTime(&clock)`, et `onOpen` remet `clock` à zéro à la **première
@@ -463,9 +463,9 @@ Un seul mediaserver suffit : il tient les deux bouts.
 
 ## 9. Arbitrages
 
-Les quatre premiers points ont été **tranchés le 2026-09-21**, avant le lot 5.
-Ils sont décrits là où ils s'appliquent ; ce qui suit ne dit que la décision et
-ce qu'elle écarte.
+Les cinq points ont été **tranchés le 2026-09-21** — les quatre premiers avant
+le lot 5, le dernier après. Ils sont décrits là où ils s'appliquent ; ce qui
+suit ne dit que la décision et ce qu'elle écarte.
 
 1. **Reconnexion** : *toutes les 5 s, indéfiniment* (§4.7). Le backoff borné à
    5 essais, proposé plus haut dans l'histoire de ce document, est écarté : une
@@ -483,9 +483,34 @@ ce qu'elle écarte.
    bis). Sans lui, la reprise ne partirait jamais dans les trois cas qui
    motivaient le point. Pas d'option de ligne de commande : la valeur n'est
    réglable que pour les tests.
-5. **Nom d'hôte en loopback** (piège 8) — **ouvert**. Faut-il que `IPAddress::Resolve`
-   sache résoudre une **destination** — filtre « annonçable » désactivé — ou
-   laisse-t-on `ws://localhost/` échouer ? La proposition est d'ouvrir le
-   filtre par un paramètre, ce qui réparerait du même coup
-   `RTPSession::SetRemoteHost`. Hors périmètre des lots 3 et 5 : ils ne touchent
-   pas à une classe partagée sans arbitrage.
+5. **Nom d'hôte en loopback** (piège 8) — *distinguer les deux usages*, tranché
+   le 2026-09-21. `IPAddress::Resolve` prend un quatrième paramètre qui dit
+   **pourquoi** on résout :
+
+   | `Usage` | Prédicat appliqué | Qui le demande |
+   |---|---|---|
+   | `Announce` *(défaut)* | `IsAnnounceable()` | `DetectAnnouncedIp`, `SetAnnouncedIp` |
+   | `Destination` | `IsUnicastDestination()` | `WebSocketServer::Connect`, `StunClient::ParseServer` |
+
+   Le défaut reste le filtre strict : un appelant qui ne dit rien ne peut pas
+   publier une loopback par distraction, et les deux appelants d'annonce ne
+   changent pas d'une ligne. `IsUnicastDestination()` existait déjà dans la même
+   classe — `RTPSession::SetRemotePort` s'en sert pour valider la destination
+   d'un flux RTP —, il n'y avait donc aucun prédicat à inventer.
+
+   Ce que l'arbitrage écartait : rendre `Resolve` sans politique du tout, en
+   confiant le filtre d'annonce à ses appelants. Plus pur, mais cela déplace le
+   risque là où il coûte le plus cher — un futur appelant qui oublie de filtrer
+   met une loopback dans une ligne `c=`.
+
+   **Correction d'un fait faux de ce document** : `RTPSession::SetRemoteHost`
+   n'existe pas, et rien n'a été « réparé du même coup ». La destination RTP se
+   pose par `SetRemotePort`, qui n'appelle pas `Resolve` : elle n'accepte qu'un
+   littéral (`IPAddress::Parse`), donc n'a jamais vu ce filtre. Lui faire
+   accepter un nom serait un autre chantier, et le contrôleur ne le demande pas.
+
+   `StunClient::ParseServer` portait le même défaut — un serveur STUN est une
+   destination — et bascule avec : `--stun-server <nom qui ne mène qu'à la
+   loopback>` était refusé alors que son littéral passait. La seule liberté qui
+   reste à `Resolve` en `Destination` est le **littéral**, rendu tel quel sans
+   politique : `ws://[ff02::1]/` est toujours accepté.

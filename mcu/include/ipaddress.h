@@ -103,6 +103,22 @@ public:
 	static IPAddress Parse(const std::string & text);
 
 	/**
+	 * Usage — POURQUOI on résout. Le filtre appliqué aux adresses rendues en
+	 * dépend, et les deux politiques ne se recouvrent pas : une loopback ne
+	 * s'annonce jamais, mais elle se joint très bien.
+	 *
+	 * Un appelant qui cherche une destination mais garde le défaut `Announce`
+	 * refuse tout nom ne résolvant qu'en loopback. C'est ce qui faisait échouer
+	 * `ws://localhost/` quand `ws://127.0.0.1/` passait : un littéral ne
+	 * traverse pas le filtre.
+	 */
+	enum Usage
+	{
+		Announce,	// l'adresse finira dans un SDP  -> IsAnnounceable()
+		Destination	// on va ouvrir une connexion vers elle -> IsUnicastDestination()
+	};
+
+	/**
 	 * Resolve — littéral OU nom d'hôte (getaddrinfo, donc A et AAAA).
 	 *
 	 * C'est ce dont `--public-ip` et l'auto-détection de l'adresse annoncée
@@ -114,18 +130,24 @@ public:
 	 * l'autre — or cette adresse finit dans la ligne `c=` d'un SDP. La règle,
 	 * déterministe et documentée, est donc appliquée ici :
 	 *
-	 *      1. première adresse ANNONÇABLE de la famille préférée ;
-	 *      2. à défaut, première adresse annonçable de l'autre famille ;
+	 *      1. première adresse RETENUE de la famille préférée ;
+	 *      2. à défaut, première adresse retenue de l'autre famille ;
 	 *      3. à défaut : échec.
 	 *
 	 * Cas special, si prefer = AF_UNSPEC
 	 *
 	 * On tente les DEUX résolutions et s'il y en a deux, on retoure les deux
 	 *
-	 * « Annonçable » = `IsAnnounceable()` (ni loopback, ni multicast, ni non
-	 * spécifiée, ni link-local). `prefer` vaut AF_INET (défaut, comportement
-	 * historique conservé), AF_INET6, ou AF_UNSPEC pour tenter les deux résolutions
-	 * et retourner toutes les adresses annonçables
+	 * « Retenue » = le prédicat de l'`Usage` demandé : `IsAnnounceable()` (ni
+	 * loopback, ni multicast, ni non spécifiée, ni link-local) pour `Announce`,
+	 * `IsUnicastDestination()` (ni multicast, ni non spécifiée, ni link-local
+	 * sans zone — la loopback passe) pour `Destination`. Ce filtre ne s'applique
+	 * qu'aux NOMS : un littéral est rendu tel quel, sans politique, et c'est à
+	 * l'appelant de le refuser s'il ne lui convient pas.
+	 *
+	 * `prefer` vaut AF_INET (défaut, comportement historique conservé),
+	 * AF_INET6, ou AF_UNSPEC pour tenter les deux résolutions et retourner
+	 * toutes les adresses retenues
 	 *
 	 * >>> POINT DE REVUE : est-ce bien AF_INET qu'on préfère par défaut ? <<<
 	 * Le conserver garantit qu'aucun déploiement existant ne change d'adresse
@@ -138,14 +160,14 @@ public:
 	 * vide = échec, et `err` dit lequel — un code errno, JAMAIS un `EAI_*` :
 	 *   0        succès
 	 *   EINVAL   `host` NULL ou vide
-	 *   ENOENT   nom inconnu, ou aucune adresse annonçable (EAI_NONAME…)
+	 *   ENOENT   nom inconnu, ou aucune adresse retenue (EAI_NONAME…)
 	 *   EAGAIN   échec temporaire de résolution (EAI_AGAIN)
 	 * (mélanger les deux jeux de codes serait un piège : `EAI_NONAME` vaut -2
 	 * en glibc, une valeur qu'aucun test `errno` ne reconnaît.)
 	 */
 
-	static std::list<IPAddress> Resolve(const char* host, int & err, int prefer = AF_INET);
-	static std::list<IPAddress> Resolve(const std::string & host, int & err, int prefer = AF_INET);
+	static std::list<IPAddress> Resolve(const char* host, int & err, int prefer = AF_INET, Usage usage = Announce);
+	static std::list<IPAddress> Resolve(const std::string & host, int & err, int prefer = AF_INET, Usage usage = Announce);
 
 	// Depuis ce que rend le noyau (`recvfrom`, `getsockname`, `accept`).
 	// Une sockaddr_in6 v4-mappée est dé-mappée à l'entrée : le reste du

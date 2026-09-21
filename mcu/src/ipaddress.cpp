@@ -172,8 +172,9 @@ IPAddress IPAddress::Parse(const std::string& text)
 *	Littéral OU nom d'hôte. L'ordre du résultat est le NÔTRE, pas celui du
 *	résolveur : cette adresse finit dans une ligne c= de SDP, elle ne peut pas
 *	dépendre de /etc/gai.conf ni de l'humeur du serveur DNS.
+*	Le filtre, lui, dépend de l'usage demandé (cf. IPAddress::Usage).
 ***********************************/
-std::list<IPAddress> IPAddress::Resolve(const char* host, int& err, int prefer)
+std::list<IPAddress> IPAddress::Resolve(const char* host, int& err, int prefer, Usage usage)
 {
 	std::list<IPAddress> out;
 
@@ -218,7 +219,12 @@ std::list<IPAddress> IPAddress::Resolve(const char* host, int& err, int prefer)
 	for (addrinfo* p = res; p; p = p->ai_next)
 	{
 		const IPAddress addr = FromSockaddr(p->ai_addr);
-		if (!addr.IsAnnounceable())
+
+		//Le filtre dépend de la question posée : publier une loopback est une
+		//faute, s'y connecter est le cas normal d'un serveur local.
+		const bool keep = (usage == Announce) ? addr.IsAnnounceable()
+						      : addr.IsUnicastDestination();
+		if (!keep)
 			continue;
 
 		//Doublons : un nom porte souvent la même adresse pour SOCK_DGRAM et
@@ -242,14 +248,15 @@ std::list<IPAddress> IPAddress::Resolve(const char* host, int& err, int prefer)
 	out.splice(out.end(), preferred);
 	out.splice(out.end(), other);
 
-	//Le nom se résout, mais rien de publiable (que de la loopback, par exemple).
+	//Le nom se résout, mais rien qui serve à l'usage demandé (que de la
+	//loopback pour une annonce, par exemple).
 	err = out.empty() ? ENOENT : 0;
 	return out;
 }
 
-std::list<IPAddress> IPAddress::Resolve(const std::string& host, int& err, int prefer)
+std::list<IPAddress> IPAddress::Resolve(const std::string& host, int& err, int prefer, Usage usage)
 {
-	return Resolve(host.c_str(), err, prefer);
+	return Resolve(host.c_str(), err, prefer, usage);
 }
 
 /***********************************

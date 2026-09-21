@@ -36,6 +36,7 @@
 #include <mutex>
 #include <string>
 
+#include "ipaddress.h"
 #include "websocketserver.h"
 
 namespace {
@@ -322,6 +323,32 @@ TEST(WsClientConnect, UneUrlV6EntreCrochetsSOuvre)
 	ASSERT_TRUE(listener->Send("bonjour en v6"));
 	ASSERT_TRUE(WaitFor([&]{ return listener->Messages() > 0; }));
 	EXPECT_EQ("bonjour en v6", listener->Message());
+}
+
+//Un NOM qui ne mène qu'à la loopback est une destination valable : c'est le cas
+//de la recette, deux jambes d'un même mediaserver. Il échouait, alors que le
+//littéral équivalent passait — le filtre « adresse annonçable » de Resolve, une
+//politique de PUBLICATION, s'appliquait à une destination (SPEC §9.5).
+TEST(WsClientConnect, UnNomQuiNeMeneQuALaLoopbackSOuvre)
+{
+	ServerFixture fixture;
+	if (!fixture.Start(39270))
+		GTEST_SKIP() << "Aucun port loopback disponible (sandbox réseau ?)";
+
+	int err = 0;
+	if (IPAddress::Resolve("localhost",err,AF_INET,IPAddress::Destination).empty())
+		GTEST_SKIP() << "\"localhost\" ne se résout pas sur cette machine";
+
+	auto listener = std::make_shared<SharedListener>();
+	ASSERT_TRUE(fixture.Server().Connect(fixture.Url("localhost"), listener))
+		<< "une destination n'a pas à être annonçable";
+
+	ASSERT_TRUE(WaitFor([&]{ return listener->IsOpened() || listener->IsClosed(); }));
+	ASSERT_TRUE(listener->IsOpened());
+
+	ASSERT_TRUE(listener->Send("bonjour par le nom"));
+	ASSERT_TRUE(WaitFor([&]{ return listener->Messages() > 0; }));
+	EXPECT_EQ("bonjour par le nom", listener->Message());
 }
 
 //Ce que le pair reçoit vient de l'URL, et de rien d'autre : chemin, query, Host.

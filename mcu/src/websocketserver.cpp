@@ -418,9 +418,11 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 	const std::string& path	      = target.path;
 	const std::string& hostHeader = target.hostHeader;
 
-	//DNS ICI, dans le thread appelant : A et AAAA, ordre déterministe.
+	//DNS ICI, dans le thread appelant : A et AAAA, ordre déterministe. On
+	//cherche une DESTINATION : la loopback est légitime — un serveur local en
+	//est une — alors qu'elle ne s'annonce jamais dans un SDP.
 	int err = 0;
-	const std::list<IPAddress> addresses = IPAddress::Resolve(host,err,AF_INET);
+	const std::list<IPAddress> addresses = IPAddress::Resolve(host,err,AF_INET,IPAddress::Destination);
 	if (addresses.empty())
 		return Error("-WebSocketServer::Connect: cannot resolve \"%s\" (errno %d) [url:%s]\n",host.c_str(),err,url.c_str());
 
