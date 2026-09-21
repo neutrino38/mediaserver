@@ -762,9 +762,20 @@ int Endpoint::Port::GetLocalMediaPort()
 		case MediaFrame::WS:
 		{
 			WSEndpoint * wsp = ( WSEndpoint * ) (this);
+			//Une jambe CLIENTE n'a pas d'URL locale : rendre le port d'écoute
+			//du serveur serait annoncer une adresse où personne n'entrera pour
+			//cette jambe — la duplication d'adresse que
+			//NETWORK-CONFIGURATION.md interdit (§4.7 du SPEC WS-CLIENT).
+			//L'appelant qui veut la cible demande GetMediaCandidates.
+			if (wsp->IsClientMode())
+			{
+				Error("Port is an outgoing WebSocket leg (%s): no local port.\n",
+				      wsp->GetRemoteUrl().c_str());
+				return -1;
+			}
 			return wsp->GetLocalPort();
 		}
-		
+
 		default:
 			Error(" Protocol not supported. \n");
 			return -1;
@@ -778,6 +789,9 @@ char* Endpoint::Port::GetLocalMediaHost()
 		case MediaFrame::WS:
 		{
 			WSEndpoint * wsp = ( WSEndpoint * ) (this);
+			//Jambe cliente : pas d'hôte local à publier (cf. GetLocalMediaPort).
+			if (wsp->IsClientMode())
+				return NULL;
 			return wsp->GetLocalHost();
 		}
 
@@ -872,6 +886,37 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 	}
 }
 
+int Endpoint::ConnectMediaConnection( MediaFrame::Type media, MediaFrame::MediaRole role,
+				      const char * url )
+{
+	if (!url || !*url)
+		return Error("ConnectMediaConnection: no url given.\n");
+
+	//Le texte seul : « jouer le navigateur » ne concerne que ce canal, l'audio et
+	//la vidéo restent en RTP (§8 du SPEC).
+	if (media != MediaFrame::Text)
+		return Error("ConnectMediaConnection: only text can be carried over an outgoing WebSocket.\n");
+
+	//Un port WS existe déjà ? Sinon le créer, comme ConfigureMediaConnection —
+	//mais SANS token : personne n'entrera par notre serveur pour cette jambe.
+	std::shared_ptr<Port> p = GetPort(media, role);
+	if (!p)
+		return Error("ConnectMediaConnection: invalid media=%d, role=%d.\n", media, role);
+
+	if ( p->GetTransport() != MediaFrame::WS )
+	{
+		if (!ConfigureMediaConnection(media, role, MediaFrame::WS, NULL))
+			return Error("ConnectMediaConnection: cannot switch port to WebSocket.\n");
+
+		p = GetPort(media, role);
+	}
+
+	std::shared_ptr<WSEndpoint> wsp = std::dynamic_pointer_cast<WSEndpoint>(p);
+	if (!wsp)
+		return Error("ConnectMediaConnection: port is not a WebSocket endpoint.\n");
+
+	return wsp->Connect(url);
+}
 
 
 bool Endpoint::SetAddressProfile(MediaFrame::Type media, const char* profile, std::string& error,
@@ -938,9 +983,20 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 			return NULL;
 		}
 		
+		//Jambe WebSocket CLIENTE : ce qu'il y a à publier, c'est la cible que le
+		//contrôleur nous a donnée — il n'y a pas d'URL locale, et l'adresse
+		//d'écoute serait fausse (§4.7 du SPEC WS-CLIENT). Avant GetLocalMediaPort,
+		//qui refuse précisément pour cette raison.
+		if ( protocol == MediaFrame::WS )
+		{
+			std::shared_ptr<WSEndpoint> wsp = std::dynamic_pointer_cast<WSEndpoint>(p);
+			if (wsp && wsp->IsClientMode())
+				return strdup(wsp->GetRemoteUrl().c_str());
+		}
+
 		port 	= p->GetLocalMediaPort();
 		wshost	= p->GetLocalMediaHost();
-		
+
 		if ( port == -1)
 			return NULL;
 		

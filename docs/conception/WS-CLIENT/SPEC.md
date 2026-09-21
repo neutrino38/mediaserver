@@ -1,8 +1,10 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **lots 0 à 4 faits** — les coutures (§6), le masquage selon le
+> Statut : **lots 0 à 5 faits** — les coutures (§6), le masquage selon le
 > rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2, §4.6), son pilotage
-> par le réacteur depuis une URL (§4.5) et le transport TLS client (§4.4).
+> par le réacteur depuis une URL (§4.5), le transport TLS client (§4.4), puis la
+> jambe JSR-309 elle-même : `WSEndpoint::Connect`, la reprise, l'U+FFFD et ce
+> que la jambe publie (§4.7). Les quatre points du §9 sont **tranchés**.
 > Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
@@ -256,7 +258,23 @@ puis `onClose`, et journalise la cause.
 ### 4.7 `WSEndpoint` en mode client
 
 Ajout minimal : `int Connect(const std::string& url)`, qui mémorise l'URL et
-demande la connexion. Tout le reste est déjà en place :
+demande la connexion. Il ne rend `0` que pour une URL **inutilisable** — schéma
+inconnu, hôte absent, URL illisible : ce qui ne se réparera pas en attendant.
+Tout le reste est asynchrone, donc arme la reprise et rend `1`. C'est la seule
+distinction qui compte ici, et `WebSocketServer::ParseWsUrl` la porte : sans
+elle, une faute de frappe du contrôleur ferait boucler le serveur pour toujours.
+
+Le point d'entrée d'une jambe est `Endpoint::ConnectMediaConnection(media, role,
+url)` : elle bascule le port en `WS` — sans token, personne n'entrera par notre
+serveur pour cette jambe — puis appelle `Connect`. Le texte seul y est admis.
+
+Le rythme de la reprise n'est pas porté par la jambe : elle pose une échéance
+dans `WebSocketServer::ConnectLater`, servie par **un thread unique pour tout le
+binaire**. Ce thread n'est pas le réacteur, et c'est tout l'objet : une tentative
+refait un DNS et un `connect()`, qui y gèleraient toutes les jambes WebSocket
+(piège 7). Le réacteur, lui, n'adopte jamais qu'un descripteur.
+
+Tout le reste est déjà en place :
 
 - `onOpen` (`WSEndpoint.cpp:36`) associe le WebSocket et **rejoue la file
   d'attente** — exactement ce qu'il faut ici, le texte RTP pouvant arriver
@@ -266,19 +284,46 @@ demande la connexion. Tout le reste est déjà en place :
 
 Deux décisions propres au mode client :
 
-**Reconnexion.** Un navigateur ne reconnecte pas ; une jambe pilotée, si — le
-contrôleur peut configurer la jambe avant que le pair n'écoute. Politique
-proposée : 5 tentatives, backoff 1 s → 2 s → 4 s → 8 s → 8 s, tant que le port
-n'a pas été terminé. Pendant les tentatives, **ne pas** envoyer l'U+FFFD au
-pair RTP : une coupure d'une seconde insérerait sinon un caractère de perte à
-chaque fois. L'U+FFFD part à l'abandon définitif, avec l'événement.
+**Reconnexion (arbitrage du 2026-09-21).** Un navigateur ne reconnecte pas ; une
+jambe pilotée, si — le contrôleur peut configurer la jambe avant que le pair
+n'écoute. La politique est : **toutes les 5 s, sans limite**, tant que la jambe
+vit. Deux choses seulement l'arrêtent, et ce sont les deux formes d'une même :
+`WSEndpoint::End()`, et la destruction de la jambe — le serveur ne garde qu'un
+`weak_ptr` sur son listener, dont l'expiration fait mourir la demande de reprise.
+Un 401 ou un 403 n'est pas un cas à part : une seule règle, aucun état
+« terminé » à écrire.
+
+Chaque coupure est une **perte annoncée** : U+FFFD vers le pair RTP quand la
+connexion tombe (`onClose`), U+FFFD vers le pair WebSocket à la reconnexion. Le
+texte arrivé pendant la coupure est **perdu**, jamais rejoué — le garder
+afficherait, après le caractère de perte, un texte que l'autre bout croit déjà
+perdu. La file d'attente ne sert donc qu'**avant la première ouverture**, là où
+elle porte la phrase de présentation de l'appelant. Une **tentative**
+infructueuse, elle, n'annonce rien : elle ne change pas ce que les deux pairs
+savent déjà.
 
 **Ce que le serveur publie.** En mode client, il n'y a pas d'URL locale.
-`GetLocalMediaPort`/`GetLocalMediaHost` (`Endpoint.cpp:762` et `:778`) et
-`GetMediaCandidates` ne doivent **pas** rendre l'adresse d'écoute : elle serait
-fausse, et c'est précisément la duplication d'adresse que
-`NETWORK-CONFIGURATION.md` interdit. Ils rendent l'URL distante configurée, ou
-une erreur explicite.
+`GetLocalMediaPort`/`GetLocalMediaHost` (`Endpoint.cpp:762` et `:778`) ne
+rendent **pas** l'adresse d'écoute : elle serait fausse, et c'est précisément la
+duplication d'adresse que `NETWORK-CONFIGURATION.md` interdit. Elles échouent
+explicitement (`-1`, `NULL`), et `GetMediaCandidates` rend l'**URL distante
+configurée** — la cible, pas notre écoute.
+
+### 4.7 bis Délai d'abandon d'une ouverture
+
+Une ouverture cliente a une **échéance : 10 s** (arbitrage du 2026-09-21). Un pair
+qui accepte le TCP puis se tait — un `wss://` pointé sur un port en clair, un 101
+jamais écrit, un trou noir réseau — ne produira jamais l'événement qui
+réveillerait le réacteur : sans échéance, la jambe reste ouverte pour toujours et
+la reprise ne part jamais.
+
+Le réacteur appelait `poll(-1)`. Il prend désormais le délai restant le plus
+court parmi ses connexions clientes **non encore ouvertes**
+(`WebSocketConnection::GetOpeningTimeLeft`, `-1` pour tout le reste, donc
+`poll(-1)` quand il n'y a aucune ouverture en cours). À l'échéance, l'ouverture
+échoue exactement comme un refus TCP : `onError` puis `onClose`, et la reprise
+repart. Le délai est **réglable** (`SetOpeningTimeout`) pour que les tests
+n'attendent pas dix secondes ; rien ne l'expose en ligne de commande.
 
 ### 4.8 API de contrôle
 
@@ -296,10 +341,16 @@ non vide pour `WS` (`MediaSession.cpp:2069`) — un token sans objet ici.
 
 Le résultat est **asynchrone** : la connexion aboutit après le retour XML-RPC.
 Le contrôleur l'apprend par la file d'événements JSR-309, avec les valeurs qui
-existent déjà (`JSR309Event.h:31`) : `EndpointConnectedEvent` (7) à
-l'ouverture, `EndpointDisconnectedEvent` (6) à l'abandon. Elles portent déjà
-`(joinableId, media, role)`, ce qui suffit. À confirmer avec elixip : leur
-sémantique actuelle est « DTLS OK + premier RTP reçu ».
+existent déjà (`JSR309Event.h:31`, arbitrage du 2026-09-21) :
+`EndpointConnectedEvent` (7) à **chaque** ouverture, `EndpointDisconnectedEvent`
+(6) à **chaque** perte d'une connexion établie. Elles portent déjà
+`(joinableId, media, role)`, ce qui suffit, et n'élargir aucun contrat de fil
+partagé avec elixip et les clients Java vaut mieux qu'une huitième valeur. Leur
+sémantique s'élargit en revanche : elle était « DTLS OK + premier RTP reçu ».
+À dire à elixip.
+
+Une **tentative** infructueuse ne publie rien : la reprise étant indéfinie, elle
+inonderait la file d'un couple 6/7 toutes les 5 s pour un pair qui n'écoute pas.
 
 Deux options de ligne de commande, à ajouter aux **deux** tableaux du
 `README.md`. Le transport les attend déjà (§4.4) : il ne reste à `main()` qu'un
@@ -348,7 +399,16 @@ Ils sont tous vérifiés, et chacun est une panne silencieuse s'il est manqué.
    `GetMediaCandidates`, donc annonçable par construction — mais la recette §7
    se fait en loopback : y écrire l'adresse, pas le nom. `RTPSession::SetRemoteHost`
    a exactement le même travers. Cf. §9.4.
-9. **`EnsureRequest`** construit un `HTTPRequest` à partir de
+9. **La file d'attente était toujours jetée comme périmée** — relevé au lot 5,
+   et il préexistait au chantier. `SendFrame` horodatait chaque trame en attente
+   par `getDifTime(&clock)`, et `onOpen` remet `clock` à zéro à la **première
+   association** : l'âge se mesurait donc depuis un instant postérieur au
+   stockage, en arithmétique non signée. Toute la file sortait « stale », c'est-à-
+   dire la première phrase de **chaque** appel — celle que cette file existe pour
+   sauver. Elle porte désormais une date absolue (`getTimeMS`). Au passage,
+   `clock` n'était initialisé que dans `onOpen` alors que `SendFrame` le lit avant
+   (chemin BOM) : un `timeval` non initialisé.
+10. **`EnsureRequest`** construit un `HTTPRequest` à partir de
    `parser->GetMethodStr()` : sans objet pour une réponse. Le mode client
    accumule ses en-têtes ailleurs — dans une map à clefs minuscules, la casse
    d'un en-tête HTTP étant libre — et lit le code de statut par
@@ -365,7 +425,7 @@ Chaque lot compile, passe `cd mcu && make check`, et se livre seul.
 | 2 | Mode client de `WebSocketConnection` en clair : connect, upgrade, 101, reliquat, `onError` | test d'intégration en-processus contre `TextEchoWebsocketHandler` |
 | 3 ✔ | `WebSocketServer::Connect` : file de demandes, URL, DNS hors réacteur, IPv4 et IPv6 | `tests/test_ws_client_connect.cpp` : `127.0.0.1` **et** `[::1]`, chemin + query, port fermé, URL inutilisable |
 | 4 ✔ | Transport TLS client | `tests/test_ws_client_tls.cpp` : ouverture `wss://` et écho, vérification refusée **et** acceptée (autorité jetable de `tests/wstlsfixture.h`), autorité illisible |
-| 5 | `WSEndpoint::Connect`, reconnexion bornée, U+FFFD, `GetMediaCandidates` | test de pontage RTP ↔ WS sortant |
+| 5 ✔ | `WSEndpoint::Connect`, `Endpoint::ConnectMediaConnection`, reprise indéfinie, U+FFFD, `GetMediaCandidates`, délai d'ouverture | `tests/test_ws_client_endpoint.cpp` : pontage RTP ↔ WS sortant dans les deux sens, coupure annoncée et texte perdu, reprise arrêtée par `End()`, URL inutilisable, cible publiée au lieu de l'écoute, ouverture muette abandonnée |
 | 6 | XML-RPC `ConnectMediaConnection`, événements, `docs/JSR-309-API.md`, `README.md`, protobuf MOTELI côté elixip | appel XML-RPC réel |
 | 7 | Recette de bout en bout | §7 |
 
@@ -382,8 +442,10 @@ Un seul mediaserver suffit : il tient les deux bouts.
 2. Vérifier l'événement `EndpointConnectedEvent` sur la jambe B.
 3. Taper du texte des deux côtés ; vérifier qu'il arrive dans les deux sens,
    caractère par caractère, sans doublon ni perte.
-4. Couper le serveur A ; vérifier la reconnexion, puis l'U+FFFD et
-   `EndpointDisconnectedEvent` à l'abandon.
+4. Couper le serveur A ; vérifier `EndpointDisconnectedEvent` et l'U+FFFD reçu
+   côté RTP, puis la reconnexion 5 s plus tard, son
+   `EndpointConnectedEvent` et l'U+FFFD reçu côté WebSocket. Le texte tapé
+   pendant la coupure ne doit **pas** réapparaître.
 5. Refaire en `wss://`, avec puis sans `--websocket-client-insecure`.
 6. Refaire avec une jambe RTP T.140 RED en face de la jambe cliente : c'est le
    cas réel d'un appel navigateur ↔ terminal SIP.
@@ -399,30 +461,31 @@ Un seul mediaserver suffit : il tient les deux bouts.
 - Le data channel WebRTC (`docs/conception/T140-DC`) est l'autre réponse au
   même besoin ; les deux cohabitent sans se gêner.
 
-## 9. À trancher avant le lot 5
+## 9. Arbitrages
 
-1. **Reconnexion** : la politique du §4.7 (5 essais, backoff borné) est une
-   proposition. Un « aucune reconnexion » est défendable si elixip préfère
-   piloter lui-même la reprise.
-2. **Événements** : réutiliser les valeurs 6 et 7, ou en ajouter une (8) propre
-   à la jambe WS cliente. Réutiliser évite d'élargir un contrat de fil partagé
-   avec elixip et les clients Java, mais élargit la sémantique des valeurs
-   existantes.
-3. **Erreur d'authentification** : si le serveur distant répond 401 ou 403,
-   faut-il retenter ? La proposition est non — une erreur d'autorisation ne se
-   résout pas par la répétition.
-4. **Délai d'abandon d'une ouverture** : une jambe sortante dont le pair
-   **accepte la connexion TCP puis se tait** reste ouverte indéfiniment, sans un
-   événement pour le dire. Trois cas, tous plausibles : un `wss://` pointé sur
-   un port en clair (le pair attend une requête HTTP, nous attendons un
-   ServerHello), un pair qui n'écrit jamais sa réponse 101, un trou noir réseau.
-   Le réacteur appelle `poll()` sans délai (`-1`) : il n'a aujourd'hui aucune
-   notion d'échéance. Ce n'est pas propre à TLS — le lot 3 avait déjà ce trou,
-   le lot 4 l'élargit. Un délai d'ouverture est la moitié manquante de la
-   politique de reconnexion du §4.7, donc à trancher **avec** elle, au lot 5.
-5. **Nom d'hôte en loopback** (piège 8) : faut-il que `IPAddress::Resolve`
+Les quatre premiers points ont été **tranchés le 2026-09-21**, avant le lot 5.
+Ils sont décrits là où ils s'appliquent ; ce qui suit ne dit que la décision et
+ce qu'elle écarte.
+
+1. **Reconnexion** : *toutes les 5 s, indéfiniment* (§4.7). Le backoff borné à
+   5 essais, proposé plus haut dans l'histoire de ce document, est écarté : une
+   jambe pilotée n'a pas de raison d'abandonner tant que le contrôleur ne l'a pas
+   terminée. Chaque coupure annonce la perte (U+FFFD des deux côtés) et le texte
+   de la coupure est perdu.
+2. **Événements** : *réutiliser 6 et 7* (§4.8), à chaque cycle, plutôt qu'une
+   huitième valeur. Le contrat de fil partagé avec elixip, les clients Java et
+   les protobuf MOTELI ne s'élargit pas ; la sémantique des deux valeurs, elle,
+   s'élargit — à dire à elixip.
+3. **Erreur d'authentification** : *aucun cas particulier*. Un 401 ou un 403 est
+   retenté comme tout le reste, ce qui découle d'une reprise indéfinie : une
+   seule règle, et aucun état « terminé » à écrire dans la jambe.
+4. **Délai d'abandon d'une ouverture** : *10 s, portés par le réacteur* (§4.7
+   bis). Sans lui, la reprise ne partirait jamais dans les trois cas qui
+   motivaient le point. Pas d'option de ligne de commande : la valeur n'est
+   réglable que pour les tests.
+5. **Nom d'hôte en loopback** (piège 8) — **ouvert**. Faut-il que `IPAddress::Resolve`
    sache résoudre une **destination** — filtre « annonçable » désactivé — ou
    laisse-t-on `ws://localhost/` échouer ? La proposition est d'ouvrir le
    filtre par un paramètre, ce qui réparerait du même coup
-   `RTPSession::SetRemoteHost`. Hors périmètre du lot 3 : il ne touche pas à
-   une classe partagée sans arbitrage.
+   `RTPSession::SetRemoteHost`. Hors périmètre des lots 3 et 5 : ils ne touchent
+   pas à une classe partagée sans arbitrage.

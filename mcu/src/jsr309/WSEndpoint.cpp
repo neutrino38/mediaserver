@@ -1,4 +1,5 @@
 #include "WSEndpoint.h"
+#include "RTPEndpoint.h"
 #include <stdexcept>
 
 static BYTE BOMUTF8[]			= {0xEF,0xBB,0xBF};
@@ -11,6 +12,7 @@ static BYTE REPLACEMENT_UTF8[]		= {0xEF,0xBF,0xBD};
 int WSEndpoint::wsPort = 0;
 char* WSEndpoint::wsHost = NULL;
 bool WSEndpoint::wsSecure = false;
+WebSocketServer* WSEndpoint::wsServer = NULL;
 
 WSEndpoint::WSEndpoint(MediaFrame::Type type) : Port(type, MediaFrame::WS)
 {
@@ -21,6 +23,13 @@ WSEndpoint::WSEndpoint(MediaFrame::Type type) : Port(type, MediaFrame::WS)
 	
     useRed = false;
     pseudoSeqNum = 0;
+    wantConnected = false;
+    retryId = 0;
+    everOpened = false;
+    droppedWhileDown = 0;
+    //L'origine des horodatages : elle est relue par SendFrame (chemin BOM) AVANT
+    //toute ouverture, et un timeval non initialise s'y lisait.
+    gettimeofday(&clock,NULL);
     switch (type)
     {
         case MediaFrame::Text:
@@ -48,11 +57,34 @@ void WSEndpoint::onOpen(WebSocket *ws)
     }
     _ws = ws->GetWeakPtr();
 
+    //Jambe cliente qui REVIENT : le texte de la coupure a été jeté, et T.140 §5.3
+    //veut que le survivant l'annonce — sans ce caractère, l'utilisateur lirait
+    //deux phrases collées sans savoir qu'il en manque une.
+    //Une jambe SERVEUR garde son comportement : c'est le navigateur qui revient,
+    //et lui n'a rien perdu que nous sachions.
+    if (everOpened && IsClientMode())
+    {
+	Log("WSEndpoint: outgoing leg reconnected to %s (%u text frame(s) lost while down).\n",
+	    clientUrl.c_str(), droppedWhileDown);
+	droppedWhileDown = 0;
+	SendReplacementChar(true);
+    }
+
+    everOpened = true;
+
+    //Le contrôleur apprend l'ouverture par la file d'événements JSR-309 : le
+    //retour de ConnectMediaConnection, lui, est antérieur (§4.8).
+    if (wantConnected)
+	PostEvent(new ::EndpointConnectedEvent());
+
     //Rejouer le texte arrivé avant que le navigateur ne soit là, dans l'ordre et
     //sans les trames trop vieilles pour être encore du dialogue (§4.5).
     if (!pending.empty())
     {
-	const QWORD now = getDifTime(&clock)/1000;
+	//Date ABSOLUE, comme celle posee par SendFrame : `clock` vient d'etre remis
+	//a zero par la premiere association ci-dessus, donc un age mesure depuis lui
+	//declarait perimee TOUTE la file — la premiere phrase de chaque appel.
+	const QWORD now = getTimeMS();
 	size_t sent = 0, stale = 0;
 
 	for (std::list<std::pair<QWORD,std::string>>::const_iterator it = pending.begin();
@@ -186,14 +218,153 @@ void WSEndpoint::onClose(WebSocket *ws)
     //Ne réinitialiser que si c'est bien la connexion courante qui se ferme
     //(une nouvelle a pu la remplacer entre-temps via onOpen).
     std::shared_ptr<WebSocket> cur = _ws.lock();
-    if ( cur.get() == ws )
+    const bool wasOpen = ( cur.get() == ws );
+
+    if ( wasOpen )
     {
         Log("WSEndpoint: connection associated with endpoint is closing.\n");
 	_ws.reset();
 
 	// Signal the interription as per
 	SendReplacementChar(false);
+
+	//Le texte en attente est PERDU à la coupure : le garder pour le rejouer
+	//plus tard afficherait, après l'U+FFFD, un texte que le pair RTP croit
+	//déjà perdu (arbitrage du 2026-09-21).
+	if (wantConnected && !pending.empty())
+	{
+	    droppedWhileDown += pending.size();
+	    pending.clear();
+	}
+
+	//Une jambe cliente qui TOMBE est une perte que le contrôleur doit voir.
+	//Une TENTATIVE infructueuse, elle, ne publie rien : elle ne change pas
+	//ce qu'il sait déjà.
+	if (wantConnected)
+	    PostEvent(new ::EndpointDisconnectedEvent());
     }
+
+    //Toute connexion qui se ferme relance la reprise — établie ou jamais
+    //ouverte. Sauf si une autre l'a déjà remplacée (cur non nul) : celle-là vit.
+    if (wantConnected && (wasOpen || !cur))
+	ScheduleReconnect();
+}
+
+/**
+ * Mode client (SPEC docs/conception/WS-CLIENT §4.7)
+ */
+void WSEndpoint::SetServer(WebSocketServer* server)
+{
+	wsServer = server;
+}
+
+bool WSEndpoint::IsClientMode() const
+{
+	std::lock_guard<std::mutex> lock(clientMutex);
+	return !clientUrl.empty();
+}
+
+std::string WSEndpoint::GetRemoteUrl() const
+{
+	std::lock_guard<std::mutex> lock(clientMutex);
+	return clientUrl;
+}
+
+int WSEndpoint::Connect(const std::string& url)
+{
+	if (!wsServer)
+		return Error("WSEndpoint: no websocket server to open an outgoing leg.\n");
+
+	//Ce qui est PERMANENT se dit tout de suite : une URL illisible ou un schéma
+	//inconnu ne se répareront pas en attendant 5 s. Ce qui est TRANSITOIRE (le
+	//pair n'écoute pas encore) arme la reprise et rend 1.
+	WebSocketServer::Target target;
+	if (!WebSocketServer::ParseWsUrl(url,target))
+		return Error("WSEndpoint: cannot use url \"%s\" for an outgoing leg.\n",url.c_str());
+
+	{
+		std::lock_guard<std::mutex> lock(clientMutex);
+		if (!clientUrl.empty() && clientUrl!=url)
+			//Rearmer une jambe vivante sur une AUTRE cible, c'est deux
+			//conversations dans un seul port : il faut la reconfigurer.
+			return Error("WSEndpoint: leg is already armed on %s.\n",clientUrl.c_str());
+
+		clientUrl     = url;
+		wantConnected = true;
+	}
+
+	Log("WSEndpoint: outgoing text leg armed on %s\n",url.c_str());
+
+	TryConnect();
+
+	return 1;
+}
+
+void WSEndpoint::TryConnect()
+{
+	std::string url;
+	{
+		std::lock_guard<std::mutex> lock(clientMutex);
+		if (!wantConnected)
+			return;
+		url = clientUrl;
+	}
+
+	if (!wsServer)
+		return;
+
+	//weak_ptr, et non shared_ptr : c'est l'expiration de cette référence qui dit
+	//au serveur que la jambe est morte et que la reprise doit s'arrêter.
+	std::weak_ptr<WebSocket::Listener> self = weak_from_this();
+	if (self.expired())
+	{
+		//Un WSEndpoint hors shared_ptr ne peut pas se donner en listener. Le
+		//dire vaut mieux que d'ouvrir une connexion que personne ne pilotera.
+		Error("WSEndpoint: endpoint is not held by a shared_ptr, cannot connect.\n");
+		return;
+	}
+
+	//HORS du verrou : Connect() résout un nom, et un DNS lent tiendrait alors
+	//tout le reste de la jambe.
+	if (!wsServer->Connect(url,self))
+		//Échec SYNCHRONE : personne n'a été notifié — il n'y a pas de jambe —,
+		//donc c'est ici que la reprise se replanifie.
+		ScheduleReconnect();
+}
+
+void WSEndpoint::ScheduleReconnect()
+{
+	std::weak_ptr<WebSocket::Listener> self = weak_from_this();
+	if (self.expired())
+		return;
+
+	std::string url;
+	uint64_t previous = 0;
+	{
+		std::lock_guard<std::mutex> lock(clientMutex);
+		if (!wantConnected)
+			return;
+		url = clientUrl;
+		//Une seule demande en vol à la fois : deux demandes feraient deux
+		//connexions concurrentes pour une seule jambe.
+		previous = retryId;
+		retryId  = 0;
+	}
+
+	if (!wsServer)
+		return;
+
+	if (previous)
+		wsServer->CancelConnectLater(previous);
+
+	const uint64_t id = wsServer->ConnectLater(url,self,retryMs);
+
+	std::lock_guard<std::mutex> lock(clientMutex);
+	//End() a pu passer pendant l'appel : ne pas ressusciter la reprise.
+	if (wantConnected)
+		retryId = id;
+	else if (id)
+		wsServer->CancelConnectLater(id);
 }
 
 //T.140 §5.3 : une perte de session s'annonce par un U+FFFD dans le flux, du côté
@@ -288,6 +459,19 @@ WSEndpoint::~WSEndpoint()
 
 int WSEndpoint::End()
 {
+    //Arrêter la reprise AVANT de fermer : sinon la fermeture qu'on déclenche
+    //rouvrirait la jambe. C'est le seul point d'arrêt volontaire de la boucle —
+    //autrement elle ne s'arrête que si la jambe est détruite.
+    uint64_t pendingRetry = 0;
+    {
+        std::lock_guard<std::mutex> lock(clientMutex);
+        wantConnected = false;
+        pendingRetry  = retryId;
+        retryId       = 0;
+    }
+    if (pendingRetry && wsServer)
+        wsServer->CancelConnectLater(pendingRetry);
+
     if ( std::shared_ptr<WebSocket> ws = _ws.lock() )
     {
         ws->Close();
@@ -337,11 +521,18 @@ int WSEndpoint::SendFrame(TextFrame &frame)
     {
         ws->SendMessage( msg );
     }
+    else if (everOpened && IsClientMode())
+    {
+        //Jambe cliente COUPÉE : le texte est perdu, et la perte s'annonce par un
+        //U+FFFD à la reconnexion (arbitrage du 2026-09-21). Le garder pour le
+        //rejouer afficherait, après ce caractère, un texte déjà déclaré perdu.
+        droppedWhileDown++;
+    }
     else
     {
         //Pas encore de navigateur : garder la trame (§4.5 de
         //jsr309_text_over_wss.md). Bornée en nombre ET en âge.
-        pending.push_back(std::make_pair((QWORD) getDifTime(&clock)/1000, msg));
+        pending.push_back(std::make_pair(getTimeMS(), msg));
 
         if (pending.size() > maxPendingFrames)
         {

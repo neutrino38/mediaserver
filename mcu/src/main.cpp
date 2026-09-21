@@ -707,6 +707,9 @@ int main(int argc,char **argv)
 	WSEndpoint::SetLocalPort(wsPort);
 	//Le schéma que GetMediaCandidates annoncera : ws:// ou wss://, sur le même port.
 	WSEndpoint::SetLocalSecure(wsSecure);
+	//Le serveur qui ouvrira les jambes texte SORTANTES (mode client, où le
+	//mediaserver joue le navigateur). Le même réacteur tient les deux sens.
+	WSEndpoint::SetServer(&wsServer);
 
 #ifdef MOTELI
 	if(cnxString) rqServer.Start(&rqHandler);

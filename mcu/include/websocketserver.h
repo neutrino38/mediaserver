@@ -62,6 +62,43 @@ public:
 	 */
 	bool Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener);
 
+	/**
+	 * Cible d'une connexion sortante, telle que l'URL la décrit.
+	 *
+	 * ParseWsUrl sépare ce qui est PERMANENT — schéma inconnu, hôte absent, URL
+	 * illisible — de ce qui est TRANSITOIRE : DNS muet, pair qui n'écoute pas
+	 * encore. Le premier ne se résout pas par la répétition, le second si. Sans
+	 * cette séparation une faute de frappe du contrôleur boucle pour toujours.
+	 */
+	struct Target
+	{
+		bool		tls;
+		std::string	host;		//hôte de l'URL, sans crochets
+		std::string	hostHeader;	//valeur de l'en-tête Host (hôte[:port])
+		std::string	path;		//chemin + query
+		WORD		port;
+	};
+	static bool ParseWsUrl(const std::string& url, Target& target);
+
+	/**
+	 * ConnectLater — programme une tentative d'ouverture sortante dans `delayMs`.
+	 *
+	 * C'est le rythme de la reprise d'une jambe cliente (SPEC §4.7 : toutes les
+	 * 5 s, sans limite). Le thread qui la porte est UNIQUE pour tout le binaire,
+	 * et ce n'est PAS le réacteur : la tentative refait un DNS et un connect(),
+	 * qui y gèleraient toutes les jambes WebSocket (piège 7 du SPEC).
+	 *
+	 * `delayMs` est aussi le rythme des tentatives suivantes tant que l'ouverture
+	 * échoue de façon SYNCHRONE — un pair dont le nom ne résout pas encore. Un
+	 * échec asynchrone, lui, passe par `onClose` : c'est le listener qui redemande.
+	 *
+	 * La demande meurt d'elle-même quand son `listener` expire : une jambe
+	 * détruite ne se reconnecte pas. Rend l'identifiant de la demande, pour
+	 * CancelConnectLater ; 0 si elle est refusée.
+	 */
+	uint64_t ConnectLater(const std::string& url, std::weak_ptr<WebSocket::Listener> listener, DWORD delayMs);
+	void CancelConnectLater(uint64_t id);
+
 	//Active le mode sécurisé (wss://). À appeler AVANT Init(). Les certificats
 	//(PEM) sont chargés dans Init() via WebSocketTlsTransport::ClassInit().
 	void SetSecure(bool secure, const char* certfile, const char* keyfile);
@@ -92,11 +129,49 @@ private:
 		std::weak_ptr<WebSocket::Listener> listener;
 	};
 
+	//Tentatives d'ouverture différées : UN thread pour tout le binaire, distinct
+	//du réacteur parce qu'une tentative résout un nom et ouvre un socket.
+	class Retrier : public Worker
+	{
+	public:
+		Retrier(WebSocketServer* server) : server(server), nextId(0) {}
+		virtual ~Retrier() { StopThread(); }
+
+		void Start()	{ StartThread(); }
+		void Stop();
+
+		uint64_t Schedule(const std::string& url,
+				  std::weak_ptr<WebSocket::Listener> listener, DWORD delayMs);
+		void Cancel(uint64_t id);
+
+	protected:
+		virtual int Run();
+
+	private:
+		struct Attempt
+		{
+			uint64_t	id;
+			QWORD		dueMs;
+			DWORD		retryMs;
+			std::string	url;
+			std::weak_ptr<WebSocket::Listener> listener;
+		};
+
+		WebSocketServer*	server;
+		std::mutex		mutex;
+		std::list<Attempt>	attempts;
+		uint64_t		nextId;
+	};
+
 	void CreateConnection(int fd);
 	void CreateClientConnection(PendingConnect& request);
 	void DrainPendingConnects();
 	void CloseConnection(uint64_t connId);
 	void DrainWakeup();
+	//Délai de poll() : ce qu'il reste à la plus proche ouverture cliente en
+	//cours, -1 s'il n'y en a aucune. Sans lui, une ouverture muette resterait
+	//ouverte pour toujours (SPEC §9.4).
+	int  GetPollTimeout();
 
 private:
 	int inited;
@@ -115,6 +190,9 @@ private:
 	//qu'un autre thread touche.
 	std::mutex			pendingMutex;
 	std::list<PendingConnect>	pendingConnects;
+	//Reprise des jambes clientes (ConnectLater). Membre : il vit et meurt avec
+	//le serveur, dont il appelle Connect().
+	Retrier				retrier;
 	//Connexions fermées au tour courant, gardées vivantes un tour de boucle de plus
 	//pour laisser s'écouler d'éventuels appels externes en vol (cf. §3.3 du plan).
 	std::vector<std::shared_ptr<WebSocketConnection>> recentlyClosed;

@@ -21,6 +21,21 @@ extern "C" {
 #include "tools.h"
 #include "websocketconnection.h"
 
+//10 s : de quoi absorber un DNS lent, un handshake TLS et un pair chargé, sans
+//laisser une jambe muette au-dela. Reglable pour que les tests n'aient pas a
+//attendre dix secondes (tests/test_ws_client_endpoint.cpp).
+static DWORD openingTimeoutMs = 10000;
+
+void WebSocketConnection::SetOpeningTimeout(DWORD ms)
+{
+	openingTimeoutMs = ms;
+}
+
+DWORD WebSocketConnection::GetOpeningTimeout()
+{
+	return openingTimeoutMs;
+}
+
 WebSocketConnection::WebSocketConnection(Listener* listener, uint64_t connId)
 {
 	//Store listener and identity
@@ -286,6 +301,29 @@ void WebSocketConnection::OnWritable()
 		//Delete it
 		delete(frame);
 	}
+}
+
+int WebSocketConnection::GetOpeningTimeLeft()
+{
+	//Seule une ouverture CLIENTE en cours a une echeance : une connexion
+	//entrante est pilotee par son pair, et une jambe ouverte n'attend plus rien.
+	if (clientState!=Connecting && clientState!=TlsHandshake && clientState!=Upgrading)
+		return -1;
+	if (!openingTimeoutMs)
+		return -1;
+
+	const QWORD elapsed = getDifTime(&startTime)/1000;
+	if (elapsed>=openingTimeoutMs)
+		return 0;
+
+	return (int) (openingTimeoutMs-elapsed);
+}
+
+void WebSocketConnection::OnOpeningTimeout()
+{
+	char msg[64];
+	snprintf(msg,sizeof(msg),"opening timed out after %ums",(unsigned)openingTimeoutMs);
+	FailClient(msg);
 }
 
 bool WebSocketConnection::IsFinished()

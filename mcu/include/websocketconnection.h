@@ -365,6 +365,15 @@ public:
 	//pose dans sa réponse 101, le client compare la sienne à celle reçue.
 	static std::string ComputeAcceptKey(const std::string& secWebSocketKey);
 
+	//Delai d'abandon d'une ouverture CLIENTE qui reste muette (SPEC WS-CLIENT
+	//§9.4, arbitrage du 2026-09-21). Un pair qui accepte le TCP puis se tait —
+	//un `wss://` pointe sur un port en clair, un 101 jamais ecrit, un trou noir
+	//reseau — laisserait sinon la jambe ouverte pour toujours : le reacteur
+	//n'attend que des evenements, et il n'en viendra aucun. Au-dela du delai,
+	//l'ouverture echoue comme un refus TCP, donc la reprise repart.
+	static void  SetOpeningTimeout(DWORD ms);
+	static DWORD GetOpeningTimeout();
+
 	WebSocketConnection(Listener* listener, uint64_t connId);
 	~WebSocketConnection();
 
@@ -424,6 +433,11 @@ public:
 	short    GetPollEvents();	//Événements poll() souhaités (POLLIN + POLLOUT si sortie en attente)
 	void     OnReadable();		//Données entrantes disponibles
 	void     OnWritable();		//Socket prêt en écriture
+	//Ouverture cliente en cours : ms restantes avant abandon, -1 si sans objet
+	//(connexion serveur, ou cliente deja ouverte/echouee).
+	int      GetOpeningTimeLeft();
+	//Le delai est ecoule : echouer l'ouverture comme un refus TCP.
+	void     OnOpeningTimeout();
 	bool     IsFinished();		//La connexion doit-elle être fermée/détruite ?
 	void     NotifyClose();		//Émet onClose vers le WebSocket::Listener (si upgraded)
 
