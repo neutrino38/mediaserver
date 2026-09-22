@@ -343,7 +343,7 @@ participant, le `floorRequestId` en cours.
 
 Chaque lot compile, passe `make check`, et se livre seul.
 
-### Lot 0 — La pile interne compile, sans être branchée
+### Lot 0 — La pile interne compile, sans être branchée — FAIT
 
 - Entrée dans `mcu/Makefile` (objets, `VPATH`).
 - `BFCPTransport` remplace `WebSocket*` ; retrait du JSON et de
@@ -354,6 +354,17 @@ Chaque lot compile, passe `make check`, et se livre seul.
   révocation par une seconde requête ; libération par le demandeur ; retrait
   d'un utilisateur qui tient le floor ; Goodbye ; FloorQuery et notification
   des abonnés. Ce sont les scénarios que `SharedDocMixer` joue.
+
+Deux défauts trouvés en écrivant le lot, corrigés :
+
+- `RemoveUser` sortait l'utilisateur de la table **avant** de révoquer ses
+  requêtes. Les notifications étant routées par `userId`, le Revoked ne
+  trouvait plus de destinataire : le client gardait un floor que le serveur
+  avait rendu. C'est le test de retrait qui l'attrape.
+- `End()` bouclait sur « tant que la table n'est pas vide » en comptant sur
+  l'effacement fait par `Revoke`/`Deny`. Un statut qu'aucun des deux
+  n'accepte aurait figé la fin de conférence. La boucle parcourt désormais un
+  instantané des identifiants.
 
 ### Lot 1 — Le codec binaire
 
