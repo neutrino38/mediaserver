@@ -126,3 +126,112 @@ const BFCPAttrRequestedByInformation* BFCPAttrFloorRequestInformation::GetReques
 {
 	return this->requestedByInformation;
 }
+
+
+size_t BFCPAttrFloorRequestInformation::Serialize(BYTE* out, size_t max, bool mandatory) const
+{
+	// Everything below has to fit in 255 octets: that is all the Length field
+	// of a grouped attribute can say. Write() refuses beyond, it never trims.
+	BYTE contents[BFCPAttribute::MaxLength];
+	set2(contents, 0, this->floorRequestId->GetValue());
+	size_t n = 2;
+
+	if (this->overallRequestStatus) {
+		const size_t written = this->overallRequestStatus->Serialize(contents + n, sizeof(contents) - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+
+	// 1*(FLOOR-REQUEST-STATUS): mandatory by the grammar, hence the M bit.
+	for (size_t i=0; i < this->floorRequestStatuses.size(); i++) {
+		const size_t written = this->floorRequestStatuses[i]->Serialize(contents + n, sizeof(contents) - n, true);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+
+	if (this->beneficiaryInformation) {
+		const size_t written = this->beneficiaryInformation->Serialize(contents + n, sizeof(contents) - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+	if (this->requestedByInformation) {
+		const size_t written = this->requestedByInformation->Serialize(contents + n, sizeof(contents) - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+
+	return Write(out, max, BFCPAttribute::FloorRequestInformation, mandatory, contents, n);
+}
+
+
+BFCPAttrFloorRequestInformation* BFCPAttrFloorRequestInformation::Parse(const BYTE* contents, size_t len)
+{
+	WORD floorRequestId;
+	if (! ReadWord(contents, len, floorRequestId))
+		return NULL;
+
+	BFCPAttrFloorRequestInformation* attr = new BFCPAttrFloorRequestInformation(floorRequestId);
+	BFCPAttrCursor cursor(contents + 2, len - 2);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::OverallRequestStatus:
+			{
+				BFCPAttrOverallRequestStatus* overall = BFCPAttrOverallRequestStatus::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! overall) {
+					delete attr;
+					return NULL;
+				}
+				attr->SetOverallRequestStatus(overall);
+				break;
+			}
+			case BFCPAttribute::FloorRequestStatus:
+			{
+				BFCPAttrFloorRequestStatus* status = BFCPAttrFloorRequestStatus::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! status) {
+					delete attr;
+					return NULL;
+				}
+				attr->AddFloorRequestStatus(status);
+				break;
+			}
+			case BFCPAttribute::BeneficiaryInformation:
+			{
+				BFCPAttrBeneficiaryInformation* beneficiary = BFCPAttrBeneficiaryInformation::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! beneficiary) {
+					delete attr;
+					return NULL;
+				}
+				attr->SetBeneficiaryInformation(beneficiary);
+				break;
+			}
+			case BFCPAttribute::RequestedByInformation:
+			{
+				BFCPAttrRequestedByInformation* requestedBy = BFCPAttrRequestedByInformation::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! requestedBy) {
+					delete attr;
+					return NULL;
+				}
+				attr->SetRequestedByInformation(requestedBy);
+				break;
+			}
+			default:
+				if (cursor.IsMandatory()) {
+					::Error("BFCPAttrFloorRequestInformation::Parse() | unknown mandatory attribute %d\n", cursor.Type());
+					delete attr;
+					return NULL;
+				}
+				break;
+		}
+	}
+
+	if (cursor.Malformed()) {
+		delete attr;
+		return NULL;
+	}
+	return attr;
+}

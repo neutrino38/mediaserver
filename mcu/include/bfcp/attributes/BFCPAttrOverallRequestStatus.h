@@ -28,6 +28,8 @@ public:
 	BFCPAttrOverallRequestStatus(int floorRequestId);
 	~BFCPAttrOverallRequestStatus();
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrOverallRequestStatus* Parse(const BYTE* contents, size_t len);
 
 	void SetRequestStatus(BFCPAttrRequestStatus *requestStatus);
 	void SetStatusInfo(BFCPAttrStatusInfo *statusInfo);

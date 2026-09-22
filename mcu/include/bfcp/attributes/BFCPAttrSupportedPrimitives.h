@@ -20,6 +20,8 @@ class BFCPAttrSupportedPrimitives : public BFCPAttribute
 public:
 	BFCPAttrSupportedPrimitives();
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrSupportedPrimitives* Parse(const BYTE* contents, size_t len);
 
 	void Add(int code);
 	int Count() const;

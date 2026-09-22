@@ -90,7 +90,7 @@ SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o t140bridge.o
 
 # BFCP : la pile interne (docs/conception/BFCP-INTERNE/SPEC.md). Lot 0 : elle
 # compile et se teste seule, le mcu parle encore a libbfcp.
-BFCPSTACKOBJ=BFCPMessage.o BFCPUser.o BFCPFloorRequest.o BFCPFloorControlServer.o \
+BFCPSTACKOBJ=BFCPMessage.o BFCPUser.o BFCPFloorRequest.o BFCPFloorControlServer.o BFCPAttribute.o \
       BFCPAttrBeneficiaryId.o BFCPAttrBeneficiaryInformation.o BFCPAttrErrorCode.o BFCPAttrErrorInfo.o \
       BFCPAttrFloorId.o BFCPAttrFloorRequestId.o BFCPAttrFloorRequestInformation.o BFCPAttrFloorRequestStatus.o \
       BFCPAttrOverallRequestStatus.o BFCPAttrParticipantProvidedInfo.o BFCPAttrRequestedByInformation.o \

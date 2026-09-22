@@ -35,6 +35,8 @@ public:
 	BFCPAttrRequestStatus();
 	BFCPAttrRequestStatus(enum Status status, int queuePosition);
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrRequestStatus* Parse(const BYTE* contents, size_t len);
 
 	void SetStatus(enum Status status);
 	void SetQueuePosition(int queuePosition);

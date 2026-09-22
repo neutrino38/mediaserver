@@ -75,3 +75,59 @@ const BFCPAttrFloorRequestInformation* BFCPMsgFloorStatus::GetFloorRequestInform
 		return NULL;
 	return this->floorRequestInformations[index];
 }
+
+
+size_t BFCPMsgFloorStatus::SerializeAttributes(BYTE* out, size_t max) const
+{
+	size_t n = 0;
+
+	// Everything here is optional: an empty FloorStatus answers a FloorQuery
+	// that named no floor.
+	if (this->floorId) {
+		const size_t written = this->floorId->Serialize(out + n, max - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+	for (size_t i=0; i < this->floorRequestInformations.size(); i++) {
+		const size_t written = this->floorRequestInformations[i]->Serialize(out + n, max - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+
+	return n;
+}
+
+
+bool BFCPMsgFloorStatus::ParseAttributes(const BYTE* data, size_t size)
+{
+	BFCPAttrCursor cursor(data, size);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::FloorId:
+			{
+				WORD floorId;
+				if (! BFCPAttribute::ReadWord(cursor.Contents(), cursor.ContentsLen(), floorId))
+					return false;
+				SetFloorId(floorId);
+				break;
+			}
+			case BFCPAttribute::FloorRequestInformation:
+			{
+				BFCPAttrFloorRequestInformation* info = BFCPAttrFloorRequestInformation::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! info)
+					return false;
+				AddFloorRequestInformation(info);
+				break;
+			}
+			default:
+				if (cursor.IsMandatory())
+					return ::Error("BFCPMsgFloorStatus::ParseAttributes() | unknown mandatory attribute %d\n", cursor.Type());
+				break;
+		}
+	}
+
+	return ! cursor.Malformed();
+}

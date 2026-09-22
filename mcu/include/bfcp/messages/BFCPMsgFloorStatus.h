@@ -22,6 +22,12 @@ public:
 	~BFCPMsgFloorStatus();
 	void Dump();
 
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
+
 	void SetFloorId(int);
 	void AddFloorRequestInformation(BFCPAttrFloorRequestInformation* floorRequestInformation);
 	bool HasFloorId() const;

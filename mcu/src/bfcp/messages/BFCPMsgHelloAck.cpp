@@ -55,3 +55,43 @@ const BFCPAttrSupportedAttributes& BFCPMsgHelloAck::GetSupportedAttributes() con
 {
 	return this->supportedAttributes;
 }
+
+
+size_t BFCPMsgHelloAck::SerializeAttributes(BYTE* out, size_t max) const
+{
+	size_t n = this->supportedPrimitives.Serialize(out, max, true);
+	if (n == Failed)
+		return Failed;
+
+	const size_t written = this->supportedAttributes.Serialize(out + n, max - n, true);
+	if (written == Failed)
+		return Failed;
+
+	return n + written;
+}
+
+
+bool BFCPMsgHelloAck::ParseAttributes(const BYTE* data, size_t size)
+{
+	BFCPAttrCursor cursor(data, size);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::SupportedPrimitives:
+				for (size_t i=0; i < cursor.ContentsLen(); i++)
+					AddSupportedPrimitive((enum BFCPMessage::Primitive)cursor.Contents()[i]);
+				break;
+			case BFCPAttribute::SupportedAttributes:
+				// 7-bit type plus a reserved bit, unlike a supported primitive.
+				for (size_t i=0; i < cursor.ContentsLen(); i++)
+					AddSupportedAttribute((enum BFCPAttribute::Name)(cursor.Contents()[i] >> 1));
+				break;
+			default:
+				if (cursor.IsMandatory())
+					return ::Error("BFCPMsgHelloAck::ParseAttributes() | unknown mandatory attribute %d\n", cursor.Type());
+				break;
+		}
+	}
+
+	return ! cursor.Malformed();
+}

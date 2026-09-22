@@ -107,3 +107,70 @@ const std::string& BFCPMsgFloorRequest::GetParticipantProvidedInfo() const
 		throw BFCPMessage::AttributeNotFound("'participantProvidedInfo' attribute not found");
 	return this->participantProvidedInfo->GetValue();
 }
+
+
+size_t BFCPMsgFloorRequest::SerializeAttributes(BYTE* out, size_t max) const
+{
+	size_t n = 0;
+
+	// 1*(FLOOR-ID) is required by the grammar, hence the M bit.
+	for (size_t i=0; i < this->floorIds.size(); i++) {
+		const size_t written = this->floorIds[i]->Serialize(out + n, max - n, true);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+	if (this->beneficiaryId) {
+		const size_t written = this->beneficiaryId->Serialize(out + n, max - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+	if (this->participantProvidedInfo) {
+		const size_t written = this->participantProvidedInfo->Serialize(out + n, max - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+
+	return n;
+}
+
+
+bool BFCPMsgFloorRequest::ParseAttributes(const BYTE* data, size_t size)
+{
+	BFCPAttrCursor cursor(data, size);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::FloorId:
+			{
+				WORD floorId;
+				if (! BFCPAttribute::ReadWord(cursor.Contents(), cursor.ContentsLen(), floorId))
+					return false;
+				AddFloorId(floorId);
+				break;
+			}
+			case BFCPAttribute::BeneficiaryId:
+			{
+				WORD beneficiaryId;
+				if (! BFCPAttribute::ReadWord(cursor.Contents(), cursor.ContentsLen(), beneficiaryId))
+					return false;
+				SetBeneficiaryId(beneficiaryId);
+				break;
+			}
+			case BFCPAttribute::ParticipantProvidedInfo:
+				SetParticipantProvidedInfo(std::string((const char*)cursor.Contents(), cursor.ContentsLen()));
+				break;
+			case BFCPAttribute::Priority:
+				// Read and dropped: we serve one floor, there is no queue to order.
+				break;
+			default:
+				if (cursor.IsMandatory())
+					return ::Error("BFCPMsgFloorRequest::ParseAttributes() | unknown mandatory attribute %d\n", cursor.Type());
+				break;
+		}
+	}
+
+	return ! cursor.Malformed();
+}

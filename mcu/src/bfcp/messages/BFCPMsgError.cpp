@@ -99,3 +99,52 @@ const std::string& BFCPMsgError::GetErrorInfo() const
 		throw BFCPMessage::AttributeNotFound("'errorInfo' attribute not found");
 	return this->errorInfo->GetValue();
 }
+
+
+size_t BFCPMsgError::SerializeAttributes(BYTE* out, size_t max) const
+{
+	if (! this->errorCode)
+		return Failed;
+
+	size_t n = this->errorCode->Serialize(out, max, true);
+	if (n == Failed)
+		return Failed;
+
+	if (this->errorInfo) {
+		const size_t written = this->errorInfo->Serialize(out + n, max - n, false);
+		if (written == Failed)
+			return Failed;
+		n += written;
+	}
+
+	return n;
+}
+
+
+bool BFCPMsgError::ParseAttributes(const BYTE* data, size_t size)
+{
+	BFCPAttrCursor cursor(data, size);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::ErrorCode:
+			{
+				BFCPAttrErrorCode* code = BFCPAttrErrorCode::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! code)
+					return false;
+				SetErrorCode(code->GetValue());
+				delete code;
+				break;
+			}
+			case BFCPAttribute::ErrorInfo:
+				SetErrorInfo(std::string((const char*)cursor.Contents(), cursor.ContentsLen()));
+				break;
+			default:
+				if (cursor.IsMandatory())
+					return ::Error("BFCPMsgError::ParseAttributes() | unknown mandatory attribute %d\n", cursor.Type());
+				break;
+		}
+	}
+
+	return ! cursor.Malformed();
+}

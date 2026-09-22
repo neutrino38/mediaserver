@@ -39,6 +39,8 @@ public:
 public:
 	BFCPAttrErrorCode(enum ErrorCode errorCode);
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrErrorCode* Parse(const BYTE* contents, size_t len);
 	enum ErrorCode GetValue() const;
 
 private:

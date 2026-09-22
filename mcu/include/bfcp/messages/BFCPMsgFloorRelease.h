@@ -21,6 +21,12 @@ public:
 	bool IsValid();
 	void Dump();
 
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
+
 	void SetFloorRequestId(int);
 	bool HasFloorRequestId() const;
 	int GetFloorRequestId() const;

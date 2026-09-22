@@ -42,3 +42,22 @@ enum BFCPAttrErrorCode::ErrorCode BFCPAttrErrorCode::GetValue() const
 {
 	return this->value;
 }
+
+
+size_t BFCPAttrErrorCode::Serialize(BYTE* out, size_t max, bool mandatory) const
+{
+	// No Error Specific Details: the contents are the single code octet, so
+	// Length is 3 and one padding octet follows.
+	const BYTE contents = (BYTE)this->value;
+	return Write(out, max, BFCPAttribute::ErrorCode, mandatory, &contents, 1);
+}
+
+
+BFCPAttrErrorCode* BFCPAttrErrorCode::Parse(const BYTE* contents, size_t len)
+{
+	if (len < 1)
+		return NULL;
+	// Error Specific Details, when present, are skipped: none of the codes we
+	// answer carries any.
+	return new BFCPAttrErrorCode((enum ErrorCode)contents[0]);
+}

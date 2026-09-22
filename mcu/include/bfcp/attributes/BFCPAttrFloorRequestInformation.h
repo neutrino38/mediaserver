@@ -36,6 +36,8 @@ public:
 	BFCPAttrFloorRequestInformation(int floorRequestId);
 	~BFCPAttrFloorRequestInformation();
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrFloorRequestInformation* Parse(const BYTE* contents, size_t len);
 
 	void AddFloorRequestStatus(BFCPAttrFloorRequestStatus *floorRequestStatus);
 	void SetOverallRequestStatus(BFCPAttrOverallRequestStatus *overallRequestStatus);

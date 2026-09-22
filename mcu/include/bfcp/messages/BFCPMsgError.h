@@ -25,6 +25,12 @@ public:
 	bool IsValid();
 	void Dump();
 
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
+
 	void SetErrorCode(enum BFCPAttrErrorCode::ErrorCode);
 	void SetErrorInfo(const std::string& errorInfo);
 	bool HasErrorCode() const;

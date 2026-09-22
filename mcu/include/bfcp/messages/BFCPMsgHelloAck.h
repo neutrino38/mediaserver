@@ -22,6 +22,12 @@ public:
 	bool IsValid();
 	void Dump();
 
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
+
 	void AddSupportedPrimitive(enum BFCPMessage::Primitive primitive);
 	void AddSupportedAttribute(enum BFCPAttribute::Name attribute);
 	const BFCPAttrSupportedPrimitives& GetSupportedPrimitives() const;

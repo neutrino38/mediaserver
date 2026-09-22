@@ -63,3 +63,26 @@ int BFCPAttrRequestStatus::GetQueuePosition() const
 {
 	return this->queuePosition;
 }
+
+
+size_t BFCPAttrRequestStatus::Serialize(BYTE* out, size_t max, bool mandatory) const
+{
+	BYTE contents[2];
+	contents[0] = (BYTE)this->status;
+	contents[1] = (BYTE)this->queuePosition;
+	return Write(out, max, BFCPAttribute::RequestStatus, mandatory, contents, sizeof(contents));
+}
+
+
+BFCPAttrRequestStatus* BFCPAttrRequestStatus::Parse(const BYTE* contents, size_t len)
+{
+	if (len < 2)
+		return NULL;
+	// Any status outside the enum is refused here rather than carried around
+	// as an int nobody can name.
+	if (contents[0] < Pending || contents[0] > Revoked) {
+		::Error("BFCPAttrRequestStatus::Parse() | unknown request status %d\n", contents[0]);
+		return NULL;
+	}
+	return new BFCPAttrRequestStatus((enum Status)contents[0], contents[1]);
+}

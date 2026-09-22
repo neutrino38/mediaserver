@@ -58,3 +58,36 @@ const BFCPAttrFloorRequestInformation* BFCPMsgFloorRequestStatus::GetFloorReques
 {
 	return this->floorRequestInformation;
 }
+
+
+size_t BFCPMsgFloorRequestStatus::SerializeAttributes(BYTE* out, size_t max) const
+{
+	if (! this->floorRequestInformation)
+		return Failed;
+	return this->floorRequestInformation->Serialize(out, max, true);
+}
+
+
+bool BFCPMsgFloorRequestStatus::ParseAttributes(const BYTE* data, size_t size)
+{
+	BFCPAttrCursor cursor(data, size);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::FloorRequestInformation:
+			{
+				BFCPAttrFloorRequestInformation* info = BFCPAttrFloorRequestInformation::Parse(cursor.Contents(), cursor.ContentsLen());
+				if (! info)
+					return false;
+				SetFloorRequestInformation(info);
+				break;
+			}
+			default:
+				if (cursor.IsMandatory())
+					return ::Error("BFCPMsgFloorRequestStatus::ParseAttributes() | unknown mandatory attribute %d\n", cursor.Type());
+				break;
+		}
+	}
+
+	return ! cursor.Malformed();
+}

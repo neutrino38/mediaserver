@@ -56,3 +56,36 @@ int BFCPMsgFloorRelease::GetFloorRequestId() const
 		throw BFCPMessage::AttributeNotFound("'floorRequestId' attribute not found");
 	return this->floorRequestId->GetValue();
 }
+
+
+size_t BFCPMsgFloorRelease::SerializeAttributes(BYTE* out, size_t max) const
+{
+	if (! this->floorRequestId)
+		return Failed;
+	return this->floorRequestId->Serialize(out, max, true);
+}
+
+
+bool BFCPMsgFloorRelease::ParseAttributes(const BYTE* data, size_t size)
+{
+	BFCPAttrCursor cursor(data, size);
+
+	while (cursor.Next()) {
+		switch (cursor.Type()) {
+			case BFCPAttribute::FloorRequestId:
+			{
+				WORD floorRequestId;
+				if (! BFCPAttribute::ReadWord(cursor.Contents(), cursor.ContentsLen(), floorRequestId))
+					return false;
+				SetFloorRequestId(floorRequestId);
+				break;
+			}
+			default:
+				if (cursor.IsMandatory())
+					return ::Error("BFCPMsgFloorRelease::ParseAttributes() | unknown mandatory attribute %d\n", cursor.Type());
+				break;
+		}
+	}
+
+	return ! cursor.Malformed();
+}

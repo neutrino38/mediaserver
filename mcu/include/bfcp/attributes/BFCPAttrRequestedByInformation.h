@@ -24,6 +24,9 @@ class BFCPAttrRequestedByInformation : public BFCPAttribute
 public:
 	BFCPAttrRequestedByInformation(int requestedById);
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrRequestedByInformation* Parse(const BYTE* contents, size_t len);
+
 	int GetRequestedById() const;
 
 private:

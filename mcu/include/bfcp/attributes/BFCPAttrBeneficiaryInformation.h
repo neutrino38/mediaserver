@@ -26,6 +26,9 @@ public:
 	BFCPAttrBeneficiaryInformation(int beneficiaryId);
 	~BFCPAttrBeneficiaryInformation();
 	void Dump();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrBeneficiaryInformation* Parse(const BYTE* contents, size_t len);
+
 	int GetBeneficiaryId() const;
 
 private:

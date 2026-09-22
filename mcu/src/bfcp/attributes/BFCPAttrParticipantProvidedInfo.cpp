@@ -19,3 +19,15 @@ const std::string& BFCPAttrParticipantProvidedInfo::GetValue() const
 {
 	return this->value;
 }
+
+
+size_t BFCPAttrParticipantProvidedInfo::Serialize(BYTE* out, size_t max, bool mandatory) const
+{
+	return Write(out, max, BFCPAttribute::ParticipantProvidedInfo, mandatory, (const BYTE*)this->value.data(), this->value.size());
+}
+
+
+BFCPAttrParticipantProvidedInfo* BFCPAttrParticipantProvidedInfo::Parse(const BYTE* contents, size_t len)
+{
+	return new BFCPAttrParticipantProvidedInfo(std::string((const char*)contents, len));
+}
