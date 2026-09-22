@@ -222,17 +222,19 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	}
 
 	// --- buffersink : yuv420p (CPU, ou GPU avec queue overlays), sinon VAAPI -
-	// pix_fmts n'est pas une option de runtime : depuis ffmpeg 8 elle est
-	// refusee sur un filtre deja initialise. On alloue donc le sink, on la pose,
-	// puis on initialise — ce que avfilter_graph_create_filter fait d'un bloc.
+	// Le format de sortie n'est pas une option de runtime : depuis ffmpeg 8 elle
+	// est refusee sur un filtre deja initialise. On alloue donc le sink, on la
+	// pose, puis on initialise — ce que avfilter_graph_create_filter fait d'un
+	// bloc. L'option s'appelle "pixel_formats" et porte un TABLEAU de formats :
+	// ni l'ancien nom "pix_fmts", ni la liste terminee par AV_PIX_FMT_NONE que
+	// prenait av_opt_set_int_list n'existent plus.
 	sinkCtx = avfilter_graph_alloc_filter(graph, avfilter_get_by_name("buffersink"), "out");
 	if (!sinkCtx)
 		return false;
 	const enum AVPixelFormat outFmt =
 		(gpu && !anyOverlay) ? AV_PIX_FMT_VAAPI : AV_PIX_FMT_YUV420P;
-	const enum AVPixelFormat pix_fmts[] = { outFmt, AV_PIX_FMT_NONE };
-	if (av_opt_set_int_list(sinkCtx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE,
-	                        AV_OPT_SEARCH_CHILDREN) < 0)
+	if (av_opt_set_array(sinkCtx, "pixel_formats", AV_OPT_SEARCH_CHILDREN,
+	                     0, 1, AV_OPT_TYPE_PIXEL_FMT, &outFmt) < 0)
 		return false;
 	if (avfilter_init_dict(sinkCtx, NULL) < 0)
 		return false;
