@@ -413,7 +413,7 @@ Trois points que le lot a fixés :
   test ne mordait pas. `IsUserConnected` donne au test un état observable, et
   l'assertion tombe avant le comportement indéfini.
 
-### Lot 3 — Le transport UDP
+### Lot 3 — Le transport UDP — FAIT
 
 - `BFCPUdpEndpoint`, fiabilité RFC 8855 (section 4.3), Hello serveur.
 - `test_bfcp_udp.cpp` : un Granted sans acquittement est réémis à 500 ms puis
@@ -422,6 +422,28 @@ Trois points que le lot a fixés :
   datagramme d'une autre source est jeté ; un client en version 1 reçoit du
   version 1, un client en version 2 du version 2 avec R ; le drapeau F fait
   jeter le message.
+
+Quatre points que le lot a fixés :
+
+- **Le drapeau R dit ce qu'il faut faire d'un message.** Il distingue ce que le
+  serveur amorce, à réémettre, de ce qu'il répond, à garder en cache. Le
+  serveur le pose donc sur chaque réponse, et le transport le lit — plutôt
+  qu'une devinette sur la primitive ou sur l'identifiant de transaction.
+- **L'abandon à 16 s a sa propre horloge.** Adossé au tour de réémission, il ne
+  se déclenchait jamais : les intervalles doublent, et le tour qui suit 15,5 s
+  tombe à 47,5 s.
+- **La comparaison d'échéance ne doit pas soustraire.** Un message émis depuis
+  le fil XML-RPC porte un horodatage postérieur à celui que le réacteur a pris
+  pour son tour ; la soustraction non signée repasse alors par le haut et la
+  transaction est abandonnée sur-le-champ. Comparer sans soustraire.
+- **Accepted et Granted sont deux transactions.** Avec un identifiant partagé,
+  le pair qui acquitte l'une ferme l'autre.
+
+Interopérabilité assumée : un HelloAck **sans** ses listes SUPPORTED-* est
+accepté. La grammaire les rend obligatoires et nous les émettons toujours, mais
+sur UDP un HelloAck est ce qui clôt notre Hello, et ce rôle ne tient qu'à
+l'identifiant de transaction. Le refuser nous ferait réémettre jusqu'à
+l'abandon, et lâcher un pair qui a répondu.
 
 ### Lot 4 — La bascule et le retrait de libbfcp
 
