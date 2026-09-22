@@ -22,7 +22,7 @@ Main functions:
 - Video layout composition through mosaics, sidebars and picture-in-picture
 - Logo and overlay
 
-The codebase is mostly C++ (in `mcu/`) around a shared conference engine (`MCU` → `MultiConf` → participants / mixers), plus three Java companion projects (`jsr309impl/`, `XmlRpcMcuClient/`, `sdp/`). Most of the codec / media plumbing now lives in the **libmedkit** submodule (ffmpeg 5, OpenSSL 3, x264, libsrtp2, webrtc-audio-processing).
+The codebase is mostly C++ (in `mcu/`) around a shared conference engine (`MCU` → `MultiConf` → participants / mixers), plus three Java companion projects (`jsr309impl/`, `XmlRpcMcuClient/`, `sdp/`). Most of the codec / media plumbing now lives in the **libmedkit** submodule (ffmpeg 9, OpenSSL 3, x264, libsrtp2). Voice activity detection comes from the **libvad** submodule (libfvad).
 
 ## XML-RPC interfaces
 
@@ -60,9 +60,8 @@ the distribution family (`rpm` or `dpkg`) and picks the package names itself.
 
 Here are the most of prerequisites:
 
-- ffmpeg (from RPMFUSION)
+- ffmpeg 9 (from the IVèS repository)
 - ImageMagic 7 - RPM needs to be rebuilt from source
-- webrtc-audio-processing
 - libsrtp
 - xmlrpc-c
 
@@ -73,12 +72,15 @@ The build links dynamically against system packages. Install them once with:
 ```
 
 On AlmaLinux 9 this installs (via `dnf`/`yum`): `ffmpeg-devel`,
-`webrtc-audio-processing-devel`, `libsrtp-devel`, `xmlrpc-c-devel`
+`libsrtp-devel`, `xmlrpc-c-devel`
 (from the *crb* repository), `usrsctp-devel`, `ImageMagick-c++-devel` and
 `libtool`.
 
-> Note: `ffmpeg-devel` is provided by the RPMFusion (free and non-free)
-> repositories.
+> Note: `ffmpeg-devel` comes from the IVèS repository (*ives-externals*), and
+> must be **version 9 or later**. It installs its headers directly under
+> `/usr/include`, unlike the RPMFusion package, which puts them in
+> `/usr/include/ffmpeg`. Both `mcu/Makefile` and the libmedikit `Makefile` find
+> them through `pkg-config` alone, so nothing has to be told where they are.
 
 ### 2. Full local build
 
@@ -92,7 +94,8 @@ This one-shot command:
 2. builds the only remaining source-only dependency into `./staticdeps`
    (`libmp4v2`);
 3. initialises the git submodules if needed (`libmedikit` = codecs,
-   `libbfcp` = BFCP floor control) and builds their archives in-tree;
+   `libbfcp` = BFCP floor control, `libvad` = voice activity detection) and
+   builds their archives in-tree;
 4. builds the `mcu` binary.
 
 The resulting binary is `bin/debug/mcu`.
@@ -113,6 +116,7 @@ If you only need to (re)build one of the in-tree submodules:
 ```sh
 ./install.ksh libmedkit   # builds libmedkit.a (codecs)
 ./install.ksh libbfcp     # builds libbfcp{dbg,rel}.a (BFCP)
+./install.ksh libvad      # builds libfvad.a (voice activity detection)
 ```
 
 ### Cleaning
@@ -122,25 +126,21 @@ If you only need to (re)build one of the in-tree submodules:
 ```
 
 This removes the RPM build tree and the previously generated packages, and
-runs `make clean` for the `mcu` binary **and for both submodules**
-(`libmedikit` and `libbfcp`) — objects, static archives and shared objects —
-so the tree is left in a pristine state.
+runs `make clean` for the `mcu` binary **and for all three submodules**
+(`libmedikit`, `libbfcp` and `libvad`) — objects, static archives and shared
+objects — so the tree is left in a pristine state.
 
 ## Building on Debian / Ubuntu
 
 Development builds are supported on Debian and Ubuntu. The commands are the
 same — `./install.ksh prereq` then `./install.ksh localcompile` — and produce
-the same `bin/debug/mcu`. Four things differ from AlmaLinux 9, and they change
+the same `bin/debug/mcu`. Three things differ from AlmaLinux 9, and they change
 what the binary does:
 
 - **ffmpeg 8** (Ubuntu 26.04) instead of the IVèS ffmpeg package. Everything
   builds and the test suite is green, but the codec catalogue is that of the
   distribution ffmpeg: ask the server itself through `/status/general` rather
   than assuming it.
-- **webrtc-audio-processing 1.x** instead of 0.3. Its APM no longer exposes a
-  detection likelihood, so `VAD::SetMode()` has **no effect** there: voice
-  detection is either on or off. Video switching driven by VAD is therefore
-  less tunable than on AlmaLinux.
 - **No `libpostproc`** package. Nothing in this repository includes it, so it
   was removed from the pkg-config modules altogether.
 - **Packaging**: `./install.ksh rpm` targets AlmaLinux 9 and refuses to run
@@ -405,4 +405,4 @@ haut). Le RPM le génère automatiquement s'il est absent, via le script
 - base media functions has been gathered into a framework called libmedkit to be able to reuse them in other telco servers
 - ffmeg is now used whenether it is possible and I intend to use more of it to take advantage of hardware acceleration
 - use of C++17 and progressive replacement of older style C++ with std:: stuff.
-- removal of some external media processing libraries in favor of ffmpeg and webrtc-audio-processing
+- removal of some external media processing libraries in favor of ffmpeg and libfvad

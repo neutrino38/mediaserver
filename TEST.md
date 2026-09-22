@@ -28,15 +28,13 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 - La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `mcu/Makefile`,
   soit tout sauf `main.o`/`rtmptest.o`/`wstest.o`), qui doivent donc avoir été
   bâtis au préalable — le plus simple est de lancer d'abord un
-  `./install.ksh localcompile` (qui bâtit aussi les sous-modules libmedikit et
-  libbfcp). `make check` (re)compile ensuite juste les sources de test et relie.
+  `./install.ksh localcompile` (qui bâtit aussi les sous-modules libmedikit,
+  libbfcp et libvad). `make check` (re)compile ensuite juste les sources de test
+  et relie.
 
-> **Piège du `main` parasite.** La suite fournit son **propre `main()`**
-> (`test_env.cpp`) et **n'utilise pas `-lgtest_main`** : `libwebrtc_audio_processing.so`
-> (VAD) exporte un symbole `main` (un outil interne « RTP timing file ») qui,
-> `.so` contre `.so`, l'emportait sur celui de `libgtest_main` dans la résolution
-> dynamique — la suite ne lançait alors aucun test. Un `main()` défini dans
-> l'exécutable est une définition forte et l'emporte toujours.
+> **Pas de `-lgtest_main`.** La suite fournit son **propre `main()`**
+> (`test_env.cpp`), qui installe l'environnement global : mode debug coupé et
+> `SIGPIPE` ignoré, comme dans `main.cpp`.
 
 ## Organisation
 
@@ -62,6 +60,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
 | `test_mcu_conference_expiry.cpp` | `McuConferenceExpiry` | Mêmes propriétés pour les **conférences de l'API MCU** (le `queueId` y est porté par la conférence) : destruction sur file non lue **avec libération du `tag`**, survie d'une référence en vol, `EventQueueDelete` qui arme au lieu de détruire puis destruction à l'échéance, conférence à `queueId` 0 (cas MOTELI) jamais balayée, délai 0 = désarmé, et `End()` qui joint le balayeur en libérant les tags. La couche « vitalité de la file » n'est pas retestée ici : elle est commune aux deux API | — (nouveau) |
 | `test_transcoder_bridging.cpp` | `VideoBridgingTest`, `AudioBridgingTest` | **Mode pont dynamique** des transcodeurs JSR-309, observé *uniquement* par les paquets qui atteignent le puits (l'état `state`/`recCodec` est privé, et le mode est une conséquence, pas une valeur à consulter). Un puits instrumenté joue le contrat qu'un `RTPEndpoint` remplit en production : il répond `TryCheckCodec` d'après la liste de codecs qu'il porte. Couvre, pour la vidéo **et** pour l'audio : relais **octet pour octet** quand le puits porte le codec entrant, passage par le décodeur quand il ne le porte pas, et opt-in du drapeau (sans lui, le comportement historique — toujours décoder — reste intact, pour ne pas changer la sémantique du mixage ou de l'enregistrement sans le demander). Côté vidéo, un test de plus : le mode est **rejugé à chaque changement de codec entrant, dans les deux sens**, ce qui est tout l'intérêt de décider par paquet | — (nouveau) |
 | `test_audiomixer.cpp` | `AudioMixerOwnership` | **Propriété mémoire du mixeur audio** : `AudioMixer` possède ses sources et ses sidebars par `unique_ptr` et les détruit **hors du verrou**, après les avoir sorties de la map. Le cycle de vie est joué **thread mixeur en marche** (pauses de plusieurs ticks de 10 ms, pour que le mixeur parcoure vraiment les maps pendant qu'on les mute) : refus de supprimer le sidebar par défaut, détachement des **seuls** auditeurs d'un sidebar supprimé (les autres gardent le leur), recréation d'un id supprimé, et `End()` suivi du destructeur sans double libération. Ces tests prennent tout leur sens **sous valgrind**, qui seul distingue ici une libération correcte d'une double libération : `valgrind ./tests/runtests --gtest_filter='AudioMixerOwnership*'` | — (nouveau) |
+| `test_vad.cpp` | `Vad` | **Détection de voix**, sur libfvad (sous-module `libvad`). Le silence numérique n'est pas voisé, la parole l'est **aux quatre fréquences** — 48 kHz compris, que `vad.h` déclarait autrefois non supporté alors que `vad.cpp` l'acceptait. Deux propriétés portent la migration : `SetMode()` a un effet **réel** sur un signal limite (c'est ce qui avait été perdu sur Debian, où l'APM 1.x n'exposait plus l'agressivité — un no-op fait tomber le test), et la fréquence se change sur la **même instance** (fvad la porte sur l'instance, pas sur l'appel : une trame de 480 échantillons serait sinon lue comme 60 ms de 8 kHz, longueur invalide, décision perdue en silence). Signaux synthétiques, sans `rand()`. La traîne mesurée du détecteur (100 ms en mode agressif, 150 ms en mode qualité) est documentée dans le test | — (nouveau) |
 
 ### Fixtures
 

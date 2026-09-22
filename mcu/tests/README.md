@@ -37,10 +37,9 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 - La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `mcu/Makefile`),
   qui doivent avoir été bâtis au préalable : lancer d'abord `./install.ksh localcompile`.
 
-> **Piège du `main` parasite.** La suite fournit son **propre `main()`**
-> (`test_env.cpp`) et **n'utilise pas `-lgtest_main`** : `libwebrtc_audio_processing.so`
-> exporte un symbole `main` qui, `.so` contre `.so`, l'emportait sur celui de
-> `libgtest_main`. Détails dans [`TEST.md`](../../TEST.md).
+> **Pas de `-lgtest_main`.** La suite fournit son **propre `main()`**
+> (`test_env.cpp`), qui installe l'environnement global de la suite.
+> Détails dans [`TEST.md`](../../TEST.md).
 
 ## Fichiers
 
