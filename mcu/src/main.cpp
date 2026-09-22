@@ -162,6 +162,10 @@ int main(int argc,char **argv)
 	const char* defaultProfile = NULL;
 	const char* stunIp        = NULL;
 	int vadPeriod = 5000;
+	//Accélération matérielle : ÉTEINTE par défaut, allumée par --use-hwaccel.
+	//Tant qu'elle n'est pas demandée, tout le traitement vidéo reste sur CPU,
+	//device VAAPI présent ou non.
+	bool useHwaccel = false;
 	//Délai de grâce (s) sans long-poll sur une file d'événements avant
 	//destruction de la file et des objets qui en dépendent (0 = désactivé).
 	//Commun à toutes les API de contrôle (JSR309 aujourd'hui, MCU à venir).
@@ -227,6 +231,11 @@ int main(int argc,char **argv)
 				"                  Extra certificate authority (PEM) trusted for wss:// servers we\r\n"
 				"                  connect to, on top of the system store\r\n"
 				" --vad-period     Set the VAD based conference change period in milliseconds\r\n"
+				" --use-hwaccel    Offload video decoding, encoding and mosaic composition to the\r\n"
+				"                  GPU through VAAPI, with a per-case fallback to CPU.\r\n"
+				"                  OFF by default: without this option nothing touches the GPU,\r\n"
+				"                  even on a machine that has one. Turn it on deliberately, and\r\n"
+				"                  check /status/general to see what actually runs on it\r\n"
 				" --event-queue-expires\r\n"
 				"                  Grace period, in seconds, before an event queue with no\r\n"
 				"                  long-poll client is destroyed together with the media sessions\r\n"
@@ -296,6 +305,9 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--vad-period")==0 && (i+1<=argc))
 			//Get rtmp port
 			vadPeriod = atoi(argv[++i]);
+		else if (strcmp(argv[i],"--use-hwaccel")==0)
+			//Sortie du CPU : decodage, encodage et composition sur GPU
+			useHwaccel = true;
 		else if (strcmp(argv[i],"--event-queue-expires")==0 && (i+1<argc))
 			//Délai de grâce sans long-poll (0 = désactive le nettoyage)
 			eventQueueExpires = atoi(argv[++i]);
@@ -416,15 +428,23 @@ int main(int argc,char **argv)
 	Log("-MCU Version %s %s\r\n",MCUVERSION,MCUDATE);
         gserver = &server;
 
-	//Accélération matérielle : sonde (et crée si possible) le device VAAPI
-	//partagé une bonne fois au démarrage — le même device que les décodeurs,
-	//les encodeurs et le graphe de composition des mosaïques utiliseront.
-	//Le verdict est ainsi visible en tête de log plutôt que découvert au
-	//premier appel.
-	if (Pict::GetVAAPIDevice())
+	//Accélération matérielle : ÉTEINTE tant que --use-hwaccel ne la demande pas.
+	//L'extinction a lieu AVANT la sonde qui suit, donc avant que le moindre
+	//codec ait pu prendre une référence sur le device — un device déjà distribué
+	//survivrait chez son porteur.
+	if (!useHwaccel)
+	{
+		Pict::DisableVAAPI();
+		Log("-Acceleration materielle NON DEMANDEE : tout le traitement video se fera sur CPU (option --use-hwaccel pour l'activer)\n");
+	}
+	//Sonde (et crée si possible) le device VAAPI partagé une bonne fois au
+	//démarrage — le même device que les décodeurs, les encodeurs et le graphe de
+	//composition des mosaïques utiliseront. Le verdict est ainsi visible en tête
+	//de log plutôt que découvert au premier appel.
+	else if (Pict::GetVAAPIDevice())
 		Log("-Acceleration materielle VAAPI DISPONIBLE : decodage/encodage/composition video sur GPU actives (repli CPU automatique au cas par cas)\n");
 	else
-		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
+		Log("-Acceleration materielle VAAPI DEMANDEE mais INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 
 	//Table des profils d'adressage (NETWORK-CONFIGURATION.md) : ce que le serveur peut lier,
 	//et ce qu'il annonce. Construite ici, avant toute initialisation de serveur —
