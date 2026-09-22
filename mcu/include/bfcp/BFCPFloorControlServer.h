@@ -76,6 +76,10 @@ public:
 	bool RevokeFloorRequest(int floorRequestId, const std::string& statusInfo = "");
 	// Returns 0 if there is no Granted FloorRequest owning the given floor.
 	int GetGrantedFloorRequestId(int floorId);
+	// Whether the user still has a transport attached. Reads the server's own
+	// bookkeeping: it never touches the transport, so it stays safe to call
+	// after one has been destroyed.
+	bool IsUserConnected(int userId);
 	// Sends the state of a floor to one user, unsolicited.
 	bool NotifyFloorStatus(int userId, int floorId);
 	void End();
@@ -83,6 +87,9 @@ public:
 	// Called by the transport.
 	bool UserConnected(int userId, BFCPTransport *transport);
 	void UserDisconnected(int userId, BFCPTransport *transport);
+	// Same, for a transport that does not know which user it carried: the
+	// server knows, it handed the attachment out in the first place.
+	void TransportClosed(BFCPTransport *transport);
 	void MessageReceived(BFCPMessage *msg, BFCPTransport *from);
 
 private:
@@ -97,6 +104,7 @@ private:
 	int NotificationTransactionIdLocked(const BFCPUser* user);
 
 	bool AttachTransportLocked(BFCPUser* user, BFCPTransport* transport, Notifications& pending);
+	void DetachTransportLocked(BFCPUser* user, Notifications& pending);
 	bool RemoveUserLocked(int userId, bool sendGoodbye, Notifications& pending);
 	bool GrantFloorRequestLocked(int floorRequestId, Notifications& pending);
 	bool DenyFloorRequestLocked(int floorRequestId, const std::string& statusInfo, Notifications& pending);

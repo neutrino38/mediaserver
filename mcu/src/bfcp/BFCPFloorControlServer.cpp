@@ -283,6 +283,15 @@ int BFCPFloorControlServer::GetGrantedFloorRequestId(int floorId)
 }
 
 
+bool BFCPFloorControlServer::IsUserConnected(int userId)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+
+	BFCPUser* user = GetUserLocked(userId);
+	return user && user->IsConnected();
+}
+
+
 bool BFCPFloorControlServer::NotifyFloorStatus(int userId, int floorId)
 {
 	std::lock_guard<std::mutex> lock(mutex);
@@ -392,15 +401,46 @@ void BFCPFloorControlServer::UserDisconnected(int userId, BFCPTransport *transpo
 		if (! user || user->GetTransport() != transport)
 			return;
 
-		::Log("BFCPFloorControlServer::UserDisconnected() | user '%d' disconnected from conference '%d'\n", userId, this->conferenceId);
-
-		user->UnsetTransport();
-		user->ResetQueriedFloorIds();
-
-		if (! this->ending)
-			RevokeUserFloorRequestsLocked(user, pending);
+		DetachTransportLocked(user, pending);
 	}
 	Fire(pending);
+}
+
+
+void BFCPFloorControlServer::TransportClosed(BFCPTransport *transport)
+{
+	Notifications pending;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+
+		// A transport carries at most one user, and it is the server that said
+		// which: a closing connection has no identity of its own to offer.
+		BFCPUser* user = NULL;
+		for (Users::iterator it = users.begin(); it != users.end(); ++it)
+			if (it->second->GetTransport() == transport) {
+				user = it->second.get();
+				break;
+			}
+
+		// Never attached, or already superseded by a newer connection.
+		if (! user)
+			return;
+
+		DetachTransportLocked(user, pending);
+	}
+	Fire(pending);
+}
+
+
+void BFCPFloorControlServer::DetachTransportLocked(BFCPUser* user, Notifications& pending)
+{
+	::Log("BFCPFloorControlServer::DetachTransport() | user '%d' disconnected from conference '%d'\n", user->GetUserId(), this->conferenceId);
+
+	user->UnsetTransport();
+	user->ResetQueriedFloorIds();
+
+	if (! this->ending)
+		RevokeUserFloorRequestsLocked(user, pending);
 }
 
 
