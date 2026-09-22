@@ -172,31 +172,34 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
 		const MosaicSlotDesc& s = cur.slots[i];
-		snprintf(args, sizeof(args),
-		         "video_size=%dx%d:pix_fmt=%d:time_base=1/1000:pixel_aspect=1/1",
-		         s.inW, s.inH, s.inFmt);
 		snprintf(name, sizeof(name), "in%zu", i);
-		if (avfilter_graph_create_filter(&slotSrcs[i], avfilter_get_by_name("buffer"),
-		                                 name, args, NULL, graph) < 0)
+
+		// Alloué puis initialise EN DEUX TEMPS (même patron que VideoRescaler, et
+		// pour la même raison) : un buffersrc refuse un pix_fmt materiel tant qu'il
+		// n'a pas son hw_frames_ctx, et avfilter_graph_create_filter initialiserait
+		// le filtre avant qu'on puisse le lui donner. La composition echouerait alors
+		// des qu'un slot porte une surface GPU.
+		slotSrcs[i] = avfilter_graph_alloc_filter(graph, avfilter_get_by_name("buffer"), name);
+		if (!slotSrcs[i])
 			return false;
 
-		// Entrée GPU : le buffersrc doit connaître le hw_frames_ctx de la
-		// surface (même patron que VideoRescaler) pour que scale_vaapi négocie.
-		if (s.hwFramesCtx)
-		{
-			AVBufferSrcParameters* par = av_buffersrc_parameters_alloc();
-			if (!par)
-				return false;
-			par->format        = s.inFmt;
-			par->width         = s.inW;
-			par->height        = s.inH;
-			par->time_base     = av_make_q(1, 1000);
-			par->hw_frames_ctx = s.hwFramesCtx;
-			int ret = av_buffersrc_parameters_set(slotSrcs[i], par);
-			av_free(par);
-			if (ret < 0)
-				return false;
-		}
+		AVBufferSrcParameters* par = av_buffersrc_parameters_alloc();
+		if (!par)
+			return false;
+		par->format              = s.inFmt;
+		par->width               = s.inW;
+		par->height              = s.inH;
+		par->time_base           = av_make_q(1, 1000);
+		par->sample_aspect_ratio = av_make_q(1, 1);
+		//Non nul pour une surface GPU seulement ; un NULL est ignore.
+		par->hw_frames_ctx       = s.hwFramesCtx;
+		int ret = av_buffersrc_parameters_set(slotSrcs[i], par);
+		av_free(par);
+		if (ret < 0)
+			return false;
+
+		if (avfilter_init_str(slotSrcs[i], NULL) < 0)
+			return false;
 
 		if (s.hasOverlay)
 		{
