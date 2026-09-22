@@ -9,13 +9,13 @@ Group:     Applications/Internet
 License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, webrtc-audio-processing, libsrtp
+Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, libsrtp
 Requires:  openssl-libs >= 3.0, xmlrpc-c, usrsctp
 BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
 BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: gsm-devel
-BuildRequires: webrtc-audio-processing-devel, libsrtp-devel
+BuildRequires: libsrtp-devel
 BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel, usrsctp-devel
 BuildRequires: systemd-rpm-macros
 %{?systemd_requires}
@@ -33,7 +33,8 @@ make clean
 %prep
 cd %_topdir
 cd ..
-# libmedikit (codecs) vit dans un sous-module git : l'initialiser avant le build.
+# libmedikit (codecs), libbfcp (BFCP) et libvad (VAD) vivent dans des sous-modules
+# git : les initialiser avant le build.
 git submodule update --init --recursive
 
 %build
@@ -60,6 +61,10 @@ cp type-asian.xml $RPM_BUILD_ROOT/etc/mediaserver
 cp certcommunication.sh $RPM_BUILD_ROOT/etc/mediaserver
 chmod 750 $RPM_BUILD_ROOT/etc/mediaserver/certcommunication.sh
 cp mcu.csr_conf $RPM_BUILD_ROOT/etc/mediaserver
+# Le binaire embarque le detecteur de voix de libfvad (BSD) : sa notice doit
+# accompagner la distribution binaire. Le sous-module libvad ne la porte pas.
+mkdir -p $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{version}
+cp LICENSE.libfvad $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{version}/
 
 %files
 %defattr(-,root,root,-)
@@ -69,6 +74,7 @@ cp mcu.csr_conf $RPM_BUILD_ROOT/etc/mediaserver
 /etc/mediaserver/type-asian.xml
 %attr(0750,root,root) /etc/mediaserver/certcommunication.sh
 %config(noreplace) /etc/mediaserver/mcu.csr_conf
+%license %{_defaultlicensedir}/%{name}-%{version}/LICENSE.libfvad
 
 %post
 # Recharge systemd et applique le preset du service (enable au 1er install).

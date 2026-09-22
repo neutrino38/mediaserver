@@ -19,6 +19,9 @@ MEDKITDIR       = ../third_party/fontventa/libmedikit
 # et archive pris dans l'arbre du sous-module, plus de dependance a /opt/ives.
 BFCPDIR         = ../third_party/libbfcp
 BFCPINCLUDE     = $(BFCPDIR)/include
+# libvad (fvad) est bati de meme, in-tree : l'archive et l'en-tete fvad.h sont
+# pris dans l'arbre du sous-module. Voir compile_libvad dans install.ksh.
+VADDIR          = ../third_party/libvad/sources
 # libmedkit (sous-module) est desormais la source unique des codecs : liaison
 # inconditionnelle de libmedkit.a. Le mode sans-medkit a ete supprime (les .o de
 # codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
@@ -106,17 +109,10 @@ ifeq ($(FLASHSTREAMER),yes)
 	TARGETS += flashstreamer
 endif
 
-# VAD via le paquet systeme webrtc-audio-processing (module APM). Le module
-# pkg-config s'appelle webrtc-audio-processing sur AlmaLinux 9 (APM 0.3) et
-# webrtc-audio-processing-1 sur Debian/Ubuntu (APM 1.x) : on prend celui qui
-# repond. L'API differe entre les deux, vad.cpp se branche sur WEBRTC_APM_1.
-WEBRTCPC := $(shell pkg-config --exists webrtc-audio-processing-1 && echo webrtc-audio-processing-1 || echo webrtc-audio-processing)
-VADINCLUDE = $(shell pkg-config --cflags $(WEBRTCPC))
-VADLD = $(shell pkg-config --libs $(WEBRTCPC))
-OPTS+= -DVADWEBRTC
-ifeq ($(WEBRTCPC),webrtc-audio-processing-1)
-	OPTS+= -DWEBRTC_APM_1
-endif
+# VAD : archive du sous-module libvad, batie in-tree par install.ksh. Aucun
+# paquet systeme en jeu. Voir docs/reference/vad.md.
+VADINCLUDE = -I$(VADDIR)/sources
+VADLD = $(VADDIR)/libfvad.a
 
 ifeq ($(MOTELI),yes)
 	OPTS+= -DMOTELI=yes
@@ -342,10 +338,8 @@ flashstreamer: $(OBJSFS) $(OBJS)
 # WebSocket) par des tests autonomes et assertifs.
 # Usage : make check   (build + execution)
 #         make tests   (build seul -> tests/runtests)
-# NB : PAS de -lgtest_main. La suite fournit son propre main() (tests/test_env.cpp)
-# car libwebrtc_audio_processing.so (VAD) exporte un symbole `main` parasite qui,
-# .so contre .so, l'emportait sur celui de libgtest_main dans la resolution
-# dynamique. Un main() defini dans l'executable est une definition forte.
+# NB : PAS de -lgtest_main. La suite fournit son propre main() (tests/test_env.cpp),
+# qui installe l'environnement global de la suite.
 GTEST_CFLAGS := $(shell pkg-config --cflags gtest 2>/dev/null)
 GTEST_LIBS   := $(shell pkg-config --libs gtest 2>/dev/null)
 TESTSRCS     := $(wildcard tests/*.cpp)

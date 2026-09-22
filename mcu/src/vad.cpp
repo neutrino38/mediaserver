@@ -1,113 +1,74 @@
 #include "vad.h"
 #include "log.h"
-#ifdef VADWEBRTC
 
 /*
- * L'APM impose des trames de 10 ms exactement, a un "native rate"
- * (8/16/32/48 kHz), en int16 entrelace. CalcVad decoupe le buffer recu en
- * blocs de 10 ms, les fait traiter par ProcessStream() puis agrege la
- * decision voix (OU logique), de facon a renvoyer le meme 0/1 par appel que
- * l'ancienne implementation.
+ * fvad rend une decision par trame de 10, 20 ou 30 ms, en int16 mono.
+ * CalcVad decoupe le buffer recu en trames de 10 ms et agrege la decision
+ * (OU logique), de facon a renvoyer le meme 0/1 par appel que les
+ * implementations precedentes.
  */
 
 VAD::VAD()
 {
 	//No vad decision yet
 	last = 0;
-#ifdef WEBRTC_APM_1
-	//Create the webrtc audio processing module
-	apm = webrtc::AudioProcessingBuilder().Create();
-	if (apm)
+	//Aucune frequence posee sur l'instance (fvad prend 8000 Hz par defaut)
+	sampleRate = 0;
+
+	//Create the fvad instance
+	fvad = fvad_new();
+	if (!fvad)
 	{
-		//Enable voice detection: it is reported in the stream statistics
-		webrtc::AudioProcessing::Config config = apm->GetConfig();
-		config.voice_detection.enabled = true;
-		apm->ApplyConfig(config);
+		Error("VAD: could not create fvad instance.\n");
+		return;
 	}
-#else
-	//Create the webrtc audio processing module
-	apm = webrtc::AudioProcessing::Create();
-	if (apm)
-	{
-		//Operate the VAD on 10ms frames
-		apm->voice_detection()->set_frame_size_ms(10);
-		//Enable voice detection
-		apm->voice_detection()->Enable(true);
-		//Set aggressive mode (comportement historique)
-		SetMode(VERYAGGRESIVE);
-	}
-#endif
-	if (!apm)
-	{
-		Error("VAD: could not create webrtc AudioProcessing instance.\n");
-	}
+
+	//Set aggressive mode (comportement historique)
+	SetMode(VERYAGGRESIVE);
 }
 
 VAD::~VAD()
 {
-	if (apm)
-		delete apm;
+	if (fvad)
+		fvad_free(fvad);
 }
 
 int VAD::CalcVad(SWORD* buffer,DWORD size,DWORD rate)
 {
 	//Check we have an instance
-	if (!apm)
+	if (!fvad)
 		return 0;
 
-	//Only native rates are accepted by the int16 APM interface
-	if (rate != 8000 && rate != 16000 && rate != 32000 && rate != 48000)
+	//Only these four rates are accepted by fvad
+	if (!IsRateSupported(rate))
+		return Error("VAD: Cannot use sample rate = %u for VAD.\n", rate);
+
+	//La frequence est portee par l'instance, pas par l'appel : on ne la reecrit
+	//que lorsqu'elle change. fvad_set_sample_rate ne touche pas a l'etat du
+	//detecteur, elle ne fait que choisir la fonction de decision.
+	if (rate != sampleRate)
 	{
-		Error("VAD: Cannot use sample rate = %u for VAD.\n", rate);
-		return 0;
+		if (fvad_set_sample_rate(fvad,(int)rate)!=0)
+			return Error("VAD: fvad rejected sample rate = %u.\n", rate);
+		sampleRate = rate;
 	}
 
 	//Number of samples in a 10ms mono frame
 	DWORD chunk = rate / 100;
 
 	//Not enough data for a single frame
-	if (chunk == 0 || size < chunk)
+	if (size < chunk)
 		return 0;
 
 	int voice = 0;
 
-#ifdef WEBRTC_APM_1
-	//L'APM 1.x ecrit le flux traite : il lui faut une sortie a part, le
-	//detecteur ne devant pas toucher l'audio de l'appelant.
-	SWORD processed[480];
-	webrtc::StreamConfig config(rate, 1);
-
-	//Process the buffer in 10ms chunks (le reliquat < 10ms est ignore)
+	//Process the buffer in 10ms chunks (le reliquat < 10ms est ignore). On ne
+	//sort pas de la boucle des qu'une trame est voisee : le detecteur est a
+	//etat, et sauter des trames fausserait son estimation du bruit.
 	for (DWORD off = 0; off + chunk <= size; off += chunk)
-	{
-		//Process it
-		if (apm->ProcessStream(buffer + off, config, config, processed) != webrtc::AudioProcessing::kNoError)
-			continue;
-
 		//Accumulate voice decision
-		if (apm->GetStatistics().voice_detected.value_or(false))
+		if (fvad_process(fvad,buffer+off,chunk) > 0)
 			voice = 1;
-	}
-#else
-	webrtc::AudioFrame frame;
-
-	//Process the buffer in 10ms chunks (le reliquat < 10ms est ignore)
-	for (DWORD off = 0; off + chunk <= size; off += chunk)
-	{
-		//Feed the mono 10ms frame
-		frame.UpdateFrame(0, 0, buffer + off, chunk, rate,
-				  webrtc::AudioFrame::kNormalSpeech,
-				  webrtc::AudioFrame::kVadUnknown, 1);
-
-		//Process it
-		if (apm->ProcessStream(&frame) != webrtc::AudioProcessing::kNoError)
-			continue;
-
-		//Accumulate voice decision
-		if (apm->voice_detection()->stream_has_voice())
-			voice = 1;
-	}
-#endif
 
 	//Store and return
 	last = voice;
@@ -116,40 +77,15 @@ int VAD::CalcVad(SWORD* buffer,DWORD size,DWORD rate)
 
 bool VAD::SetMode(Mode mode)
 {
-	if (!apm)
+	if (!fvad)
 		return false;
 
-#ifdef WEBRTC_APM_1
-	//L'APM 1.x n'expose plus de vraisemblance : voice_detection s'active ou se
-	//desactive, sans reglage d'agressivite. Le mode est donc sans effet ici.
-	return true;
-#else
-	//L'echelle de vraisemblance de l'APM est inverse de l'agressivite :
-	//plus la vraisemblance est haute, moins le VAD est agressif.
-	webrtc::VoiceDetection::Likelihood likelihood;
-	switch (mode)
-	{
-		case QUALITY:
-			likelihood = webrtc::VoiceDetection::kHighLikelihood;
-			break;
-		case LOWBITRATE:
-			likelihood = webrtc::VoiceDetection::kModerateLikelihood;
-			break;
-		case AGGRESSIVE:
-			likelihood = webrtc::VoiceDetection::kLowLikelihood;
-			break;
-		case VERYAGGRESIVE:
-		default:
-			likelihood = webrtc::VoiceDetection::kVeryLowLikelihood;
-			break;
-	}
-
-	return apm->voice_detection()->set_likelihood(likelihood) == webrtc::AudioProcessing::kNoError;
-#endif
+	//L'enum a les memes valeurs ET les memes noms que les modes fvad :
+	//0 quality, 1 low bitrate, 2 aggressive, 3 very aggressive.
+	return fvad_set_mode(fvad,(int)mode) == 0;
 }
 
 int VAD::GetVAD()
 {
 	return last;
 }
-#endif

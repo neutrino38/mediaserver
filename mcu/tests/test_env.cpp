@@ -9,15 +9,9 @@
  * d'exposer un smoke test qui valide la chaîne compile/link/exécution
  * gtest ↔ objets mcu.
  *
- * ATTENTION : on fournit ici notre PROPRE main() plutôt que -lgtest_main. En
- * effet, la suite se lie contre libwebrtc_audio_processing.so (VAD), qui exporte
- * un symbole `main` parasite (un petit outil interne « RTP timing file »). Comme
- * gtest_main est lui aussi une bibliothèque partagée, l'éditeur de liens dynamique
- * résolvait le `main` indéfini de l'exécutable vers celui de la .so webrtc (première
- * dans l'ordre de lien) au lieu de gtest — et la suite ne lançait jamais aucun test.
- * Un main() défini DANS l'exécutable est une définition forte : il l'emporte
- * toujours. L'Environment global est enregistré via un initialiseur statique
- * (AddGlobalTestEnvironment se contente d'empiler l'objet, sûr avant InitGoogleTest).
+ * On fournit ici notre PROPRE main() plutôt que -lgtest_main. L'Environment global
+ * est enregistré via un initialiseur statique (AddGlobalTestEnvironment se contente
+ * d'empiler l'objet, sûr avant InitGoogleTest).
  */
 #include <gtest/gtest.h>
 
@@ -58,8 +52,7 @@ TEST(Smoke, LogFunctionsWork)
 	SUCCEED();
 }
 
-// main() propre à l'exécutable (cf. en-tête : contourne le main parasite exporté
-// par libwebrtc_audio_processing.so).
+// main() propre à l'exécutable (cf. en-tête).
 int main(int argc, char** argv)
 {
 	::testing::InitGoogleTest(&argc, argv);
