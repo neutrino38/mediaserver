@@ -15,10 +15,7 @@ DEBUG           = yes
 FLASHSTREAMER   = no
 ADDLIBPATH      = ../staticdeps
 MEDKITDIR       = ../third_party/fontventa/libmedikit
-# libbfcp est desormais un sous-module bati in-tree (comme libmedkit) : en-tetes
 # et archive pris dans l'arbre du sous-module, plus de dependance a /opt/ives.
-BFCPDIR         = ../third_party/libbfcp
-BFCPINCLUDE     = $(BFCPDIR)/include
 # libvad (fvad) est bati de meme, in-tree : l'archive et l'en-tete fvad.h sont
 # pris dans l'arbre du sous-module. Voir compile_libvad dans install.ksh.
 VADDIR          = ../third_party/libvad/sources
@@ -38,11 +35,9 @@ endif
 ifeq ($(DEBUG),yes)
 	TAG=debug
 	OPTS+= -g -O0
-	BFCPLIBS=$(BFCPDIR)/lib/libbfcpdbg.a
 else
 	OPTS+= -O3
 	TAG=release
-	BFCPLIBS=$(BFCPDIR)/lib/libbfcprel.a
 endif
 
 #LOG
@@ -88,8 +83,9 @@ MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 SCTPDIR=sctp
 SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o t140bridge.o
 
-# BFCP : la pile interne (docs/conception/BFCP-INTERNE/SPEC.md). Lot 0 : elle
-# compile et se teste seule, le mcu parle encore a libbfcp.
+# BFCP : la pile interne du mcu (docs/conception/BFCP-INTERNE/SPEC.md,
+# docs/reference/bfcp.md). Contrôle de parole, codec RFC 4582/8855, transports
+# TCP et UDP. Il n'y a plus de sous-module BFCP.
 BFCPSTACKOBJ=BFCPMessage.o BFCPUser.o BFCPFloorRequest.o BFCPFloorControlServer.o BFCPAttribute.o BFCPTcpTransport.o BFCPUdpTransport.o \
       BFCPAttrBeneficiaryId.o BFCPAttrBeneficiaryInformation.o BFCPAttrErrorCode.o BFCPAttrErrorInfo.o \
       BFCPAttrFloorId.o BFCPAttrFloorRequestId.o BFCPAttrFloorRequestInformation.o BFCPAttrFloorRequestStatus.o \
@@ -145,8 +141,8 @@ endif
 # TSAN=yes : detecteur de courses (ThreadSanitizer). Meme usage qu'ASAN, meme
 # piege sur le melange d'objets : passer TAG=tsan pour les isoler du build
 # normal (make check TSAN=yes TAG=tsan, qui joue tests/runtests-tsan).
-# libmedkit et libbfcp ne sont pas
-# instrumentes : une course INTERNE a ces bibliotheques ne sera pas vue.
+# libmedkit n'est pas instrumentee : une course INTERNE a cette
+# bibliotheque ne sera pas vue.
 ifeq ($(TSAN),yes)
 	OPTS    += -fsanitize=thread -fno-omit-frame-pointer
 	LDFLAGS += -fsanitize=thread
@@ -199,7 +195,7 @@ $(warning Installer la dependance : ./install.ksh prereq)
 SCTPLIBS := -lusrsctp
 endif
 
-INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCTPCFLAGS) -I$(BFCPINCLUDE)
+INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCTPCFLAGS)
 
 ###################################
 # libmedkit + ffmpeg, par pkg-config
@@ -236,7 +232,7 @@ endif
 # medkit et non son homonyme dans mcu/src.
 INCLUDE := $(PKGCFLAGS) $(INCLUDE)
 
-LDFLAGS+= $(BFCPLIBS) -L$(ADDLIBPATH)/lib
+LDFLAGS+= -L$(ADDLIBPATH)/lib
 # libmedkit.a d'abord, puis ce dont elle depend : pour une archive, l'ordre du
 # lien decide. pkg-config rend deja -lmedkit avant les -lav*.
 LDFLAGS+= $(PKGLIBS)

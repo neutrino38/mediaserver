@@ -33,7 +33,7 @@ make clean
 %prep
 cd %_topdir
 cd ..
-# libmedikit (codecs), libbfcp (BFCP) et libvad (VAD) vivent dans des sous-modules
+# libmedikit (codecs) et libvad (VAD) vivent dans des sous-modules
 # git : les initialiser avant le build.
 git submodule update --init --recursive
 
