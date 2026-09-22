@@ -445,7 +445,7 @@ sur UDP un HelloAck est ce qui clôt notre Hello, et ce rôle ne tient qu'à
 l'identifiant de transaction. Le refuser nous ferait réémettre jusqu'à
 l'abandon, et lâcher un pair qui a répondu.
 
-### Lot 4 — La bascule et le retrait de libbfcp
+### Lot 4 — La bascule et le retrait de libbfcp — FAIT
 
 - `SharedDocMixer` sur la pile interne (section 4.6).
 - Retrait du sous-module et de tout ce qui le nomme (section 4.7).
@@ -454,6 +454,17 @@ l'abandon, et lâcher un pair qui a répondu.
   `confid = confId`, et de la liste des transports acceptés. ADR 002 pour la
   décision (section 9.5).
 - Mesure des rappels sur le réacteur (piège 8).
+
+La mesure : aucun tour de réacteur au-delà de 50 ms (`LongTurnUs`) pendant les
+suites TCP et UDP. Ce n'est pas une charge réelle — c'est le lot 5 qui le dira
+— mais les rappels du chair n'allongent pas le tour à eux seuls.
+
+Un défaut corrigé au passage : `SetSharedMosaic` n'enregistrait la mosaïque que
+s'il y avait déjà un partage en cours, l'affectation étant à l'intérieur du
+`if`. Un flux SLIDES qui arrivait après ne trouvait donc rien à relire.
+
+`test_bfcp_dualstack.cpp` est supprimé : il éprouvait libbfcp, et part avec
+elle. Les cas double pile du transport interne vivent dans `test_bfcp_tcp.cpp`.
 
 ### Lot 5 — Recette réelle
 
