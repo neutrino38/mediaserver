@@ -175,18 +175,17 @@ participants. **Vide** si aucune adresse n'est annonçable.
 
 ### 3.7 `hardware.vaapi`
 
-**L'accélération matérielle est éteinte par défaut.** Sans `--use-hwaccel`, ce
-champ vaut `false` sur toute machine, même équipée d'un GPU : le device n'est
-alors même pas créé. C'est un choix : un driver VAAPI qui se comporte mal casse
-le service, et personne ne veut le découvrir en production sur une machine qu'il
-n'a pas choisie.
+Le device VAAPI partagé est sondé une fois au démarrage. Ce champ dit si la
+sonde a abouti. Décodage, encodage et composition de mosaïque dérivent tous de
+ce même device.
 
-Avec `--use-hwaccel`, le device VAAPI partagé est sondé une fois au démarrage,
-et ce champ dit si la sonde a abouti. Décodage, encodage et composition de
-mosaïque dérivent tous de ce même device.
+L'option `--no-hwaccel` éteint l'accélération matérielle. Le device n'est alors
+même pas créé, et ce champ vaut `false`, même sur une machine équipée d'un GPU.
+Elle sert quand le driver VAAPI se comporte mal. Exemple : sur Iris Xe avec le
+driver iHD et libavcodec 62, `h264_vaapi` arrête le processus.
 
-`false` se lit donc de deux façons — option absente, ou option présente et
-device introuvable. Le log de démarrage distingue les deux.
+`false` se lit donc de deux façons : option présente, ou device introuvable. Le
+log de démarrage distingue les deux.
 
 ### 3.8 Une capacité n'est pas un usage
 
@@ -232,5 +231,5 @@ globaux au processus.
 | Structure des faits publiés | `mcu/include/statushandler.h` |
 | Autorité des capacités codec | `third_party/fontventa/libmedikit/codecs.cpp` |
 | Compteurs d'accélération | `third_party/fontventa/libmedikit/video.cpp` (`VideoAccel`) |
-| Extinction du GPU | `Pict::DisableVAAPI`, posée par `main()` en l'absence de `--use-hwaccel` |
+| Extinction du GPU | `Pict::DisableVAAPI`, posée par `main()` sur `--no-hwaccel` |
 | Tests | `mcu/tests/test_status.cpp` (suite `Status`), `third_party/fontventa/libmedikit/tests/test_video_accel.cpp` |
