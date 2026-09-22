@@ -1,11 +1,11 @@
 # WSEndpoint en mode client : le mediaserver joue le navigateur
 
-> Statut : **lots 0 à 6 faits** — les coutures (§6), le masquage selon le
-> rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2, §4.6), son pilotage
-> par le réacteur depuis une URL (§4.5), le transport TLS client (§4.4), la
-> jambe JSR-309 elle-même — `WSEndpoint::Connect`, la reprise, l'U+FFFD et ce
-> que la jambe publie (§4.7) —, puis l'API de contrôle (§4.8). Reste le lot 7,
-> la recette en appel réel. Les cinq points du §9 sont **tranchés**.
+> Statut : **chantier terminé, lots 0 à 7 faits** — les coutures (§6), le
+> masquage selon le rôle (§4.3), l'ouverture cliente en clair (§4.1, §4.2,
+> §4.6), son pilotage par le réacteur depuis une URL (§4.5), le transport TLS
+> client (§4.4), la jambe JSR-309 elle-même — `WSEndpoint::Connect`, la reprise,
+> l'U+FFFD et ce que la jambe publie (§4.7) —, l'API de contrôle (§4.8), puis la
+> recette en appel réel (§7). Les cinq points du §9 sont **tranchés**.
 > Branche : `feat/wss-client`.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
@@ -427,7 +427,7 @@ Chaque lot compile, passe `cd mcu && make check`, et se livre seul.
 | 4 ✔ | Transport TLS client | `tests/test_ws_client_tls.cpp` : ouverture `wss://` et écho, vérification refusée **et** acceptée (autorité jetable de `tests/wstlsfixture.h`), autorité illisible |
 | 5 ✔ | `WSEndpoint::Connect`, `Endpoint::ConnectMediaConnection`, reprise indéfinie, U+FFFD, `GetMediaCandidates`, délai d'ouverture | `tests/test_ws_client_endpoint.cpp` : pontage RTP ↔ WS sortant dans les deux sens, coupure annoncée et texte perdu, reprise arrêtée par `End()`, URL inutilisable, cible publiée au lieu de l'écoute, ouverture muette abandonnée |
 | 6 ✔ | XML-RPC `ConnectMediaConnection`, options TLS client de `main()`, `docs/JSR-309-API.md`, `README.md`, client Java, protobuf MOTELI côté elixip | `tests/test_ws_client_xmlrpc.cpp` : méthode recensée dans la table, ordre des paramètres, jambe armée qui atteint le pair, média non texte, URL inutilisable, identifiants inconnus, appel mal typé |
-| 7 | Recette de bout en bout | appel réel elixip → passerelle WebRTC → écho Asterisk, `docs/maintenance/recette-ws-client.md` |
+| 7 ✔ | Recette de bout en bout | appel réel elixip → passerelle WebRTC → écho Asterisk, `docs/maintenance/recette-ws-client.md` |
 
 Les lots 0 à 4 ne touchent pas au JSR-309 : ils sont utiles seuls, et sans
 risque pour l'existant.
