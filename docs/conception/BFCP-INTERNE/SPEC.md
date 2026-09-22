@@ -366,7 +366,7 @@ Deux défauts trouvés en écrivant le lot, corrigés :
   n'accepte aurait figé la fin de conférence. La boucle parcourt désormais un
   instantané des identifiants.
 
-### Lot 1 — Le codec binaire
+### Lot 1 — Le codec binaire — FAIT
 
 - `Serialize` / `Parse` sur tous les attributs et toutes les primitives.
 - `test_bfcp_codec.cpp` : aller-retour de chaque primitive avec tous ses
@@ -375,6 +375,16 @@ Deux défauts trouvés en écrivant le lot, corrigés :
 - `test_bfcp_codec_hardening.cpp`, suite adverse sur le modèle de
   `test_rtcp_hardening.cpp` : chaque règle de robustesse de la section 4.1 a un
   test qui échoue si elle est violée, derrière une page de garde.
+
+Deux points que le lot a fixés, et qui ne se devinent pas :
+
+- **Le bit M appartient à la position, pas à l'attribut.** Le même attribut est
+  obligatoire dans un message et facultatif dans un autre. C'est donc le parent
+  qui écrit l'attribut qui dit lequel : `Serialize(out, max, mandatory)`.
+- **Les deux listes du HelloAck ne se codent pas pareil.** Une primitive est un
+  octet plein ; un type d'attribut tient sur 7 bits et est décalé d'un bit.
+  Elles se ressemblent assez pour qu'on les confonde, et seule une comparaison
+  aux octets de la RFC le voit.
 
 ### Lot 2 — Le transport TCP
 
