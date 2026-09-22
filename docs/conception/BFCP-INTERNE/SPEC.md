@@ -386,7 +386,7 @@ Deux points que le lot a fixés, et qui ne se devinent pas :
   Elles se ressemblent assez pour qu'on les confonde, et seule une comparaison
   aux octets de la RFC le voit.
 
-### Lot 2 — Le transport TCP
+### Lot 2 — Le transport TCP — FAIT
 
 - `BFCPTcpListener`, `BFCPTcpConnection`, groupe `RtpSessionSet` du BFCP.
 - `test_bfcp_tcp.cpp` : un client de test en loopback envoie Hello et reçoit
@@ -394,8 +394,24 @@ Deux points que le lot a fixés, et qui ne se devinent pas :
   dans une seule écriture sont tous deux traités ; un message d'un `userId`
   inconnu reçoit Error ; la fermeture par le client révoque le floor ; la
   connexion en IPv4 et en IPv6 réussit sur la même écoute.
-- `test_bfcp_dualstack.cpp` réécrit contre `BFCPTcpListener` et
-  `BFCPUdpEndpoint`, mêmes cinq cas.
+
+`test_bfcp_dualstack.cpp` n'est **pas** réécrit ici : il éprouve libbfcp, qui
+est encore le BFCP en service. Il part avec le sous-module, au lot 4. Les cas
+dual-stack du transport interne vivent dans `test_bfcp_tcp.cpp`.
+
+Trois points que le lot a fixés :
+
+- **Un handler qui se termine doit réveiller le réacteur.** La récolte vit dans
+  le `OnPeriodic` de l'écoute, donc elle a besoin d'un tour ; or tous les
+  handlers BFCP demandent une échéance infinie. Sans ce réveil, une connexion
+  fermée n'est jamais récoltée et son descripteur jamais rendu.
+- **Détacher le transport avant de le détruire.** L'écoute possède la
+  connexion, le serveur en garde un pointeur sur l'utilisateur. Détruire sans
+  prévenir laisse un pointeur mort, et le Goodbye suivant écrit dedans.
+- **Un défaut de ce genre ne se teste pas par le plantage qu'il provoque.**
+  Écrire dans de la mémoire libérée ne tombe pas de façon fiable : le premier
+  test ne mordait pas. `IsUserConnected` donne au test un état observable, et
+  l'assertion tombe avant le comportement indéfini.
 
 ### Lot 3 — Le transport UDP
 
