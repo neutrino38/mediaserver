@@ -94,7 +94,7 @@ This one-shot command:
 2. builds the only remaining source-only dependency into `./staticdeps`
    (`libmp4v2`);
 3. initialises the git submodules if needed (`libmedikit` = codecs,
-   `libbfcp` = BFCP floor control, `libvad` = voice activity detection) and
+   `libvad` = voice activity detection) and
    builds their archives in-tree;
 4. builds the `mcu` binary.
 
@@ -115,7 +115,6 @@ If you only need to (re)build one of the in-tree submodules:
 
 ```sh
 ./install.ksh libmedkit   # builds libmedkit.a (codecs)
-./install.ksh libbfcp     # builds libbfcp{dbg,rel}.a (BFCP)
 ./install.ksh libvad      # builds libfvad.a (voice activity detection)
 ```
 
@@ -127,7 +126,7 @@ If you only need to (re)build one of the in-tree submodules:
 
 This removes the RPM build tree and the previously generated packages, and
 runs `make clean` for the `mcu` binary **and for all three submodules**
-(`libmedikit`, `libbfcp` and `libvad`) — objects, static archives and shared
+(`libmedikit` and `libvad`) — objects, static archives and shared
 objects — so the tree is left in a pristine state.
 
 ## Building on Debian / Ubuntu
