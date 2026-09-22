@@ -162,15 +162,17 @@ bool BFCPFloorControlServer::GrantFloorRequestLocked(int floorRequestId, Notific
 			RevokeFloorRequestLocked(others[i]->GetFloorRequestId(), "granted to other user", pending);
 
 	// The sequence the endpoints in service know: Accepted, then Granted.
+	// Each gets its OWN transaction id: they are two transactions of ours, and
+	// over UDP an acknowledgement names one. Sharing an id would let the peer
+	// close both by answering either.
 	BFCPUser* requester = GetUserLocked(floorRequest->GetUserId());
-	int transactionId = NotificationTransactionIdLocked(requester);
 
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Accepted);
-	SendFloorRequestStatusLocked(floorRequest, transactionId, floorRequest->GetUserId(), "");
+	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), "", false);
 
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Granted);
 	::Log("BFCPFloorControlServer::GrantFloorRequest() | FloorRequest '%d' has been granted\n", floorRequestId);
-	SendFloorRequestStatusLocked(floorRequest, transactionId, floorRequest->GetUserId(), "");
+	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), "", false);
 
 	NotifyForFloorRequestLocked(floorRequest);
 
@@ -210,7 +212,7 @@ bool BFCPFloorControlServer::DenyFloorRequestLocked(int floorRequestId, const st
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Denied);
 
 	BFCPUser* requester = GetUserLocked(floorRequest->GetUserId());
-	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), statusInfo);
+	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), statusInfo, false);
 
 	NotifyForFloorRequestLocked(floorRequest);
 
@@ -245,7 +247,7 @@ bool BFCPFloorControlServer::RevokeFloorRequestLocked(int floorRequestId, const 
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Revoked);
 
 	BFCPUser* requester = GetUserLocked(floorRequest->GetUserId());
-	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), statusInfo);
+	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), statusInfo, false);
 
 	NotifyForFloorRequestLocked(floorRequest);
 
@@ -625,10 +627,11 @@ void BFCPFloorControlServer::NotifyForFloorRequestLocked(const BFCPFloorRequest*
 }
 
 
-void BFCPFloorControlServer::SendFloorRequestStatusLocked(const BFCPFloorRequest* floorRequest, int transactionId, int toUserId, const std::string& statusInfo)
+void BFCPFloorControlServer::SendFloorRequestStatusLocked(const BFCPFloorRequest* floorRequest, int transactionId, int toUserId, const std::string& statusInfo, bool isResponse)
 {
 	std::unique_ptr<BFCPMsgFloorRequestStatus> floorRequestStatus(floorRequest->CreateFloorRequestStatus(transactionId));
 	floorRequestStatus->SetUserId(toUserId);
+	floorRequestStatus->SetResponder(isResponse);
 	if (! statusInfo.empty())
 		floorRequestStatus->SetDescription(statusInfo);
 	SendMessageLocked(*floorRequestStatus);
@@ -650,6 +653,7 @@ void BFCPFloorControlServer::ReplyErrorLocked(const BFCPMessage *msg, BFCPTransp
 {
 	::Log("BFCPFloorControlServer::ReplyError() | replying Error '%s' to %s\n", BFCPAttrErrorCode::CodeName(errorCode), BFCPMessage::PrimitiveName(msg->GetPrimitive()));
 	BFCPMsgError error(msg, errorCode, errorInfo);
+	error.SetResponder(true);
 	if (to)
 		to->Send(error);
 }
@@ -685,7 +689,7 @@ void BFCPFloorControlServer::ProcessFloorRequestLocked(BFCPMsgFloorRequest *req,
 	::Log("BFCPFloorControlServer::ProcessFloorRequest() | FloorRequest '%d' added to conference '%d'\n", floorRequestId, this->conferenceId);
 
 	// The response: Pending, with the transaction id of the request.
-	SendFloorRequestStatusLocked(floorRequest, req->GetTransactionId(), req->GetUserId(), "");
+	SendFloorRequestStatusLocked(floorRequest, req->GetTransactionId(), req->GetUserId(), "", true);
 
 	if (user->IsChair()) {
 		::Log("BFCPFloorControlServer::ProcessFloorRequest() | the sender is a chair, request authorized\n");
@@ -737,9 +741,9 @@ void BFCPFloorControlServer::ProcessFloorReleaseLocked(BFCPMsgFloorRelease *req,
 	}
 
 	// The response to the sender, and a notification to the requester if distinct.
-	SendFloorRequestStatusLocked(floorRequest, req->GetTransactionId(), sender, "");
+	SendFloorRequestStatusLocked(floorRequest, req->GetTransactionId(), sender, "", true);
 	if (sender != requester)
-		SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(GetUserLocked(requester)), requester, "");
+		SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(GetUserLocked(requester)), requester, "", false);
 
 	NotifyForFloorRequestLocked(floorRequest);
 
@@ -771,14 +775,17 @@ void BFCPFloorControlServer::ProcessFloorQueryLocked(BFCPMsgFloorQuery *req, BFC
 	int count = user->CountQueriedFloorIds();
 	if (count == 0) {
 		BFCPMsgFloorStatus floorStatus(req->GetTransactionId(), this->conferenceId, req->GetUserId());
+		floorStatus.SetResponder(true);
 		user->SendMessage(floorStatus);
 		return;
 	}
 
 	// The first FloorStatus answers the query, the others are notifications.
 	for (int i=0; i<count; i++) {
-		int transactionId = (i == 0) ? req->GetTransactionId() : NotificationTransactionIdLocked(user);
+		const bool isResponse = (i == 0);
+		int transactionId = isResponse ? req->GetTransactionId() : NotificationTransactionIdLocked(user);
 		std::unique_ptr<BFCPMsgFloorStatus> floorStatus = BuildFloorStatusLocked(user->GetQueriedFloorId(i), transactionId, req->GetUserId());
+		floorStatus->SetResponder(isResponse);
 		user->SendMessage(*floorStatus);
 	}
 }
@@ -815,6 +822,7 @@ void BFCPFloorControlServer::ProcessHelloLocked(BFCPMsgHello *req, BFCPUser* use
 	ack.AddSupportedAttribute(BFCPAttribute::RequestedByInformation);
 	ack.AddSupportedAttribute(BFCPAttribute::FloorRequestStatus);
 	ack.AddSupportedAttribute(BFCPAttribute::OverallRequestStatus);
+	ack.SetResponder(true);
 	user->SendMessage(ack);
 
 	// Over UDP the server greets back, as the endpoints in service expect.
@@ -830,6 +838,8 @@ void BFCPFloorControlServer::ProcessHelloLocked(BFCPMsgHello *req, BFCPUser* use
 
 void BFCPFloorControlServer::ProcessGoodbyeLocked(BFCPMessage *req, BFCPUser* user, Notifications& pending)
 {
-	user->SendMessage(BFCPMessage(BFCPMessage::GoodbyeAck, req->GetTransactionId(), this->conferenceId, req->GetUserId()));
+	BFCPMessage goodbyeAck(BFCPMessage::GoodbyeAck, req->GetTransactionId(), this->conferenceId, req->GetUserId());
+	goodbyeAck.SetResponder(true);
+	user->SendMessage(goodbyeAck);
 	RemoveUserLocked(user->GetUserId(), false, pending);
 }

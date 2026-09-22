@@ -119,7 +119,7 @@ private:
 	void ProcessHelloLocked(BFCPMsgHello *req, BFCPUser* user, Notifications& pending);
 	void ProcessGoodbyeLocked(BFCPMessage *req, BFCPUser* user, Notifications& pending);
 
-	void SendFloorRequestStatusLocked(const BFCPFloorRequest* floorRequest, int transactionId, int toUserId, const std::string& statusInfo);
+	void SendFloorRequestStatusLocked(const BFCPFloorRequest* floorRequest, int transactionId, int toUserId, const std::string& statusInfo, bool isResponse);
 	void SendMessageLocked(const BFCPMessage& msg);
 	void ReplyErrorLocked(const BFCPMessage *msg, BFCPTransport *to, BFCPAttrErrorCode::ErrorCode errorCode, const std::string& errorInfo);
 

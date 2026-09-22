@@ -76,6 +76,12 @@ bool BFCPMessage::ParseAttributes(const BYTE* data, size_t size)
 
 size_t BFCPMessage::Serialize(BYTE* out, size_t max) const
 {
+	return Serialize(out, max, this->version);
+}
+
+
+size_t BFCPMessage::Serialize(BYTE* out, size_t max, int version) const
+{
 	if (max < HeaderLen)
 		return Failed;
 
@@ -94,7 +100,7 @@ size_t BFCPMessage::Serialize(BYTE* out, size_t max) const
 		return Failed;
 	}
 
-	out[0] = (BYTE)((this->version << 5) | (this->responder ? 0x10 : 0x00));
+	out[0] = (BYTE)((version << 5) | (this->responder ? 0x10 : 0x00));
 	out[1] = (BYTE)this->primitive;
 	set2(out, 2, payload / 4);
 	set4(out, 4, this->conferenceId);

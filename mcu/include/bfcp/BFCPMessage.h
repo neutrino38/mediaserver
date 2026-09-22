@@ -83,6 +83,9 @@ public:
 
 	// Writes header and attributes. Failed when they do not fit.
 	size_t Serialize(BYTE* out, size_t max) const;
+	// Same, with the version the transport wants: it knows what the peer
+	// speaks, the message does not.
+	size_t Serialize(BYTE* out, size_t max, int version) const;
 
 	void SetVersion(int version);
 	int GetVersion() const;

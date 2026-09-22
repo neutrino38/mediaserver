@@ -15,10 +15,13 @@ BFCPMsgHelloAck::~BFCPMsgHelloAck()
 
 bool BFCPMsgHelloAck::IsValid()
 {
-	if (this->supportedPrimitives.Count() < 1 || this->supportedAttributes.Count() < 1) {
-		::Error("BFCPMsgHelloAck::IsValid() | MUST have SupportedPrimitives and SupportedAttributes\n");
-		return false;
-	}
+	// The grammar makes both lists mandatory, and we always send them. We do
+	// NOT demand them on receipt: over UDP a HelloAck is what closes our Hello
+	// transaction, and that job rests on the transaction id alone. Refusing a
+	// peer's acknowledgement over a missing informational list would have us
+	// retransmit until we gave up, and drop a participant that is right there.
+	if (this->supportedPrimitives.Count() < 1 || this->supportedAttributes.Count() < 1)
+		::Debug("BFCPMsgHelloAck::IsValid() | HelloAck without its supported lists, accepted anyway\n");
 	return true;
 }
 
