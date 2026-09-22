@@ -93,7 +93,19 @@ private:
 	std::list<std::pair<QWORD,std::string>> pending;
 
 	//Atomique : le thread de tirage le lit en condition de boucle, End() l'écrit.
+	//La transition TaskStarting -> TaskRunning se fait par compare_exchange :
+	//un simple test-puis-écriture écrase le TaskStopping qu'End() vient de
+	//poser, et le thread ne sort alors plus jamais de sa boucle.
 	std::atomic<TaskState>	pulling;
+
+	//Sérialise Init() et End() entre eux. Deux End() concurrents sont un
+	//chemin réel — le participant est détruit pendant que le dernier
+	//shared_ptr tombe côté serveur WebSocket — et sans ce verrou le second
+	//rend la main AVANT que le thread de tirage soit joint : le destructeur
+	//libère alors les pipes et le mutex sous un thread encore vivant.
+	//Pris AVANT le join, donc jamais en même temps que `mtx`, que le thread
+	//de tirage détient pendant qu'il délivre.
+	std::mutex	lifecycle;
 };
 
 #endif /* PARTICIPANTTEXTWS_H */
