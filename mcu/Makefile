@@ -88,6 +88,16 @@ MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 SCTPDIR=sctp
 SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o t140bridge.o
 
+# BFCP : la pile interne (docs/conception/BFCP-INTERNE/SPEC.md). Lot 0 : elle
+# compile et se teste seule, le mcu parle encore a libbfcp.
+BFCPSTACKOBJ=BFCPMessage.o BFCPUser.o BFCPFloorRequest.o BFCPFloorControlServer.o \
+      BFCPAttrBeneficiaryId.o BFCPAttrBeneficiaryInformation.o BFCPAttrErrorCode.o BFCPAttrErrorInfo.o \
+      BFCPAttrFloorId.o BFCPAttrFloorRequestId.o BFCPAttrFloorRequestInformation.o BFCPAttrFloorRequestStatus.o \
+      BFCPAttrOverallRequestStatus.o BFCPAttrParticipantProvidedInfo.o BFCPAttrRequestedByInformation.o \
+      BFCPAttrRequestStatus.o BFCPAttrStatusInfo.o BFCPAttrSupportedAttributes.o BFCPAttrSupportedPrimitives.o \
+      BFCPMsgError.o BFCPMsgFloorQuery.o BFCPMsgFloorRelease.o BFCPMsgFloorRequest.o \
+      BFCPMsgFloorRequestStatus.o BFCPMsgFloorStatus.o BFCPMsgHello.o BFCPMsgHelloAck.o
+
 OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
@@ -100,7 +110,7 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
 OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o
 
-OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ)
+OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ) $(BFCPSTACKOBJ)
 TARGETS=mcu rtmptest
 
 ifeq ($(FLASHSTREAMER),yes)
@@ -159,6 +169,9 @@ VPATH +=  %.c src/
 VPATH +=  %.cpp src/
 VPATH +=  %.cpp src/$(JSR309DIR)
 VPATH +=  %.cpp src/$(SCTPDIR)
+VPATH +=  %.cpp src/bfcp
+VPATH +=  %.cpp src/bfcp/attributes
+VPATH +=  %.cpp src/bfcp/messages
 
 ifeq ($(MOTELI),yes)
     VPATH +=  %.cpp src/$(MOTELIDIR)

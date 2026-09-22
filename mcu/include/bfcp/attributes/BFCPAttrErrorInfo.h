@@ -8,16 +8,13 @@
 
 class BFCPAttrErrorInfo : public BFCPAttribute
 {
-/* Instance members. */
-
 public:
-	BFCPAttrErrorInfo(std::wstring value);
+	BFCPAttrErrorInfo(const std::string& value);
 	void Dump();
-
-	std::wstring GetValue();
+	const std::string& GetValue() const;
 
 private:
-	std::wstring value;
+	std::string value;
 };
 
 

@@ -15,7 +15,8 @@
 #include "attributes/BFCPAttrBeneficiaryInformation.h"
 #include "attributes/BFCPAttrRequestedByInformation.h"
 #include "attributes/BFCPAttrStatusInfo.h"
+#include "attributes/BFCPAttrSupportedAttributes.h"
+#include "attributes/BFCPAttrSupportedPrimitives.h"
 
 
 #endif
-

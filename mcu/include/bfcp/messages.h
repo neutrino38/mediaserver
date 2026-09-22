@@ -12,6 +12,10 @@
 #include "messages/BFCPMsgError.h"
 #include "messages/BFCPMsgFloorRequestStatus.h"
 #include "messages/BFCPMsgFloorStatus.h"
+#include "messages/BFCPMsgHelloAck.h"
+
+/* Goodbye, GoodbyeAck, FloorRequestStatusAck and FloorStatusAck carry no
+ * attribute: they are plain BFCPMessage instances. */
 
 
 #endif

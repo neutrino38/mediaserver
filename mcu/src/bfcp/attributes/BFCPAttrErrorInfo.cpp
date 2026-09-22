@@ -2,9 +2,7 @@
 #include "log.h"
 
 
-/* Instance methods */
-
-BFCPAttrErrorInfo::BFCPAttrErrorInfo(std::wstring value) : value(value)
+BFCPAttrErrorInfo::BFCPAttrErrorInfo(const std::string& value) : value(value)
 {
 }
 
@@ -12,12 +10,12 @@ BFCPAttrErrorInfo::BFCPAttrErrorInfo(std::wstring value) : value(value)
 void BFCPAttrErrorInfo::Dump()
 {
 	::Debug("[BFCPAttrErrorInfo]\n");
-	::Debug("- value: (not shown)\n");
+	::Debug("- value: %s\n", this->value.c_str());
 	::Debug("[/BFCPAttrErrorInfo]\n");
 }
 
 
-std::wstring BFCPAttrErrorInfo::GetValue()
+const std::string& BFCPAttrErrorInfo::GetValue() const
 {
 	return this->value;
 }

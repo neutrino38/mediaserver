@@ -2,9 +2,7 @@
 #include "log.h"
 
 
-/* Instance methods */
-
-BFCPAttrParticipantProvidedInfo::BFCPAttrParticipantProvidedInfo(std::wstring value) : value(value)
+BFCPAttrParticipantProvidedInfo::BFCPAttrParticipantProvidedInfo(const std::string& value) : value(value)
 {
 }
 
@@ -12,14 +10,12 @@ BFCPAttrParticipantProvidedInfo::BFCPAttrParticipantProvidedInfo(std::wstring va
 void BFCPAttrParticipantProvidedInfo::Dump()
 {
 	::Debug("[BFCPAttrParticipantProvidedInfo]\n");
-	// NOTE: Cannot print a UTF8 wide string which can have multibyte symbols.
-	//::Debug("- value: %ls\n", this->value);
-	::Debug("- value: (not shown)\n");
+	::Debug("- value: %s\n", this->value.c_str());
 	::Debug("[/BFCPAttrParticipantProvidedInfo]\n");
 }
 
 
-std::wstring BFCPAttrParticipantProvidedInfo::GetValue()
+const std::string& BFCPAttrParticipantProvidedInfo::GetValue() const
 {
 	return this->value;
 }

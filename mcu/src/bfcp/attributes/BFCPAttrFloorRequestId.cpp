@@ -17,7 +17,7 @@ void BFCPAttrFloorRequestId::Dump()
 }
 
 
-int BFCPAttrFloorRequestId::GetValue()
+int BFCPAttrFloorRequestId::GetValue() const
 {
 	return this->value;
 }

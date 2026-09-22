@@ -3,8 +3,6 @@
 #include <algorithm>
 
 
-/* Instance methods */
-
 BFCPAttrFloorRequestInformation::BFCPAttrFloorRequestInformation(int floorRequestId) :
 	floorRequestId(new BFCPAttrFloorRequestId(floorRequestId)),
 	overallRequestStatus(NULL),
@@ -16,11 +14,8 @@ BFCPAttrFloorRequestInformation::BFCPAttrFloorRequestInformation(int floorReques
 
 BFCPAttrFloorRequestInformation::~BFCPAttrFloorRequestInformation()
 {
-	::Debug("BFCPAttrFloorRequestInformation::~BFCPAttrFloorRequestInformation() | free memory\n");
-
 	delete this->floorRequestId;
-	int num_floor_request_statuses = this->floorRequestStatuses.size();
-	for (int i=0; i < num_floor_request_statuses; i++)
+	for (size_t i=0; i < this->floorRequestStatuses.size(); i++)
 		delete this->floorRequestStatuses[i];
 	if (this->overallRequestStatus)
 		delete this->overallRequestStatus;
@@ -35,8 +30,7 @@ void BFCPAttrFloorRequestInformation::Dump()
 {
 	::Debug("[BFCPAttrFloorRequestInformation]\n");
 	::Debug("- floorRequestId: %d\n", this->floorRequestId->GetValue());
-	int num_floor_request_statuses = this->floorRequestStatuses.size();
-	for (int i=0; i < num_floor_request_statuses; i++) {
+	for (size_t i=0; i < this->floorRequestStatuses.size(); i++) {
 		::Debug("- floorRequestStatus:\n");
 		this->floorRequestStatuses[i]->Dump();
 	}
@@ -56,41 +50,10 @@ void BFCPAttrFloorRequestInformation::Dump()
 }
 
 
-void BFCPAttrFloorRequestInformation::Stringify(std::wstringstream &json_stream)
-{
-	json_stream << L"{";
-	json_stream << L"\n  \"floorRequestId\": " << this->floorRequestId->GetValue();
-	json_stream << L",\n  \"floorRequestStatus\": [";
-	int num_floor_request_statuses = this->floorRequestStatuses.size();
-	for (int i=0; i < num_floor_request_statuses; i++) {
-		json_stream << L"\n";
-		this->floorRequestStatuses[i]->Stringify(json_stream);
-		if (i < num_floor_request_statuses - 1)
-			json_stream << L", ";
-	}
-	json_stream << L"\n]";
-	if (this->overallRequestStatus) {
-		json_stream << L",\n  \"overallRequestStatus\": ";
-		this->overallRequestStatus->Stringify(json_stream);
-	}
-	if (this->beneficiaryInformation) {
-		json_stream << L",\n  \"beneficiaryInformation\": ";
-		this->beneficiaryInformation->Stringify(json_stream);
-	}
-	if (this->requestedByInformation) {
-		json_stream << L",\n  \"requestedByInformation\": ";
-		this->requestedByInformation->Stringify(json_stream);
-	}
-	json_stream << L"\n}";
-}
-
-
 void BFCPAttrFloorRequestInformation::AddFloorRequestStatus(BFCPAttrFloorRequestStatus *floorRequestStatus)
 {
-	// Avoid duplicated floorRequestStatuses.
 	if (std::find(this->floorRequestStatuses.begin(), this->floorRequestStatuses.end(), floorRequestStatus) != this->floorRequestStatuses.end())
 		return;
-
 	this->floorRequestStatuses.push_back(floorRequestStatus);
 }
 
@@ -99,7 +62,6 @@ void BFCPAttrFloorRequestInformation::SetOverallRequestStatus(BFCPAttrOverallReq
 {
 	if (this->overallRequestStatus)
 		delete this->overallRequestStatus;
-
 	this->overallRequestStatus = overallRequestStatus;
 }
 
@@ -108,7 +70,6 @@ void BFCPAttrFloorRequestInformation::SetBeneficiaryInformation(BFCPAttrBenefici
 {
 	if (this->beneficiaryInformation)
 		delete this->beneficiaryInformation;
-
 	this->beneficiaryInformation = beneficiaryInformation;
 }
 
@@ -117,15 +78,51 @@ void BFCPAttrFloorRequestInformation::SetRequestedByInformation(BFCPAttrRequeste
 {
 	if (this->requestedByInformation)
 		delete this->requestedByInformation;
-
 	this->requestedByInformation = requestedByInformation;
 }
 
 
-void BFCPAttrFloorRequestInformation::SetDescription(std::wstring& statusInfo)
+void BFCPAttrFloorRequestInformation::SetDescription(const std::string& statusInfo)
 {
 	if (! this->overallRequestStatus)
 		return;
-
 	this->overallRequestStatus->SetStatusInfo(new BFCPAttrStatusInfo(statusInfo));
+}
+
+
+int BFCPAttrFloorRequestInformation::GetFloorRequestId() const
+{
+	return this->floorRequestId->GetValue();
+}
+
+
+int BFCPAttrFloorRequestInformation::CountFloorRequestStatuses() const
+{
+	return this->floorRequestStatuses.size();
+}
+
+
+const BFCPAttrFloorRequestStatus* BFCPAttrFloorRequestInformation::GetFloorRequestStatus(unsigned int index) const
+{
+	if (index >= this->floorRequestStatuses.size())
+		return NULL;
+	return this->floorRequestStatuses[index];
+}
+
+
+const BFCPAttrOverallRequestStatus* BFCPAttrFloorRequestInformation::GetOverallRequestStatus() const
+{
+	return this->overallRequestStatus;
+}
+
+
+const BFCPAttrBeneficiaryInformation* BFCPAttrFloorRequestInformation::GetBeneficiaryInformation() const
+{
+	return this->beneficiaryInformation;
+}
+
+
+const BFCPAttrRequestedByInformation* BFCPAttrFloorRequestInformation::GetRequestedByInformation() const
+{
+	return this->requestedByInformation;
 }

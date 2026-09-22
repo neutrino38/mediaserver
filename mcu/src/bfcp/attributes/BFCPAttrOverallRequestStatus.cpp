@@ -2,8 +2,6 @@
 #include "log.h"
 
 
-/* Instance methods */
-
 BFCPAttrOverallRequestStatus::BFCPAttrOverallRequestStatus(int floorRequestId) :
 	floorRequestId(new BFCPAttrFloorRequestId(floorRequestId)),
 	requestStatus(NULL),
@@ -14,8 +12,6 @@ BFCPAttrOverallRequestStatus::BFCPAttrOverallRequestStatus(int floorRequestId) :
 
 BFCPAttrOverallRequestStatus::~BFCPAttrOverallRequestStatus()
 {
-	::Debug("BFCPAttrOverallRequestStatus::~BFCPAttrOverallRequestStatus() | free memory\n");
-
 	delete this->floorRequestId;
 	if (this->requestStatus)
 		delete this->requestStatus;
@@ -33,24 +29,9 @@ void BFCPAttrOverallRequestStatus::Dump()
 		this->requestStatus->Dump();
 	}
 	if (this->statusInfo) {
-		::Debug("- statusInfo: (not shown)\n");
+		::Debug("- statusInfo: %s\n", this->statusInfo->GetValue().c_str());
 	}
 	::Debug("[/BFCPAttrOverallRequestStatus]\n");
-}
-
-
-void BFCPAttrOverallRequestStatus::Stringify(std::wstringstream &json_stream)
-{
-	json_stream << L"{";
-	json_stream << L"\n  \"floorRequestId\": " << this->floorRequestId->GetValue();
-	if (this->requestStatus) {
-		json_stream << L",\n  \"requestStatus\": ";
-		this->requestStatus->Stringify(json_stream);
-	}
-	if (this->statusInfo) {
-		json_stream << L",\n  \"statusInfo\": \"" << this->statusInfo->GetValue() << L"\"";
-	}
-	json_stream << L"\n}";
 }
 
 
@@ -67,4 +48,22 @@ void BFCPAttrOverallRequestStatus::SetStatusInfo(BFCPAttrStatusInfo *statusInfo)
 	if (this->statusInfo)
 		delete this->statusInfo;
 	this->statusInfo = statusInfo;
+}
+
+
+int BFCPAttrOverallRequestStatus::GetFloorRequestId() const
+{
+	return this->floorRequestId->GetValue();
+}
+
+
+const BFCPAttrRequestStatus* BFCPAttrOverallRequestStatus::GetRequestStatus() const
+{
+	return this->requestStatus;
+}
+
+
+const BFCPAttrStatusInfo* BFCPAttrOverallRequestStatus::GetStatusInfo() const
+{
+	return this->statusInfo;
 }

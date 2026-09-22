@@ -2,8 +2,6 @@
 #include "log.h"
 
 
-/* Instance methods */
-
 BFCPAttrBeneficiaryInformation::BFCPAttrBeneficiaryInformation(int beneficiaryId) :
 	beneficiaryId(new BFCPAttrBeneficiaryId(beneficiaryId))
 {
@@ -12,8 +10,6 @@ BFCPAttrBeneficiaryInformation::BFCPAttrBeneficiaryInformation(int beneficiaryId
 
 BFCPAttrBeneficiaryInformation::~BFCPAttrBeneficiaryInformation()
 {
-	::Debug("BFCPAttrBeneficiaryInformation::~BFCPAttrBeneficiaryInformation() | free memory\n");
-
 	delete this->beneficiaryId;
 }
 
@@ -26,9 +22,7 @@ void BFCPAttrBeneficiaryInformation::Dump()
 }
 
 
-void BFCPAttrBeneficiaryInformation::Stringify(std::wstringstream &json_stream)
+int BFCPAttrBeneficiaryInformation::GetBeneficiaryId() const
 {
-	json_stream << L"{";
-	json_stream << L"\n  \"beneficiaryId\": " << this->beneficiaryId->GetValue();
-	json_stream << L"\n}";
+	return this->beneficiaryId->GetValue();
 }

@@ -13,7 +13,7 @@ public:
 	BFCPAttrFloorId(int);
 	void Dump();
 
-	int GetValue();
+	int GetValue() const;
 
 private:
 	int value;

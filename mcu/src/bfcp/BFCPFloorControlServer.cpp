@@ -1,14 +1,12 @@
 #include "bfcp/BFCPFloorControlServer.h"
-#include "bfcp/messages.h"
-#include "bfcp/attributes.h"
 #include "log.h"
-#include "use.h"
 
 
 BFCPFloorControlServer::BFCPFloorControlServer(int conferenceId, BFCPFloorControlServer::Listener *listener) :
-	conferenceId(conferenceId),
 	listener(listener),
+	conferenceId(conferenceId),
 	floorRequestCounter(1),
+	transactionCounter(0),
 	ending(false)
 {
 }
@@ -16,68 +14,40 @@ BFCPFloorControlServer::BFCPFloorControlServer(int conferenceId, BFCPFloorContro
 
 BFCPFloorControlServer::~BFCPFloorControlServer()
 {
-	::Debug("BFCPFloorControlServer::~BFCPFloorControlServer()\n");
-
-	//Lock
-	users.WaitUnusedAndLock();
-	// Clear Users, Floors and FloorRequests.
-	for (BFCPFloorControlServer::Users::iterator it = this->users.begin() ; it != this->users.end(); ++it) {
-		delete it->second;
-	}
-	this->users.clear();
-	//Unlock
-	users.Unlock();
-
-	for (BFCPFloorControlServer::RemovedUsers::iterator it = this->removedUsers.begin() ; it != this->removedUsers.end(); ++it) {
-		delete *it;
-	}
-	this->removedUsers.clear();
-
-	this->floors.clear();
-
-	for (BFCPFloorControlServer::FloorRequests::iterator it = this->floorRequests.begin() ; it != this->floorRequests.end(); ++it) {
-		delete it->second;
-	}
-	this->floorRequests.clear();
+	::Debug("BFCPFloorControlServer::~BFCPFloorControlServer() | conference '%d'\n", this->conferenceId);
 }
 
 
-int BFCPFloorControlServer::GetConferenceId()
+int BFCPFloorControlServer::GetConferenceId() const
 {
 	return this->conferenceId;
 }
 
 
+void BFCPFloorControlServer::Fire(Notifications& pending)
+{
+	for (size_t i=0; i<pending.size(); i++)
+		pending[i]();
+	pending.clear();
+}
+
+
+/* Chair API */
+
 bool BFCPFloorControlServer::AddUser(int userId)
 {
+	std::lock_guard<std::mutex> lock(mutex);
+
 	if (this->ending)
-		return ::Error("BFCPFloorControlServer::AddUser() already ended\n");
+		return ::Error("BFCPFloorControlServer::AddUser() | already ended\n");
 
-	if (userId < 1) {
-		::Error("BFCPFloorControlServer::AddUser() | userId must be > 0\n");
-		return false;
-	}
+	if (userId < 1 || userId > 0xFFFF)
+		return ::Error("BFCPFloorControlServer::AddUser() | userId '%d' out of range\n", userId);
 
-	//Lock users for writting
-	users.WaitUnusedAndLock();
-
-	//Find user
-	Users::iterator it = users.find(userId);
-
-	// If the userId already exists then abort.
-	if (it != users.end())
-	{
-		//Unlock
-		users.Unlock();
-		//Error
+	if (users.find(userId) != users.end())
 		return ::Error("BFCPFloorControlServer::AddUser() | userId '%d' already exists in conference '%d'\n", userId, this->conferenceId);
-	}
 
-	// Add to the Users map.
-	this->users[userId] = new BFCPUser(userId, this->conferenceId);
-
-	//Unlock
-	users.Unlock();
+	users[userId].reset(new BFCPUser(userId, this->conferenceId));
 
 	::Log("BFCPFloorControlServer::AddUser() | user '%d' added to conference '%d'\n", userId, this->conferenceId);
 	return true;
@@ -86,44 +56,35 @@ bool BFCPFloorControlServer::AddUser(int userId)
 
 bool BFCPFloorControlServer::RemoveUser(int userId)
 {
-	if (this->ending)
-		return ::Error("BFCPFloorControlServer::RemoveUser() already ended\n");
-
-	//Lock users for writting
-	users.WaitUnusedAndLock();
-
-	//Find user
-	Users::iterator it = users.find(userId);
-
-	// If the userId did not exist then abort.
-	if (it == users.end())
+	Notifications pending;
+	bool ok;
 	{
-		//Unlock
-		users.Unlock();
-		//Error
-		return ::Error("BFCPFloorControlServer::RemoveUser() | userId '%d' does not exist in conference '%d'\n", userId, this->conferenceId);
+		std::lock_guard<std::mutex> lock(mutex);
+		if (this->ending)
+			return ::Error("BFCPFloorControlServer::RemoveUser() | already ended\n");
+		ok = RemoveUserLocked(userId, true, pending);
 	}
+	Fire(pending);
+	return ok;
+}
 
-	//Get user
-	BFCPUser* user = it->second;
 
-	//Delete from map
+bool BFCPFloorControlServer::RemoveUserLocked(int userId, bool sendGoodbye, Notifications& pending)
+{
+	Users::iterator it = users.find(userId);
+	if (it == users.end())
+		return ::Error("BFCPFloorControlServer::RemoveUser() | userId '%d' does not exist in conference '%d'\n", userId, this->conferenceId);
+
+	// Revoke BEFORE erasing: the Revoked notifications are routed by userId, so
+	// the user must still be reachable for its own transport to be found.
+	BFCPUser* user = it->second.get();
+	RevokeUserFloorRequestsLocked(user, pending);
+
+	if (sendGoodbye && user->IsConnected())
+		user->SendMessage(BFCPMessage(BFCPMessage::Goodbye, NotificationTransactionIdLocked(user), this->conferenceId, userId));
+	user->CloseTransport();
+
 	users.erase(it);
-
-	//Unlock
-	users.Unlock();
-
-	// Revoke user's ongoing FloorRequests.
-	::Debug("BFCPFloorControlServer::RemoveUser() | calling RevokeUserFloorRequests(%d)\n", userId);
-	RevokeUserFloorRequests(user);
-	::Debug("BFCPFloorControlServer::RemoveUser() | RevokeUserFloorRequests(%d) returns\n", userId);
-
-	// Close its transport (if connected).
-	// TODO: log?
-	user->CloseTransport(4001, L"you have been removed from the BFCP conference");
-
-	// Don't delete the user (as other thread may have retrieved it before). Instead move it to removedUsers.
-	removedUsers.push_back(user);
 
 	::Log("BFCPFloorControlServer::RemoveUser() | user '%d' removed from conference '%d'\n", userId, this->conferenceId);
 	return true;
@@ -132,50 +93,37 @@ bool BFCPFloorControlServer::RemoveUser(int userId)
 
 bool BFCPFloorControlServer::SetChair(int userId)
 {
-	if (this->ending) { return false; }
+	std::lock_guard<std::mutex> lock(mutex);
 
-	BFCPUser* user = GetUser(userId);
-
-	if (! user) {
-		::Error("BFCPFloorControlServer::SetChair() | user '%d' does not exist\n", userId);
+	if (this->ending)
 		return false;
-	}
 
-	//As we are setting also the chair, lock for writting
-	users.WaitUnusedAndLock();
+	BFCPUser* user = GetUserLocked(userId);
+	if (! user)
+		return ::Error("BFCPFloorControlServer::SetChair() | user '%d' does not exist\n", userId);
 
-	// Unset the current chair.
-	for (BFCPFloorControlServer::Users::iterator it=this->users.begin(); it!=this->users.end(); ++it) {
-		BFCPUser* otherUser = it->second;
-		otherUser->UnsetChair();
-	}
-
-	::Log("BFCPFloorControlServer::SetChair() | user '%d' becomes chair\n", userId);
+	for (Users::iterator it=users.begin(); it!=users.end(); ++it)
+		it->second->UnsetChair();
 	user->SetChair();
 
-	//Unlock after chair is set
-	users.Unlock();
-
+	::Log("BFCPFloorControlServer::SetChair() | user '%d' becomes chair\n", userId);
 	return true;
 }
 
 
 bool BFCPFloorControlServer::AddFloor(int floorId)
 {
-	if (this->ending) { return false; }
+	std::lock_guard<std::mutex> lock(mutex);
 
-	if (floorId < 1) {
-		::Error("BFCPFloorControlServer::AddFloor() | floorId must be > 0\n");
+	if (this->ending)
 		return false;
-	}
 
-	// Ensure the floor does not already exist.
-	if (this->HasFloor(floorId)) {
-		::Error("BFCPFloorControlServer::AddFloor() | floor '%d' already exists\n", floorId);
-		return false;
-	}
+	if (floorId < 1 || floorId > 0xFFFF)
+		return ::Error("BFCPFloorControlServer::AddFloor() | floorId '%d' out of range\n", floorId);
 
-	// Add to the Floors set.
+	if (HasFloorLocked(floorId))
+		return ::Error("BFCPFloorControlServer::AddFloor() | floor '%d' already exists\n", floorId);
+
 	this->floors.insert(floorId);
 
 	::Log("BFCPFloorControlServer::AddFloor() | floor '%d' added to conference '%d'\n", floorId, this->conferenceId);
@@ -185,208 +133,130 @@ bool BFCPFloorControlServer::AddFloor(int floorId)
 
 bool BFCPFloorControlServer::GrantFloorRequest(int floorRequestId)
 {
-	if (this->ending) { return false; }
-
-	::Debug("BFCPFloorControlServer::GrantFloorRequest() | start | [floorRequestId: %d]\n", floorRequestId);
-
-	BFCPFloorRequest *floorRequest = GetFloorRequest(floorRequestId);
-	if (! floorRequest) {
-		::Error("BFCPFloorControlServer::GrantFloorRequest() | FloorRequest '%d' does not exist\n", floorRequestId);
-		return false;
+	Notifications pending;
+	bool ok;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (this->ending)
+			return false;
+		ok = GrantFloorRequestLocked(floorRequestId, pending);
 	}
+	Fire(pending);
+	return ok;
+}
 
 
-	/* Check that the FloorRequest is in a proper status. */
+bool BFCPFloorControlServer::GrantFloorRequestLocked(int floorRequestId, Notifications& pending)
+{
+	BFCPFloorRequest *floorRequest = GetFloorRequestLocked(floorRequestId);
+	if (! floorRequest)
+		return ::Error("BFCPFloorControlServer::GrantFloorRequest() | FloorRequest '%d' does not exist\n", floorRequestId);
 
-	if (! floorRequest->CanBeGranted()) {
-		::Error("BFCPFloorControlServer::GrantFloorRequest() | cannot grant FloorRequest '%d' which is in status '%ls'\n", floorRequestId, floorRequest->GetStatusString().c_str());
-		return false;
-	}
+	if (! floorRequest->CanBeGranted())
+		return ::Error("BFCPFloorControlServer::GrantFloorRequest() | cannot grant FloorRequest '%d' in status '%s'\n", floorRequestId, floorRequest->GetStatusName());
 
+	// Revoke whoever holds any of the requested floors.
+	std::vector<BFCPFloorRequest*> others = GetFloorRequestsForFloorsLocked(floorRequest->GetFloorIds());
+	for (size_t i=0; i<others.size(); i++)
+		if (others[i] != floorRequest && others[i]->IsGranted())
+			RevokeFloorRequestLocked(others[i]->GetFloorRequestId(), "granted to other user", pending);
 
-	/* Revoke any other(s) FloorRequests owning any floor in this FloorRequest. */
+	// The sequence the endpoints in service know: Accepted, then Granted.
+	BFCPUser* requester = GetUserLocked(floorRequest->GetUserId());
+	int transactionId = NotificationTransactionIdLocked(requester);
 
-	// Get all the ongoing FloorRequests owning any floor in this FloorRequest.
-	std::vector<BFCPFloorRequest*> floorRequestsToRevoke = GetFloorRequestsForFloors(floorRequest->GetFloorIds());
+	floorRequest->SetStatus(BFCPAttrRequestStatus::Accepted);
+	SendFloorRequestStatusLocked(floorRequest, transactionId, floorRequest->GetUserId(), "");
 
-	// Revoke the Granted ones (the current FloorRequest won't be revoked since it is not granted yet).
-	for (int i=0; i<floorRequestsToRevoke.size(); i++) {
-		::Debug("BFCPFloorControlServer::GrantFloorRequest() | revoking FloorRequest %d/%d\n", i, floorRequestsToRevoke.size());
-		BFCPFloorRequest* floorRequestToRevoke = floorRequestsToRevoke[i];
-
-		if (! floorRequestToRevoke->IsGranted())
-			continue;
-		RevokeFloorRequest(floorRequestToRevoke->GetFloorRequestId(), L"granted to other user");
-	}
-
-
-	/* Update the current FloorRequest to "Granted" and send the FloorRequestStatus notification
-	 * to the FloorRequest sender. */
-
-	::Debug("BFCPFloorControlServer::GrantFloorRequest() | FloorRequest '%d' before beeing granted:\n", floorRequestId);
-	floorRequest->Dump();
-
-	// Update the FloorRequest status to "Granted".
-	::Log("BFCPFloorControlServer::GrantFloorRequest() | FloorRequest '%d' has been granted\n", floorRequestId);
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Granted);
+	::Log("BFCPFloorControlServer::GrantFloorRequest() | FloorRequest '%d' has been granted\n", floorRequestId);
+	SendFloorRequestStatusLocked(floorRequest, transactionId, floorRequest->GetUserId(), "");
 
-	// Notify to the FloorRequest sender with a "Granted" FloorRequestStatus notification.
-	::Debug("BFCPFloorControlServer::GrantFloorRequest() | sending 'Granted' FloorRequestStatus notification for FloorRequest '%d'\n", floorRequestId);
-	BFCPMsgFloorRequestStatus *floorRequestStatus = floorRequest->CreateFloorRequestStatus();
+	NotifyForFloorRequestLocked(floorRequest);
 
-	// Send the FloorRequestStatus notification to the requester of the FloorRequest.
-	SendMessage(floorRequestStatus);
-
-	// Delete it.
-	delete floorRequestStatus;
-
-
-	/* Notify with FloorStatus notifications to users who queried the status of any of the floors
-	 * in the current FloorRequest. */
-
-	NotifyForFloorRequest(floorRequest);
-
-
-	/* Notify the chair */
-
-	::Debug("BFCPFloorControlServer::GrantFloorRequest() | calling listener->onFloorGranted(%d)\n", floorRequestId);
-	this->listener->onFloorGranted(floorRequestId, floorRequest->GetBeneficiaryId(), floorRequest->GetFloorIds());
-	::Debug("BFCPFloorControlServer::GrantFloorRequest() | listener->onFloorGranted(%d) returns\n", floorRequestId);
-
-	::Debug("BFCPFloorControlServer::GrantFloorRequest() | end | [floorRequestId: %d]\n", floorRequestId);
+	int beneficiaryId = floorRequest->GetBeneficiaryId();
+	std::set<int> floorIds = floorRequest->GetFloorIds();
+	pending.push_back([this, floorRequestId, beneficiaryId, floorIds]() {
+		listener->onFloorGranted(floorRequestId, beneficiaryId, floorIds);
+	});
 
 	return true;
 }
 
 
-bool BFCPFloorControlServer::DenyFloorRequest(int floorRequestId, std::wstring statusInfo)
+bool BFCPFloorControlServer::DenyFloorRequest(int floorRequestId, const std::string& statusInfo)
 {
-	::Debug("BFCPFloorControlServer::DenyFloorRequest() | start | [floorRequestId: %d]\n", floorRequestId);
-
-	BFCPFloorRequest *floorRequest = GetFloorRequest(floorRequestId);
-	if (! floorRequest) {
-		::Error("BFCPFloorControlServer::DenyFloorRequest() | FloorRequest '%d' does not exist\n", floorRequestId);
-		return false;
+	Notifications pending;
+	bool ok;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		ok = DenyFloorRequestLocked(floorRequestId, statusInfo, pending);
 	}
+	Fire(pending);
+	return ok;
+}
 
 
-	/* Check that the FloorRequest is in a proper status. */
+bool BFCPFloorControlServer::DenyFloorRequestLocked(int floorRequestId, const std::string& statusInfo, Notifications& pending)
+{
+	BFCPFloorRequest *floorRequest = GetFloorRequestLocked(floorRequestId);
+	if (! floorRequest)
+		return ::Error("BFCPFloorControlServer::DenyFloorRequest() | FloorRequest '%d' does not exist\n", floorRequestId);
 
-	if (! floorRequest->CanBeDenied()) {
-		::Error("BFCPFloorControlServer::DenyFloorRequest() | cannot deny FloorRequest '%d' which is in status '%ls'\n", floorRequestId, floorRequest->GetStatusString().c_str());
-		return false;
-	}
+	if (! floorRequest->CanBeDenied())
+		return ::Error("BFCPFloorControlServer::DenyFloorRequest() | cannot deny FloorRequest '%d' in status '%s'\n", floorRequestId, floorRequest->GetStatusName());
 
-
-	/* Update the current FloorRequest to "Denied" and send the FloorRequestStatus notification
-	 * to the FloorRequest sender. */
-
-	::Debug("BFCPFloorControlServer::DenyFloorRequest() | FloorRequest '%d' before beeing denied:\n", floorRequestId);
-	floorRequest->Dump();
-
-	// Update the FloorRequest status to "Denied".
 	::Log("BFCPFloorControlServer::DenyFloorRequest() | FloorRequest '%d' has been denied\n", floorRequestId);
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Denied);
 
-	// Notify to the FloorRequest sender with a "Denied" FloorRequestStatus notification.
-	::Debug("BFCPFloorControlServer::DenyFloorRequest() | sending 'Denied' FloorRequestStatus notification for FloorRequest '%d'\n", floorRequestId);
-	BFCPMsgFloorRequestStatus *floorRequestStatus = floorRequest->CreateFloorRequestStatus();
-	if (! statusInfo.empty())
-		floorRequestStatus->SetDescription(statusInfo);
+	BFCPUser* requester = GetUserLocked(floorRequest->GetUserId());
+	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), statusInfo);
 
-	// Send the FloorRequestStatus notification to the requester of the FloorRequest.
-	SendMessage(floorRequestStatus);
-
-	// Delete it.
-	delete floorRequestStatus;
-
-
-	/* Notify with FloorStatus notifications to users who queried the status of any of the floors
-	 * in the current FloorRequest. */
-
-	NotifyForFloorRequest(floorRequest);
-
-
-	/* Delete the FloorRequest. */
+	NotifyForFloorRequestLocked(floorRequest);
 
 	this->floorRequests.erase(floorRequestId);
-	delete floorRequest;
-
-	::Debug("BFCPFloorControlServer::DenyFloorRequest() | end | [floorRequestId: %d]\n", floorRequestId);
-
 	return true;
 }
 
 
-bool BFCPFloorControlServer::RevokeFloorRequest(int floorRequestId, std::wstring statusInfo)
+bool BFCPFloorControlServer::RevokeFloorRequest(int floorRequestId, const std::string& statusInfo)
 {
-	::Debug("BFCPFloorControlServer::RevokeFloorRequest() | start | [floorRequestId: %d]\n", floorRequestId);
-
-	BFCPFloorRequest *floorRequest = GetFloorRequest(floorRequestId);
-	if (! floorRequest) {
-		::Error("BFCPFloorControlServer::RevokeFloorRequest() | FloorRequest '%d' does not exist\n", floorRequestId);
-		return false;
+	Notifications pending;
+	bool ok;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		ok = RevokeFloorRequestLocked(floorRequestId, statusInfo, pending);
 	}
+	Fire(pending);
+	return ok;
+}
 
 
-	/* Check that the FloorRequest is in Granted status. */
+bool BFCPFloorControlServer::RevokeFloorRequestLocked(int floorRequestId, const std::string& statusInfo, Notifications& pending)
+{
+	BFCPFloorRequest *floorRequest = GetFloorRequestLocked(floorRequestId);
+	if (! floorRequest)
+		return ::Error("BFCPFloorControlServer::RevokeFloorRequest() | FloorRequest '%d' does not exist\n", floorRequestId);
 
-	if (! floorRequest->IsGranted()) {
-		::Error("BFCPFloorControlServer::RevokeFloorRequest() | cannot deny FloorRequest '%d' which is in status 'Granted'\n", floorRequestId);
-		return false;
-	}
+	if (! floorRequest->IsGranted())
+		return ::Error("BFCPFloorControlServer::RevokeFloorRequest() | cannot revoke FloorRequest '%d' in status '%s'\n", floorRequestId, floorRequest->GetStatusName());
 
-
-	/* Update the current FloorRequest to "Revoked" and send the FloorRequestStatus notification
-	 * to the FloorRequest sender. */
-
-	::Debug("BFCPFloorControlServer::RevokeFloorRequest() | FloorRequest '%d' before beeing revoked:\n", floorRequestId);
-	floorRequest->Dump();
-
-	// Update the FloorRequest status to "Revoked".
 	::Log("BFCPFloorControlServer::RevokeFloorRequest() | FloorRequest '%d' has been revoked\n", floorRequestId);
 	floorRequest->SetStatus(BFCPAttrRequestStatus::Revoked);
 
-	// Notify to the FloorRequest sender with a "Revoked" FloorRequestStatus notification.
-	::Debug("BFCPFloorControlServer::RevokeFloorRequest() | sending 'Revoked' FloorRequestStatus notification for FloorRequest '%d'\n", floorRequestId);
-	BFCPMsgFloorRequestStatus *floorRequestStatus = floorRequest->CreateFloorRequestStatus();
-	if (! statusInfo.empty())
-		floorRequestStatus->SetDescription(statusInfo);
+	BFCPUser* requester = GetUserLocked(floorRequest->GetUserId());
+	SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(requester), floorRequest->GetUserId(), statusInfo);
 
-	// Send the FloorRequestStatus notification to the requester of the FloorRequest.
-	SendMessage(floorRequestStatus);
+	NotifyForFloorRequestLocked(floorRequest);
 
-	// Delete it.
-	delete floorRequestStatus;
-
-
-	/* Notify with FloorStatus notifications to users who queried the status of any of the floors
-	 * in the current FloorRequest. */
-
-	NotifyForFloorRequest(floorRequest);
-
-
-	/* Notify the chair. */
-
-	// But first remove the FloorRequest from the map so in the ugly case in which the
-	// chair calls to RevokeFloor() for this same FloorRequest it will fail.
+	int beneficiaryId = floorRequest->GetBeneficiaryId();
+	std::set<int> floorIds = floorRequest->GetFloorIds();
 	this->floorRequests.erase(floorRequestId);
 
-	if (! this->ending) {
-		::Debug("BFCPFloorControlServer::RevokeFloorRequest() | calling listener->onFloorReleased(%d)\n", floorRequestId);
-		this->listener->onFloorReleased(floorRequestId, floorRequest->GetBeneficiaryId(), floorRequest->GetFloorIds());
-		::Debug("BFCPFloorControlServer::RevokeFloorRequest() | listener->onFloorReleased(%d) returns\n", floorRequestId);
-	}
-
-
-	/* Delete the FloorRequest. */
-
-	// NOTE: the FloorRequest may has been removed by the chair when notified onFloorReleased, so check it!
-	if (GetFloorRequest(floorRequestId)) {
-		delete floorRequest;
-	}
-
-	::Debug("BFCPFloorControlServer::RevokeFloorRequest() | end | [floorRequestId: %d]\n", floorRequestId);
+	if (! this->ending)
+		pending.push_back([this, floorRequestId, beneficiaryId, floorIds]() {
+			listener->onFloorReleased(floorRequestId, beneficiaryId, floorIds);
+		});
 
 	return true;
 }
@@ -394,745 +264,532 @@ bool BFCPFloorControlServer::RevokeFloorRequest(int floorRequestId, std::wstring
 
 int BFCPFloorControlServer::GetGrantedFloorRequestId(int floorId)
 {
-	if (this->ending) { return 0; }
+	std::lock_guard<std::mutex> lock(mutex);
 
-	if (! HasFloor(floorId)) {
+	if (this->ending)
+		return 0;
+
+	if (! HasFloorLocked(floorId)) {
 		::Error("BFCPFloorControlServer::GetGrantedFloorRequestId() | floor '%d' does not exist\n", floorId);
 		return 0;
 	}
 
-	// Get all the ongoing FloorRequest including the given floor.
-	std::vector<BFCPFloorRequest*> floorRequests = GetFloorRequestsForFloor(floorId);
-
-	// Choose the first one that is Granted (can only be one).
-	int num_floor_requests = floorRequests.size();
-	for (int i=0; i<num_floor_requests; i++) {
-		if (floorRequests[i]->IsGranted()) {
-			return floorRequests[i]->GetFloorRequestId();
-		}
-	}
+	std::vector<BFCPFloorRequest*> requests = GetFloorRequestsForFloorLocked(floorId);
+	for (size_t i=0; i<requests.size(); i++)
+		if (requests[i]->IsGranted())
+			return requests[i]->GetFloorRequestId();
 
 	return 0;
 }
 
 
-void BFCPFloorControlServer::End()
+bool BFCPFloorControlServer::NotifyFloorStatus(int userId, int floorId)
 {
-	if (this->ending) { return; }
+	std::lock_guard<std::mutex> lock(mutex);
 
-	::Log("BFCPFloorControlServer::End() | terminanting conference '%d'\n", this->conferenceId);
+	if (this->ending)
+		return false;
 
-	this->ending = true;
+	BFCPUser* user = GetUserLocked(userId);
+	if (! user)
+		return ::Error("BFCPFloorControlServer::NotifyFloorStatus() | user '%d' does not exist\n", userId);
 
-	// Revoke all the ongoing FloorRequests.
-	::Log("BFCPFloorControlServer::End() | revoking/dening ongoing FloorRequests in conference '%d'\n", this->conferenceId);
+	if (! HasFloorLocked(floorId))
+		return ::Error("BFCPFloorControlServer::NotifyFloorStatus() | floor '%d' does not exist\n", floorId);
 
-	BFCPFloorControlServer::FloorRequests::iterator it;
-	while (this->floorRequests.size() > 0) {
-		::Debug("BFCPFloorControlServer::End() | [number of ongoing FloorRequests: %d]\n", this->floorRequests.size());
-
-		it = this->floorRequests.begin();
-		BFCPFloorRequest* floorRequest = it->second;
-
-		if (floorRequest->IsGranted()) {
-			RevokeFloorRequest(floorRequest->GetFloorRequestId(), L"conference ended");
-		}
-		else {
-			DenyFloorRequest(floorRequest->GetFloorRequestId(), L"conference ended");
-		}
-	}
-
-	// Disconect all the users.
-	::Log("BFCPFloorControlServer::End() | disconnecting users in conference '%d'\n", this->conferenceId);
-
-	//Lock users from writing
-	users.WaitUnusedAndLock();
-
-	//Close all user's transports and erase map
-	Users::iterator it2 = users.begin();
-
-	//Until the end
-	while( it2!=users.end())
-	{
-		::Debug("BFCPFloorControlServer::End() | [number of users: %d]\n", this->users.size());
-
-		//Get users
-		BFCPUser* user = it2->second;
-
-		//erase from map and move forward iterator
-		users.erase(it2++);
-
-		// Close its transport (if connected).
-		user->CloseTransport(4000, L"the BFCP conference has ended");
-
-		// Delete user.
-		delete user;
-	}
-
-	//Unlock map
-	users.Unlock();
+	std::unique_ptr<BFCPMsgFloorStatus> floorStatus = BuildFloorStatusLocked(floorId, NotificationTransactionIdLocked(user), userId);
+	return user->SendMessage(*floorStatus);
 }
 
 
-/**
- * Called by the transport layer upon a new WS connection.
- *
- * @param  userId          The userId of the connected user.
- * @param  ws              The WebSocket connection.
- * @return                 true when a valid user.
- */
-bool BFCPFloorControlServer::UserConnected(int userId, WebSocket *ws)
+void BFCPFloorControlServer::End()
 {
-	if (this->ending) { return false; }
+	Notifications pending;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
-	// The userId must exist in the list of users for this conference.
-	BFCPUser *user = this->GetUser(userId);
-	if (! user) {
-		::Error("BFCPFloorControlServer::UserConnected() | connection from invalid userId '%d' ignored in conference '%d'\n", userId, this->conferenceId);
-		return false;
+		if (this->ending)
+			return;
+
+		::Log("BFCPFloorControlServer::End() | terminating conference '%d'\n", this->conferenceId);
+		this->ending = true;
+
+		std::vector<int> ids;
+		for (FloorRequests::iterator it = floorRequests.begin(); it != floorRequests.end(); ++it)
+			ids.push_back(it->first);
+		for (size_t i=0; i<ids.size(); i++) {
+			BFCPFloorRequest* floorRequest = GetFloorRequestLocked(ids[i]);
+			if (! floorRequest)
+				continue;
+			if (floorRequest->IsGranted())
+				RevokeFloorRequestLocked(ids[i], "conference ended", pending);
+			else
+				DenyFloorRequestLocked(ids[i], "conference ended", pending);
+		}
+		floorRequests.clear();
+
+		for (Users::iterator it = users.begin(); it != users.end(); ++it) {
+			BFCPUser* user = it->second.get();
+			if (user->IsConnected())
+				user->SendMessage(BFCPMessage(BFCPMessage::Goodbye, NotificationTransactionIdLocked(user), this->conferenceId, user->GetUserId()));
+			user->CloseTransport();
+		}
+		users.clear();
 	}
+	Fire(pending);
+}
 
-	// Valid user. Set (or replace) its transport.
-	// If it was connected then reset first.
+
+/* Transport API */
+
+bool BFCPFloorControlServer::UserConnected(int userId, BFCPTransport *transport)
+{
+	Notifications pending;
+	bool ok;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+
+		if (this->ending)
+			return false;
+
+		BFCPUser *user = GetUserLocked(userId);
+		if (! user)
+			return ::Error("BFCPFloorControlServer::UserConnected() | connection from invalid userId '%d' ignored in conference '%d'\n", userId, this->conferenceId);
+
+		ok = AttachTransportLocked(user, transport, pending);
+	}
+	Fire(pending);
+	return ok;
+}
+
+
+bool BFCPFloorControlServer::AttachTransportLocked(BFCPUser* user, BFCPTransport* transport, Notifications& pending)
+{
+	if (user->GetTransport() == transport)
+		return true;
+
 	if (user->IsConnected()) {
-		::Log("BFCPFloorControlServer::UserConnected() | user '%d' was already connected in conference '%d', reseting user\n", userId, this->conferenceId);
-
-		// Reset queried floors.
+		::Log("BFCPFloorControlServer::UserConnected() | user '%d' was already connected in conference '%d', resetting user\n", user->GetUserId(), this->conferenceId);
 		user->ResetQueriedFloorIds();
-
-		// Revoke user's ongoing FloorRequests.
-		::Debug("BFCPFloorControlServer::UserConnected() | calling RevokeUserFloorRequests(%d)\n", userId);
-		RevokeUserFloorRequests(user);
-		::Debug("BFCPFloorControlServer::UserConnected() | RevokeUserFloorRequests(%d) returns\n", userId);
-
-		// Close the previous connection from this user.
-		user->CloseTransport(4002, L"your user has connected from somewhere else");
+		RevokeUserFloorRequestsLocked(user, pending);
+		user->CloseTransport();
 	}
-	user->SetTransport(ws);
+	user->SetTransport(transport);
 
-	::Log("BFCPFloorControlServer::UserConnected() | user '%d' connected to conference '%d':\n", userId, this->conferenceId);
-	user->Dump();
-
+	::Log("BFCPFloorControlServer::UserConnected() | user '%d' connected to conference '%d'\n", user->GetUserId(), this->conferenceId);
 	return true;
 }
 
 
-/**
- * Called by the transport upon disconnection of a valid WS connection.
- *
- * @param  userId The userId associated (previously validated) to the connection.
- */
-void BFCPFloorControlServer::UserDisconnected(int userId, bool closedByServer)
+void BFCPFloorControlServer::UserDisconnected(int userId, BFCPTransport *transport)
 {
-	BFCPUser *user = this->GetUser(userId);
-
-	// The user does not longer exist it is has been removed via RemoveUser().
-	if (! user) {
-		return;
-	}
-
-	// If the server has disconnected the user then do nothing (already done).
-	if (closedByServer) {
-		::Log("BFCPFloorControlServer::UserDisconnected() | user '%d' disconnected by the server from conference '%d'\n", userId, this->conferenceId);
-		return;
-	}
-
-	::Log("BFCPFloorControlServer::UserDisconnected() | user '%d' disconnected from conference '%d'\n", userId, this->conferenceId);
-
-	// Remove the transport of the user (so we detect it as disconnected).
-	user->UnsetTransport();
-
-	// Reset queried floors.
-	user->ResetQueriedFloorIds();
-
-	// Don't do more if the conference is ending.
-	if (this->ending) { return; }
-
-	// Revoke user's ongoing FloorRequests.
-	::Debug("BFCPFloorControlServer::UserDisconnected() | calling RevokeUserFloorRequests(%d)\n", userId);
-	RevokeUserFloorRequests(user);
-	::Debug("BFCPFloorControlServer::UserDisconnected() | RevokeUserFloorRequests(%d) returns\n", userId);
-}
-
-
-/**
- * Called by the transport when an invalid message has been received.
- */
-void BFCPFloorControlServer::DisconnectUser(int userId, const WORD code, const std::wstring& reason)
-{
-	if (this->ending) { return; }
-
-	::Debug("BFCPFloorControlServer::DisconnectUser() | start | [userId: %d]\n", userId);
-
-	BFCPUser *user = this->GetUser(userId);
-
-	// This should never happen.
-	if (! user) {
-		::Error("BFCPFloorControlServer::DisconnectUser() | user '%d' does not exist in the conference\n", userId);
-		return;
-	}
-
-	::Log("BFCPFloorControlServer::UserDisconnected() | disconnecting user '%d' from conference '%d':\n", userId, this->conferenceId);
-
-	// Reset queried floors.
-	user->ResetQueriedFloorIds();
-
-	// Revoke user's ongoing FloorRequests.
-	::Debug("BFCPFloorControlServer::DisconnectUser() | calling RevokeUserFloorRequests(%d)\n", userId);
-	RevokeUserFloorRequests(user);
-	::Debug("BFCPFloorControlServer::DisconnectUser() | RevokeUserFloorRequests(%d) returns\n", userId);
-
-	// Disconnect the transport.
-	user->CloseTransport(code, reason);
-
-	::Debug("BFCPFloorControlServer::DisconnectUser() | end | [userId: %d]\n", userId);
-}
-
-
-/**
- * BFCPFloorControlServer::MessageReceived Called by the transport upon receipt of a BFCP message.
- * @param msg The BFCP message.
- */
-void BFCPFloorControlServer::MessageReceived(BFCPMessage *msg)
-{
-	if (this->ending) { return; }
-
-	::Debug("BFCPFloorControlServer::MessageReceived() | start | %ls message received:\n", BFCPMessage::mapPrimitive2JsonStr[msg->GetPrimitive()].c_str());
-	msg->Dump();
-
-	int userId = msg->GetUserId();
-	BFCPUser* user = GetUser(userId);
-
-	if (! user) {
-		::Error("BFCPFloorControlServer::MessageReceived() | userId '%d' does not exist, replying BFCP Error 'UserDoesNotExist'\n");
-		ReplyError(msg, BFCPAttrErrorCode::UserDoesNotExist, L"user does not exist");
-		return;
-	}
-
-	switch (msg->GetPrimitive())
+	Notifications pending;
 	{
-		case BFCPMessage::FloorRequest:
-			{
-				BFCPMsgFloorRequest *req = (BFCPMsgFloorRequest *)msg;
-				ProcessFloorRequest(req, user);
-			}
-			break;
+		std::lock_guard<std::mutex> lock(mutex);
 
-		case BFCPMessage::FloorRelease:
-			{
-				BFCPMsgFloorRelease *req = (BFCPMsgFloorRelease *)msg;
-				ProcessFloorRelease(req, user);
-			}
-			break;
+		BFCPUser *user = GetUserLocked(userId);
+		// Removed meanwhile, or the disconnection is that of a superseded transport.
+		if (! user || user->GetTransport() != transport)
+			return;
 
-		case BFCPMessage::FloorQuery:
-			{
-				BFCPMsgFloorQuery *req = (BFCPMsgFloorQuery *)msg;
-				ProcessFloorQuery(req, user);
-			}
-			break;
+		::Log("BFCPFloorControlServer::UserDisconnected() | user '%d' disconnected from conference '%d'\n", userId, this->conferenceId);
 
-		case BFCPMessage::Hello:
-			{
-				BFCPMsgHello *req = (BFCPMsgHello *)msg;
-				ProcessHello(req, user);
-			}
-			break;
+		user->UnsetTransport();
+		user->ResetQueriedFloorIds();
 
-		default:
-			{
-				// Reply UnknownPrimitive Error.
-				::Error("BFCPFloorControlServer::MessageReceived() | replying BFCP Error 'UnknownPrimitive'\n");
-				ReplyError(msg, BFCPAttrErrorCode::UnknownPrimitive, L"unknown or unsupported primitive");
-			}
+		if (! this->ending)
+			RevokeUserFloorRequestsLocked(user, pending);
 	}
-
-	::Debug("BFCPFloorControlServer::MessageReceived() | end | %ls message processed:\n", BFCPMessage::mapPrimitive2JsonStr[msg->GetPrimitive()].c_str());
+	Fire(pending);
 }
 
 
-bool BFCPFloorControlServer::HasUser(int userId)
+void BFCPFloorControlServer::MessageReceived(BFCPMessage *msg, BFCPTransport *from)
 {
-	return GetUser(userId)!=NULL;
-}
+	Notifications pending;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
 
+		if (this->ending)
+			return;
 
-BFCPUser* BFCPFloorControlServer::GetUser(int userId)
-{
-	//NO User yet
-	BFCPUser* user = NULL;
+		::Debug("BFCPFloorControlServer::MessageReceived() | %s received:\n", BFCPMessage::PrimitiveName(msg->GetPrimitive()));
+		msg->Dump();
 
-	//Lock users
-	users.IncUse();
-
-	//Find user
-	Users::iterator it = users.find(userId);
-
-	//If found
-	if (it != users.end())
-		//Get it
-		user = it->second;
-
-	//Unlock
-	users.DecUse();
-
-	//Return user
-	return user;
-}
-
-
-BFCPFloorRequest* BFCPFloorControlServer::GetFloorRequest(int floorRequestId)
-{
-	BFCPFloorControlServer::FloorRequests::iterator it = this->floorRequests.find(floorRequestId);
-	if (it != this->floorRequests.end())
-		return it->second;
-	else
-		return NULL;
-}
-
-
-std::vector<BFCPFloorRequest*> BFCPFloorControlServer::GetFloorRequestsForFloor(int floorId)
-{
-	std::vector<BFCPFloorRequest*> floorRequests;
-
-	for (BFCPFloorControlServer::FloorRequests::iterator it = this->floorRequests.begin() ; it != this->floorRequests.end(); ++it) {
-		BFCPFloorRequest* floorRequest = it->second;
-		if (floorRequest->HasFloorId(floorId)) {
-			floorRequests.push_back(floorRequest);
-		}
-	}
-
-	return floorRequests;
-}
-
-
-std::vector<BFCPFloorRequest*> BFCPFloorControlServer::GetFloorRequestsForFloors(std::set<int> floorIds)
-{
-	std::vector<BFCPFloorRequest*> floorRequests;
-
-	for (BFCPFloorControlServer::FloorRequests::iterator it = this->floorRequests.begin() ; it != this->floorRequests.end(); ++it) {
-		BFCPFloorRequest* floorRequest = it->second;
-
-		// If the FloorRequest contains any of the given floors then collect it.
-		std::set<int>::iterator it2;
-		for(it2=floorIds.begin(); it2 != floorIds.end(); ++it2) {
-			int floorId = *it2;
-			if (floorRequest->HasFloorId(floorId)) {
-				floorRequests.push_back(floorRequest);
-				break;  // No need to inspect more floors.
-			}
-		}
-	}
-
-	return floorRequests;
-}
-
-
-void BFCPFloorControlServer::NotifyForFloorRequest(BFCPFloorRequest* floorRequest)
-{
-	::Debug("BFCPFloorControlServer::NotifyForFloorRequest() | start | notifying changes in FloorRequest '%d' to subscribers\n", floorRequest->GetFloorRequestId());
-
-	// Map of users and their queried affected floors due to the status change in
-	// the given FloorRequest.
-	std::map<BFCPUser*, std::set<int> > mapUsersAffectedFloorIds;
-	std::set<int> affectedFloorIds = floorRequest->GetFloorIds();
-
-	//Lock user map
-	users.IncUse();
-
-	// Fill the map.
-	for (BFCPFloorControlServer::Users::iterator it=this->users.begin(); it!=this->users.end(); ++it) {
-		BFCPUser* user = it->second;
-		std::set<int> userAffectedfloorIds;
-
-		for(std::set<int>::iterator it2=affectedFloorIds.begin(); it2 != affectedFloorIds.end(); ++it2) {
-			int floorId = *it2;
-			if (user->HasQueriedFloorId(floorId)) {
-				userAffectedfloorIds.insert(floorId);
-			}
+		if (msg->GetConferenceId() != this->conferenceId) {
+			ReplyErrorLocked(msg, from, BFCPAttrErrorCode::ConferenceDoesNotExist, "conference does not exist");
+			return;
 		}
 
-		// If at least one floor has been collected then collect the user.
-		if (! userAffectedfloorIds.empty())
-			mapUsersAffectedFloorIds[user] = userAffectedfloorIds;
-	}
-	//Unlock user map
-	users.DecUse();
+		BFCPUser* user = GetUserLocked(msg->GetUserId());
+		if (! user) {
+			::Error("BFCPFloorControlServer::MessageReceived() | userId '%d' does not exist, replying Error 'UserDoesNotExist'\n", msg->GetUserId());
+			ReplyErrorLocked(msg, from, BFCPAttrErrorCode::UserDoesNotExist, "user does not exist");
+			return;
+		}
 
-	// Create a single FloorStatus notification and modify it for each user and floor.
-	BFCPMsgFloorStatus* floorStatus = new BFCPMsgFloorStatus(0, this->GetConferenceId(), 0);
+		// A transport belongs to the first user that speaks on it. Another
+		// transport may take a user over, but only with a Hello.
+		if (user->GetTransport() != from) {
+			if (user->IsConnected() && msg->GetPrimitive() != BFCPMessage::Hello) {
+				::Error("BFCPFloorControlServer::MessageReceived() | userId '%d' spoke from a transport that is not its own\n", msg->GetUserId());
+				ReplyErrorLocked(msg, from, BFCPAttrErrorCode::UnauthorizedOperation, "user is connected elsewhere");
+				return;
+			}
+			AttachTransportLocked(user, from, pending);
+		}
 
-	// Generate a FloorRequestInformation attribute for the given FloorRequest and append
-	// it to the FloorStatus message.
-	BFCPAttrFloorRequestInformation* floorRequestInformation = floorRequest->CreateFloorRequestInformation();
-	floorStatus->AddFloorRequestInformation(floorRequestInformation);
-
-	// For each user the FloorStatus must be sent as many times as affected floors the user
-	// has (each FloorStatus with the corresponding floorId attribute).
-	std::map<BFCPUser*, std::set<int> >::iterator it3;
-	for (it3=mapUsersAffectedFloorIds.begin(); it3!=mapUsersAffectedFloorIds.end(); ++it3) {
-		BFCPUser* user = it3->first;
-		int userId = user->GetUserId();
-		std::set<int> userAffectedfloorIds = it3->second;
-
-		std::set<int>::iterator it4;
-		for (it4=userAffectedfloorIds.begin(); it4!=userAffectedfloorIds.end(); ++it4)
+		switch (msg->GetPrimitive())
 		{
-		    int floorId = *it4;
-
-		    // Update the FloorStatus with the userId and floorId.
-		    floorStatus->SetUserId(userId);
-		    floorStatus->SetFloorId(floorId);
-
-		    // Send the FloorStatus notification to the subscriber user.
-		    SendMessage(floorStatus);
+			case BFCPMessage::FloorRequest:
+				ProcessFloorRequestLocked((BFCPMsgFloorRequest *)msg, user, pending);
+				break;
+			case BFCPMessage::FloorRelease:
+				ProcessFloorReleaseLocked((BFCPMsgFloorRelease *)msg, user, pending);
+				break;
+			case BFCPMessage::FloorQuery:
+				ProcessFloorQueryLocked((BFCPMsgFloorQuery *)msg, user);
+				break;
+			case BFCPMessage::Hello:
+				ProcessHelloLocked((BFCPMsgHello *)msg, user, pending);
+				break;
+			case BFCPMessage::Goodbye:
+				ProcessGoodbyeLocked(msg, user, pending);
+				break;
+			case BFCPMessage::HelloAck:
+			case BFCPMessage::FloorRequestStatusAck:
+			case BFCPMessage::FloorStatusAck:
+			case BFCPMessage::GoodbyeAck:
+			case BFCPMessage::Error:
+				// Ends a server transaction (the transport tracks it) or reports one.
+				break;
+			default:
+				::Error("BFCPFloorControlServer::MessageReceived() | replying Error 'UnknownPrimitive' to %s\n", BFCPMessage::PrimitiveName(msg->GetPrimitive()));
+				ReplyErrorLocked(msg, from, BFCPAttrErrorCode::UnknownPrimitive, "unknown or unsupported primitive");
+				break;
 		}
 	}
-
-	// Delete the FloorStatus.
-	delete floorStatus;
-
-	::Debug("BFCPFloorControlServer::NotifyForFloorRequest() | end | notified changes in FloorRequest '%d' to subscribers\n", floorRequest->GetFloorRequestId());
-
+	Fire(pending);
 }
 
 
-void BFCPFloorControlServer::RevokeUserFloorRequests(BFCPUser* user)
+/* Locked helpers */
+
+BFCPUser* BFCPFloorControlServer::GetUserLocked(int userId)
 {
-	::Debug("BFCPFloorControlServer::RevokeUserFloorRequests() | start | revoking (or cancelling) ongoing FloorRequest of user '%d'\n", user->GetUserId());
+	Users::iterator it = users.find(userId);
+	return it != users.end() ? it->second.get() : NULL;
+}
 
+
+BFCPFloorRequest* BFCPFloorControlServer::GetFloorRequestLocked(int floorRequestId)
+{
+	FloorRequests::iterator it = floorRequests.find(floorRequestId);
+	return it != floorRequests.end() ? it->second.get() : NULL;
+}
+
+
+std::vector<BFCPFloorRequest*> BFCPFloorControlServer::GetFloorRequestsForFloorLocked(int floorId)
+{
+	std::vector<BFCPFloorRequest*> result;
+	for (FloorRequests::iterator it = floorRequests.begin(); it != floorRequests.end(); ++it)
+		if (it->second->HasFloorId(floorId))
+			result.push_back(it->second.get());
+	return result;
+}
+
+
+std::vector<BFCPFloorRequest*> BFCPFloorControlServer::GetFloorRequestsForFloorsLocked(const std::set<int>& floorIds)
+{
+	std::vector<BFCPFloorRequest*> result;
+	for (FloorRequests::iterator it = floorRequests.begin(); it != floorRequests.end(); ++it)
+		for (std::set<int>::const_iterator f = floorIds.begin(); f != floorIds.end(); ++f)
+			if (it->second->HasFloorId(*f)) {
+				result.push_back(it->second.get());
+				break;
+			}
+	return result;
+}
+
+
+bool BFCPFloorControlServer::HasFloorLocked(int floorId) const
+{
+	return floors.find(floorId) != floors.end();
+}
+
+
+int BFCPFloorControlServer::NextTransactionIdLocked()
+{
+	transactionCounter = (transactionCounter % 0xFFFF) + 1;
+	return transactionCounter;
+}
+
+
+// RFC 4582 §8.3: over a reliable transport a server-initiated message carries
+// transaction id 0. RFC 8855: over UDP it carries a fresh one, to be acked.
+int BFCPFloorControlServer::NotificationTransactionIdLocked(const BFCPUser* user)
+{
+	if (user && ! user->IsReliable())
+		return NextTransactionIdLocked();
+	return 0;
+}
+
+
+void BFCPFloorControlServer::RevokeUserFloorRequestsLocked(BFCPUser* user, Notifications& pending)
+{
 	int userId = user->GetUserId();
-	std::vector<int> userFloorRequests;
+	std::vector<int> ids;
+	for (FloorRequests::iterator it = floorRequests.begin(); it != floorRequests.end(); ++it)
+		if (it->second->GetBeneficiaryId() == userId || it->second->GetUserId() == userId)
+			ids.push_back(it->first);
 
-	// Store all the ongoing FloorRequestsIds for this user in a vector.
-	BFCPFloorControlServer::FloorRequests::iterator it;
-	for(it=this->floorRequests.begin(); it!=this->floorRequests.end(); it++) {
-		BFCPFloorRequest* floorRequest = it->second;
-
-		// Just collect those FloorRequests whose beneficiary is the given user.
-		if (floorRequest->GetBeneficiaryId() == userId)
-			userFloorRequests.push_back(floorRequest->GetFloorRequestId());
-	}
-
-	// For each stored FloorRequestId check that it still exists (the chair may delete it
-	// when notified).
-	for(int i=0; i<userFloorRequests.size(); i++) {
-		::Debug("BFCPFloorControlServer::RevokeUserFloorRequests() | revoking FloorRequest %d/%d\n", i, userFloorRequests.size());
-
-		int floorRequestId = userFloorRequests[i];
-		BFCPFloorRequest* floorRequest = GetFloorRequest(floorRequestId);
-
-		// Has been removed!
+	for (size_t i=0; i<ids.size(); i++) {
+		BFCPFloorRequest* floorRequest = GetFloorRequestLocked(ids[i]);
 		if (! floorRequest)
 			continue;
+		if (floorRequest->IsGranted())
+			RevokeFloorRequestLocked(ids[i], "FloorRequests from this user have been revoked or denied", pending);
+		else
+			DenyFloorRequestLocked(ids[i], "FloorRequests from this user have been revoked or denied", pending);
+	}
+}
 
-		if (floorRequest->IsGranted()) {
-			RevokeFloorRequest(floorRequest->GetFloorRequestId(), L"FloorRequests from this user have been revoked or denied");
-		}
-		else {
-			DenyFloorRequest(floorRequest->GetFloorRequestId(), L"FloorRequests from this user have been revoked or denied");
+
+std::unique_ptr<BFCPMsgFloorStatus> BFCPFloorControlServer::BuildFloorStatusLocked(int floorId, int transactionId, int userId)
+{
+	std::unique_ptr<BFCPMsgFloorStatus> floorStatus(new BFCPMsgFloorStatus(transactionId, this->conferenceId, userId));
+	floorStatus->SetFloorId(floorId);
+
+	std::vector<BFCPFloorRequest*> requests = GetFloorRequestsForFloorLocked(floorId);
+	for (size_t i=0; i<requests.size(); i++)
+		floorStatus->AddFloorRequestInformation(requests[i]->CreateFloorRequestInformation());
+
+	return floorStatus;
+}
+
+
+// FloorStatus notifications to the users who queried a floor of this request.
+void BFCPFloorControlServer::NotifyForFloorRequestLocked(const BFCPFloorRequest* floorRequest)
+{
+	std::set<int> floorIds = floorRequest->GetFloorIds();
+
+	for (Users::iterator it = users.begin(); it != users.end(); ++it) {
+		BFCPUser* user = it->second.get();
+		for (std::set<int>::const_iterator f = floorIds.begin(); f != floorIds.end(); ++f) {
+			if (! user->HasQueriedFloorId(*f))
+				continue;
+			std::unique_ptr<BFCPMsgFloorStatus> floorStatus = BuildFloorStatusLocked(*f, NotificationTransactionIdLocked(user), user->GetUserId());
+			user->SendMessage(*floorStatus);
 		}
 	}
-
-	::Debug("BFCPFloorControlServer::RevokeUserFloorRequests() | end | revoke (or cancelled) ongoing FloorRequest of user '%d'\n", userId);
 }
 
 
-bool BFCPFloorControlServer::HasFloor(int floorId)
+void BFCPFloorControlServer::SendFloorRequestStatusLocked(const BFCPFloorRequest* floorRequest, int transactionId, int toUserId, const std::string& statusInfo)
 {
-	return (this->floors.find(floorId) != this->floors.end()) ? true : false;
+	std::unique_ptr<BFCPMsgFloorRequestStatus> floorRequestStatus(floorRequest->CreateFloorRequestStatus(transactionId));
+	floorRequestStatus->SetUserId(toUserId);
+	if (! statusInfo.empty())
+		floorRequestStatus->SetDescription(statusInfo);
+	SendMessageLocked(*floorRequestStatus);
 }
 
 
-void BFCPFloorControlServer::ProcessFloorRequest(BFCPMsgFloorRequest *req, BFCPUser* user)
+void BFCPFloorControlServer::SendMessageLocked(const BFCPMessage& msg)
 {
-	// Check that floorId value(s) in the request exist.
-	int num_floors = req->CountFloorIds();
-	for (int i=0; i < num_floors; i++) {
-		int floorId = req->GetFloorId(i);
-		if (! HasFloor(floorId)) {
-			::Error("BFCPFloorControlServer::ProcessFloorRequest() | requesting non existing floor '%d'\n", floorId);
-			ReplyError(req, BFCPAttrErrorCode::InvalidFloorId, L"requested floor does not exist");
+	BFCPUser* user = GetUserLocked(msg.GetUserId());
+	if (! user) {
+		::Error("BFCPFloorControlServer::SendMessage() | user '%d' does not exist\n", msg.GetUserId());
+		return;
+	}
+	user->SendMessage(msg);
+}
+
+
+void BFCPFloorControlServer::ReplyErrorLocked(const BFCPMessage *msg, BFCPTransport *to, BFCPAttrErrorCode::ErrorCode errorCode, const std::string& errorInfo)
+{
+	::Log("BFCPFloorControlServer::ReplyError() | replying Error '%s' to %s\n", BFCPAttrErrorCode::CodeName(errorCode), BFCPMessage::PrimitiveName(msg->GetPrimitive()));
+	BFCPMsgError error(msg, errorCode, errorInfo);
+	if (to)
+		to->Send(error);
+}
+
+
+/* Incoming primitives */
+
+void BFCPFloorControlServer::ProcessFloorRequestLocked(BFCPMsgFloorRequest *req, BFCPUser* user, Notifications& pending)
+{
+	for (int i=0; i < req->CountFloorIds(); i++) {
+		if (! HasFloorLocked(req->GetFloorId(i))) {
+			::Error("BFCPFloorControlServer::ProcessFloorRequest() | requesting non existing floor '%d'\n", req->GetFloorId(i));
+			ReplyErrorLocked(req, user->GetTransport(), BFCPAttrErrorCode::InvalidFloorId, "requested floor does not exist");
 			return;
 		}
 	}
 
-	// Check that the beneficiaryId (if present) is a valid user.
-	if (req->HasBeneficiaryId()) {
-		if (! HasUser(req->GetBeneficiaryId())) {
-			::Error("BFCPFloorControlServer::ProcessFloorRequest() | beneficiary '%d' does not exist\n", req->GetBeneficiaryId());
-			ReplyError(req, BFCPAttrErrorCode::UserDoesNotExist, L"beneficiary does not exist");
-			return;
-		}
+	if (req->HasBeneficiaryId() && ! GetUserLocked(req->GetBeneficiaryId())) {
+		::Error("BFCPFloorControlServer::ProcessFloorRequest() | beneficiary '%d' does not exist\n", req->GetBeneficiaryId());
+		ReplyErrorLocked(req, user->GetTransport(), BFCPAttrErrorCode::UserDoesNotExist, "beneficiary does not exist");
+		return;
 	}
 
-	// Set an unique floorRequestId.
 	int floorRequestId = this->floorRequestCounter++;
 
-	// Create a BFCPFloorRequest.
 	BFCPFloorRequest* floorRequest = new BFCPFloorRequest(floorRequestId, req->GetUserId(), this->conferenceId);
 	if (req->HasBeneficiaryId())
 		floorRequest->SetBeneficiaryId(req->GetBeneficiaryId());
 	for (int i=0; i < req->CountFloorIds(); i++)
 		floorRequest->AddFloorId(req->GetFloorId(i));
+	this->floorRequests[floorRequestId].reset(floorRequest);
 
-	// Add to the floorRequests map.
-	this->floorRequests[floorRequestId] = floorRequest;
 	::Log("BFCPFloorControlServer::ProcessFloorRequest() | FloorRequest '%d' added to conference '%d'\n", floorRequestId, this->conferenceId);
 
-	// Build a "Pending" FloorRequestStatus response.
-	BFCPMsgFloorRequestStatus *floorRequestStatus = floorRequest->CreateFloorRequestStatus(req->GetTransactionId());
+	// The response: Pending, with the transaction id of the request.
+	SendFloorRequestStatusLocked(floorRequest, req->GetTransactionId(), req->GetUserId(), "");
 
-	// Send it.
-	SendMessage(floorRequestStatus);
-
-	// Delete it.
-	delete floorRequestStatus;
-
-	// If the FloorRequest comes from the chair automatically grant it.
 	if (user->IsChair()) {
-		::Log("BFCPFloorControlServer::ProcessFloorRequest() | the FloorRequest sender is a chair, request authorized\n");
-		GrantFloorRequest(floorRequestId);
+		::Log("BFCPFloorControlServer::ProcessFloorRequest() | the sender is a chair, request authorized\n");
+		GrantFloorRequestLocked(floorRequestId, pending);
+		return;
 	}
-	// Otherwise notify the chair.
-	else {
-		::Log("BFCPFloorControlServer::ProcessFloorRequest() | the FloorRequest sender is not a chair, let's ask the chair\n");
-		::Debug("BFCPFloorControlServer::ProcessFloorRequest() | calling listener->onFloorRequest(%d)\n", floorRequestId);
-		this->listener->onFloorRequest(floorRequestId, floorRequest->GetUserId(), floorRequest->GetBeneficiaryId(), floorRequest->GetFloorIds());
-		::Debug("BFCPFloorControlServer::ProcessFloorRequest() | listener->onFloorRequest(%d) returns\n", floorRequestId);
-	}
+
+	int userId = floorRequest->GetUserId();
+	int beneficiaryId = floorRequest->GetBeneficiaryId();
+	std::set<int> floorIds = floorRequest->GetFloorIds();
+	pending.push_back([this, floorRequestId, userId, beneficiaryId, floorIds]() {
+		listener->onFloorRequest(floorRequestId, userId, beneficiaryId, floorIds);
+	});
 }
 
 
-void BFCPFloorControlServer::ProcessFloorRelease(BFCPMsgFloorRelease *req, BFCPUser* user)
+void BFCPFloorControlServer::ProcessFloorReleaseLocked(BFCPMsgFloorRelease *req, BFCPUser* user, Notifications& pending)
 {
 	int floorRequestId = req->GetFloorRequestId();
-	BFCPFloorRequest* floorRequest = GetFloorRequest(floorRequestId);
-	bool must_notify_chair = false;
+	BFCPFloorRequest* floorRequest = GetFloorRequestLocked(floorRequestId);
 
-	// Check that FloorRequest exists.
 	if (! floorRequest) {
 		::Error("BFCPFloorControlServer::ProcessFloorRelease() | FloorRequest '%d' does not exist\n", floorRequestId);
-		ReplyError(req, BFCPAttrErrorCode::FloorRequestIdDoesNotExist, L"FloorRequest does not exist");
+		ReplyErrorLocked(req, user->GetTransport(), BFCPAttrErrorCode::FloorRequestIdDoesNotExist, "FloorRequest does not exist");
 		return;
 	}
 
-	int floorReleaseSender = user->GetUserId();
-	int floorRequestSender = floorRequest->GetUserId();
-	int floorRequestBeneficiary = floorRequest->GetBeneficiaryId();
+	int sender = user->GetUserId();
+	int requester = floorRequest->GetUserId();
+	int beneficiary = floorRequest->GetBeneficiaryId();
 
-	// The FloorRelease is accepted in these cases:
-	// - The FloorRelease sender matches the sender of the FloorRequest.
-	// - The FloorRelease sender matches the beneficiary of the FloorRequest which is Granted.
-	// - The FloorRelease sender is a chair and the FloorRequest is Granted.
-	if (floorReleaseSender == floorRequestSender) {
-		::Log("BFCPFloorControlServer::ProcessFloorRelease() | the FloorRelease sender matches the FloorRequest sender, release authorized\n");
-	}
-	else if (floorReleaseSender == floorRequestBeneficiary) {
-		::Log("BFCPFloorControlServer::ProcessFloorRelease() | the FloorRelease sender matches the FloorRequest beneficiary, release authorized\n");
-	}
-	else if (user->IsChair()) {
-		::Log("BFCPFloorControlServer::ProcessFloorRelease() | the FloorRelease sender is a chair, release authorized\n");
-	}
-	else {
-		::Error("BFCPFloorControlServer::ProcessFloorRelease() | FloorRelease not allowed for this sender\n");
-		ReplyError(req, BFCPAttrErrorCode::UnauthorizedOperation, L"you cannot release that FloorRequest");
+	// Allowed: the requester, the beneficiary, or a chair.
+	if (sender != requester && sender != beneficiary && ! user->IsChair()) {
+		::Error("BFCPFloorControlServer::ProcessFloorRelease() | FloorRelease not allowed for user '%d'\n", sender);
+		ReplyErrorLocked(req, user->GetTransport(), BFCPAttrErrorCode::UnauthorizedOperation, "you cannot release that FloorRequest");
 		return;
 	}
 
-	// If it is not granted then cancel it.
-	if (! floorRequest->IsGranted() && floorRequest->CanBeCancelled()) {
-		// Update the status of the FloorRequest to "Cancelled".
+	bool wasGranted = floorRequest->IsGranted();
+
+	if (wasGranted)
+		floorRequest->SetStatus(sender == beneficiary ? BFCPAttrRequestStatus::Released : BFCPAttrRequestStatus::Revoked);
+	else if (floorRequest->CanBeCancelled())
 		floorRequest->SetStatus(BFCPAttrRequestStatus::Cancelled);
-	}
-
-	// If it granted then release it (or revoke).
-	else if (floorRequest->IsGranted()) {
-		if (floorReleaseSender == floorRequestBeneficiary) {
-			// Update the status of the FloorRequest to "Released".
-			floorRequest->SetStatus(BFCPAttrRequestStatus::Released);
-		}
-		else {
-			// Update the status of the FloorRequest to "Revoked".
-			floorRequest->SetStatus(BFCPAttrRequestStatus::Revoked);
-		}
-
-		// Notify the chair (later, to avoid that the chair revokes the same FloorRequest and we
-		// get a crash below).
-		must_notify_chair = true;
-	}
-
-	// Otherwise cannot release it.
 	else {
-		::Error("BFCPFloorControlServer::ProcessFloorRelease() | cannot release a FloorRequest in status '%ls'\n", floorRequest->GetStatusString().c_str());
-		ReplyError(req, BFCPAttrErrorCode::UnauthorizedOperation, L"cannot release or cancel the FloorRequest due to its current status");
+		::Error("BFCPFloorControlServer::ProcessFloorRelease() | cannot release a FloorRequest in status '%s'\n", floorRequest->GetStatusName());
+		ReplyErrorLocked(req, user->GetTransport(), BFCPAttrErrorCode::UnauthorizedOperation, "cannot release or cancel the FloorRequest due to its current status");
 		return;
 	}
 
+	// The response to the sender, and a notification to the requester if distinct.
+	SendFloorRequestStatusLocked(floorRequest, req->GetTransactionId(), sender, "");
+	if (sender != requester)
+		SendFloorRequestStatusLocked(floorRequest, NotificationTransactionIdLocked(GetUserLocked(requester)), requester, "");
 
-	// Create a FloorRequestStatus response for the FloorRelease sender.
-	BFCPMsgFloorRequestStatus *floorRequestStatus = floorRequest->CreateFloorRequestStatus(req->GetTransactionId());
-	floorRequestStatus->SetUserId(floorReleaseSender);
+	NotifyForFloorRequestLocked(floorRequest);
 
-	// Send it.
-	SendMessage(floorRequestStatus);
-
-	// Delete it.
-	delete floorRequestStatus;
-
-	// If the FloorRelease sender does not match the FloorRequest sender then also send a
-	// FloorRequestStatus notification to the FloorRequest sender.
-	if (floorReleaseSender != floorRequestSender) {
-		BFCPMsgFloorRequestStatus *floorRequestStatus = floorRequest->CreateFloorRequestStatus();
-		floorRequestStatus->SetUserId(floorRequestSender);
-
-		// Send it.
-		SendMessage(floorRequestStatus);
-
-		// Delete it.
-		delete floorRequestStatus;
-	}
-
-
-	/* Notify with FloorStatus notifications to users who queried the status of any of the floors
-	 * in the current FloorRequest. */
-
-	NotifyForFloorRequest(floorRequest);
-
-
-	/* Notify the chair. */
-
-	// But first remove the FloorRequest from the map so in the ugly case in which the chair calls
-	// to RevokeFloor() for this same FloorRequest it will fail.
+	std::set<int> floorIds = floorRequest->GetFloorIds();
 	this->floorRequests.erase(floorRequestId);
 
-	if (must_notify_chair) {
-		::Debug("BFCPFloorControlServer::ProcessFloorRelease() | calling listener->onFloorReleased(%d)\n", floorRequestId);
-		this->listener->onFloorReleased(floorRequestId, floorRequestBeneficiary, floorRequest->GetFloorIds());
-		::Debug("BFCPFloorControlServer::ProcessFloorRelease() | listener->onFloorReleased(%d) returns\n", floorRequestId);
-	}
-
-	/* Delete the FloorRequest. */
-
-	// NOTE: the FloorRequest may has been removed by the chair when notified onFloorReleased, so check it!
-	if (GetFloorRequest(floorRequestId)) {
-		delete floorRequest;
-	}
-
-	return;
+	if (wasGranted)
+		pending.push_back([this, floorRequestId, beneficiary, floorIds]() {
+			listener->onFloorReleased(floorRequestId, beneficiary, floorIds);
+		});
 }
 
 
-void BFCPFloorControlServer::ProcessFloorQuery(BFCPMsgFloorQuery *req, BFCPUser* user)
+void BFCPFloorControlServer::ProcessFloorQueryLocked(BFCPMsgFloorQuery *req, BFCPUser* user)
 {
-	// Check that floorId value(s) in the request exist.
-	int num_floors = req->CountFloorIds();
-	for (int i=0; i < num_floors; i++) {
-		int floorId = req->GetFloorId(i);
-		if (! HasFloor(floorId)) {
-			::Error("BFCPFloorControlServer::ProcessFloorQuery() | requesting non existing floor '%d'\n", floorId);
-			ReplyError(req, BFCPAttrErrorCode::InvalidFloorId, L"requested floor does not exist");
+	for (int i=0; i < req->CountFloorIds(); i++) {
+		if (! HasFloorLocked(req->GetFloorId(i))) {
+			::Error("BFCPFloorControlServer::ProcessFloorQuery() | requesting non existing floor '%d'\n", req->GetFloorId(i));
+			ReplyErrorLocked(req, user->GetTransport(), BFCPAttrErrorCode::InvalidFloorId, "requested floor does not exist");
 			return;
 		}
 	}
 
-	// Reset the list of floors this user is subscribed to.
+	// The query replaces the subscription.
 	user->ResetQueriedFloorIds();
-
-	// And insert the Floors included in the new FloorQuery.
-	for (int i=0; i<num_floors; i++)
+	for (int i=0; i < req->CountFloorIds(); i++)
 		user->AddQueriedFloorId(req->GetFloorId(i));
 
-	::Debug("BFCPFloorControlServer::ProcessFloorQuery() | user '%d' information updated:\n", user->GetUserId());
-	user->Dump();
-
-	int num_queried_floors = user->CountQueriedFloorIds();
-
-	// If the user has no queried floors then reply an empty FloorStatus and exit.
-	if (num_queried_floors == 0) {
-		::Debug("BFCPFloorControlServer::ProcessFloorQuery() | no queried floors, replying empty FloorStatus\n");
-		BFCPMsgFloorStatus* floorStatus = new BFCPMsgFloorStatus(req->GetTransactionId(), this->GetConferenceId(), req->GetUserId());
-		SendMessage(floorStatus);
-		delete floorStatus;
+	int count = user->CountQueriedFloorIds();
+	if (count == 0) {
+		BFCPMsgFloorStatus floorStatus(req->GetTransactionId(), this->conferenceId, req->GetUserId());
+		user->SendMessage(floorStatus);
 		return;
 	}
 
-	// Otherwise, get the queried floors from the user (no duplicated floorIds there) and
-	// generate a FloorStatus response for one of them and FloorStatus notifications for
-	// the others.
-	for (int i=0; i<num_queried_floors; i++) {
-		BFCPMsgFloorStatus* floorStatus;
-		int floorId = user->GetQueriedFloorId(i);
-
-		// First FloorStatus will be a response to the FloorQuery.
-		if (i == 0)
-			floorStatus = new BFCPMsgFloorStatus(req->GetTransactionId(), this->GetConferenceId(), req->GetUserId());
-		// Other FloorStatus are notifications.
-		else
-			floorStatus = new BFCPMsgFloorStatus(0, this->GetConferenceId(), req->GetUserId());
-
-		// Set the floorId.
-		floorStatus->SetFloorId(floorId);
-
-		// Get all the ongoing FloorRequest that include this floor.
-		std::vector<BFCPFloorRequest*> floorRequests = GetFloorRequestsForFloor(floorId);
-
-		::Debug("BFCPFloorControlServer::ProcessFloorQuery() | found %d ongoing FloorRequests related to floor '%d'\n", floorRequests.size(), floorId);
-
-		// Generate a FloorRequestInformation attribute from each FloorRequest and append
-		// it to the FloorStatus message.
-		for (int j=0; j<floorRequests.size(); j++) {
-			BFCPAttrFloorRequestInformation* floorRequestInformation = floorRequests[j]->CreateFloorRequestInformation();
-			floorStatus->AddFloorRequestInformation(floorRequestInformation);
-		}
-
-		// Send the response o notification to the user who sent the FloorQuery.
-		SendMessage(floorStatus);
-
-		delete floorStatus;
+	// The first FloorStatus answers the query, the others are notifications.
+	for (int i=0; i<count; i++) {
+		int transactionId = (i == 0) ? req->GetTransactionId() : NotificationTransactionIdLocked(user);
+		std::unique_ptr<BFCPMsgFloorStatus> floorStatus = BuildFloorStatusLocked(user->GetQueriedFloorId(i), transactionId, req->GetUserId());
+		user->SendMessage(*floorStatus);
 	}
 }
 
 
-void BFCPFloorControlServer::ProcessHello(BFCPMsgHello *req, BFCPUser* user)
+void BFCPFloorControlServer::ProcessHelloLocked(BFCPMsgHello *req, BFCPUser* user, Notifications& pending)
 {
-	// TODO: tmp, for testing.
-	SendMessage(req);
+	BFCPMsgHelloAck ack(req->GetTransactionId(), this->conferenceId, req->GetUserId());
+	ack.AddSupportedPrimitive(BFCPMessage::FloorRequest);
+	ack.AddSupportedPrimitive(BFCPMessage::FloorRelease);
+	ack.AddSupportedPrimitive(BFCPMessage::FloorRequestStatus);
+	ack.AddSupportedPrimitive(BFCPMessage::FloorQuery);
+	ack.AddSupportedPrimitive(BFCPMessage::FloorStatus);
+	ack.AddSupportedPrimitive(BFCPMessage::Hello);
+	ack.AddSupportedPrimitive(BFCPMessage::HelloAck);
+	ack.AddSupportedPrimitive(BFCPMessage::Error);
+	ack.AddSupportedPrimitive(BFCPMessage::FloorRequestStatusAck);
+	ack.AddSupportedPrimitive(BFCPMessage::FloorStatusAck);
+	ack.AddSupportedPrimitive(BFCPMessage::Goodbye);
+	ack.AddSupportedPrimitive(BFCPMessage::GoodbyeAck);
+	ack.AddSupportedAttribute(BFCPAttribute::BeneficiaryId);
+	ack.AddSupportedAttribute(BFCPAttribute::FloorId);
+	ack.AddSupportedAttribute(BFCPAttribute::FloorRequestId);
+	ack.AddSupportedAttribute(BFCPAttribute::Priority);
+	ack.AddSupportedAttribute(BFCPAttribute::RequestStatus);
+	ack.AddSupportedAttribute(BFCPAttribute::ErrorCode);
+	ack.AddSupportedAttribute(BFCPAttribute::ErrorInfo);
+	ack.AddSupportedAttribute(BFCPAttribute::ParticipantProvidedInfo);
+	ack.AddSupportedAttribute(BFCPAttribute::StatusInfo);
+	ack.AddSupportedAttribute(BFCPAttribute::SupportedAttributes);
+	ack.AddSupportedAttribute(BFCPAttribute::SupportedPrimitives);
+	ack.AddSupportedAttribute(BFCPAttribute::BeneficiaryInformation);
+	ack.AddSupportedAttribute(BFCPAttribute::FloorRequestInformation);
+	ack.AddSupportedAttribute(BFCPAttribute::RequestedByInformation);
+	ack.AddSupportedAttribute(BFCPAttribute::FloorRequestStatus);
+	ack.AddSupportedAttribute(BFCPAttribute::OverallRequestStatus);
+	user->SendMessage(ack);
+
+	// Over UDP the server greets back, as the endpoints in service expect.
+	if (! user->IsReliable())
+		user->SendMessage(BFCPMsgHello(NextTransactionIdLocked(), this->conferenceId, req->GetUserId()));
+
+	int userId = user->GetUserId();
+	pending.push_back([this, userId]() {
+		listener->onUserConnected(userId);
+	});
 }
 
 
-void BFCPFloorControlServer::SendMessage(BFCPMessage *msg)
+void BFCPFloorControlServer::ProcessGoodbyeLocked(BFCPMessage *req, BFCPUser* user, Notifications& pending)
 {
-	int userId = msg->GetUserId();
-
-	BFCPUser* user = this->GetUser(userId);
-	if (! user) {
-		::Error("BFCPFloorControlServer::SendMessage() | user '%d' does not exist\n", userId);
-		return;
-	}
-
-	::Debug("BFCPFloorControlServer::SendMessage() | sending message to user '%d':\n", userId);
-	msg->Dump();
-
-	user->SendMessage(msg);
-}
-
-
-void BFCPFloorControlServer::ReplyError(BFCPMessage *msg, BFCPAttrErrorCode::ErrorCode errorCode)
-{
-	::Log("BFCPFloorControlServer::ReplyError() | replying BFCP Error\n");
-	BFCPMsgError *error_response = new BFCPMsgError(msg, errorCode);
-
-	SendMessage(error_response);
-	delete error_response;
-}
-
-
-void BFCPFloorControlServer::ReplyError(BFCPMessage *msg, BFCPAttrErrorCode::ErrorCode errorCode, std::wstring errorInfo)
-{
-	::Log("BFCPFloorControlServer::ReplyError() | replying BFCP Error\n");
-	BFCPMsgError *error_response = new BFCPMsgError(msg, errorCode, errorInfo);
-
-	SendMessage(error_response);
-	delete error_response;
+	user->SendMessage(BFCPMessage(BFCPMessage::GoodbyeAck, req->GetTransactionId(), this->conferenceId, req->GetUserId()));
+	RemoveUserLocked(user->GetUserId(), false, pending);
 }

@@ -19,11 +19,12 @@ class BFCPMsgFloorRequestStatus :  public BFCPMessage
 public:
 	BFCPMsgFloorRequestStatus(int transactionId, int conferenceId, int userId);
 	~BFCPMsgFloorRequestStatus();
+	bool IsValid();
 	void Dump();
-	std::wstring Stringify();
 
 	void SetFloorRequestInformation(BFCPAttrFloorRequestInformation *floorRequestInformation);
-	void SetDescription(std::wstring& statusInfo);
+	void SetDescription(const std::string& statusInfo);
+	const BFCPAttrFloorRequestInformation* GetFloorRequestInformation() const;
 
 private:
 	// Mandatory attributes.

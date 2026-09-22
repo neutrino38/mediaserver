@@ -7,7 +7,7 @@
 
 
 // 5.3.2.  FloorRelease
-
+//
 //    FloorRelease =   (COMMON-HEADER)
 //                     (FLOOR-REQUEST-ID)
 //                    *[EXTENSION-ATTRIBUTE]
@@ -18,12 +18,12 @@ class BFCPMsgFloorRelease : public BFCPMessage
 public:
 	BFCPMsgFloorRelease(int transactionId, int conferenceId, int userId);
 	~BFCPMsgFloorRelease();
-	bool ParseAttributes(JSONParser &parser);
 	bool IsValid();
 	void Dump();
 
 	void SetFloorRequestId(int);
-	int GetFloorRequestId();
+	bool HasFloorRequestId() const;
+	int GetFloorRequestId() const;
 
 private:
 	// Mandatory attributes.

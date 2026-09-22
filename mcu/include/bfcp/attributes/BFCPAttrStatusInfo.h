@@ -8,16 +8,13 @@
 
 class BFCPAttrStatusInfo : public BFCPAttribute
 {
-/* Instance members. */
-
 public:
-	BFCPAttrStatusInfo(std::wstring value);
+	BFCPAttrStatusInfo(const std::string& value);
 	void Dump();
-
-	std::wstring GetValue();
+	const std::string& GetValue() const;
 
 private:
-	std::wstring value;
+	std::string value;
 };
 
 

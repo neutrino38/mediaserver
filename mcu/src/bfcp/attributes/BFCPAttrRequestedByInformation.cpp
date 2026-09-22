@@ -2,8 +2,6 @@
 #include "log.h"
 
 
-/* Instance methods */
-
 BFCPAttrRequestedByInformation::BFCPAttrRequestedByInformation(int requestedById) :
 	requestedById(requestedById)
 {
@@ -18,9 +16,7 @@ void BFCPAttrRequestedByInformation::Dump()
 }
 
 
-void BFCPAttrRequestedByInformation::Stringify(std::wstringstream &json_stream)
+int BFCPAttrRequestedByInformation::GetRequestedById() const
 {
-	json_stream << L"{";
-	json_stream << L"\n  \"requestedById\": " << this->requestedById;
-	json_stream << L"\n}";
+	return this->requestedById;
 }

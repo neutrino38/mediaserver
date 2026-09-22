@@ -2,19 +2,11 @@
 #define	BFCPATTRIBUTE_H
 
 
-#include "stringparser.h"
-#include <map>
-#include <string>
-#include <sstream>
-
-
 class BFCPAttribute
 {
-/* Static members. */
-
 public:
+	// Type codes of RFC 4582 §5.2 (RFC 8855 keeps them).
 	enum Name {
-		// Single BFCP attributes.
 		BeneficiaryId = 1,
 		FloorId,
 		FloorRequestId,
@@ -28,7 +20,6 @@ public:
 		SupportedPrimitives,
 		UserDisplayName,
 		UserUri,
-		// Grouped BFCP attributes.
 		BeneficiaryInformation,
 		FloorRequestInformation,
 		RequestedByInformation,
@@ -36,16 +27,8 @@ public:
 		OverallRequestStatus,
 	};
 
-	// For BFCP JSON.
-	static std::map<std::wstring, enum Name>	mapJsonStr2Name;
-	static std::map<enum Name, std::wstring>	mapName2JsonStr;
-
 public:
-	static void Init();
-
-/* Instance members. */
-
-public:
+	virtual ~BFCPAttribute() {}
 	virtual void Dump() = 0;
 };
 

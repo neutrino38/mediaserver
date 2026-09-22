@@ -32,19 +32,23 @@
 
 class BFCPAttrFloorRequestInformation : public BFCPAttribute
 {
-/* Instance members. */
-
 public:
 	BFCPAttrFloorRequestInformation(int floorRequestId);
 	~BFCPAttrFloorRequestInformation();
 	void Dump();
-	void Stringify(std::wstringstream &json_stream);
 
 	void AddFloorRequestStatus(BFCPAttrFloorRequestStatus *floorRequestStatus);
 	void SetOverallRequestStatus(BFCPAttrOverallRequestStatus *overallRequestStatus);
 	void SetBeneficiaryInformation(BFCPAttrBeneficiaryInformation *beneficiaryInformation);
 	void SetRequestedByInformation(BFCPAttrRequestedByInformation *requestedByInformation);
-	void SetDescription(std::wstring& statusInfo);
+	void SetDescription(const std::string& statusInfo);
+
+	int GetFloorRequestId() const;
+	int CountFloorRequestStatuses() const;
+	const BFCPAttrFloorRequestStatus* GetFloorRequestStatus(unsigned int index) const;
+	const BFCPAttrOverallRequestStatus* GetOverallRequestStatus() const;
+	const BFCPAttrBeneficiaryInformation* GetBeneficiaryInformation() const;
+	const BFCPAttrRequestedByInformation* GetRequestedByInformation() const;
 
 private:
 	// Mandatory attributes.

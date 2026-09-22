@@ -17,7 +17,7 @@ void BFCPAttrBeneficiaryId::Dump()
 }
 
 
-int BFCPAttrBeneficiaryId::GetValue()
+int BFCPAttrBeneficiaryId::GetValue() const
 {
 	return this->value;
 }
