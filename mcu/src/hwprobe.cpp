@@ -351,8 +351,12 @@ Outcome ProbeMosaic(const PictPtr& gpuMire)
 
 // 42801F : SPS rabattu sur 0x80, ce que déclare un terminal SIP (l'encodeur,
 // lui, pose constraint_set1).
-const struct { const char* plid; int spsFlags; } Profiles[] = {
-	{ "42e01f", -1 }, { "42801F", 0x80 }, { "4d001f", -1 }, { "64001f", -1 },
+// avProfile : le même profil vu par libavcodec, clé du refus (VideoAccel::RefuseHw).
+const struct { const char* plid; int spsFlags; const char* avProfile; } Profiles[] = {
+	{ "42e01f", -1,   "constrained_baseline" },
+	{ "42801F", 0x80, "baseline" },
+	{ "4d001f", -1,   "main" },
+	{ "64001f", -1,   "high" },
 };
 
 // Simule une sonde tuée ou bloquée par le driver (cf. hwprobe.h).
@@ -555,4 +559,29 @@ std::vector<HwProbeVerdict> RunHwProbeChild(int timeoutSecs)
 			Error("-hwprobe:   %s\n", l.c_str());
 	}
 	return verdicts;
+}
+
+void ApplyHwProbe(const std::vector<HwProbeVerdict>& verdicts)
+{
+	for (const HwProbeVerdict& v : verdicts)
+		if (v.state == HwProbeState::Failed
+		    && (v.capability == "device" || v.capability == "upload" || v.capability == "download"))
+		{
+			Pict::DisableVAAPI();
+			Error("-hwprobe: %s en echec, acceleration materielle eteinte : tout le traitement video se fera sur CPU\n",
+			      v.capability.c_str());
+			return;
+		}
+
+	for (const HwProbeVerdict& v : verdicts)
+	{
+		if (v.state != HwProbeState::Failed)
+			continue;
+		std::string path = v.capability;
+		for (const auto& p : Profiles)
+			if (v.capability == std::string("h264.decode.") + p.plid)
+				path = std::string("h264.decode.") + p.avProfile;
+		VideoAccel::RefuseHw(path);
+		Log("-hwprobe: GPU refuse pour %s, ce chemin se fera sur CPU\n", path.c_str());
+	}
 }

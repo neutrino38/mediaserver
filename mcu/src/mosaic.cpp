@@ -206,7 +206,8 @@ MosaicGraphDesc Mosaic::BuildDesc()
 	// sans entrée GPU, tout monter en VRAM serait une pure perte (uploads puis
 	// probable redescente côté encodeur logiciel). Le compositor peut encore
 	// replier en CPU (échec de config, slots superposés type PIP).
-	desc.wantGPU = anyGPUInput && Pict::GetVAAPIDevice() != nullptr;
+	desc.wantGPU = anyGPUInput && Pict::GetVAAPIDevice() != nullptr
+	            && !VideoAccel::IsHwRefused("mosaic");
 
 	return desc;
 }

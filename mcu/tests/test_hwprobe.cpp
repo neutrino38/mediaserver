@@ -1,5 +1,5 @@
 /**
- * test_hwprobe.cpp — sonde d'accélération matérielle (lots 0 et 1 de
+ * test_hwprobe.cpp — sonde d'accélération matérielle (lots 0 à 2 de
  * docs/conception/HWACCEL-SONDE/SPEC.md).
  *
  * Tout tourne partout, sans GPU compris, sauf
@@ -139,4 +139,60 @@ TEST(HwProbeChild, UneSondeBloqueeEstTueeAuDelai)
 	EXPECT_EQ(HwProbeState::Failed, v[hung].state);
 	EXPECT_EQ("delai depasse (3 s)", v[hung].detail);
 	EXPECT_EQ("non testee", v[hung + 1].detail);
+}
+
+// --- Lot 2 : les verdicts décident -------------------------------------------
+
+namespace {
+
+// Tout `ok`, sauf les capacités citées, en échec.
+std::vector<HwProbeVerdict> VerdictsFailing(std::initializer_list<const char*> failed)
+{
+	std::vector<HwProbeVerdict> v;
+	for (const std::string& cap : HwProbeCapabilities())
+		v.push_back({ cap, HwProbeState::Ok, "" });
+	for (const char* f : failed)
+		v[IndexOf(f)].state = HwProbeState::Failed;
+	return v;
+}
+
+int DeviceFailureDisablesGpu(const char* capability)
+{
+	ApplyHwProbe(VerdictsFailing({ capability }));
+	return Pict::GetVAAPIDevice() == nullptr ? 0 : 1;
+}
+
+int EachFailureRefusesItsOwnPath()
+{
+	const bool device = Pict::GetVAAPIDevice() != nullptr;
+	ApplyHwProbe(VerdictsFailing({ "h264.encode", "h264.decode.42801F", "scale", "mosaic" }));
+	for (const char* refused : { "h264.encode", "h264.decode.baseline", "scale", "mosaic" })
+		if (!VideoAccel::IsHwRefused(refused))
+			return 1;
+	for (const char* kept : { "h264.decode", "h264.decode.constrained_baseline", "vp8.decode" })
+		if (VideoAccel::IsHwRefused(kept))
+			return 2;
+	return (Pict::GetVAAPIDevice() != nullptr) == device ? 0 : 3;
+}
+
+} // namespace
+
+// Un refus ou une extinction est définitif pour le processus : sous-processus,
+// relancé (threadsafe) plutôt que forké d'un parent qui a peut-être touché au GPU.
+TEST(HwProbeApply, UnEchecDuDeviceEteintLeGpu)
+{
+	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	EXPECT_EXIT(exit(DeviceFailureDisablesGpu("device")), ::testing::ExitedWithCode(0), "");
+}
+
+TEST(HwProbeApply, UnEchecDeTransfertEteintLeGpu)
+{
+	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	EXPECT_EXIT(exit(DeviceFailureDisablesGpu("download")), ::testing::ExitedWithCode(0), "");
+}
+
+TEST(HwProbeApply, ChaqueEchecNeRefuseQueSonChemin)
+{
+	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	EXPECT_EXIT(exit(EachFailureRefusesItsOwnPath()), ::testing::ExitedWithCode(0), "");
 }

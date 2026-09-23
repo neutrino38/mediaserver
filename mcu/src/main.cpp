@@ -453,11 +453,15 @@ int main(int argc,char **argv)
 		//Sonde hors processus (ADR 002), AVANT que ce processus n'ouvre le
 		//device : un driver qui tue la sonde ne tue pas le serveur.
 		if (!hwprobe)
-			for (const HwProbeVerdict& v : RunHwProbeChild(hwprobeTimeout))
+		{
+			std::vector<HwProbeVerdict> verdicts = RunHwProbeChild(hwprobeTimeout);
+			for (const HwProbeVerdict& v : verdicts)
 				if (v.state == HwProbeState::Failed)
 					Error("-hwprobe %s %s %s\n", v.capability.c_str(), HwProbeStateName(v.state), v.detail.c_str());
 				else
 					Log("-hwprobe %s %s %s\n", v.capability.c_str(), HwProbeStateName(v.state), v.detail.c_str());
+			ApplyHwProbe(verdicts);
+		}
 		//Sonde (et crée si possible) le device VAAPI partagé une bonne fois au
 		//démarrage — le même device que les décodeurs, les encodeurs et le graphe de
 		//composition des mosaïques utiliseront. Le verdict est ainsi visible en tête

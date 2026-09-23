@@ -31,4 +31,9 @@ std::vector<HwProbeVerdict> RunHwProbe(FILE* out);
 // cours est en échec avec la cause pour motif, et les suivantes « non testee ».
 std::vector<HwProbeVerdict> RunHwProbeChild(int timeoutSecs);
 
+// Applique les verdicts (SPEC §5) : un échec du device ou des transferts éteint
+// le GPU pour tout le processus, tout autre échec refuse ce seul chemin
+// (VideoAccel::RefuseHw). À appeler avant d'ouvrir le moindre codec.
+void ApplyHwProbe(const std::vector<HwProbeVerdict>& verdicts);
+
 #endif

@@ -660,6 +660,30 @@ TEST(MosaicCompositorGpu, SameGpuPoolKeepsTheGraph)
 	EXPECT_TRUE(first == second) << "meme pool, graphe reconstruit";
 }
 
+// La sonde de démarrage a vu la mosaïque GPU échouer : la description ne la
+// demande plus, même avec une entrée GPU. Sous-processus relancé : le refus est
+// définitif, et un fork hériterait d'un état libva inutilisable.
+static int RefusedMosaicWantsNoGpu()
+{
+	PictPtr gpuIn;
+	if (SolidPict(640, 360, 90)->UploadToGPU(gpuIn) != 0)
+		return 2;
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	m->Update(0, gpuIn);
+	if (!MosaicProbe::Desc(*m).wantGPU)
+		return 3;
+	VideoAccel::RefuseHw("mosaic");
+	return MosaicProbe::Desc(*m).wantGPU ? 1 : 0;
+}
+
+TEST(MosaicCompositorGpu, UneMosaiqueRefuseeNeDemandePlusLeGpu)
+{
+	if (!Pict::GetVAAPIDevice())
+		GTEST_SKIP() << "pas de device VAAPI";
+	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	EXPECT_EXIT(exit(RefusedMosaicWantsNoGpu()), ::testing::ExitedWithCode(0), "");
+}
+
 // Slots superposés (PIP) : le liseré GPU est peint dans le fond, qui serait
 // masqué par l'image principale — le mode GPU doit replier en CPU MÊME sur
 // une machine avec device VAAPI (sortie yuv420p garantie partout).
