@@ -1,7 +1,8 @@
 # Sonde d'accélération matérielle au démarrage
 
-> Statut : **lot 0 fait** — le mode `mediaserver --hwprobe` (§6, §10). Les lots
-> 1 à 4 sont à faire : aujourd'hui, la sonde ne décide encore rien.
+> Statut : **lots 0 et 1 faits** — le mode `mediaserver --hwprobe`, et son
+> lancement par `main()` à chaque démarrage (§6, §10). Les lots 2 à 4 sont à
+> faire : aujourd'hui, la sonde est journalisée mais ne décide encore rien.
 > Décision d'architecture : [ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
 > Prérequis : ffmpeg 8 au minimum (libavfilter 11). En dessous, `main()`
 > éteint le GPU (voir §8).
@@ -174,10 +175,30 @@ l'[ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
      motif « délai dépassé ».
 6. Le père applique les verdicts (§5), puis démarre ses serveurs.
 
-Le lot 0 livre les étapes 3 et 5 côté processus de sonde : `mediaserver
---hwprobe` juge, écrit ses lignes, rend 0 et sort sans démarrer de serveur. Il
-respecte `--no-hwaccel` et la garde ffmpeg 8 : dans les deux cas, tout est
-`absent`.
+Ce qui est livré (lots 0 et 1) :
+
+- `mediaserver --hwprobe` juge, écrit ses lignes, rend 0 et sort sans démarrer
+  de serveur. Il respecte `--no-hwaccel` et la garde ffmpeg 8 : dans les deux
+  cas, tout est `absent`.
+- `main()` lance la sonde (`RunHwProbeChild`) **avant** d'ouvrir lui-même le
+  device. Il ne la lance pas avec `--no-hwaccel`, ni bâti contre libavfilter
+  < 11, ni en mode `--hwprobe`.
+- Le père complète les verdicts dans l'ordre du §3. Le motif de la capacité en
+  cours dit la cause : `sonde tuee par le signal 6 (Aborted)`, `delai depasse
+  (10 s)`, `sonde sortie avec le code 127` (le binaire n'a pas pu être relancé)
+  ou `verdict manquant`. Les capacités suivantes portent `non testee`.
+- Chaque verdict est journalisé (`-hwprobe <capacité> <état> <détail>`), en
+  erreur s'il est en échec. Quand la sonde s'arrête avant la fin, le père
+  journalise aussi les 5 dernières lignes de l'enfant qui ne sont pas des
+  verdicts : c'est là qu'apparaît l'assertion de libavcodec.
+- **Rien n'est encore décidé** (lot 2) : après la sonde, le père ouvre le device
+  comme avant. Un driver qui tue le processus à l'ouverture du device tue donc
+  encore le serveur. C'est le lot 2 qui l'évite, en éteignant le GPU quand
+  `device` est en échec.
+
+Pour les tests, `MCU_HWPROBE_FAULT=abort:<capacité>` fait mourir la sonde sur
+`abort()` juste avant de juger cette capacité, et `hang:<capacité>` la bloque.
+Le crochet agit même sans GPU : les tests du lot 1 tournent partout.
 
 Une ligne s'écrit `hwprobe <capacité> <état> <détail> (<durée> ms)`. Elle est
 lisible par un humain comme par le père. Le père ne lit que les lignes qui
@@ -240,7 +261,7 @@ donc un booléen plus honnête, sans changer leur code. `docs/reference/status-h
 |---|---|
 | `--no-hwaccel` | pas de sonde, pas de GPU (inchangé) |
 | `--hwprobe` | mode sonde : teste, écrit ses lignes, sort. Ne démarre aucun serveur (lot 0, fait) |
-| `--hwprobe-timeout <s>` | délai global de la sonde, 10 s par défaut (lot 1) |
+| `--hwprobe-timeout <s>` | délai global de la sonde, 10 s par défaut (lot 1, fait) |
 
 **ffmpeg 8 au minimum.** Le graphe de mosaïque GPU a besoin de l'API segment de
 libavfilter : `hwupload` exige son device avant son initialisation. Bâti contre
@@ -251,7 +272,13 @@ alors `absent` partout.
 
 **Coût mesuré** : 0,35 s pour tout le processus de sonde sur un Iris Xe, dont
 environ 220 ms de tests. `h264.encode` est le plus lent (93 ms). Sans GPU, la
-sonde rend la main tout de suite.
+sonde rend la main tout de suite. Au démarrage du serveur, la sonde ajoute
+environ 0,23 s : le serveur répond en 0,35 s, contre 0,13 s avec `--no-hwaccel`.
+
+**Une sonde tuée coûte une seconde de plus sur Ubuntu.** Le noyau passe le core
+à apport (`core_pattern` est un pipe) même quand la limite de core vaut 0.
+apport n'écrit rien pour un binaire hors paquet, mais il met environ une
+seconde à le décider.
 
 **Un profil que le driver ne décode pas est un `echec`, pas un `absent`.** Le
 lot 0 ne sait pas distinguer « le driver ne propose pas ce codec » de « il le
@@ -271,7 +298,7 @@ hors `make check`.
 | Lot | Contenu | Livrable vérifiable |
 |---|---|---|
 | 0 — **fait** | Mode `--hwprobe` : capacités du §3, lignes du §6, sans effet sur le serveur | `mediaserver --hwprobe` sur ce poste, puis `LIBVA_DRIVER_NAME=aucun` ; tests `HwProbe.*` |
-| 1 | Lancement par `main()`, délai, signal, lecture partielle | test : processus de sonde forcé à `abort()` en pleine capacité (variable d'environnement de test) |
+| 1 — **fait** | Lancement par `main()`, délai, signal, lecture partielle | tests `HwProbeChild.*`, sonde forcée à `abort()` ou bloquée par `MCU_HWPROBE_FAULT` |
 | 2 | Point de consultation libmedikit + application du §5 | tests : verdict injecté → codec logiciel, sans GPU |
 | 3 | Compteurs `VideoAccel` redéfinis (§5) | test : décodeur dont `get_format` échoue → compté logiciel, un repli compté |
 | 4 | Publication : log, `/status/general`, réécriture de `status-http.md` | test `test_status.cpp` sur l'objet `probe` |
@@ -280,13 +307,22 @@ Chaque test qui demande un GPU est préfixé `DISABLED_` et joué par
 `--gtest_also_run_disabled_tests`, comme `H264HwVaapi`. Chaque test qui
 simule un verdict tourne partout, dans `make check`.
 
-Tests du lot 0 (`mcu/tests/test_hwprobe.cpp`) :
+Tests des lots 0 et 1 (`mcu/tests/test_hwprobe.cpp`). `runtests` accepte
+`--hwprobe` comme le binaire serveur, pour que les tests relancent le vrai code
+de sonde :
 
-- `HwProbe.ChaqueCapaciteRecoitUnVerdict` tourne partout : chaque capacité
-  reçoit un verdict et une ligne bien formée, et tout est `absent` sans device ;
+- `HwProbe.ChaqueCapaciteRecoitUnVerdict` : chaque capacité reçoit un verdict
+  et une ligne bien formée, et tout est `absent` sans device ;
 - `HwProbe.DISABLED_ToutCeQueLeServeurUtiliseEstProuve` exige un GPU : device,
   transferts, encodage H.264, décodage `42e01f` et `42801F`, retaillage et
-  mosaïque doivent être `ok`.
+  mosaïque doivent être `ok` ;
+- `HwProbeChild.RendLesMemesVerdictsQueLaSonde` : la sonde relancée rend les
+  mêmes états que la sonde dans le processus ;
+- `HwProbeChild.UneSondeTueeGardeSesVerdictsEtNommeLaCause` : tuée pendant
+  `h264.encode`, la sonde garde les trois verdicts déjà écrits, nomme le signal,
+  et marque la suite `non testee` ;
+- `HwProbeChild.UneSondeBloqueeEstTueeAuDelai` : bloquée pendant `scale`, elle
+  est tuée à 3 s et le père rend la main.
 
 Contre-épreuves faites en réintroduisant les défauts corrigés sur la branche :
 
