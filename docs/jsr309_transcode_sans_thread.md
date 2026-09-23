@@ -451,7 +451,8 @@ Le deinit d'un encodeur (jusqu'ici sur le thread d'encodage) se fait désormais
 sur le thread de démux, **sous `Port.mutex`**. Si un deinit se bloque (cas
 SVT-AV1 0.9.0 du 2026-08-13), le thread XML-RPC se bloquera derrière
 `Port.mutex` au prochain `RemoveListener` : la même gêne, par un autre chemin.
-Le contournement de ce bogue vit dans libmedikit (`medkit/ffcodeclock.h`) ; le
+Le contournement de ce bogue vit dans libmedikit (`LockSvtAv1()`, dans
+`ffvideocodec.cpp`) ; le
 plan n'y change rien, il faut le dire.
 
 ### 4.6 `onEndStream` et réentrance sur le même thread
