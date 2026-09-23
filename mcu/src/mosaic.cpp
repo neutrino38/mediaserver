@@ -144,7 +144,8 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		s.inW    = f->width;
 		s.inH    = f->height;
 		s.inFmt  = f->format;
-		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU (clé de reconfig)
+		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU
+		s.hwFrames    = f->hw_frames_ctx ? f->hw_frames_ctx->data : nullptr;
 		if (pic->IsGPUPict())
 			anyGPUInput = true;
 

@@ -639,6 +639,27 @@ TEST(MosaicCompositorGpu, GpuSurfaceSlotComposesOnGpu)
 	EXPECT_NEAR(90, LumaAt(cpu, 320, 180), 2);
 }
 
+// Un décodeur rend chaque image dans une trame neuve, avec sa propre référence
+// vers le même pool : la description ne doit pas changer d'une image à l'autre,
+// sinon le graphe GPU est reconstruit à chaque tick.
+TEST(MosaicCompositorGpu, SameGpuPoolKeepsTheGraph)
+{
+	if (!Pict::GetVAAPIDevice())
+		GTEST_SKIP() << "pas de device VAAPI";
+
+	PictPtr gpuIn;
+	ASSERT_EQ(0, SolidPict(640, 360, 90)->UploadToGPU(gpuIn));
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	m->Update(0, std::make_shared<Pict>(av_frame_clone(gpuIn->GetAVFrame())));
+	MosaicGraphDesc first = MosaicProbe::Desc(*m);
+	m->Update(0, std::make_shared<Pict>(av_frame_clone(gpuIn->GetAVFrame())));
+	MosaicGraphDesc second = MosaicProbe::Desc(*m);
+
+	ASSERT_EQ(1u, first.slots.size());
+	EXPECT_TRUE(first == second) << "meme pool, graphe reconstruit";
+}
+
 // Slots superposés (PIP) : le liseré GPU est peint dans le fond, qui serait
 // masqué par l'image principale — le mode GPU doit replier en CPU MÊME sur
 // une machine avec device VAAPI (sortie yuv420p garantie partout).
