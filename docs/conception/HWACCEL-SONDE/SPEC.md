@@ -1,6 +1,7 @@
 # Sonde d'accélération matérielle au démarrage
 
-> Statut : **conception**, rien n'est implémenté.
+> Statut : **lot 0 fait** — le mode `mediaserver --hwprobe` (§6, §10). Les lots
+> 1 à 4 sont à faire : aujourd'hui, la sonde ne décide encore rien.
 > Décision d'architecture : [ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
 > Prérequis : ffmpeg 8 au minimum (libavfilter 11). En dessous, `main()`
 > éteint le GPU (voir §8).
@@ -38,27 +39,33 @@ Elle ne prouve pas :
 ## 3. Les capacités sondées
 
 Chaque capacité est une opération élémentaire, avec un verdict propre. Un
-échec n'éteint que sa capacité, sauf l'échec du device.
+échec n'éteint que sa capacité, sauf l'échec du device. La sonde teste le
+chemin **que le serveur emprunte**, pas ce que ffmpeg saurait faire en théorie.
 
 | Capacité | Opération | Vérification |
 |---|---|---|
 | `device` | `Pict::GetVAAPIDevice()` | non nul |
-| `upload` | CPU → surface NV12 (`av_hwframe_transfer_data`) | la redescente rend la même luma |
+| `upload` | CPU → surface NV12 (`Pict::UploadToGPU`) | la redescente rend la mire à ±2 |
 | `download` | surface → CPU (`Pict::DownloadToCPU`) | luma et chroma à ±2 |
-| `h264.encode` | `H264Encoder`, `video.hwaccel.required=1` | voir §4 |
-| `h264.decode` | `H264Decoder(true)` | voir §4 |
-| `vp8.decode` | `FfVideoDecoder` VP8, flux encodé en logiciel | voir §4 |
-| `vp8.encode` | encodeur VP8 VAAPI, s'il existe | voir §4 |
-| `av1.decode` | décodeur AV1 VAAPI, s'il existe | voir §4 |
-| `scale` | `VideoRescaler` sur une surface (`scale_vaapi`) | luma d'une mire, à la taille cible |
-| `mosaic` | `MosaicCompositor` 2×2, un slot GPU et un slot CPU | luma de chaque slot et du liseré |
+| `h264.encode` | `H264Encoder`, `video.hwaccel.required=1` | voir §4, décodage de contrôle en logiciel |
+| `h264.decode.<profil>` | `H264Decoder(true)`, flux encodé en logiciel | voir §4 |
+| `h264.decode` | synthèse des profils | `ok` dès qu'un profil l'est |
+| `vp8.decode` | `FfVideoDecoder` VP8 en VAAPI exigé, flux encodé en logiciel | voir §4 |
+| `vp8.encode` | toujours `absent` : `VP8Encoder` ne tente pas le matériel | — |
+| `av1.decode` | toujours `absent` : `AV1Decoder` passe par libdav1d, logiciel | — |
+| `scale` | `VideoRescaler` sur une surface (`scale_vaapi`), vers 160×120 | mire à ±4, sortie en surface |
+| `mosaic` | `MosaicCompositor` 640×360, un slot GPU et un slot CPU | mire du slot GPU, luma du slot CPU, du liseré et du fond, sortie en surface |
+
+`vp8.encode` et `av1.decode` figurent dans la liste pour que leur absence soit
+dite, pas devinée : ffmpeg fournit `vp8_vaapi` et un décodeur AV1 VAAPI, mais
+libmedikit ne s'en sert pas.
 
 Une capacité a trois états :
 
 - `ok` : l'opération a rendu une image juste ;
-- `absent` : ffmpeg ou le driver ne la proposent pas (pas d'encodeur
-  `vp8_vaapi`, par exemple). Ce n'est pas une panne ;
-- `échec` : elle est proposée, mais elle a échoué, menti, dépassé le délai, ou
+- `absent` : le serveur ne l'emprunte pas, ou le poste n'a pas de device VAAPI.
+  Sans device, toutes les capacités sont `absent`. Ce n'est pas une panne ;
+- `echec` : elle est empruntée, mais elle a échoué, menti, dépassé le délai, ou
   tué le processus de sonde. Le motif est conservé (voir §6).
 
 ## 4. La règle de vérification d'un codec
@@ -66,20 +73,27 @@ Une capacité a trois états :
 Un codec n'est `ok` que si **l'image qui sort ressemble à celle qui entre**.
 Trois règles viennent des pannes que la sonde doit attraper :
 
-1. **Au moins 20 images.** Un encodeur matériel retient sa première image, et
-   un DPB (la mémoire d'images de référence du codec) qui se remplit sans
-   jamais rien rendre ne se voit qu'après une quinzaine d'images.
+1. **20 images.** Un encodeur matériel retient sa première image, et un DPB
+   (la mémoire d'images de référence du codec) qui se remplit sans jamais rien
+   rendre ne se voit qu'après une quinzaine d'images. Un encodeur est en échec
+   s'il rend moins de 16 paquets.
 2. **Une image décodée se compte par `GetFrame()`, pas par le code retour.**
    `FfVideoDecoder::Decode` rend 1 même quand aucune image ne sort.
 3. **Un décodeur n'est matériel que si sa sortie est une surface.**
    `IsHardwareReady()` teste seulement la présence d'un device. Le décodeur
    peut avoir rejeté le flux et décoder en logiciel. Seul `IsGPUPict()` sur
-   l'image rendue le prouve.
+   l'image rendue le prouve. Un décodeur est en échec si plus d'une image sort
+   hors GPU.
 
-La vérification elle-même : une mire à bandes de luma connues (40, 90, 140,
-190), chroma non neutre. On compare au centre de chaque bande, à ±8 après
-compression. Une bande juste et une chroma fausse est un échec : c'est le
-symptôme d'un mauvais format de surface.
+Chaque sens se juge **seul**. L'encodeur matériel est contrôlé par un décodeur
+libavcodec sans device. Le décodeur matériel reçoit un flux de l'encodeur
+logiciel. Une panne du décodage GPU ne fait donc pas tomber l'encodage, et
+inversement.
+
+La vérification elle-même : une mire 320×240 à quatre bandes verticales de luma
+connue (40, 90, 140, 190), chroma non neutre (U = 90, V = 160). On compare au
+centre de chaque bande, à ±8 après compression. Une bande juste et une chroma
+fausse est un échec : c'est le symptôme d'un mauvais format de surface.
 
 ### Les profils H.264 sondés
 
@@ -103,7 +117,7 @@ La sonde teste donc ces profils :
 | Profil | Pourquoi |
 |---|---|
 | `42e01f` | Constrained Baseline, celui des navigateurs WebRTC |
-| `42801F` | Baseline, celui de beaucoup de terminaux SIP : prouve la tolérance de profil |
+| `42801F` | Baseline, celui de beaucoup de terminaux SIP : prouve la tolérance de profil. La sonde rabat l'octet de contraintes du SPS sur `0x80`, puisque notre encodeur pose `constraint_set1` |
 | `4d001f` | Main |
 | `64001f` | High |
 
@@ -152,20 +166,39 @@ l'[ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
 4. Le père attend, avec un délai global (`--hwprobe-timeout`, 10 s par défaut).
 5. Le processus de sonde se termine :
    - normalement : les verdicts sont lus tels quels ;
-   - par un signal (abort, segfault) : la capacité en cours passe en `échec`,
+   - par un signal (abort, segfault) : la capacité en cours passe en `echec`,
      avec le signal pour motif. Les capacités non encore testées passent aussi
-     en `échec`, motif « non testée ». Le père ne peut pas savoir si elles
+     en `echec`, motif « non testée ». Le père ne peut pas savoir si elles
      auraient marché ;
    - après le délai : le père tue le processus de sonde. Même traitement,
      motif « délai dépassé ».
 6. Le père applique les verdicts (§5), puis démarre ses serveurs.
 
-Format d'une ligne, lisible par un humain comme par le père :
+Le lot 0 livre les étapes 3 et 5 côté processus de sonde : `mediaserver
+--hwprobe` juge, écrit ses lignes, rend 0 et sort sans démarrer de serveur. Il
+respecte `--no-hwaccel` et la garde ffmpeg 8 : dans les deux cas, tout est
+`absent`.
+
+Une ligne s'écrit `hwprobe <capacité> <état> <détail> (<durée> ms)`. Elle est
+lisible par un humain comme par le père. Le père ne lit que les lignes qui
+commencent par `hwprobe ` : les logs du serveur et de ffmpeg partagent la même
+sortie. Sortie réelle sur un Iris Xe (driver iHD, ffmpeg 8) :
 
 ```
-hwprobe h264.encode ok 19/20 psnr=41.2
-hwprobe h264.decode.64001f echec profil refuse par libavcodec
-hwprobe vp8.encode absent
+hwprobe device ok device VAAPI ouvert (0 ms)
+hwprobe upload ok mire juste apres aller-retour (0 ms)
+hwprobe download ok luma et chroma a +-2 (0 ms)
+hwprobe h264.encode ok 19/20 paquets, mire juste (93 ms)
+hwprobe h264.decode.42e01f ok 19/20 images sur GPU, mire juste (23 ms)
+hwprobe h264.decode.42801F ok 19/20 images sur GPU, mire juste (15 ms)
+hwprobe h264.decode.4d001f ok 19/20 images sur GPU, mire juste (15 ms)
+hwprobe h264.decode.64001f ok 19/20 images sur GPU, mire juste (13 ms)
+hwprobe h264.decode ok profils 42e01f 42801F 4d001f 64001f (0 ms)
+hwprobe vp8.decode ok 20/20 images sur GPU, mire juste (22 ms)
+hwprobe vp8.encode absent VP8Encoder encode en logiciel (libvpx) (0 ms)
+hwprobe av1.decode absent AV1Decoder decode par libdav1d, logiciel (0 ms)
+hwprobe scale ok 160x120, mire juste (6 ms)
+hwprobe mosaic ok slot GPU, slot CPU, lisere et fond justes (29 ms)
 ```
 
 `mediaserver --hwprobe` lancé à la main par un exploitant affiche ces mêmes
@@ -189,7 +222,7 @@ porte son état et son motif.
     "h264.encode": { "state": "ok" },
     "h264.decode": { "state": "ok", "profiles": ["42e01f", "4d001f", "64001f"] },
     "vp8.encode":  { "state": "absent" },
-    "mosaic":      { "state": "echec", "reason": "graph config failed (-22)" }
+    "mosaic":      { "state": "echec", "reason": "composition retombee sur le CPU" }
   },
   "videoEncoders": 0
 }
@@ -206,19 +239,25 @@ donc un booléen plus honnête, sans changer leur code. `docs/reference/status-h
 | Option | Effet |
 |---|---|
 | `--no-hwaccel` | pas de sonde, pas de GPU (inchangé) |
-| `--hwprobe` | mode sonde : teste, écrit ses lignes, sort. Ne démarre aucun serveur |
-| `--hwprobe-timeout <s>` | délai global de la sonde, 10 s par défaut |
+| `--hwprobe` | mode sonde : teste, écrit ses lignes, sort. Ne démarre aucun serveur (lot 0, fait) |
+| `--hwprobe-timeout <s>` | délai global de la sonde, 10 s par défaut (lot 1) |
 
 **ffmpeg 8 au minimum.** Le graphe de mosaïque GPU a besoin de l'API segment de
 libavfilter : `hwupload` exige son device avant son initialisation. Bâti contre
-libavfilter < 11, `main()` éteint le GPU et le dit dans le log. La sonde n'est
-alors pas lancée.
+libavfilter < 11, `main()` éteint le GPU et le dit dans le log. La sonde rend
+alors `absent` partout.
 
 ## 9. Coût et limites
 
-**Coût au démarrage** : une estimation, non mesurée, de 0,5 à 1,5 s. Cela
-représente une vingtaine d'images en 320×240 par codec, et le lancement d'un
-processus. À mesurer au premier lot, avant de fixer le délai par défaut.
+**Coût mesuré** : 0,35 s pour tout le processus de sonde sur un Iris Xe, dont
+environ 220 ms de tests. `h264.encode` est le plus lent (93 ms). Sans GPU, la
+sonde rend la main tout de suite.
+
+**Un profil que le driver ne décode pas est un `echec`, pas un `absent`.** Le
+lot 0 ne sait pas distinguer « le driver ne propose pas ce codec » de « il le
+propose et échoue » : dans les deux cas, libavcodec passe en logiciel sans le
+dire. Seule une interrogation de libva (`vaQueryConfigProfiles`) ferait la
+différence (§11).
 
 **Capacité en charge** : hors sujet de la sonde. Le harnais de parallélisme
 (N mixeurs, sources H.264 GPU, mosaïque GPU, retaillage, encodage de sortie,
@@ -231,7 +270,7 @@ hors `make check`.
 
 | Lot | Contenu | Livrable vérifiable |
 |---|---|---|
-| 0 | Mode `--hwprobe` : capacités du §3, lignes du §6, sans effet sur le serveur | `mediaserver --hwprobe` sur ce poste, puis `LIBVA_DRIVER_NAME=aucun` |
+| 0 — **fait** | Mode `--hwprobe` : capacités du §3, lignes du §6, sans effet sur le serveur | `mediaserver --hwprobe` sur ce poste, puis `LIBVA_DRIVER_NAME=aucun` ; tests `HwProbe.*` |
 | 1 | Lancement par `main()`, délai, signal, lecture partielle | test : processus de sonde forcé à `abort()` en pleine capacité (variable d'environnement de test) |
 | 2 | Point de consultation libmedikit + application du §5 | tests : verdict injecté → codec logiciel, sans GPU |
 | 3 | Compteurs `VideoAccel` redéfinis (§5) | test : décodeur dont `get_format` échoue → compté logiciel, un repli compté |
@@ -241,10 +280,32 @@ Chaque test qui demande un GPU est préfixé `DISABLED_` et joué par
 `--gtest_also_run_disabled_tests`, comme `H264HwVaapi`. Chaque test qui
 simule un verdict tourne partout, dans `make check`.
 
+Tests du lot 0 (`mcu/tests/test_hwprobe.cpp`) :
+
+- `HwProbe.ChaqueCapaciteRecoitUnVerdict` tourne partout : chaque capacité
+  reçoit un verdict et une ligne bien formée, et tout est `absent` sans device ;
+- `HwProbe.DISABLED_ToutCeQueLeServeurUtiliseEstProuve` exige un GPU : device,
+  transferts, encodage H.264, décodage `42e01f` et `42801F`, retaillage et
+  mosaïque doivent être `ok`.
+
+Contre-épreuves faites en réintroduisant les défauts corrigés sur la branche :
+
+| Défaut réintroduit | Verdict de la sonde |
+|---|---|
+| ancien compositeur (device posé après le parse) | `mosaic echec composition retombee sur le CPU` |
+| décodeur sans tolérance de profil | `h264.decode.42801F echec 0/20 images sur GPU` |
+| surfaces en YUV420P | le processus de sonde meurt sur `pic->nb_dpb_pics < 16` pendant `h264.encode` ; les trois lignes déjà écrites restent lisibles |
+
+La dernière ligne montre pourquoi la sonde doit tourner hors du processus
+serveur (ADR 002) : dans le serveur, ce même abort aurait arrêté le service.
+
 ## 11. Questions ouvertes
 
 1. **Resonder en cours de vie ?** Après une mise à jour du driver, ou après N
    replis pendant l'exécution. Proposition : non, un redémarrage suffit, et la
    sonde reste un événement de démarrage.
-2. **Délai par défaut.** 10 s est une borne prudente. À réduire une fois le
-   coût du lot 0 mesuré.
+2. **Délai par défaut.** 10 s est une borne prudente pour 0,35 s mesurées.
+   Proposition : 5 s, qui laisse de la marge à un poste plus lent.
+3. **`absent` ou `echec` pour un codec que le driver ne propose pas ?**
+   Interroger libva demanderait de lier `libva` directement. Proposition : s'en
+   passer tant qu'aucun poste de production ne le demande.
