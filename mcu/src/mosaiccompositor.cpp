@@ -119,6 +119,7 @@ bool MosaicCompositor::Configure(const MosaicGraphDesc& desc)
 	return false;
 }
 
+#if LIBAVFILTER_VERSION_MAJOR >= 11
 // hwupload exige son device dès son init, que parse_ptr fait : seule l'API
 // segment permet de le poser entre la création des filtres et leur init.
 static int ParseWithDevice(AVFilterGraph* graph, const char* desc, AVBufferRef* device,
@@ -156,6 +157,7 @@ static int ParseWithDevice(AVFilterGraph* graph, const char* desc, AVBufferRef* 
 	avfilter_graph_segment_free(&seg);
 	return ret;
 }
+#endif
 
 bool MosaicCompositor::BuildGraph(bool gpu)
 {
@@ -432,8 +434,12 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	int ret = -1;
 	if (ok)
 	{
+#if LIBAVFILTER_VERSION_MAJOR >= 11
 		ret = gpu ? ParseWithDevice(graph, desc.c_str(), device, outputs, inputs)
 		          : avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
+#else
+		ret = avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
+#endif
 		if (ret >= 0)
 			ret = avfilter_graph_config(graph, NULL);
 		ok = (ret >= 0);

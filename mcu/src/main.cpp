@@ -38,6 +38,7 @@
 
 extern "C" {
 #include "libavcodec/avcodec.h"
+#include "libavfilter/version.h"
 }
 extern XmlHandlerCmd mcuCmdList[];
 extern XmlHandlerCmd broadcasterCmdList[];
@@ -435,6 +436,14 @@ int main(int argc,char **argv)
 		Pict::DisableVAAPI();
 		Log("-Acceleration materielle DESACTIVEE par --no-hwaccel : tout le traitement video se fera sur CPU\n");
 	}
+#if LIBAVFILTER_VERSION_MAJOR < 11
+	//La composition GPU exige l'API segment de libavfilter 11 (ffmpeg 8).
+	else
+	{
+		Pict::DisableVAAPI();
+		Log("-Acceleration materielle DESACTIVEE : libavfilter %d < 11 (ffmpeg 8 requis), tout le traitement video se fera sur CPU\n", LIBAVFILTER_VERSION_MAJOR);
+	}
+#else
 	//Sonde (et crée si possible) le device VAAPI partagé une bonne fois au
 	//démarrage — le même device que les décodeurs, les encodeurs et le graphe de
 	//composition des mosaïques utiliseront. Le verdict est ainsi visible en tête
@@ -443,6 +452,7 @@ int main(int argc,char **argv)
 		Log("-Acceleration materielle VAAPI DISPONIBLE : decodage/encodage/composition video sur GPU actives (repli CPU automatique au cas par cas)\n");
 	else
 		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
+#endif
 
 	//Table des profils d'adressage (NETWORK-CONFIGURATION.md) : ce que le serveur peut lier,
 	//et ce qu'il annonce. Construite ici, avant toute initialisation de serveur —
