@@ -38,7 +38,14 @@ public:
 		std::vector<std::string> audioEncode;
 		std::vector<std::string> videoDecode;
 		std::vector<std::string> videoEncode;
+		// Le device VAAPI partagé existe-t-il ? C'est une CAPACITÉ, pas un
+		// usage : les compteurs ci-dessous disent ce qui s'en sert vraiment.
 		bool		vaapi;
+		int		videoEncoders;		// encodeurs vidéo ouverts
+		int		videoEncodersHw;	// ... dont matériels
+		int		videoDecoders;		// décodeurs vidéo ouverts
+		int		videoDecodersHw;	// ... dont matériels
+		int		hwFallbacks;		// replis GPU -> CPU depuis le démarrage
 
 		// Texte temps réel, par transport
 		bool		textRtp;	// T.140 sur RTP (RFC 4103)

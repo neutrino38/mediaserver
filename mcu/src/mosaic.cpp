@@ -144,7 +144,8 @@ MosaicGraphDesc Mosaic::BuildDesc()
 		s.inW    = f->width;
 		s.inH    = f->height;
 		s.inFmt  = f->format;
-		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU (clé de reconfig)
+		s.hwFramesCtx = f->hw_frames_ctx;   // non nul ssi trame GPU
+		s.hwFrames    = f->hw_frames_ctx ? f->hw_frames_ctx->data : nullptr;
 		if (pic->IsGPUPict())
 			anyGPUInput = true;
 
@@ -205,7 +206,8 @@ MosaicGraphDesc Mosaic::BuildDesc()
 	// sans entrée GPU, tout monter en VRAM serait une pure perte (uploads puis
 	// probable redescente côté encodeur logiciel). Le compositor peut encore
 	// replier en CPU (échec de config, slots superposés type PIP).
-	desc.wantGPU = anyGPUInput && Pict::GetVAAPIDevice() != nullptr;
+	desc.wantGPU = anyGPUInput && Pict::GetVAAPIDevice() != nullptr
+	            && !VideoAccel::IsHwRefused("mosaic");
 
 	return desc;
 }

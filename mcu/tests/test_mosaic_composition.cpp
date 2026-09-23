@@ -594,7 +594,94 @@ TEST(MosaicCompositorGpu, GpuRequestStillComposesEverywhere)
 		// Machine sans GPU : composite CPU, pixels vérifiables.
 		EXPECT_EQ(AV_PIX_FMT_YUV420P, out->GetAVFrame()->format);
 		EXPECT_NEAR(90, LumaAt(out, 320, 180), 2);
+		return;
 	}
+	// Machine avec GPU : le repli CPU serait silencieux, c'est lui qu'on refuse.
+	ASSERT_EQ(AV_PIX_FMT_VAAPI, out->GetAVFrame()->format)
+		<< "graphe VAAPI en echec, composition retombee sur le CPU";
+	PictPtr cpu = out->DownloadToCPU();
+	ASSERT_TRUE(cpu != nullptr);
+	EXPECT_NEAR(90, LumaAt(cpu, 320, 180), 2);
+}
+
+// Le cas de production : un décodeur VAAPI livre des surfaces, le slot n'a donc
+// pas de hwupload et seul le fond en porte un.
+TEST(MosaicCompositorGpu, GpuSurfaceSlotComposesOnGpu)
+{
+	if (!Pict::GetVAAPIDevice())
+		GTEST_SKIP() << "pas de device VAAPI";
+
+	PictPtr gpuIn;
+	ASSERT_EQ(0, SolidPict(640, 480, 90)->UploadToGPU(gpuIn));
+	ASSERT_TRUE(gpuIn && gpuIn->IsGPUPict());
+
+	MosaicGraphDesc d;
+	d.width   = 1280;
+	d.height  = 720;
+	d.wantGPU = true;
+
+	MosaicSlotDesc s;
+	s.pos = 0; s.x = 82; s.y = 2; s.w = 474; s.h = 356; s.border = 2;
+	s.inW = 640; s.inH = 480; s.inFmt = AV_PIX_FMT_VAAPI;
+	s.hwFramesCtx = gpuIn->GetAVFrame()->hw_frames_ctx;
+	d.slots.push_back(s);
+
+	MosaicCompositor comp;
+	ASSERT_TRUE(comp.Configure(d));
+
+	PictPtr out = comp.Compose({ gpuIn }, std::vector<PictPtr>(),
+	                           SolidPict(1280, 720, 128), nullptr);
+	ASSERT_TRUE(out != nullptr);
+	ASSERT_EQ(AV_PIX_FMT_VAAPI, out->GetAVFrame()->format)
+		<< "graphe VAAPI en echec, composition retombee sur le CPU";
+	PictPtr cpu = out->DownloadToCPU();
+	ASSERT_TRUE(cpu != nullptr);
+	EXPECT_NEAR(90, LumaAt(cpu, 320, 180), 2);
+}
+
+// Un décodeur rend chaque image dans une trame neuve, avec sa propre référence
+// vers le même pool : la description ne doit pas changer d'une image à l'autre,
+// sinon le graphe GPU est reconstruit à chaque tick.
+TEST(MosaicCompositorGpu, SameGpuPoolKeepsTheGraph)
+{
+	if (!Pict::GetVAAPIDevice())
+		GTEST_SKIP() << "pas de device VAAPI";
+
+	PictPtr gpuIn;
+	ASSERT_EQ(0, SolidPict(640, 360, 90)->UploadToGPU(gpuIn));
+
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	m->Update(0, std::make_shared<Pict>(av_frame_clone(gpuIn->GetAVFrame())));
+	MosaicGraphDesc first = MosaicProbe::Desc(*m);
+	m->Update(0, std::make_shared<Pict>(av_frame_clone(gpuIn->GetAVFrame())));
+	MosaicGraphDesc second = MosaicProbe::Desc(*m);
+
+	ASSERT_EQ(1u, first.slots.size());
+	EXPECT_TRUE(first == second) << "meme pool, graphe reconstruit";
+}
+
+// La sonde de démarrage a vu la mosaïque GPU échouer : la description ne la
+// demande plus, même avec une entrée GPU. Sous-processus relancé : le refus est
+// définitif, et un fork hériterait d'un état libva inutilisable.
+static int RefusedMosaicWantsNoGpu()
+{
+	PictPtr gpuIn;
+	if (SolidPict(640, 360, 90)->UploadToGPU(gpuIn) != 0)
+		return 2;
+	auto m = MakeMosaic(Mosaic::mosaic2x2);
+	m->Update(0, gpuIn);
+	if (!MosaicProbe::Desc(*m).wantGPU)
+		return 3;
+	VideoAccel::RefuseHw("mosaic");
+	return MosaicProbe::Desc(*m).wantGPU ? 1 : 0;
+}
+
+TEST(MosaicCompositorGpu, UneMosaiqueRefuseeNeDemandePlusLeGpu)
+{
+	if (!Pict::GetVAAPIDevice())
+		GTEST_SKIP() << "pas de device VAAPI";
+	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	EXPECT_EXIT(exit(RefusedMosaicWantsNoGpu()), ::testing::ExitedWithCode(0), "");
 }
 
 // Slots superposés (PIP) : le liseré GPU est peint dans le fond, qui serait

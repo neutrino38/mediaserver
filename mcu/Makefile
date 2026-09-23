@@ -98,7 +98,7 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
-OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o
+OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o hwprobe.o
 
 OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ)
 TARGETS=mcu rtmptest
@@ -316,7 +316,14 @@ install:
 .PHONY: mcu
 mcu: $(BIN)/mcu
 
-$(BIN)/mcu: $(OBJSMCU) | $(BUILD) $(BIN)
+# libmedkit.a en prerequis : sans lui, un sous-module rebati ne reliait RIEN ici,
+# et l'on testait un binaire portant l'ANCIENNE bibliotheque sans qu'aucun message
+# ne le signale. Passe par $(wildcard) : sur un arbre neuf ou le sous-module n'est
+# pas encore bati, la dependance disparait au lieu de faire echouer make sur une
+# cible sans regle -- le lien, lui, dira ce qui manque.
+MEDKITLIB = $(wildcard $(MEDKITDIR)/libmedkit.a)
+
+$(BIN)/mcu: $(OBJSMCU) $(MEDKITLIB) | $(BUILD) $(BIN)
 	$(CXX) -o $@ $(BUILDOBJSMCU) $(LDFLAGS) $(VADLD)
 
 rtmptest: $(OBJSRTMPTEST)
@@ -359,7 +366,7 @@ TESTBIN = tests/runtests$(if $(filter-out debug,$(TAG)),-$(TAG),)
 # $(BUILD) en prerequis ORDER-ONLY, pas `mkdirs` : celui-ci n'etant pas un fichier,
 # il etait toujours plus recent que tests/runtests et forcait la recompilation de
 # TOUTE la suite gtest a chaque `make check`, meme sans modification.
-$(TESTBIN): $(OBJS) $(TESTSRCS) | $(BUILD)
+$(TESTBIN): $(OBJS) $(TESTSRCS) $(MEDKITLIB) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) -DTEST_PCAP_FILE='"$(TEST_PCAP)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
 		-o $(TESTBIN) $(LDFLAGS) $(VADLD) $(GTEST_LIBS)

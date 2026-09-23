@@ -25,17 +25,24 @@
 #include <thread>
 
 #include "log.h"
+#include "hwprobe.h"
+
+// libmedikit route ses Log()/Debug()/Error() par des pointeurs de fonctions
+// (SetLogFunctions). SANS BRANCHEMENT ILS SONT PERDUS — erreurs comprises —, et
+// la suite devient aveugle à la moitié du code qu'elle exerce : une panne du
+// sous-module s'y présente comme un test rouge sans le moindre message. C'est ce
+// qui a masqué l'échec de configuration du graphe VAAPI du VideoRescaler.
+//
+// Déclaré à la main plutôt qu'inclus : les extern "C" Log/Debug/Error de
+// <medkit/log.h> entrent en conflit avec les inline d'include/log.h (même raison
+// que dans main.cpp).
+extern "C" void SetLogFunctions(int (*dbg)(const char*, va_list),
+				int (*log)(const char*, va_list),
+				int (*err)(const char*, va_list));
 
 namespace {
 
 // Chien de garde : un test qui se FIGE ne doit pas figer la suite.
-//
-// Mesurer la durée d'un arrêt ne protège que d'un arrêt lent. Quand une course
-// de démontage se déclenche — le pont texte WebSocket l'a fait le 2026-09-22,
-// et le démontage RTMP est connu pour bloquer une fois sur dix —, un thread
-// tourne, le join ne rend jamais la main, et `make check` attend sans fin sans
-// même dire où. Ce chien de garde nomme le test et tue le processus : un échec
-// se lit, un gel ne se lit pas.
 //
 // Budget PAR TEST : GTEST_MCU_WATCHDOG_S (défaut 120 s, 0 = désarmé). Aucun
 // test légitime de cette suite ne s'en approche, le plus lent tenant en
@@ -103,6 +110,26 @@ private:
 
 TestWatchdog g_watchdog;
 
+int MedkitLogCb(const char *msg, va_list ap)
+{
+	printf("[medkit] ");
+	vprintf(msg, ap);
+	fflush(stdout);
+	return 1;
+}
+
+int MedkitDebugCb(const char *msg, va_list ap)
+{
+	if (!Logger::IsDebugEnabled())
+		return 1;
+
+	printf("[medkit][DBG] ");
+	vprintf(msg, ap);
+	fflush(stdout);
+	return 1;
+}
+
+
 // Environment global : SetUp() une fois avant tous les tests.
 class McuEnvironment : public ::testing::Environment
 {
@@ -115,6 +142,10 @@ public:
 		// Passer GTEST_MCU_DEBUG=1 dans l'environnement pour tout tracer.
 		const char* dbg = getenv("GTEST_MCU_DEBUG");
 		Logger::EnableDebug(dbg && dbg[0]=='1');
+
+		// Les messages de libmedikit sortent avec ceux du mcu, préfixés pour qu'on
+		// sache lequel des deux parle. Les Debug() suivent le même interrupteur.
+		SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitLogCb);
 
 		// Comme main.cpp : écrire dans un socket que le pair a fermé est un cas
 		// NORMAL de fin de connexion. Sans cette ligne, le SIGPIPE par défaut tue
@@ -144,6 +175,14 @@ TEST(Smoke, LogFunctionsWork)
 // main() propre à l'exécutable (cf. en-tête).
 int main(int argc, char** argv)
 {
+	// Même mode que le binaire mcu : RunHwProbeChild relance /proc/self/exe,
+	// qui est ici runtests.
+	if (argc == 2 && strcmp(argv[1], "--hwprobe") == 0)
+	{
+		SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitLogCb);
+		RunHwProbe(stdout);
+		return 0;
+	}
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }

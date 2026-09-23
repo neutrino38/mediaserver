@@ -29,6 +29,7 @@
 #include "amf.h"
 #include "dtls.h"
 #include "video.h"
+#include "hwprobe.h"
 #include <openssl/crypto.h>
 
 #ifdef MOTELI
@@ -38,6 +39,7 @@
 
 extern "C" {
 #include "libavcodec/avcodec.h"
+#include "libavfilter/version.h"
 }
 extern XmlHandlerCmd mcuCmdList[];
 extern XmlHandlerCmd broadcasterCmdList[];
@@ -162,6 +164,10 @@ int main(int argc,char **argv)
 	const char* defaultProfile = NULL;
 	const char* stunIp        = NULL;
 	int vadPeriod = 5000;
+	//Accélération matérielle : ALLUMÉE par défaut, éteinte par --no-hwaccel.
+	bool useHwaccel = true;
+	bool hwprobe = false;
+	int hwprobeTimeout = 10;
 	//Délai de grâce (s) sans long-poll sur une file d'événements avant
 	//destruction de la file et des objets qui en dépendent (0 = désactivé).
 	//Commun à toutes les API de contrôle (JSR309 aujourd'hui, MCU à venir).
@@ -227,6 +233,17 @@ int main(int argc,char **argv)
 				"                  Extra certificate authority (PEM) trusted for wss:// servers we\r\n"
 				"                  connect to, on top of the system store\r\n"
 				" --vad-period     Set the VAD based conference change period in milliseconds\r\n"
+				" --no-hwaccel     Keep video decoding, encoding and mosaic composition on the CPU.\r\n"
+				"                  By default they are offloaded to the GPU through VAAPI when a\r\n"
+				"                  device is found, with a per-case fallback to CPU. With this\r\n"
+				"                  option the device is not even opened: use it when the VAAPI\r\n"
+				"                  driver misbehaves. /status/general tells what actually runs on it\r\n"
+				" --hwprobe        Test each GPU capability on real pictures, print one\r\n"
+				"                  \"hwprobe <capability> <ok|absent|echec> <detail>\" line per\r\n"
+				"                  verdict, then exit without starting any server\r\n"
+				" --hwprobe-timeout\r\n"
+				"                  Seconds granted at startup to the GPU probe, which runs in a\r\n"
+				"                  child process (default: 10)\r\n"
 				" --event-queue-expires\r\n"
 				"                  Grace period, in seconds, before an event queue with no\r\n"
 				"                  long-poll client is destroyed together with the media sessions\r\n"
@@ -296,6 +313,13 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--vad-period")==0 && (i+1<=argc))
 			//Get rtmp port
 			vadPeriod = atoi(argv[++i]);
+		else if (strcmp(argv[i],"--no-hwaccel")==0)
+			//Tout le traitement video reste sur CPU
+			useHwaccel = false;
+		else if (strcmp(argv[i],"--hwprobe")==0)
+			hwprobe = true;
+		else if (strcmp(argv[i],"--hwprobe-timeout")==0 && (i+1<argc))
+			hwprobeTimeout = atoi(argv[++i]);
 		else if (strcmp(argv[i],"--event-queue-expires")==0 && (i+1<argc))
 			//Délai de grâce sans long-poll (0 = désactive le nettoyage)
 			eventQueueExpires = atoi(argv[++i]);
@@ -407,6 +431,55 @@ int main(int argc,char **argv)
 	//Hack to allocate fd =0 and avoid bug closure
 	int fdzero = socket(AF_INET, SOCK_STREAM, 0);
 
+	//Accélération matérielle : éteinte si --no-hwaccel le demande.
+	//L'extinction a lieu AVANT la sonde qui suit, donc avant que le moindre
+	//codec ait pu prendre une référence sur le device — un device déjà distribué
+	//survivrait chez son porteur.
+	if (!useHwaccel)
+	{
+		Pict::DisableVAAPI();
+		Log("-Acceleration materielle DESACTIVEE par --no-hwaccel : tout le traitement video se fera sur CPU\n");
+	}
+#if LIBAVFILTER_VERSION_MAJOR < 11
+	//La composition GPU exige l'API segment de libavfilter 11 (ffmpeg 8).
+	else
+	{
+		Pict::DisableVAAPI();
+		Log("-Acceleration materielle DESACTIVEE : libavfilter %d < 11 (ffmpeg 8 requis), tout le traitement video se fera sur CPU\n", LIBAVFILTER_VERSION_MAJOR);
+	}
+#else
+	else
+	{
+		//Sonde hors processus (ADR 002), AVANT que ce processus n'ouvre le
+		//device : un driver qui tue la sonde ne tue pas le serveur.
+		if (!hwprobe)
+		{
+			std::vector<HwProbeVerdict> verdicts = RunHwProbeChild(hwprobeTimeout);
+			for (const HwProbeVerdict& v : verdicts)
+				if (v.state == HwProbeState::Failed)
+					Error("-hwprobe %s %s %s\n", v.capability.c_str(), HwProbeStateName(v.state), v.detail.c_str());
+				else
+					Log("-hwprobe %s %s %s\n", v.capability.c_str(), HwProbeStateName(v.state), v.detail.c_str());
+			ApplyHwProbe(verdicts);
+		}
+		//Sonde (et crée si possible) le device VAAPI partagé une bonne fois au
+		//démarrage — le même device que les décodeurs, les encodeurs et le graphe de
+		//composition des mosaïques utiliseront. Le verdict est ainsi visible en tête
+		//de log plutôt que découvert au premier appel.
+		if (Pict::GetVAAPIDevice())
+			Log("-Acceleration materielle VAAPI DISPONIBLE : decodage/encodage/composition video sur GPU actives (repli CPU automatique au cas par cas)\n");
+		else
+			Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
+	}
+#endif
+
+	//Mode sonde : juge le GPU et sort, sans démarrer aucun serveur.
+	if (hwprobe)
+	{
+		RunHwProbe(stdout);
+		return 0;
+	}
+
 	//Create servers
 	XmlRpcServer	server(port);
 	RTMPServer	rtmpServer;
@@ -415,16 +488,6 @@ int main(int argc,char **argv)
 	//Log version
 	Log("-MCU Version %s %s\r\n",MCUVERSION,MCUDATE);
         gserver = &server;
-
-	//Accélération matérielle : sonde (et crée si possible) le device VAAPI
-	//partagé une bonne fois au démarrage — le même device que les décodeurs,
-	//les encodeurs et le graphe de composition des mosaïques utiliseront.
-	//Le verdict est ainsi visible en tête de log plutôt que découvert au
-	//premier appel.
-	if (Pict::GetVAAPIDevice())
-		Log("-Acceleration materielle VAAPI DISPONIBLE : decodage/encodage/composition video sur GPU actives (repli CPU automatique au cas par cas)\n");
-	else
-		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 
 	//Table des profils d'adressage (NETWORK-CONFIGURATION.md) : ce que le serveur peut lier,
 	//et ce qu'il annonce. Construite ici, avant toute initialisation de serveur —
