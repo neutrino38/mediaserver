@@ -119,6 +119,44 @@ bool MosaicCompositor::Configure(const MosaicGraphDesc& desc)
 	return false;
 }
 
+// hwupload exige son device dès son init, que parse_ptr fait : seule l'API
+// segment permet de le poser entre la création des filtres et leur init.
+static int ParseWithDevice(AVFilterGraph* graph, const char* desc, AVBufferRef* device,
+                           AVFilterInOut* srcs, AVFilterInOut* sink)
+{
+	AVFilterGraphSegment* seg = NULL;
+	AVFilterInOut* ins  = NULL;
+	AVFilterInOut* outs = NULL;
+
+	int ret = avfilter_graph_segment_parse(graph, desc, 0, &seg);
+	if (ret >= 0)
+		ret = avfilter_graph_segment_create_filters(seg, 0);
+	if (ret >= 0)
+		for (unsigned i = 0; i < graph->nb_filters; i++)
+			if (!graph->filters[i]->hw_device_ctx)
+				graph->filters[i]->hw_device_ctx = av_buffer_ref(device);
+	if (ret >= 0)
+		ret = avfilter_graph_segment_apply(seg, 0, &ins, &outs);
+
+	for (AVFilterInOut* in = ins; ret >= 0 && in; in = in->next)
+	{
+		AVFilterInOut* src = srcs;
+		while (src && (!in->name || strcmp(src->name, in->name)))
+			src = src->next;
+		ret = src ? avfilter_link(src->filter_ctx, src->pad_idx, in->filter_ctx, in->pad_idx)
+		          : AVERROR(EINVAL);
+	}
+	for (AVFilterInOut* out = outs; ret >= 0 && out; out = out->next)
+		ret = out->name && !strcmp(out->name, sink->name)
+		    ? avfilter_link(out->filter_ctx, out->pad_idx, sink->filter_ctx, sink->pad_idx)
+		    : AVERROR(EINVAL);
+
+	avfilter_inout_free(&ins);
+	avfilter_inout_free(&outs);
+	avfilter_graph_segment_free(&seg);
+	return ret;
+}
+
 bool MosaicCompositor::BuildGraph(bool gpu)
 {
 	if (cur.width <= 0 || cur.height <= 0)
@@ -394,16 +432,8 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	int ret = -1;
 	if (ok)
 	{
-		ret = avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
-		if (ret >= 0 && gpu)
-		{
-			// Équivalent du -filter_hw_device de ffmpeg : les hwupload (et tout
-			// filtre créé par le parse qui en aurait besoin) reçoivent le device
-			// VAAPI partagé AVANT la config, faute de quoi la négociation échoue.
-			for (unsigned i = 0; i < graph->nb_filters; i++)
-				if (!graph->filters[i]->hw_device_ctx)
-					graph->filters[i]->hw_device_ctx = av_buffer_ref(device);
-		}
+		ret = gpu ? ParseWithDevice(graph, desc.c_str(), device, outputs, inputs)
+		          : avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
 		if (ret >= 0)
 			ret = avfilter_graph_config(graph, NULL);
 		ok = (ret >= 0);

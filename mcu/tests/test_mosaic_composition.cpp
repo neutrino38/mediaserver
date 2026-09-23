@@ -594,7 +594,49 @@ TEST(MosaicCompositorGpu, GpuRequestStillComposesEverywhere)
 		// Machine sans GPU : composite CPU, pixels vérifiables.
 		EXPECT_EQ(AV_PIX_FMT_YUV420P, out->GetAVFrame()->format);
 		EXPECT_NEAR(90, LumaAt(out, 320, 180), 2);
+		return;
 	}
+	// Machine avec GPU : le repli CPU serait silencieux, c'est lui qu'on refuse.
+	ASSERT_EQ(AV_PIX_FMT_VAAPI, out->GetAVFrame()->format)
+		<< "graphe VAAPI en echec, composition retombee sur le CPU";
+	PictPtr cpu = out->DownloadToCPU();
+	ASSERT_TRUE(cpu != nullptr);
+	EXPECT_NEAR(90, LumaAt(cpu, 320, 180), 2);
+}
+
+// Le cas de production : un décodeur VAAPI livre des surfaces, le slot n'a donc
+// pas de hwupload et seul le fond en porte un.
+TEST(MosaicCompositorGpu, GpuSurfaceSlotComposesOnGpu)
+{
+	if (!Pict::GetVAAPIDevice())
+		GTEST_SKIP() << "pas de device VAAPI";
+
+	PictPtr gpuIn;
+	ASSERT_EQ(0, SolidPict(640, 480, 90)->UploadToGPU(gpuIn));
+	ASSERT_TRUE(gpuIn && gpuIn->IsGPUPict());
+
+	MosaicGraphDesc d;
+	d.width   = 1280;
+	d.height  = 720;
+	d.wantGPU = true;
+
+	MosaicSlotDesc s;
+	s.pos = 0; s.x = 82; s.y = 2; s.w = 474; s.h = 356; s.border = 2;
+	s.inW = 640; s.inH = 480; s.inFmt = AV_PIX_FMT_VAAPI;
+	s.hwFramesCtx = gpuIn->GetAVFrame()->hw_frames_ctx;
+	d.slots.push_back(s);
+
+	MosaicCompositor comp;
+	ASSERT_TRUE(comp.Configure(d));
+
+	PictPtr out = comp.Compose({ gpuIn }, std::vector<PictPtr>(),
+	                           SolidPict(1280, 720, 128), nullptr);
+	ASSERT_TRUE(out != nullptr);
+	ASSERT_EQ(AV_PIX_FMT_VAAPI, out->GetAVFrame()->format)
+		<< "graphe VAAPI en echec, composition retombee sur le CPU";
+	PictPtr cpu = out->DownloadToCPU();
+	ASSERT_TRUE(cpu != nullptr);
+	EXPECT_NEAR(90, LumaAt(cpu, 320, 180), 2);
 }
 
 // Slots superposés (PIP) : le liseré GPU est peint dans le fond, qui serait
