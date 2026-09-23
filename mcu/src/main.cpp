@@ -29,6 +29,7 @@
 #include "amf.h"
 #include "dtls.h"
 #include "video.h"
+#include "hwprobe.h"
 #include <openssl/crypto.h>
 
 #ifdef MOTELI
@@ -165,6 +166,7 @@ int main(int argc,char **argv)
 	int vadPeriod = 5000;
 	//Accélération matérielle : ALLUMÉE par défaut, éteinte par --no-hwaccel.
 	bool useHwaccel = true;
+	bool hwprobe = false;
 	//Délai de grâce (s) sans long-poll sur une file d'événements avant
 	//destruction de la file et des objets qui en dépendent (0 = désactivé).
 	//Commun à toutes les API de contrôle (JSR309 aujourd'hui, MCU à venir).
@@ -235,6 +237,9 @@ int main(int argc,char **argv)
 				"                  device is found, with a per-case fallback to CPU. With this\r\n"
 				"                  option the device is not even opened: use it when the VAAPI\r\n"
 				"                  driver misbehaves. /status/general tells what actually runs on it\r\n"
+				" --hwprobe        Test each GPU capability on real pictures, print one\r\n"
+				"                  \"hwprobe <capability> <ok|absent|echec> <detail>\" line per\r\n"
+				"                  verdict, then exit without starting any server\r\n"
 				" --event-queue-expires\r\n"
 				"                  Grace period, in seconds, before an event queue with no\r\n"
 				"                  long-poll client is destroyed together with the media sessions\r\n"
@@ -307,6 +312,8 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--no-hwaccel")==0)
 			//Tout le traitement video reste sur CPU
 			useHwaccel = false;
+		else if (strcmp(argv[i],"--hwprobe")==0)
+			hwprobe = true;
 		else if (strcmp(argv[i],"--event-queue-expires")==0 && (i+1<argc))
 			//Délai de grâce sans long-poll (0 = désactive le nettoyage)
 			eventQueueExpires = atoi(argv[++i]);
@@ -418,15 +425,6 @@ int main(int argc,char **argv)
 	//Hack to allocate fd =0 and avoid bug closure
 	int fdzero = socket(AF_INET, SOCK_STREAM, 0);
 
-	//Create servers
-	XmlRpcServer	server(port);
-	RTMPServer	rtmpServer;
-	WebSocketServer wsServer;
-
-	//Log version
-	Log("-MCU Version %s %s\r\n",MCUVERSION,MCUDATE);
-        gserver = &server;
-
 	//Accélération matérielle : éteinte si --no-hwaccel le demande.
 	//L'extinction a lieu AVANT la sonde qui suit, donc avant que le moindre
 	//codec ait pu prendre une référence sur le device — un device déjà distribué
@@ -453,6 +451,22 @@ int main(int argc,char **argv)
 	else
 		Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 #endif
+
+	//Mode sonde : juge le GPU et sort, sans démarrer aucun serveur.
+	if (hwprobe)
+	{
+		RunHwProbe(stdout);
+		return 0;
+	}
+
+	//Create servers
+	XmlRpcServer	server(port);
+	RTMPServer	rtmpServer;
+	WebSocketServer wsServer;
+
+	//Log version
+	Log("-MCU Version %s %s\r\n",MCUVERSION,MCUDATE);
+        gserver = &server;
 
 	//Table des profils d'adressage (NETWORK-CONFIGURATION.md) : ce que le serveur peut lier,
 	//et ce qu'il annonce. Construite ici, avant toute initialisation de serveur —
