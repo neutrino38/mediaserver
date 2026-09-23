@@ -1,7 +1,16 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <deque>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "log.h"
 #include "hwprobe.h"
 #include "mosaiccompositor.h"
@@ -340,6 +349,39 @@ Outcome ProbeMosaic(const PictPtr& gpuMire)
 	return Ok("slot GPU, slot CPU, lisere et fond justes");
 }
 
+// 42801F : SPS rabattu sur 0x80, ce que déclare un terminal SIP (l'encodeur,
+// lui, pose constraint_set1).
+const struct { const char* plid; int spsFlags; } Profiles[] = {
+	{ "42e01f", -1 }, { "42801F", 0x80 }, { "4d001f", -1 }, { "64001f", -1 },
+};
+
+// Simule une sonde tuée ou bloquée par le driver (cf. hwprobe.h).
+void InjectFault(const std::string& capability)
+{
+	const char* fault = getenv("MCU_HWPROBE_FAULT");
+	if (!fault)
+		return;
+	std::string f(fault);
+	if (f == "abort:" + capability)
+	{
+		rlimit noCore = { 0, 0 };
+		setrlimit(RLIMIT_CORE, &noCore);
+		abort();
+	}
+	if (f == "hang:" + capability)
+		for (;;)
+			pause();
+}
+
+HwProbeState ParseState(const std::string& s, bool& known)
+{
+	known = true;
+	if (s == "ok")     return HwProbeState::Ok;
+	if (s == "absent") return HwProbeState::Absent;
+	known = (s == "echec");
+	return HwProbeState::Failed;
+}
+
 } // namespace
 
 const char* HwProbeStateName(HwProbeState state)
@@ -352,6 +394,19 @@ const char* HwProbeStateName(HwProbeState state)
 	}
 }
 
+const std::vector<std::string>& HwProbeCapabilities()
+{
+	static const std::vector<std::string> caps = [] {
+		std::vector<std::string> c = { "device", "upload", "download", "h264.encode" };
+		for (const auto& p : Profiles)
+			c.push_back(std::string("h264.decode.") + p.plid);
+		for (const char* n : { "h264.decode", "vp8.decode", "vp8.encode", "av1.decode", "scale", "mosaic" })
+			c.push_back(n);
+		return c;
+	}();
+	return caps;
+}
+
 std::vector<HwProbeVerdict> RunHwProbe(FILE* out)
 {
 	std::vector<HwProbeVerdict> verdicts;
@@ -359,6 +414,7 @@ std::vector<HwProbeVerdict> RunHwProbe(FILE* out)
 
 	auto judge = [&](const std::string& capability, const std::function<Outcome()>& probe)
 	{
+		InjectFault(capability);
 		auto start = std::chrono::steady_clock::now();
 		Outcome o = device ? probe() : Absent("pas de device VAAPI");
 		long ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
@@ -376,13 +432,8 @@ std::vector<HwProbeVerdict> RunHwProbe(FILE* out)
 	judge("download", [&] { return ProbeDownload(gpuMire); });
 	judge("h264.encode", [] { return ProbeH264Encode(); });
 
-	// 42801F : SPS rabattu sur 0x80, ce que déclare un terminal SIP (l'encodeur,
-	// lui, pose constraint_set1).
-	const struct { const char* plid; int spsFlags; } profiles[] = {
-		{ "42e01f", -1 }, { "42801F", 0x80 }, { "4d001f", -1 }, { "64001f", -1 },
-	};
 	std::string okProfiles;
-	for (const auto& p : profiles)
+	for (const auto& p : Profiles)
 	{
 		judge(std::string("h264.decode.") + p.plid, [&] { return ProbeH264Decode(p.plid, p.spsFlags); });
 		if (verdicts.back().state == HwProbeState::Ok)
@@ -397,5 +448,111 @@ std::vector<HwProbeVerdict> RunHwProbe(FILE* out)
 	judge("av1.decode", [] { return Absent("AV1Decoder decode par libdav1d, logiciel"); });
 	judge("scale", [&] { return ProbeScale(gpuMire); });
 	judge("mosaic", [&] { return ProbeMosaic(gpuMire); });
+	return verdicts;
+}
+
+std::vector<HwProbeVerdict> RunHwProbeChild(int timeoutSecs)
+{
+	std::vector<HwProbeVerdict> received;
+	// Les logs de l'enfant partagent sa sortie : on garde les derniers, qui
+	// disent pourquoi il est mort (assertion de libavcodec, par exemple).
+	std::deque<std::string> lastLogs;
+	std::string cause;
+
+	int fds[2];
+	if (pipe2(fds, O_CLOEXEC) < 0)
+		cause = std::string("pipe : ") + strerror(errno);
+	pid_t pid = cause.empty() ? fork() : -1;
+	if (pid == 0)
+	{
+		dup2(fds[1], STDOUT_FILENO);
+		execl("/proc/self/exe", "mediaserver", "--hwprobe", (char*)NULL);
+		_exit(127);
+	}
+	if (cause.empty() && pid < 0)
+		cause = std::string("fork : ") + strerror(errno);
+
+	if (pid > 0)
+	{
+		close(fds[1]);
+		auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSecs);
+		std::string pending;
+		bool timedOut = false;
+		for (;;)
+		{
+			long left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+			if (left <= 0)
+			{
+				timedOut = true;
+				break;
+			}
+			pollfd pfd = { fds[0], POLLIN, 0 };
+			if (poll(&pfd, 1, (int)left) <= 0)
+				continue;
+			char buf[1024];
+			ssize_t n = read(fds[0], buf, sizeof(buf));
+			if (n <= 0)
+				break;
+			pending.append(buf, n);
+			size_t eol;
+			while ((eol = pending.find('\n')) != std::string::npos)
+			{
+				std::string line = pending.substr(0, eol);
+				pending.erase(0, eol + 1);
+				char cap[64], state[16];
+				int used = 0;
+				bool known = false;
+				if (line.rfind("hwprobe ", 0) == 0
+				    && sscanf(line.c_str(), "hwprobe %63s %15s %n", cap, state, &used) == 2)
+				{
+					HwProbeState st = ParseState(state, known);
+					if (known)
+					{
+						received.push_back({ cap, st, line.substr(used) });
+						continue;
+					}
+				}
+				lastLogs.push_back(line);
+				if (lastLogs.size() > 5)
+					lastLogs.pop_front();
+			}
+		}
+		close(fds[0]);
+
+		if (timedOut)
+			kill(pid, SIGKILL);
+		int status = 0;
+		waitpid(pid, &status, 0);
+		if (timedOut)
+			cause = "delai depasse (" + std::to_string(timeoutSecs) + " s)";
+		else if (WIFSIGNALED(status))
+			cause = "sonde tuee par le signal " + std::to_string(WTERMSIG(status))
+			      + " (" + strsignal(WTERMSIG(status)) + ")";
+		else if (WEXITSTATUS(status) != 0)
+			cause = "sonde sortie avec le code " + std::to_string(WEXITSTATUS(status));
+	}
+
+	std::vector<HwProbeVerdict> verdicts;
+	const std::vector<std::string>& caps = HwProbeCapabilities();
+	size_t next = 0;
+	for (const std::string& cap : caps)
+	{
+		if (next < received.size() && received[next].capability == cap)
+		{
+			verdicts.push_back(received[next++]);
+			continue;
+		}
+		if (cause.empty())
+			cause = "verdict manquant";
+		bool first = verdicts.size() == next;
+		verdicts.push_back({ cap, HwProbeState::Failed, first ? cause : "non testee" });
+	}
+
+	if (verdicts.size() != next)
+	{
+		Error("-hwprobe: la sonde s'est arretee avant la fin : %s\n", cause.c_str());
+		for (const std::string& l : lastLogs)
+			Error("-hwprobe:   %s\n", l.c_str());
+	}
 	return verdicts;
 }

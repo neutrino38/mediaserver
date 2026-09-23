@@ -25,7 +25,10 @@
 #include <cstdarg>
 #include <cstdio>
 
+#include <cstring>
+
 #include "log.h"
+#include "hwprobe.h"
 
 // libmedikit route ses Log()/Debug()/Error() par des pointeurs de fonctions
 // (SetLogFunctions). SANS BRANCHEMENT ILS SONT PERDUS — erreurs comprises —, et
@@ -100,6 +103,14 @@ TEST(Smoke, LogFunctionsWork)
 // par libwebrtc_audio_processing.so).
 int main(int argc, char** argv)
 {
+	// Même mode que le binaire mcu : RunHwProbeChild relance /proc/self/exe,
+	// qui est ici runtests.
+	if (argc == 2 && strcmp(argv[1], "--hwprobe") == 0)
+	{
+		SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitLogCb);
+		RunHwProbe(stdout);
+		return 0;
+	}
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }
