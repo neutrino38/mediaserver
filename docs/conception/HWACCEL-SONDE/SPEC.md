@@ -1,8 +1,9 @@
 # Sonde d'accélération matérielle au démarrage
 
-> Statut : **lots 0 et 1 faits** — le mode `mediaserver --hwprobe`, et son
-> lancement par `main()` à chaque démarrage (§6, §10). Les lots 2 à 4 sont à
-> faire : aujourd'hui, la sonde est journalisée mais ne décide encore rien.
+> Statut : **lots 0 à 2 faits** — le mode `mediaserver --hwprobe`, son
+> lancement par `main()` à chaque démarrage, et l'application des verdicts
+> (§5, §6, §10). Les lots 3 et 4 sont à faire : les compteurs `VideoAccel` et
+> `/status/general` ne reflètent pas encore les verdicts.
 > Décision d'architecture : [ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
 > Prérequis : ffmpeg 8 au minimum (libavfilter 11). En dessous, `main()`
 > éteint le GPU (voir §8).
@@ -134,22 +135,56 @@ une table écrite à la main, ni côté contrôleur.
 
 | Verdict | Effet |
 |---|---|
-| `device` en échec | `Pict::DisableVAAPI()` : tout le processus passe en CPU |
+| `device`, `upload` ou `download` en échec | `Pict::DisableVAAPI()` : tout le processus passe en CPU |
 | `h264.encode` en échec | les encodeurs H.264 s'ouvrent en logiciel |
-| `h264.decode` en échec pour un profil | les flux de ce profil se décodent en logiciel |
-| `scale` en échec | `VideoRescaler` refuse le chemin GPU et redescend la trame |
-| `mosaic` en échec | `MosaicCompositor` ne tente pas le graphe GPU |
-| `upload` ou `download` en échec | équivaut à `device` en échec : aucune autre capacité n'est utilisable |
+| `h264.decode.<profil>` en échec | les flux de ce profil se décodent en logiciel |
+| `h264.decode` en échec (aucun profil `ok`) | tout décodage H.264 se fait en logiciel |
+| `vp8.decode` en échec | tout décodage VP8 se fait en logiciel |
+| `scale` en échec | `VideoRescaler` redescend la trame GPU avant de la retailler |
+| `mosaic` en échec | `Mosaic::BuildDesc` ne demande plus le graphe GPU |
 
-Côté libmedikit, il faut un point de consultation unique, lu par
-`FfVideoEncoder::SelectCodec`, `FfVideoDecoder` (`TryVAAPI`) et
-`VideoRescaler`. Côté mcu, `Mosaic::BuildDesc` le lit pour `wantGPU`. Sa forme
-exacte (par exemple `VideoAccel::IsProven(capacité)`) se décide à
-l'implémentation.
+`ApplyHwProbe` (mcu) traduit les verdicts. Il éteint le GPU dès qu'un des trois
+premiers échoue. Sinon, il appelle `VideoAccel::RefuseHw` pour chaque capacité
+en échec. Les capacités `non testee` après une mort de la sonde sont en échec,
+donc refusées : c'est le cas prudent.
 
-Les compteurs `VideoAccel` changent aussi de définition. Un décodeur n'est
-compté matériel que lorsqu'il a rendu une surface. Un décodeur qui passe en
-logiciel faute de profil compte un repli. Sans cela, le compteur continue de
+**Le point de consultation est une liste de refus, pas de preuves.** Ce qui n'a
+pas été refusé reste tenté, comme avant la sonde. Trois raisons :
+
+- sans sonde (mode `--hwprobe` lui-même, tests, autre appelant de libmedikit),
+  le comportement ne change pas ;
+- un profil que la sonde ne teste pas (High 10, par exemple) reste confié à
+  ffmpeg, au lieu d'être refusé d'office ;
+- un refus ne peut venir que d'un échec observé.
+
+Les clés sont celles de libmedikit, pas celles de la sonde :
+`<codec>.encode`, `<codec>.decode`, `<codec>.decode.<profil>` (noms
+libavcodec, profil en minuscules et espaces en « _ », ex.
+`h264.decode.baseline`), `scale`, `mosaic`. `ApplyHwProbe` traduit
+`h264.decode.42801F` en `h264.decode.baseline`.
+
+Où chaque refus est lu :
+
+| Clé | Lue par | Moment |
+|---|---|---|
+| `<codec>.encode` | `FfVideoEncoder::SelectCodec` | choix de l'encodeur |
+| `<codec>.decode` | constructeur de `FfVideoDecoder` | ouverture du décodeur |
+| `<codec>.decode.<profil>` | `GetVAAPIFormat`, le `get_format` du décodeur | à la lecture du SPS : c'est le seul moment où le profil est connu |
+| `scale` | `VideoRescaler::Run` | avant de configurer le graphe |
+| `mosaic` | `Mosaic::BuildDesc` | calcul de `wantGPU` |
+
+Deux conséquences :
+
+- **Un refus n'est pas un repli.** Il ne compte pas dans `hwFallbacks` :
+  c'est une décision connue, publiée par la sonde. Sinon le compteur monterait
+  à chaque appel.
+- **Un codec qui exige le matériel échoue** s'il est refusé
+  (`video.hwaccel.required=1`, `H264Decoder(true)`) : l'exigence ne peut pas
+  être tenue.
+
+Les compteurs `VideoAccel` changent aussi de définition (lot 3). Un décodeur
+n'est compté matériel que lorsqu'il a rendu une surface. Un décodeur qui passe
+en logiciel faute de profil compte un repli. Sans cela, le compteur continue de
 compter des décodeurs logiciels comme GPU.
 
 ## 6. Déroulement
@@ -175,7 +210,7 @@ l'[ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
      motif « délai dépassé ».
 6. Le père applique les verdicts (§5), puis démarre ses serveurs.
 
-Ce qui est livré (lots 0 et 1) :
+Ce qui est livré (lots 0 à 2) :
 
 - `mediaserver --hwprobe` juge, écrit ses lignes, rend 0 et sort sans démarrer
   de serveur. Il respecte `--no-hwaccel` et la garde ffmpeg 8 : dans les deux
@@ -191,10 +226,9 @@ Ce qui est livré (lots 0 et 1) :
   erreur s'il est en échec. Quand la sonde s'arrête avant la fin, le père
   journalise aussi les 5 dernières lignes de l'enfant qui ne sont pas des
   verdicts : c'est là qu'apparaît l'assertion de libavcodec.
-- **Rien n'est encore décidé** (lot 2) : après la sonde, le père ouvre le device
-  comme avant. Un driver qui tue le processus à l'ouverture du device tue donc
-  encore le serveur. C'est le lot 2 qui l'évite, en éteignant le GPU quand
-  `device` est en échec.
+- Le père applique ensuite les verdicts (§5), **avant** d'ouvrir lui-même le
+  device. Une sonde tuée à l'ouverture du device donne `device` en échec : le
+  père éteint le GPU sans jamais l'ouvrir, et démarre en CPU.
 
 Pour les tests, `MCU_HWPROBE_FAULT=abort:<capacité>` fait mourir la sonde sur
 `abort()` juste avant de juger cette capacité, et `hang:<capacité>` la bloque.
@@ -299,7 +333,7 @@ hors `make check`.
 |---|---|---|
 | 0 — **fait** | Mode `--hwprobe` : capacités du §3, lignes du §6, sans effet sur le serveur | `mediaserver --hwprobe` sur ce poste, puis `LIBVA_DRIVER_NAME=aucun` ; tests `HwProbe.*` |
 | 1 — **fait** | Lancement par `main()`, délai, signal, lecture partielle | tests `HwProbeChild.*`, sonde forcée à `abort()` ou bloquée par `MCU_HWPROBE_FAULT` |
-| 2 | Point de consultation libmedikit + application du §5 | tests : verdict injecté → codec logiciel, sans GPU |
+| 2 — **fait** | Point de consultation libmedikit + application du §5 | tests `HwProbeApply.*` (partout), `HwRefusal.*` (libmedikit) et `MosaicCompositorGpu.UneMosaiqueRefuseeNeDemandePlusLeGpu` |
 | 3 | Compteurs `VideoAccel` redéfinis (§5) | test : décodeur dont `get_format` échoue → compté logiciel, un repli compté |
 | 4 | Publication : log, `/status/general`, réécriture de `status-http.md` | test `test_status.cpp` sur l'objet `probe` |
 
@@ -307,7 +341,7 @@ Chaque test qui demande un GPU est préfixé `DISABLED_` et joué par
 `--gtest_also_run_disabled_tests`, comme `H264HwVaapi`. Chaque test qui
 simule un verdict tourne partout, dans `make check`.
 
-Tests des lots 0 et 1 (`mcu/tests/test_hwprobe.cpp`). `runtests` accepte
+Tests des lots 0 à 2 (`mcu/tests/test_hwprobe.cpp`). `runtests` accepte
 `--hwprobe` comme le binaire serveur, pour que les tests relancent le vrai code
 de sonde :
 
@@ -322,7 +356,23 @@ de sonde :
   `h264.encode`, la sonde garde les trois verdicts déjà écrits, nomme le signal,
   et marque la suite `non testee` ;
 - `HwProbeChild.UneSondeBloqueeEstTueeAuDelai` : bloquée pendant `scale`, elle
-  est tuée à 3 s et le père rend la main.
+  est tuée à 3 s et le père rend la main ;
+- `HwProbeApply.*` (partout) : un échec du device ou d'un transfert éteint le
+  GPU ; tout autre échec ne refuse que son chemin, et `42801F` devient
+  `h264.decode.baseline` ;
+- `MosaicCompositorGpu.UneMosaiqueRefuseeNeDemandePlusLeGpu` (sauté sans GPU).
+
+Côté libmedikit, `tests/test_hw_refusal.cpp` : un refus ne vaut que pour son
+chemin (partout) ; encodeur, décodeur, profil et retaillage refusés passent en
+logiciel (`HwRefusal.DISABLED_*`, GPU exigé). Chaque test GPU vérifie d'abord
+que le chemin est matériel sans refus : il échoue aussi sur un poste où le GPU
+ne servait pas de toute façon.
+
+**Piège des tests en sous-processus.** Un refus est définitif : ces tests
+tournent sous `EXPECT_EXIT`. Ils demandent le style `threadsafe`, qui relance le
+binaire. Le style par défaut fait un `fork()` sans `exec`, et l'enfant d'un
+processus qui a déjà touché au GPU hérite d'un état libva inutilisable : le
+chemin GPU y échoue sans raison apparente.
 
 Contre-épreuves faites en réintroduisant les défauts corrigés sur la branche :
 
