@@ -200,18 +200,32 @@ bout, GPU présent, sans qu'une seule image soit encodée par lui.
 | `videoEncoders` | encodeurs vidéo ouverts à cet instant |
 | `videoEncodersHw` | ... dont matériels. Toujours ≤ `videoEncoders` |
 | `videoDecoders` | décodeurs vidéo ouverts à cet instant |
-| `videoDecodersHw` | ... dont matériels |
+| `videoDecodersHw` | ... dont la dernière image rendue est une surface GPU. Toujours ≤ `videoDecoders` |
 | `hwFallbacks` | replis matériel → logiciel depuis le démarrage, **cumulatif** |
 
 Les quatre premiers sont une photo : ils montent et descendent avec les appels.
 Une renégociation (changement de taille ou de débit) ferme puis rouvre
 l'encodeur — le compteur ne doit pas dériver pour autant.
 
+Un décodeur n'est compté matériel qu'**après sa première surface GPU**. Qu'un
+device lui soit attaché ne suffit pas : libavcodec passe en logiciel sans le
+dire quand le driver ne décode pas le profil du flux. Un décodeur ouvert qui n'a
+encore rien rendu est donc compté logiciel.
+
 `hwFallbacks` ne compte que les replis **subis alors qu'un device était
 utilisable**. Sur une machine sans GPU, tout est logiciel : compter chaque codec
 comme un repli ferait monter le compteur sans rien apprendre. Un `hwFallbacks`
 qui grimpe pendant que `vaapi` vaut `true` est donc un vrai signal — le GPU est
-là et quelque chose l'empêche de servir.
+là et quelque chose l'empêche de servir. Exemple : un décodeur qui avait un
+device et rend ses images en logiciel compte un repli, une fois par épisode et
+non une fois par image.
+
+Deux cas ne sont **pas** des replis :
+
+- un codec sans chemin VAAPI, qui ne visait pas le matériel (AV1 par libdav1d,
+  encodeur VP8 par libvpx) ;
+- un chemin que la sonde de démarrage a refusé : c'est une décision connue, pas
+  un incident (`docs/conception/HWACCEL-SONDE/SPEC.md` §5).
 
 Ce que ces compteurs ne disent pas : **quel** appel tourne sur GPU. Ils sont
 globaux au processus.

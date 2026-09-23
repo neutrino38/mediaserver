@@ -1,9 +1,9 @@
 # Sonde d'accélération matérielle au démarrage
 
-> Statut : **lots 0 à 2 faits** — le mode `mediaserver --hwprobe`, son
-> lancement par `main()` à chaque démarrage, et l'application des verdicts
-> (§5, §6, §10). Les lots 3 et 4 sont à faire : les compteurs `VideoAccel` et
-> `/status/general` ne reflètent pas encore les verdicts.
+> Statut : **lots 0 à 3 faits** — le mode `mediaserver --hwprobe`, son
+> lancement par `main()` à chaque démarrage, l'application des verdicts et les
+> compteurs `VideoAccel` redéfinis (§5, §6, §10). Le lot 4 est à faire :
+> `/status/general` et la synthèse du log ne publient pas encore les verdicts.
 > Décision d'architecture : [ADR 002](../../architecture/adr-002-sonde-gpu-hors-processus.md).
 > Prérequis : ffmpeg 8 au minimum (libavfilter 11). En dessous, `main()`
 > éteint le GPU (voir §8).
@@ -182,10 +182,21 @@ Deux conséquences :
   (`video.hwaccel.required=1`, `H264Decoder(true)`) : l'exigence ne peut pas
   être tenue.
 
-Les compteurs `VideoAccel` changent aussi de définition (lot 3). Un décodeur
-n'est compté matériel que lorsqu'il a rendu une surface. Un décodeur qui passe
-en logiciel faute de profil compte un repli. Sans cela, le compteur continue de
-compter des décodeurs logiciels comme GPU.
+Les compteurs `VideoAccel` changent aussi de définition (lot 3). Sans cela, ils
+comptaient comme GPU tout décodeur qui avait un device, même quand libavcodec
+était passé en logiciel faute de savoir décoder le profil sur ce driver.
+
+- Un décodeur entre dans `decodersHw` quand il **rend une surface**, et en sort
+  s'il rend ensuite une image logicielle (`VideoAccel::OnDecoderOutput`). À
+  l'ouverture, il n'est compté que dans `decoders`.
+- Il compte **un repli** quand, device attaché, il rend une image en logiciel
+  sans refus de la sonde. Un seul par épisode logiciel, pas un par image.
+- Un codec **sans chemin VAAPI** n'est pas un repli : il ne visait pas le
+  matériel. `AV1Decoder` (libdav1d) en comptait un à chaque ouverture sur un
+  poste équipé. C'est la règle déjà en place pour les encodeurs.
+
+Le contrat exploitant de ces compteurs est dans `docs/reference/status-http.md`
+§3.8.
 
 ## 6. Déroulement
 
@@ -334,7 +345,7 @@ hors `make check`.
 | 0 — **fait** | Mode `--hwprobe` : capacités du §3, lignes du §6, sans effet sur le serveur | `mediaserver --hwprobe` sur ce poste, puis `LIBVA_DRIVER_NAME=aucun` ; tests `HwProbe.*` |
 | 1 — **fait** | Lancement par `main()`, délai, signal, lecture partielle | tests `HwProbeChild.*`, sonde forcée à `abort()` ou bloquée par `MCU_HWPROBE_FAULT` |
 | 2 — **fait** | Point de consultation libmedikit + application du §5 | tests `HwProbeApply.*` (partout), `HwRefusal.*` (libmedikit) et `MosaicCompositorGpu.UneMosaiqueRefuseeNeDemandePlusLeGpu` |
-| 3 | Compteurs `VideoAccel` redéfinis (§5) | test : décodeur dont `get_format` échoue → compté logiciel, un repli compté |
+| 3 — **fait** | Compteurs `VideoAccel` redéfinis (§5) | tests `VideoAccel.*` et `HwRefusal.DISABLED_UnProfilRefuseNestPasUnRepli` (libmedikit) |
 | 4 | Publication : log, `/status/general`, réécriture de `status-http.md` | test `test_status.cpp` sur l'objet `probe` |
 
 Chaque test qui demande un GPU est préfixé `DISABLED_` et joué par
@@ -367,6 +378,17 @@ chemin (partout) ; encodeur, décodeur, profil et retaillage refusés passent en
 logiciel (`HwRefusal.DISABLED_*`, GPU exigé). Chaque test GPU vérifie d'abord
 que le chemin est matériel sans refus : il échoue aussi sur un poste où le GPU
 ne servait pas de toute façon.
+
+Lot 3, dans `tests/test_video_accel.cpp` :
+
+- `DecoderIsCountedWhileOpen` : à l'ouverture, `decodersHw` ne bouge pas ;
+- `DecoderIsHardwareOnlyOnceItOutputsASurface` : le compteur suit la dernière
+  image rendue, avec ou sans GPU. Il passe aussi avec l'ancienne définition :
+  il garde le contrat du cas positif, il ne discrimine pas ;
+- `DecoderWithoutVaapiPathIsNotAFallback` : un `AV1Decoder` n'est pas un repli ;
+- `DISABLED_ProfileTheDriverCannotDecodeCountsOneFallback` (GPU exigé) : un flux
+  H.264 High 4:4:4, que le driver ne décode pas, sort en logiciel, n'est pas
+  compté GPU, et compte un seul repli pour 10 images.
 
 **Piège des tests en sous-processus.** Un refus est définitif : ces tests
 tournent sous `EXPECT_EXIT`. Ils demandent le style `threadsafe`, qui relance le
