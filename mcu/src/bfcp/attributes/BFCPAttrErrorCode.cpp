@@ -2,27 +2,28 @@
 #include "log.h"
 
 
-// Initialize static members of the class.
-std::map<enum BFCPAttrErrorCode::ErrorCode, std::wstring>	BFCPAttrErrorCode::mapErrorCode2JsonStr;
-
-
-/* Static methods */
-
-void BFCPAttrErrorCode::Init()
+const char* BFCPAttrErrorCode::CodeName(enum BFCPAttrErrorCode::ErrorCode code)
 {
-	mapErrorCode2JsonStr[ConferenceDoesNotExist] = L"ConferenceDoesNotExist";
-	mapErrorCode2JsonStr[UserDoesNotExist] = L"UserDoesNotExist";
-	mapErrorCode2JsonStr[UnknownPrimitive] = L"UnknownPrimitive";
-	mapErrorCode2JsonStr[UnknownMandatoryAttribute] = L"UnknownMandatoryAttribute";
-	mapErrorCode2JsonStr[UnauthorizedOperation] = L"UnauthorizedOperation";
-	mapErrorCode2JsonStr[InvalidFloorId] = L"InvalidFloorId";
-	mapErrorCode2JsonStr[FloorRequestIdDoesNotExist] = L"FloorRequestIdDoesNotExist";
-	mapErrorCode2JsonStr[FloorRequestMaxNumberReached] = L"FloorRequestMaxNumberReached";
-	mapErrorCode2JsonStr[UseTls] = L"UseTls";
+	switch (code)
+	{
+		case ConferenceDoesNotExist:		return "ConferenceDoesNotExist";
+		case UserDoesNotExist:			return "UserDoesNotExist";
+		case UnknownPrimitive:			return "UnknownPrimitive";
+		case UnknownMandatoryAttribute:		return "UnknownMandatoryAttribute";
+		case UnauthorizedOperation:		return "UnauthorizedOperation";
+		case InvalidFloorId:			return "InvalidFloorId";
+		case FloorRequestIdDoesNotExist:	return "FloorRequestIdDoesNotExist";
+		case FloorRequestMaxNumberReached:	return "FloorRequestMaxNumberReached";
+		case UseTls:				return "UseTls";
+		case UnableToParse:			return "UnableToParse";
+		case UseDtls:				return "UseDtls";
+		case UnsupportedVersion:		return "UnsupportedVersion";
+		case IncorrectMessageLength:		return "IncorrectMessageLength";
+		case GenericError:			return "GenericError";
+	}
+	return "Unknown";
 }
 
-
-/* Instance methods */
 
 BFCPAttrErrorCode::BFCPAttrErrorCode(enum BFCPAttrErrorCode::ErrorCode value) : value(value)
 {
@@ -32,18 +33,31 @@ BFCPAttrErrorCode::BFCPAttrErrorCode(enum BFCPAttrErrorCode::ErrorCode value) : 
 void BFCPAttrErrorCode::Dump()
 {
 	::Debug("[BFCPAttrErrorCode]\n");
-	::Debug("- value: %ls\n", GetString().c_str());
+	::Debug("- value: %s\n", CodeName(this->value));
 	::Debug("[/BFCPAttrErrorCode]\n");
 }
 
 
-enum BFCPAttrErrorCode::ErrorCode BFCPAttrErrorCode::GetValue()
+enum BFCPAttrErrorCode::ErrorCode BFCPAttrErrorCode::GetValue() const
 {
 	return this->value;
 }
 
 
-std::wstring BFCPAttrErrorCode::GetString()
+size_t BFCPAttrErrorCode::Serialize(BYTE* out, size_t max, bool mandatory) const
 {
-	return BFCPAttrErrorCode::mapErrorCode2JsonStr[this->value];
+	// No Error Specific Details: the contents are the single code octet, so
+	// Length is 3 and one padding octet follows.
+	const BYTE contents = (BYTE)this->value;
+	return Write(out, max, BFCPAttribute::ErrorCode, mandatory, &contents, 1);
+}
+
+
+BFCPAttrErrorCode* BFCPAttrErrorCode::Parse(const BYTE* contents, size_t len)
+{
+	if (len < 1)
+		return NULL;
+	// Error Specific Details, when present, are skipped: none of the codes we
+	// answer carries any.
+	return new BFCPAttrErrorCode((enum ErrorCode)contents[0]);
 }

@@ -2,9 +2,6 @@
 	path = third_party/fontventa
 	url = https://github.com/InteractiviteVideoEtSystemes/fontventa.git
 	branch = migration/almalinux_9
-[submodule "third_party/libbfcp"]
-	path = third_party/libbfcp
-	url = https://github.com/InteractiviteVideoEtSystemes/libbfcp.git
 [submodule "third_party/libvad"]
 	path = third_party/libvad
 	url = https://github.com/aks-tel/libvad.git

@@ -245,7 +245,6 @@ function clean
 {
 	BASESRCDIR=$PWD
 	MEDKITDIR=$BASESRCDIR/third_party/fontventa/libmedikit
-	BFCPDIR=$BASESRCDIR/third_party/libbfcp
 	VADDIR=$BASESRCDIR/third_party/libvad/sources
 
   	# On efface les liens ainsi que le package precedemment cr.
@@ -257,9 +256,9 @@ function clean
 	make clean
 	cd "$BASESRCDIR"
 
-	# Nettoyage des objets et archives des sous-modules (libmedkit + libbfcp +
+	# Nettoyage des objets et archives des sous-modules (libmedkit +
 	# libvad), pour qu'un "clean" reparte reellement d'un arbre vierge. On garde
-	# les memes options que la construction (compile_libmedkit / compile_libbfcp
+	# les memes options que la construction (compile_libmedkit
 	# / compile_libvad).
 	if [ -f "$MEDKITDIR/Makefile" ]
 	then
@@ -270,14 +269,6 @@ function clean
 		# (aucun .o n'est suivi par git dans le sous-module).
 		find "$MEDKITDIR" -name '*.o' -delete
 		rm -f "$MEDKITDIR/libmedkit.a"
-	fi
-	if [ -f "$BFCPDIR/Makefile" ]
-	then
-		echo "Nettoyage libbfcp (in-tree) : objets + libbfcp{dbg,rel}.a"
-		make -C "$BFCPDIR" clean DEBUG=yes
-		make -C "$BFCPDIR" clean DEBUG=no
-		find "$BFCPDIR" -name '*.o' -delete
-		rm -f "$BFCPDIR"/lib/libbfcp*.a "$BFCPDIR"/lib/libbfcp*.so
 	fi
 	if [ -f "$VADDIR/Makefile" ]
 	then
@@ -401,16 +392,15 @@ function local_compile
 
 	cd $BASESRCDIR
 
-	# Sous-modules (libmedkit = codecs, libbfcp = BFCP, libvad = VAD) : on les
+	# Sous-modules (libmedkit = codecs, libvad = VAD) : on les
 	# initialise au besoin puis on construit leurs archives in-tree, pour qu'un
 	# seul "install.ksh localcompile" suffise a produire le binaire.
-	if [ ! -f third_party/fontventa/libmedikit/medkit/media.h ] || [ ! -f third_party/libbfcp/Makefile ] || [ ! -f third_party/libvad/sources/Makefile ]
+	if [ ! -f third_party/fontventa/libmedikit/medkit/media.h ] || [ ! -f third_party/libvad/sources/Makefile ]
 	then
-		echo "initialisation des sous-modules (libmedikit, libbfcp, libvad)"
+		echo "initialisation des sous-modules (libmedikit, libvad)"
 		git submodule update --init --recursive
 	fi
 	compile_libmedkit
-	compile_libbfcp
 	compile_libvad
 
 	cd $BASESRCDIR
@@ -490,32 +480,6 @@ function compile_libmedkit
 	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
 	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
 	make -C "$MEDKITDIR" all ASTERISK=no
-	cd $MEDIASERVERPATH
-}
-
-function compile_libbfcp
-{
-	# Construit libbfcp DANS l'arbre du sous-module (cible 'all', pas d'install
-	# dans /opt/ives). Le mediaserver s'y lie directement via BFCPDIR dans
-	# mcu/Makefile. On produit les deux variantes (dbg + rel) pour couvrir
-	# les deux valeurs de DEBUG du build mcu.
-	MEDIASERVERPATH=$PWD
-	BFCPDIR=$MEDIASERVERPATH/third_party/libbfcp
-	if [ ! -f "$BFCPDIR/Makefile" ]
-	then
-		echo "Sous-module libbfcp absent. Lancer : git submodule update --init"
-		exit 20
-	fi
-	if [ ! -f "$BFCPDIR/lib/libbfcpdbg.a" ]
-	then
-		echo "Compilation libbfcp (in-tree, debug)"
-		make -C "$BFCPDIR" all DEBUG=yes
-	fi
-	if [ ! -f "$BFCPDIR/lib/libbfcprel.a" ]
-	then
-		echo "Compilation libbfcp (in-tree, release)"
-		make -C "$BFCPDIR" all DEBUG=no
-	fi
 	cd $MEDIASERVERPATH
 }
 
@@ -603,8 +567,6 @@ case $1 in
 	"libmedkit")
 		compile_libmedkit;;
 
-	"libbfcp")
-		compile_libbfcp;;
 
 	"libvad")
 		compile_libvad;;
@@ -627,8 +589,7 @@ case $1 in
 		echo "  localcompile	Compilation du logiciel sans creation de paquet rpm"
 		echo "  rabbitmq        Compilation des libs RABBITMQ (projet moteli)"
 		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
-		echo "  libbfcp         Compilation de libbfcp (sous-module, in-tree)"
 		echo "  libvad          Compilation de libfvad.a (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"
-  		echo "  clean			Nettoie les fichiers crees par ce script (liens, rpm) + les objets/archives de mcu et des sous-modules (libmedkit, libbfcp, libvad)";;
+  		echo "  clean			Nettoie les fichiers crees par ce script (liens, rpm) + les objets/archives de mcu et des sous-modules (libmedkit, libvad)";;
 esac

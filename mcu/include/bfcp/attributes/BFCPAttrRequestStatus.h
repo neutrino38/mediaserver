@@ -3,7 +3,6 @@
 
 
 #include "bfcp/BFCPAttribute.h"
-#include <string>
 
 
 // 5.2.5.  REQUEST-STATUS
@@ -19,8 +18,6 @@
 
 class BFCPAttrRequestStatus : public BFCPAttribute
 {
-/* Static members. */
-
 public:
 	enum Status {
 		Pending = 1,
@@ -32,25 +29,19 @@ public:
 		Revoked
 	};
 
-	// For BFCP JSON.
-	static std::map<enum Status, std::wstring>  mapStatus2JsonStr;
-
-public:
-	static void Init();
-
-/* Instance members. */
+	static const char* StatusName(enum Status status);
 
 public:
 	BFCPAttrRequestStatus();
 	BFCPAttrRequestStatus(enum Status status, int queuePosition);
 	void Dump();
-	void Stringify(std::wstringstream &json_stream);
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrRequestStatus* Parse(const BYTE* contents, size_t len);
 
 	void SetStatus(enum Status status);
 	void SetQueuePosition(int queuePosition);
-	enum Status GetStatus();
-	std::wstring GetStatusString();
-	int GetQueuePosition();
+	enum Status GetStatus() const;
+	int GetQueuePosition() const;
 
 private:
 	enum Status status;

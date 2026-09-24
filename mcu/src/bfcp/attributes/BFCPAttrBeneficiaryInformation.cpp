@@ -2,8 +2,6 @@
 #include "log.h"
 
 
-/* Instance methods */
-
 BFCPAttrBeneficiaryInformation::BFCPAttrBeneficiaryInformation(int beneficiaryId) :
 	beneficiaryId(new BFCPAttrBeneficiaryId(beneficiaryId))
 {
@@ -12,8 +10,6 @@ BFCPAttrBeneficiaryInformation::BFCPAttrBeneficiaryInformation(int beneficiaryId
 
 BFCPAttrBeneficiaryInformation::~BFCPAttrBeneficiaryInformation()
 {
-	::Debug("BFCPAttrBeneficiaryInformation::~BFCPAttrBeneficiaryInformation() | free memory\n");
-
 	delete this->beneficiaryId;
 }
 
@@ -26,9 +22,33 @@ void BFCPAttrBeneficiaryInformation::Dump()
 }
 
 
-void BFCPAttrBeneficiaryInformation::Stringify(std::wstringstream &json_stream)
+int BFCPAttrBeneficiaryInformation::GetBeneficiaryId() const
 {
-	json_stream << L"{";
-	json_stream << L"\n  \"beneficiaryId\": " << this->beneficiaryId->GetValue();
-	json_stream << L"\n}";
+	return this->beneficiaryId->GetValue();
+}
+
+
+size_t BFCPAttrBeneficiaryInformation::Serialize(BYTE* out, size_t max, bool mandatory) const
+{
+	// A grouped attribute carries its id in the header, then its children.
+	// USER-DISPLAY-NAME and USER-URI are optional and we hold neither.
+	BYTE contents[2];
+	set2(contents, 0, this->beneficiaryId->GetValue());
+	return Write(out, max, BFCPAttribute::BeneficiaryInformation, mandatory, contents, sizeof(contents));
+}
+
+
+BFCPAttrBeneficiaryInformation* BFCPAttrBeneficiaryInformation::Parse(const BYTE* contents, size_t len)
+{
+	WORD beneficiaryId;
+	if (! ReadWord(contents, len, beneficiaryId))
+		return NULL;
+	// The children we do not keep still have to walk cleanly, or the whole
+	// attribute is malformed.
+	BFCPAttrCursor cursor(contents + 2, len - 2);
+	while (cursor.Next())
+		;
+	if (cursor.Malformed())
+		return NULL;
+	return new BFCPAttrBeneficiaryInformation(beneficiaryId);
 }

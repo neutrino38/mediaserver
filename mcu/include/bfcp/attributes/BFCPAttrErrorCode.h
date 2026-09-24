@@ -3,13 +3,19 @@
 
 
 #include "bfcp/BFCPAttribute.h"
-#include <string>
+
+
+// 5.2.6.  ERROR-CODE
+//
+//       0                   1                   2                   3
+//       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//      |0 0 0 0 1 1 0|M|    Length     |  Error Code   |               |
+//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 
 
 class BFCPAttrErrorCode : public BFCPAttribute
 {
-/* Static members. */
-
 public:
 	enum ErrorCode {
 		ConferenceDoesNotExist = 1,
@@ -20,23 +26,22 @@ public:
 		InvalidFloorId,
 		FloorRequestIdDoesNotExist,
 		FloorRequestMaxNumberReached,
-		UseTls
+		UseTls,
+		UnableToParse,
+		UseDtls,
+		UnsupportedVersion,
+		IncorrectMessageLength,
+		GenericError
 	};
 
-	// For BFCP JSON.
-	static std::map<enum ErrorCode, std::wstring>	mapErrorCode2JsonStr;
-
-public:
-	static void Init();
-
-/* Instance members. */
+	static const char* CodeName(enum ErrorCode code);
 
 public:
 	BFCPAttrErrorCode(enum ErrorCode errorCode);
 	void Dump();
-
-	enum ErrorCode GetValue();
-	std::wstring GetString();
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrErrorCode* Parse(const BYTE* contents, size_t len);
+	enum ErrorCode GetValue() const;
 
 private:
 	enum ErrorCode value;

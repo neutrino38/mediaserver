@@ -1109,6 +1109,34 @@ Publie le flux de la conférence vers un serveur RTMP externe.
 
 Ces commandes répondent aux événements `ParticipantRequestDocSharing` (§5).
 
+#### Ce que le contrôleur doit écrire dans le SDP
+
+Le mediaserver déduit l'identité BFCP de ce que le contrôleur lui a déjà dit.
+Il n'y a rien à configurer de plus, mais il faut écrire les mêmes valeurs dans
+le SDP :
+
+| Attribut SDP | Valeur à écrire |
+|---|---|
+| `a=confid` | le `confId` de la conférence |
+| `a=userid` | le `partId` du participant |
+| `a=floorid` | toujours `1`, suivi de `mstrm` pour le flux partagé |
+
+Un message BFCP qui nomme une autre conférence ou un autre participant est
+refusé.
+
+#### Transports acceptés
+
+Le média `application` se négocie en `TCP/BFCP` ou en `UDP/BFCP`. Le transport
+vient du paramètre `proto` de `StartReceiving` : `3` pour TCP, `4` pour UDP
+(§4). **`TLS/BFCP` n'est pas servi.**
+
+Le port à annoncer est celui que `StartReceiving` renvoie pour ce média. En TCP
+c'est un port unique pour toute la conférence ; en UDP, un port par
+participant.
+
+En UDP, le mediaserver salue le pair dès que `StartSending` lui a donné son
+adresse. Il répond ensuite dans la version BFCP que le pair emploie.
+
 #### `AcceptDocSharingRequest`
 Accepte une demande de partage de document d'un participant.
 - **Params** `(ii)` : `confId`, `partId`.

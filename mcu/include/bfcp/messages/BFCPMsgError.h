@@ -4,34 +4,44 @@
 
 #include "bfcp/BFCPMessage.h"
 #include "bfcp/attributes.h"
+#include <string>
 
 
 // 5.3.13.  Error
-
-//    Error              =   (COMMON-HEADER)
-//                           (ERROR-CODE)
-//                           [ERROR-INFO]
-//                          *[EXTENSION-ATTRIBUTE]
+//
+//    Error =   (COMMON-HEADER)
+//              (ERROR-CODE)
+//              [ERROR-INFO]
+//             *[EXTENSION-ATTRIBUTE]
 
 
 class BFCPMsgError : public BFCPMessage
 {
 public:
 	BFCPMsgError(int transactionId, int conferenceId, int userId);
-	// Constructors to generate responses.
-	BFCPMsgError(BFCPMessage *msg, enum BFCPAttrErrorCode::ErrorCode errorCode);
-	BFCPMsgError(BFCPMessage *msg, enum BFCPAttrErrorCode::ErrorCode errorCode, std::wstring errorInfo);
+	BFCPMsgError(const BFCPMessage *msg, enum BFCPAttrErrorCode::ErrorCode errorCode);
+	BFCPMsgError(const BFCPMessage *msg, enum BFCPAttrErrorCode::ErrorCode errorCode, const std::string& errorInfo);
 	~BFCPMsgError();
+	bool IsValid();
 	void Dump();
-	std::wstring Stringify();
+
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
 
 	void SetErrorCode(enum BFCPAttrErrorCode::ErrorCode);
-	bool HasErrorCode();
-	enum BFCPAttrErrorCode::ErrorCode GetErrorCode();
+	void SetErrorInfo(const std::string& errorInfo);
+	bool HasErrorCode() const;
+	bool HasErrorInfo() const;
+	enum BFCPAttrErrorCode::ErrorCode GetErrorCode() const;
+	const std::string& GetErrorInfo() const;
 
 private:
 	// Mandatory attributes.
 	BFCPAttrErrorCode *errorCode;
+	// Optional attributes.
 	BFCPAttrErrorInfo *errorInfo;
 };
 
