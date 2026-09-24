@@ -181,18 +181,18 @@ int EachFailureRefusesItsOwnPath()
 // relancé (threadsafe) plutôt que forké d'un parent qui a peut-être touché au GPU.
 TEST(HwProbeApply, UnEchecDuDeviceEteintLeGpu)
 {
-	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	::testing::GTEST_FLAG(death_test_style) = "threadsafe";
 	EXPECT_EXIT(exit(DeviceFailureDisablesGpu("device")), ::testing::ExitedWithCode(0), "");
 }
 
 TEST(HwProbeApply, UnEchecDeTransfertEteintLeGpu)
 {
-	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	::testing::GTEST_FLAG(death_test_style) = "threadsafe";
 	EXPECT_EXIT(exit(DeviceFailureDisablesGpu("download")), ::testing::ExitedWithCode(0), "");
 }
 
 TEST(HwProbeApply, ChaqueEchecNeRefuseQueSonChemin)
 {
-	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	::testing::GTEST_FLAG(death_test_style) = "threadsafe";
 	EXPECT_EXIT(exit(EachFailureRefusesItsOwnPath()), ::testing::ExitedWithCode(0), "");
 }

@@ -16,8 +16,10 @@
 #include <gtest/gtest.h>
 
 #include <csignal>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include <atomic>
 #include <chrono>
@@ -50,6 +52,10 @@ namespace {
 class TestWatchdog
 {
 public:
+	// Un death test « threadsafe » relance le binaire, donc l'environnement et
+	// ce thread : son exit() ne passe pas par TearDown().
+	~TestWatchdog() { Stop(); }
+
 	void Start()
 	{
 		const char* s = getenv("GTEST_MCU_WATCHDOG_S");
@@ -128,7 +134,6 @@ int MedkitDebugCb(const char *msg, va_list ap)
 	fflush(stdout);
 	return 1;
 }
-
 
 // Environment global : SetUp() une fois avant tous les tests.
 class McuEnvironment : public ::testing::Environment

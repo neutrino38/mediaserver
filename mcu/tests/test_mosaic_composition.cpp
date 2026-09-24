@@ -680,7 +680,7 @@ TEST(MosaicCompositorGpu, UneMosaiqueRefuseeNeDemandePlusLeGpu)
 {
 	if (!Pict::GetVAAPIDevice())
 		GTEST_SKIP() << "pas de device VAAPI";
-	GTEST_FLAG_SET(death_test_style, "threadsafe");
+	::testing::GTEST_FLAG(death_test_style) = "threadsafe";
 	EXPECT_EXIT(exit(RefusedMosaicWantsNoGpu()), ::testing::ExitedWithCode(0), "");
 }
 
