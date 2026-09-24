@@ -1,6 +1,6 @@
-# Mendooze media server fork
+# Medooze media server fork
 
-This software is a fork of the mendooze media server originaly written by Sergio Murillo Garcia (itself derived from the Medooze / Fontventa projects). It is a multipoint conferencing unit (MCU) / media server maintained by IVèS that mixes and bridges audio, video, text and document-sharing media between Asterisk and SIP/WebRTC endpoints. It has been used as
+This software is a fork of the Medooze media server originally written by Sergio Murillo Garcia (itself derived from the Medooze / Fontventa projects). It is a multipoint conferencing unit (MCU) / media server maintained by IVèS that mixes and bridges audio, video, text and document-sharing media between Asterisk and SIP/WebRTC endpoints. It has been used as
 
 - MCU
 - Mediagateway / webrtc gateway.
@@ -22,11 +22,10 @@ Main functions:
 - Video layout composition through mosaics, sidebars and picture-in-picture
 - Logo and overlay
 
-The codebase is mostly C++ (in `mcu/`) around a shared conference engine (`MCU` → `MultiConf` → participants / mixers), plus three Java companion projects (`jsr309impl/`, `XmlRpcMcuClient/`, `sdp/`). Most of the codec / media plumbing now lives in the **libmedkit** submodule (ffmpeg 9, OpenSSL 3, x264, libsrtp2). Voice activity detection comes from the **libvad** submodule (libfvad).
 
 ## XML-RPC interfaces
 
-The mediaserver exposes three XML-RPC interfaces
+The mediaserver exposes two maintained XML-RPC interfaces
 
 - a general purpose JSR309 interface that let an external controller connect and activate all mediaserver resources. It is documented in [JSR-309-API.md](docs/JSR-309-API.md).
 
@@ -36,51 +35,34 @@ The mediaserver exposes three XML-RPC interfaces
 
 ## Documentation
 
-| Document | Contenu |
+| Document | Content |
 |---|---|
-| [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md) | **Configuration réseau, par cas d'usage** : IP publique portée par l'hôte, IP publique nattée 1:1, deux adresses (publique + interne). Ports à ouvrir, vérification, diagnostic. À lire avant tout déploiement. |
-| [MCU-API.md](docs/MCU-API.md) | API XML-RPC MCU (conférences, participants, mosaïques) |
-| [JSR-309-API.md](docs/JSR-309-API.md) | API XML-RPC JSR-309 |
-| [RATE-CONTROL.md](docs/RATE-CONTROL.md) | Contrôle de débit : estimation, feedback RTCP, lissage, images clés |
-| [CODECS.md](docs/CODECS.md) | Codecs et paramètres `fmtp` négociés |
-| [TEST.md](TEST.md) | Suite de tests du binaire `mcu` |
+| [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md) | **Network configuration, by use case**: public IP carried by the host, public IP behind a 1:1 NAT, two addresses (public + internal). Ports to open, verification, diagnosis. Read it before any deployment. |
+| [MCU-API.md](docs/MCU-API.md) | MCU XML-RPC API (conferences, participants, mosaics) |
+| [JSR-309-API.md](docs/JSR-309-API.md) | JSR-309 XML-RPC API |
+| [RATE-CONTROL.md](docs/RATE-CONTROL.md) | Rate control: estimation, RTCP feedback, smoothing, key frames |
+| [CODECS.md](docs/CODECS.md) | Codecs and negotiated `fmtp` parameters |
+| [TEST.md](TEST.md) | Unit testing `mcu` |
 
 
 ## Building
 
-This version is intended to run on RHEL 9 / AlmaLinux 9 servers. It also builds
-and runs on Debian / Ubuntu, for development (see *Building on Debian /
-Ubuntu* below); only the RPM package targets AlmaLinux 9.
+The codebase is mostly C++ (in `mcu/`). Most of the codec / media plumbing now lives in the **libmedkit** framework. It
+contains what used to be the base classes of the mediaserver and has been turned into some kind of C++ FFMPEG based media
+framework. It is managed as a submodule. Voice activity detection comes from the **libvad** submodule (libfvad).
 
-All build steps are driven by the `install.ksh` script at the root of the
-project. It takes a single argument selecting the action to perform. It detects
-the distribution family (`rpm` or `dpkg`) and picks the package names itself.
+This version is intended to run on RHEL 9 / AlmaLinux 9 servers and runs on Debian / Ubuntu.
+
+All build steps are driven by the `install.ksh` script at the root of the project. It takes a single argument selecting the action to perform. It detects the distribution family (`rpm` or `dpkg`) and picks the package names itself.
 
 ### 1. Install the build prerequisites
 
-Here are the most of prerequisites:
-
-- ffmpeg 9 (from the IVèS repository)
-- ImageMagic 7 - RPM needs to be rebuilt from source
-- libsrtp
-- xmlrpc-c
 
 The build links dynamically against system packages. Install them once with:
 
 ```sh
 ./install.ksh prereq
 ```
-
-On AlmaLinux 9 this installs (via `dnf`/`yum`): `ffmpeg-devel`,
-`libsrtp-devel`, `xmlrpc-c-devel`
-(from the *crb* repository), `usrsctp-devel`, `ImageMagick-c++-devel` and
-`libtool`.
-
-> Note: `ffmpeg-devel` comes from the IVèS repository (*ives-externals*), and
-> must be **version 9 or later**. It installs its headers directly under
-> `/usr/include`, unlike the RPMFusion package, which puts them in
-> `/usr/include/ffmpeg`. Both `mcu/Makefile` and the libmedikit `Makefile` find
-> them through `pkg-config` alone, so nothing has to be told where they are.
 
 ### 2. Full local build
 
@@ -125,31 +107,12 @@ If you only need to (re)build one of the in-tree submodules:
 ```
 
 This removes the RPM build tree and the previously generated packages, and
-runs `make clean` for the `mcu` binary **and for all three submodules**
+runs `make clean` for the `mcu` binary **and for both submodules**
 (`libmedikit` and `libvad`) — objects, static archives and shared
 objects — so the tree is left in a pristine state.
 
-## Building on Debian / Ubuntu
 
-Development builds are supported on Debian and Ubuntu. The commands are the
-same — `./install.ksh prereq` then `./install.ksh localcompile` — and produce
-the same `bin/debug/mcu`. Three things differ from AlmaLinux 9, and they change
-what the binary does:
-
-- **ffmpeg 8** (Ubuntu 26.04) instead of the IVèS ffmpeg package. Everything
-  builds and the test suite is green, but the codec catalogue is that of the
-  distribution ffmpeg: ask the server itself through `/status/general` rather
-  than assuming it.
-- **No `libpostproc`** package. Nothing in this repository includes it, so it
-  was removed from the pkg-config modules altogether.
-- **Packaging**: `./install.ksh rpm` targets AlmaLinux 9 and refuses to run
-  here; build a `.deb` instead (see below).
-
-`mp4v2` is still built from source into `./staticdeps`, and its autotools are
-regenerated (`autoreconf -fi`) because the ones committed upstream date from
-automake 1.13 and silently produce a truncated `libtool` script elsewhere.
-
-### The Debian package
+### Building the Debian package
 
 ```sh
 ./install.ksh localcompile      # the package ships bin/debug/mcu
@@ -166,11 +129,6 @@ ffmpeg version you built against instead of a hand-written list going stale.
 The package is unsigned, and no APT repository publishes it: install it with
 `sudo apt install ./mcumediaserver_<version>_<arch>.deb`.
 
-> ⚠️ On Debian and Ubuntu `/etc/hosts` maps the host name to `127.0.1.1`, which
-> is not announceable in an SDP. The server falls back to the first
-> announceable address carried by a network interface. With several interfaces
-> — or behind a NAT — pass `--public-ip <ip>` explicitly.
-
 ## Building the RPM package
 
 To produce the RPM package (this is what the release build runs):
@@ -179,12 +137,6 @@ To produce the RPM package (this is what the release build runs):
 ./install.ksh rpm nosign
 ```
 
-
-```sh
-./install.ksh rpm            # GPG-signed package (IVèS only)
-```
-
-
 ## Running
 
 The RPM installs the server as a **systemd service** (`mediaserver.service`,
@@ -192,11 +144,11 @@ replacing the old SysV `/etc/init.d/mediaserver` script). The binary is
 `/opt/ives/bin/mediaserver`, the configuration lives in `/etc/mediaserver/`.
 
 ```sh
-systemctl start mediaserver          # démarrer
-systemctl stop mediaserver           # arrêter (SIGTERM → arrêt propre)
-systemctl restart mediaserver        # redémarrer
-systemctl status mediaserver         # état
-systemctl enable  mediaserver        # démarrage au boot
+systemctl start mediaserver          # start
+systemctl stop mediaserver           # stop (SIGTERM → clean shutdown)
+systemctl restart mediaserver        # restart
+systemctl status mediaserver         # status
+systemctl enable  mediaserver        # start at boot
 ```
 
 The unit runs the binary **in the foreground** (`Type=simple`) — it does *not*
@@ -212,8 +164,8 @@ kept: they are appended to `/var/log/mcu.log`, and they are also available
 through the journal:
 
 ```sh
-tail -f /var/log/mcu.log             # convention historique
-journalctl -u mediaserver -f         # via le journal systemd
+tail -f /var/log/mcu.log             # historical convention
+journalctl -u mediaserver -f         # through the systemd journal
 ```
 
 ### Command-line options / configuration
@@ -244,61 +196,61 @@ systemctl daemon-reload && systemctl restart mediaserver
 mcu [-h|--help] [-f] [-d]
     [--mcu-log <log_file>] [--mcu-pid <pid_file>]
     [--http-port <control_port>] [--rtmp-port <port>]
-    [--websocket-port <ws_port>] [--websocket-host hôte]
+    [--websocket-port <ws_port>] [--websocket-host host]
     [--websocket-secure] [--websocket-cert <pem>] [--websocket-key <pem>]
     [--websocket-client-insecure] [--websocket-client-ca <pem>]
     [--min-rtp-port <min_port>] [--max-rtp-port port]
-    [--public-ip <ip>] [--nat <ip>|auto] [--stun-server <hôte[:port]>]
-    [--internal-ip <ip>] [--default-profile <profil>]
+    [--public-ip <ip>] [--nat <ip>|auto] [--stun-server <host[:port]>]
+    [--internal-ip <ip>] [--default-profile <profile>]
     [--vad-period <m>]
     [--event-queue-expires <s>]
 ```
 
-### Options générales
+### General options
 
-| Option | Défaut | Description |
+| Option | Default | Description |
 |---|---|---|
-| `-h`, `--help` | — | Affiche la version et l'aide, puis quitte. |
-| `-f` | désactivé | Lance le serveur en démon « safe mode » : double `fork()`, détachement du terminal (`setsid`), puis un processus superviseur relance automatiquement le serveur s'il meurt sur un signal (crash). La sortie standard est redirigée vers le fichier de log et le PID est écrit dans le fichier PID. **Ne pas utiliser sous systemd** (voir *Running*) : systemd gère lui-même le cycle de vie et le redémarrage. |
-| `-d` | désactivé | Active les logs de debug (`Logger::EnableDebug`). |
-| `--mcu-log fichier` | `mcu.log` | Fichier de log (utilisé pour rediriger stdout/stderr en mode démon `-f` uniquement ; sans effet en avant-plan / sous systemd, où stdout/stderr vont dans `/var/log/mcu.log` et le journal). |
-| `--mcu-pid fichier` | `mcu.pid` | Fichier où le PID du processus serveur est écrit (mode démon `-f` uniquement ; inutile sous systemd). |
+| `-h`, `--help` | — | Prints the version and the help, then exits. |
+| `-f` | disabled | Runs the server as a "safe mode" daemon: double `fork()`, detach from the terminal (`setsid`), then a supervisor process restarts the server automatically if it dies on a signal (crash). Standard output is redirected to the log file and the PID is written to the PID file. **Do not use under systemd** (see *Running*): systemd manages the lifecycle and the restarts itself. |
+| `-d` | disabled | Enables debug logs (`Logger::EnableDebug`). |
+| `--mcu-log file` | `mcu.log` | Log file (used to redirect stdout/stderr in `-f` daemon mode only; no effect in the foreground / under systemd, where stdout/stderr go to `/var/log/mcu.log` and the journal). |
+| `--mcu-pid file` | `mcu.pid` | File where the PID of the server process is written (`-f` daemon mode only; useless under systemd). |
 
-### Ports et réseau
+### Ports and network
 
-| Option | Défaut | Description |
+| Option | Default | Description |
 |---|---|---|
-| `--http-port port` | `8080` | Port d'écoute du serveur HTTP portant l'API de contrôle XML-RPC (et les flux d'événements HTTP). |
-| `--rtmp-port port` | `1935` | Port d'écoute du serveur RTMP. |
-| `--websocket-port port` | `9090` | Port d'écoute du serveur WebSocket. |
-| `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Non listé dans l'aide `--help`. |
-| `--min-rtp-port port` | `49152` | Borne basse de la plage de ports UDP allouée aux sessions RTP/RTCP. |
-| `--max-rtp-port port` | `65535` | Borne haute de la plage de ports RTP/RTCP. |
-| `--public-ip ip` | *(auto-détectée)* | Adresse du côté **extérieur**, annoncée dans le SDP. IPv4 **ou IPv6**. **Obligatoire derrière un NAT.** |
-| `--nat ip\|auto` | *(aucun)* | Adresse publique vue de l'extérieur, quand `--public-ip` porte l'adresse **locale** d'un hôte natté (IPv4 seulement). `auto` la découvre par STUN. |
-| `--stun-server hôte[:port]` | `stun.l.google.com:19302` | Serveur interrogé par `--nat auto`. |
-| `--internal-ip ip` | *(aucune)* | Adresse du côté **interne** (réseau de service, mode SBC). **Restreint l'API de contrôle à cette adresse.** |
-| `--default-profile nom` | `publicv4` | Profil employé par un appel qui n'en demande aucun : `publicv4`, `publicv6`, `internalv4`, `internalv6`. |
+| `--http-port port` | `8080` | Listening port of the HTTP server carrying the XML-RPC control API (and the HTTP event streams). |
+| `--rtmp-port port` | `1935` | Listening port of the RTMP server. |
+| `--websocket-port port` | `9090` | Listening port of the WebSocket server. |
+| `--websocket-host host` | *(none)* | Host name/address announced in the WebSocket endpoint URLs (`WSEndpoint::SetLocalHost`). Not listed by `--help`. |
+| `--min-rtp-port port` | `49152` | Lower bound of the UDP port range allocated to RTP/RTCP sessions. |
+| `--max-rtp-port port` | `65535` | Upper bound of the RTP/RTCP port range. |
+| `--public-ip ip` | *(auto-detected)* | Address of the **outside**, announced in the SDP. IPv4 **or IPv6**. **Mandatory behind a NAT.** |
+| `--nat ip\|auto` | *(none)* | Public address seen from the outside, when `--public-ip` carries the **local** address of a NATed host (IPv4 only). `auto` discovers it through STUN. |
+| `--stun-server host[:port]` | `stun.l.google.com:19302` | Server queried by `--nat auto`. |
+| `--internal-ip ip` | *(none)* | Address of the **inside** (service network, SBC mode). **Restricts the control API to this address.** |
+| `--default-profile name` | `publicv4` | Profile used by a call that requests none: `publicv4`, `publicv6`, `internalv4`, `internalv6`. |
 
-> 📖 **Ces cinq options se configurent ensemble, et le détail est dans un document
-> dédié : [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).** Il procède par
-> cas d'usage — adresse publique portée par l'hôte, adresse publique nattée 1:1,
-> deux adresses (publique + interne) — et donne les ports à ouvrir, la
-> vérification au démarrage et le diagnostic des pannes de média.
+> 📖 **These five options are configured together, and the details are in a
+> dedicated document: [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).**
+> It goes by use case — public address carried by the host, public address
+> behind a 1:1 NAT, two addresses (public + internal) — and gives the ports to
+> open, the check at startup and the diagnosis of media failures.
 
-### Adressage : le principe en dix lignes
+### Addressing: the principle in ten lines
 
-Un serveur média manipule **deux adresses** : celle qu'il **lie** (portée par une
-carte de la machine, elle décide de l'interface d'émission) et celle qu'il
-**annonce** dans le SDP (celle que le correspondant utilisera pour lui envoyer le
-média). Elles sont identiques sur une machine directement exposée, et
-**différentes derrière un NAT** — confondre les deux est la panne de
-configuration la plus fréquente : l'appel s'établit, aucun média ne circule.
+A media server handles **two addresses**: the one it **binds** (carried by a
+network card of the machine, it decides the sending interface) and the one it
+**announces** in the SDP (the one the peer will use to send it media). They are
+identical on a directly exposed machine, and **different behind a NAT** —
+mixing them up is the most frequent configuration failure: the call is set up,
+no media flows.
 
-Le serveur décrit donc son adressage sous forme de **profils** — `publicv4`,
-`publicv6`, `internalv4`, `internalv6` —, chacun portant ce couple d'adresses. La
-plupart des déploiements n'en utilisent qu'un (`publicv4`). Le démarrage
-journalise la table, premier endroit à regarder devant un appel sans média :
+The server therefore describes its addressing as **profiles** — `publicv4`,
+`publicv6`, `internalv4`, `internalv6` —, each carrying this pair of addresses.
+Most deployments use only one (`publicv4`). The startup logs the table, the
+first place to look at when a call has no media:
 
 ```
 -Profils d'adressage :
@@ -308,100 +260,76 @@ internalv4 : bind 172.16.0.5
 internalv6 : indisponible
 ```
 
-> 📖 **Tout le reste — les trois cas d'usage (IP publique portée par l'hôte, IP
-> publique nattée 1:1, deux adresses publique + interne), les ports à ouvrir, la
-> vérification, le diagnostic des pannes de média et la liste des contrôles
-> bloquants au démarrage — est dans
+> 📖 **Everything else — the three use cases (public IP carried by the host,
+> public IP behind a 1:1 NAT, two addresses public + internal), the ports to
+> open, the verification, the diagnosis of media failures and the list of
+> blocking checks at startup — is in
 > [NETWORK-CONFIGURATION.md](docs/NETWORK-CONFIGURATION.md).**
 >
-> Côté contrôleur, le paramètre `profile` de `StartSending`/`StartReceiving` est
-> décrit dans `MCU-API.md` §6.7 bis et `JSR-309-API.md` §6.7 bis.
+> On the controller side, the `profile` parameter of `StartSending`/`StartReceiving`
+> is described in `MCU-API.md` §6.7 bis and `JSR-309-API.md` §6.7 bis.
 
-### Média
+### Media
 
-| Option | Défaut | Description |
+| Option | Default | Description |
 |---|---|---|
-| `--vad-period ms` | `5000` | Période (en millisecondes) de changement de la mosaïque pilotée par la détection d'activité vocale (VAD). |
+| `--vad-period ms` | `5000` | Period (in milliseconds) of the mosaic changes driven by voice activity detection (VAD). |
 
-### Files d'événements — expiration des sessions et conférences abandonnées
+### Event queues — expiry of abandoned sessions and conferences
 
-| Option | Défaut | Description |
+| Option | Default | Description |
 |---|---|---|
-| `--event-queue-expires s` | `60` | Délai de grâce, en secondes, sans aucun client en long-poll sur une file d'événements, avant destruction de la file **et des objets qui en dépendent**. `0` désactive le nettoyage (comportement historique). S'applique aux **deux API de contrôle** : les `MediaSession` de `/jsr309` et les **conférences** de `/mcu`, chacune liée à une file par son `queueId`. |
+| `--event-queue-expires s` | `60` | Grace period, in seconds, without any long-poll client on an event queue, before the queue **and the objects that depend on it** are destroyed. `0` disables the cleanup (historical behaviour). Applies to **both control APIs**: the `MediaSession`s of `/jsr309` and the **conferences** of `/mcu`, each bound to a queue by its `queueId`. |
 
-Le long-poll du contrôleur sur `/events/jsr309/<queueId>` (ou
-`/events/mcu/<queueId>`) sert de **preuve de vie** : il est rétabli en moins
-d'une seconde après une coupure et le serveur y émet un keep-alive toutes les
-30 s. Soixante secondes sans lecteur, c'est donc un contrôleur mort — et sans ce
-nettoyage ses sessions et conférences (endpoints, mixers, threads d'encodage,
-ports RTP) vivaient jusqu'au redémarrage du serveur.
+The controller's long-poll on `/events/jsr309/<queueId>` (or
+`/events/mcu/<queueId>`) acts as a **proof of life**: it is re-established in
+less than a second after a disconnection and the server sends a keep-alive on it
+every 30 s. Sixty seconds without a reader therefore means a dead controller —
+and without this cleanup its sessions and conferences (endpoints, mixers,
+encoding threads, RTP ports) lived until the server restarted.
 
-Deux signaux, un seul délai :
+Two signals, a single delay:
 
-1. **file toujours là, mais plus lue** → les objets rattachés sont détruits,
-   puis la file ;
-2. **file détruite explicitement** (`EventQueueDelete`) alors que des objets la
-   référencent encore → le délai est **armé**, pas exécuté : les objets ne
-   partent qu'à l'échéance, ce qui laisse au contrôleur une chance de revenir.
-
-Trace dans `/var/log/mcu.log` :
-
-```
--JSR309Manager: expiration par event queue armee [grace:60000ms,balayage:10000ms]
--MCU: expiration par event queue armee [grace:60000ms,balayage:10000ms]
--JSR309Manager: suppression de la session 12 [tag:call-42,queue:7] : controleur absent du long-poll
--JSR309Manager: file d'evenements 7 sans poller depuis plus de 60s, destruction [objets:1]
--MCU: file d'evenements 9 detruite mais encore referencee, armement du delai de grace de 60s
--MCU: delai de grace ecoule pour la file d'evenements 9, destruction [objets:1]
-```
-
-**La portée du nettoyage est celle du découpage des files choisi par le
-contrôleur** : une file par appel/conférence isole les objets entre eux ; une
-file partagée (cas du client Java `jsr309impl`, et du montage historique décrit
-dans `MCU-API.md` §7.2) les emporte *tous ensemble*. Détail du contrat dans
-`JSR-309-API.md` §5 et `MCU-API.md` §5.
+1. **queue still there, but no longer read** → the attached objects are
+   destroyed, then the queue;
+2. **queue explicitly destroyed** (`EventQueueDelete`) while objects still
+   reference it → the delay is **armed**, not executed: the objects only go
+   away when it expires, which gives the controller a chance to come back.
 
 
-### WebRTC — WebSocket sécurisé (wss://)
+### WebRTC — secure WebSocket (wss://)
 
-Le transport WebSocket (utilisé notamment pour le texte temps réel et le canal
-de signalisation des endpoints Web) peut être servi en TLS (`wss://`). Ces
-options n'affectent **que** le transport WebSocket ; le média WebRTC (SRTP) est
-sécurisé séparément par DTLS (voir ci-dessous).
+The WebSocket transport (used in particular for real-time text and the
+signalling channel of Web endpoints) can be served over TLS (`wss://`).
 
-Deux rôles, à ne pas confondre. Les trois premières options règlent ce que le
-**serveur** présente. Les deux dernières règlent ce que le mediaserver **exige
-d'un serveur qu'il appelle** : une jambe texte sortante en `wss://`
-(`ConnectMediaConnection`, `docs/JSR-309-API.md` §6.12).
-
-| Option | Défaut | Description |
+| Option | Default | Description |
 |---|---|---|
-| `--websocket-secure` | désactivé | Active le WebSocket sécurisé (`wss://`). Implicite dès que `--websocket-cert` ou `--websocket-key` est fourni. |
-| `--websocket-cert fichier` | *(certificat DTLS)* | Certificat PEM présenté pour `wss://`. Implique `--websocket-secure`. À défaut, réutilise le certificat DTLS (`/etc/mediaserver/mcu.crt`). |
-| `--websocket-key fichier` | *(clé DTLS)* | Clé privée PEM pour `wss://`. Implique `--websocket-secure`. À défaut, réutilise la clé DTLS (`/etc/mediaserver/mcu.key`). |
-| `--websocket-host hôte` | *(aucun)* | Nom d'hôte/adresse annoncé dans les URL des endpoints WebSocket (`WSEndpoint::SetLocalHost`). Utile derrière un proxy / en `wss://`. |
-| `--websocket-client-ca fichier` | *(magasin système)* | Autorité de certification PEM supplémentaire, acceptée pour les serveurs `wss://` que le mediaserver **appelle**. S'ajoute au magasin du système. |
-| `--websocket-client-insecure` | désactivé | Ne **pas** vérifier le certificat des serveurs `wss://` appelés. Pour la mise au point seulement : la jambe devient vulnérable à l'interception. |
+| `--websocket-secure` | disabled | Enables the secure WebSocket (`wss://`). Implied as soon as `--websocket-cert` or `--websocket-key` is given. |
+| `--websocket-cert file` | *(DTLS certificate)* | PEM certificate presented for `wss://`. Implies `--websocket-secure`. By default, reuses the DTLS certificate (`/etc/mediaserver/mcu.crt`). |
+| `--websocket-key file` | *(DTLS key)* | PEM private key for `wss://`. Implies `--websocket-secure`. By default, reuses the DTLS key (`/etc/mediaserver/mcu.key`). |
+| `--websocket-host host` | *(none)* | Host name/address announced in the WebSocket endpoint URLs (`WSEndpoint::SetLocalHost`). Useful behind a proxy / with `wss://`. |
+| `--websocket-client-ca file` | *(system store)* | Additional PEM certificate authority, accepted for the `wss://` servers the mediaserver **calls**. Added to the system store. |
+| `--websocket-client-insecure` | disabled | Do **not** verify the certificate of the `wss://` servers called. For debugging only: the leg becomes open to interception. |
 
 
-### WebRTC — Certificat DTLS-SRTP
+### WebRTC — DTLS-SRTP certificate
 
-Le média WebRTC (audio/vidéo/texte) est chiffré par **DTLS-SRTP**. Le certificat
-et la clé utilisés pour la poignée de main DTLS ne sont **pas** configurables en
-ligne de commande : les chemins sont fixés en dur à `/etc/mediaserver/mcu.crt` et
+WebRTC media (audio/video/text) is encrypted by **DTLS-SRTP**. The certificate
+and the key used for the DTLS handshake are **not** configurable on the command
+line: the paths are hard-coded to `/etc/mediaserver/mcu.crt` and
 `/etc/mediaserver/mcu.key`.
 
-Ce certificat est aussi la valeur par défaut du WebSocket sécurisé (voir plus
-haut). Le RPM le génère automatiquement s'il est absent, via le script
-`%post` `certcommunication.sh` : un certificat auto-signé **ECDSA P-256**
-(signé SHA-256, valable 10 ans), compatible OpenSSL 3 et les navigateurs WebRTC
-(le RSA 1024 historique était refusé).
+This certificate is also the default for the secure WebSocket (see above). The
+RPM generates it automatically if it is missing, through the `%post` script
+`certcommunication.sh`: a self-signed **ECDSA P-256** certificate (SHA-256
+signed, valid for 10 years), compatible with OpenSSL 3 and WebRTC browsers (the
+historical RSA 1024 one was rejected).
 
 # Modernization
 
 ## This mediaserver has been updated and modernized using Claude Code
 
-- base media functions has been gathered into a framework called libmedkit to be able to reuse them in other telco servers
-- ffmeg is now used whenether it is possible and I intend to use more of it to take advantage of hardware acceleration
+- base media functions have been gathered into a framework called libmedkit to be able to reuse them in other telco servers
+- ffmpeg is now used whenever it is possible and I intend to use more of it to take advantage of hardware acceleration
 - use of C++17 and progressive replacement of older style C++ with std:: stuff.
 - removal of some external media processing libraries in favor of ffmpeg and libfvad
