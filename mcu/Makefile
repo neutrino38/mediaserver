@@ -273,16 +273,16 @@ DEPFLAGS = -MMD -MP -MF $(BUILD)/$(@:.o=.d) -MT $@
 mcu.pb.cc: mcu.proto
 	$(PROTOC) --cpp_out=$(PWD) src/moteli/mcu.proto
 
-rabbitmqmcu.o: rabbitmqmcu.cpp rabbitmqmcu.h mcu.pb.cc
+rabbitmqmcu.o: rabbitmqmcu.cpp rabbitmqmcu.h mcu.pb.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
-mcu.pb.o: mcu.pb.cc
+mcu.pb.o: mcu.pb.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(PWD) -c $< -o $(BUILD)/$@
 
-%.o: %.c
+%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
-%.o: %.cpp
+%.o: %.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
 ############################################
