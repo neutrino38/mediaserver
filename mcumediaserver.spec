@@ -9,12 +9,11 @@ Group:     Applications/Internet
 License:   GPL
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
-Requires:  x264, ImageMagick-c++ >= 7, ffmpeg, libsrtp
+Requires:  ImageMagick-c++ >= 7, ffmpeg, libsrtp
 Requires:  openssl-libs >= 3.0, xmlrpc-c, usrsctp
 BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
-BuildRequires: x264-devel, gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
-BuildRequires: gsm-devel
+BuildRequires: gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: libsrtp-devel
 BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel, usrsctp-devel
 BuildRequires: systemd-rpm-macros
