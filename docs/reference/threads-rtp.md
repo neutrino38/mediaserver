@@ -161,21 +161,25 @@ existants les réveillent tout de suite.
 ## 7. Les couplages connus, et leurs bornes
 
 Un groupe partage un thread : ce qui retarde une jambe retarde ses voisines de
-groupe. Trois sources, toutes bornées.
+groupe. Deux sources, toutes deux bornées.
 
 | Source | Borne | Quand |
 |---|---|---|
-| Verrou `streamUse` tenu par un consommateur parqué | **200 ms** | à la naissance d'un SSRC sur une session dont un consommateur attend |
 | Handshake DTLS | ~50 ms | à l'établissement, avant tout paquet média |
 | Un tour de réacteur | quelques dizaines de µs | en permanence ; le tour coûte O(N) sur les sessions du groupe |
 
-Le premier mérite un mot, parce qu'il n'est pas devinable. `GetPacket` prend le
-verrou **lecteur** `streamUse` avant l'attente bornée et ne le rend qu'après ; le
-réacteur prend ce même verrou en **écriture** quand un SSRC inconnu arrive
-(`SetDefaultStream`, `ChangeStream`), et les lecteurs sont prioritaires. Un flux
-SLIDES qui naît à côté de MAIN, ou un changement de SSRC sur re-INVITE, peut
-donc faire attendre le réacteur. C'est une des raisons du découpage en deux
-groupes : cette attente ne touche jamais l'audio.
+Le verrou `streamUse` n'en fait pas partie, et c'est une règle à tenir. Le
+réacteur le prend en **écriture** quand un SSRC inconnu arrive
+(`SetDefaultStream`, `ChangeStream`, `AddStream`), avec une borne de 500 ms
+(`StreamLockTimeoutMs`) et une trace cadencée en cas d'échec. Un lecteur ne
+doit donc le tenir que le temps d'une recherche dans la map, jamais pendant
+une attente : `GetPacket` copie le `shared_ptr` de son flux sous le verrou, et
+attend son paquet hors du verrou. Tenir le verrou pendant l'attente faisait
+attendre le réacteur jusqu'à 200 ms à chaque changement de SSRC. Avec deux
+consommateurs sur la même session (MAIN et SLIDES en partage de document), le
+compteur de lecteurs ne retombait jamais à zéro : le renommage échouait sur sa
+borne à chaque paquet, et la jambe restait sourde. Garde-fou :
+`mcu/tests/test_rtp_stream_lock.cpp`.
 
 ## 8. La trace qui dit qu'un groupe a attendu
 
@@ -201,6 +205,9 @@ est un vrai défaut : du travail long est entré dans un thread de réacteur.
 - `mcu/tests/test_rtpsessionset.cpp` : le réacteur seul — un thread pour N
   handlers, l'aiguillage, le minimum des échéances, le retrait synchrone, le
   retrait réentrant, un socket mort qui ne rend pas son groupe sourd.
+- `mcu/tests/test_rtp_stream_lock.cpp` : le réacteur n'attend jamais un
+  consommateur parqué — un renommage de SSRC aboutit en quelques
+  millisecondes, avec un puis deux consommateurs sur la même session.
 - `mcu/tests/test_rtp_reactor.cpp` : la session dans le réacteur — six jambes
   n'ajoutent aucun thread, l'inscription à `Init` et le retrait à `End`, le
   découpage en deux groupes par jambe, l'attente bornée qui ne sonde pas.

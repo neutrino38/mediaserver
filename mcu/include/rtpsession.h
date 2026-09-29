@@ -244,8 +244,9 @@ public:
 	//Borne des prises de verrou ÉCRIVAIN sur la map des flux (AddStream,
 	//ChangeStream) : elles s'exécutent sur le thread réacteur, qui ne doit
 	//jamais attendre sans borne — il bat toutes les jambes de son groupe.
-	//Supérieure à ConsumerPollMs, le temps pendant lequel un consommateur tient
-	//légitimement le verrou lecteur.
+	//Aucun lecteur ne tient ce verrou plus que le temps d'une recherche dans
+	//la map : GetPacket attend son paquet HORS du verrou, sur une référence
+	//partagée du flux. La borne est un filet, pas une attente prévue.
 	static const DWORD StreamLockTimeoutMs = 500;
 
 	//Bornes de l'estimateur d'ÉMISSION d'une session vidéo (arbitrage
@@ -537,11 +538,13 @@ protected:
         /**
 	 *  Find the stream associated to the SSRC .
 	 */
-	RTPStream* getStream(DWORD ssrc);
+	std::shared_ptr<RTPStream> getStream(DWORD ssrc);
 
 private:
 	typedef std::map<DWORD,RTPTimedPacket*> RTPOrderedPackets;
-	typedef std::map<DWORD, RTPStream*> Streams;
+	//La map possède les flux ; un consommateur parqué dans GetPacket en tient
+	//une copie, ce qui laisse DeleteStreams vider la map sans l'attendre.
+	typedef std::map<DWORD, std::shared_ptr<RTPStream>> Streams;
 protected:
 	RemoteRateEstimator*	remoteRateEstimator;
 private:
@@ -562,7 +565,7 @@ private:
 	}
 
 	Streams streams;
-	RTPStream * defaultStream;
+	std::shared_ptr<RTPStream> defaultStream;
 	
 	bool muxRTCP;
 	//Sockets

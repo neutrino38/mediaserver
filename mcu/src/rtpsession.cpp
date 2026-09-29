@@ -3008,7 +3008,7 @@ int RTPSession::ReadRTP()
 
         //if ( defaultSSRC == 0 && defaultStream != NULL) defaultStream->Cancel();
 
-        RTPStream* stream = getStream(ssrc);
+        std::shared_ptr<RTPStream> stream = getStream(ssrc);
 
         if (!isRTX)
         {
@@ -3291,11 +3291,19 @@ RTPPacket* RTPSession::GetPacket(DWORD ssrc, DWORD timeoutMs)
 	//l'attente le voit déjà et ne dort pas.
 	const DWORD seen = streamGeneration.load();
 
-	streamUse.IncUse();
-	RTPStream* s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
-	const bool disabled = (s != NULL) && s->disabled;
-	RTPPacket* rtp = (s != NULL && !disabled) ? s->Wait(timeoutMs) : NULL;
-	streamUse.DecUse();
+	//Le verrou lecteur ne couvre que la recherche, JAMAIS l'attente : tenu
+	//pendant ConsumerPollMs, il faisait attendre d'autant le thread réacteur
+	//venu renommer ou créer un flux (SetDefaultStream, ChangeStream), et avec
+	//deux consommateurs sur la session le compteur ne retombait plus à zéro.
+	//La copie du shared_ptr garde le flux vivant si DeleteStreams passe
+	//pendant l'attente ; CancelStreams l'a déjà réveillé.
+	std::shared_ptr<RTPStream> s;
+	{
+		ScopedUse scopedStreams(streamUse);
+		s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+	}
+	const bool disabled = s && s->disabled;
+	RTPPacket* rtp = (s && !disabled) ? s->Wait(timeoutMs) : NULL;
 
 	if (rtp != NULL)
 		return rtp;
@@ -3335,7 +3343,7 @@ void RTPSession::CancelGetPacket()
 void RTPSession::CancelGetPacket(DWORD & ssrc)
 {
     streamUse.IncUse();
-    RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+    std::shared_ptr<RTPStream> s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     if (s) s->Cancel();
     streamUse.DecUse();
 
@@ -3347,7 +3355,7 @@ void RTPSession::CancelGetPacket(DWORD & ssrc)
 void RTPSession::ResetPacket(DWORD & ssrc, bool clear) 
 { 
     streamUse.IncUse();
-    RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+    std::shared_ptr<RTPStream> s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     if (s) s->Reset(clear);
     streamUse.DecUse();
 }
@@ -3647,7 +3655,7 @@ int RTPSession::SendReferencePictureSelectionIndication(DWORD ssrc, WORD picture
 	//RTPSession::CreateSenderReport).
 	ScopedUse scopedStreams(streamUse);
 
-	RTPStream* stream = getStream(ssrc);
+	std::shared_ptr<RTPStream> stream = getStream(ssrc);
 	if (stream == NULL)
 		stream = defaultStream;
 	if (stream == NULL)
@@ -3722,7 +3730,7 @@ int RTPSession::RequestFPU(DWORD & ssrc)
 	//RTPSession::CreateSenderReport).
 	ScopedUse scopedStreams(streamUse);
 	//Send all the packets inmediatelly to the decoderso I frame can be handled as soon as possoble
-	RTPStream* stream = getStream(ssrc);
+	std::shared_ptr<RTPStream> stream = getStream(ssrc);
 	if (stream == NULL  )
 		stream = defaultStream;
 	
@@ -4109,10 +4117,10 @@ bool RTPSession::AddStream( bool receiving, DWORD ssrc )
     bool created = false;
     if ( streamUse.WaitUnusedAndLock(StreamLockTimeoutMs) )
     {
-	RTPStream* stream = getStream(ssrc);
+	std::shared_ptr<RTPStream> stream = getStream(ssrc);
 	if ( stream == NULL )
 	{
-		stream = new RTPStream(this,ssrc);
+		stream = std::make_shared<RTPStream>(this,ssrc);
 		
 		streams[ssrc]=stream;
 		created = true;
@@ -4165,14 +4173,13 @@ bool RTPSession::DeleteStreams()
     streamUse.WaitUnusedAndLock();
 
     for (Streams::iterator it = streams.begin(); it != streams.end(); it++)
-    {
         removed.push_back(it->first);
-        delete it->second;
-    }
 
+    //Un consommateur encore parqué dans GetPacket tient sa propre référence :
+    //le flux meurt avec elle, pas ici, et CancelStreams l'a déjà réveillé.
     streams.clear();
 
-    defaultStream = NULL;
+    defaultStream.reset();
     streamUse.Unlock();
 
     //L'estimateur se previent HORS du verrou streamUse, sinon les deux verrous
@@ -4218,7 +4225,7 @@ bool RTPSession::SetDefaultStream(bool receiving, DWORD ssrc )
 /**
  *  get the stream associated to the SSRC .
  */
-RTPSession::RTPStream* RTPSession::getStream(DWORD ssrc)
+std::shared_ptr<RTPSession::RTPStream> RTPSession::getStream(DWORD ssrc)
 {
 	//Find stream
 	Streams::iterator it = streams.find(ssrc);
@@ -4226,7 +4233,7 @@ RTPSession::RTPStream* RTPSession::getStream(DWORD ssrc)
 	//If not found
 	if (it == streams.end())
 		//Error
-		return NULL;
+		return nullptr;
 
 	//Get the stream
 	return it->second;
@@ -4243,9 +4250,9 @@ bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 	//
 	//BORNEE, parce qu'elle s'execute sur le THREAD REACTEUR : une attente sans
 	//borne y rend sourdes TOUTES les jambes du groupe, et le pair ne le voit
-	//que comme une image noire (docs/reference/threads-rtp.md). La borne couvre
-	//un cycle de lecture du consommateur (ConsumerPollMs), qui tient le verrou
-	//lecteur pendant son attente ; meme valeur que AddStream.
+	//que comme une image noire (docs/reference/threads-rtp.md). Aucun lecteur
+	//ne tient le verrou plus qu'une recherche dans la map (GetPacket attend
+	//hors verrou) : la borne est un filet ; meme valeur que AddStream.
 	if (!streamUse.WaitUnusedAndLock(StreamLockTimeoutMs))
 	{
 		//Le renommage n'a pas eu lieu : le paquet courant sera jete faute de
@@ -4260,7 +4267,7 @@ bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 		return false;
 	}
 
-	RTPStream* stream = getStream(oldssrc);
+	std::shared_ptr<RTPStream> stream = getStream(oldssrc);
 	if (stream != NULL)
 	{
 		streams.erase(oldssrc);
@@ -4693,7 +4700,7 @@ bool RTPSession::GetStatistics( DWORD ssrc, MediaStatistics & stats)
 	else
 		stats.sendingCodec = -1;
 		
-    RTPStream * s =(ssrc > 0) ? getStream(ssrc) : NULL;
+    std::shared_ptr<RTPStream> s = (ssrc > 0) ? getStream(ssrc) : nullptr;
     if (s != NULL)
     {
         stats.numRecvPackets = s->GetNumRecvPackets();

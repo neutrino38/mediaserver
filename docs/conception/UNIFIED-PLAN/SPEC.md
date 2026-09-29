@@ -1,6 +1,7 @@
 # Flux vidéo multiples par participant (RFC 9429, BUNDLE)
 
-> Statut : **conception, rien de codé**. Branche `feat/unified-plan`.
+> Statut : **en cours**. Branche `feat/unified-plan`. Le chantier préalable
+> (famine de `ChangeStream`, §5) est fait ; les lots 0 à 5 restent à faire.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur par XML-RPC ou par
@@ -539,11 +540,17 @@ section par section, dans les deux sens.
   jointe, ni l'un ni l'autre ne doit être atteint **avant** le routage par
   MID, SSRC ou PT : sinon l'écran remplace la caméra. Le point 4 du
   démultiplexage (jeter) est là pour ça.
-- **`ChangeStream` prend un verrou écrivain borné à 500 ms.** La fiche mémoire
-  « réacteur RTP affamé » décrit un écran noir de 34 s sur un changement de
-  SSRC. Avec le BUNDLE, cette famine touche aussi l'audio du participant.
-  **Chantier préalable** (décision du 2026-09-29) : le lot 2 ne démarre pas
-  tant que ce correctif n'est pas livré et recetté.
+- **`ChangeStream` s'exécute sur le thread du réacteur, sous le verrou
+  écrivain de la map des flux.** Ce verrou est borné à 500 ms, et aucun
+  consommateur ne le tient plus qu'une recherche : `GetPacket` attend son
+  paquet hors du verrou, sur une référence partagée du flux (chantier
+  préalable, **fait** ; garde-fou `mcu/tests/test_rtp_stream_lock.cpp`).
+  Tenir le verrou pendant l'attente faisait attendre le réacteur jusqu'à
+  200 ms à chaque changement de SSRC, et deux consommateurs sur une même
+  session suffisaient à faire échouer le renommage à chaque paquet. Avec le
+  BUNDLE, l'audio du participant l'aurait subi. Règle pour le lot 2 : le
+  démultiplexage de la porteuse ne prend jamais un verrou qu'un consommateur
+  peut tenir pendant une attente (`docs/reference/threads-rtp.md` §7).
 - **`ProcessExtensions` n'est appelée que sous transport-cc.** Sans transport-cc
   négocié, un MID reçu serait invisible. Lot 0.
 - **Le parseur d'extensions ne vérifie pas le profil** (`0xBEDE` contre
@@ -565,9 +572,9 @@ section par section, dans les deux sens.
 
 Chaque lot compile, passe `cd mcu && make check` et `make check-ipv6`, et
 porte sa preuve. Les lots 1 et 2 sont indépendants et peuvent aller de front.
-Le lot 1b suit le lot 1. Le lot 2 attend le correctif de la famine de
-`ChangeStream` (§5), qui est un chantier à part. Le lot 4 attend que l'API des
-lots 1 à 3 soit figée.
+Le lot 1b suit le lot 1. Le correctif de la famine de `ChangeStream` (§5),
+préalable au lot 2, est livré ; sa recette en appel réel reste à faire. Le lot
+4 attend que l'API des lots 1 à 3 soit figée.
 
 ### Lot 0 — L'extension MID
 
@@ -692,7 +699,7 @@ après.
 Avec `bundle=1`, la porteuse bat seule l'audio, le texte et N vidéos du
 participant. Un callback qui bloque bloque tout. Les règles de
 `docs/reference/threads-rtp.md` deviennent vitales, et la famine de
-`ChangeStream` (§5) est réglée avant, dans son propre chantier. La livraison reste tirée (`GetPacket`),
+`ChangeStream` (§5) est réglée. La livraison reste tirée (`GetPacket`),
 donc le décodage vidéo reste hors du thread de la porteuse : le coût ajouté au
 `poll` est celui du démultiplexage, une recherche de table par paquet.
 
@@ -738,7 +745,7 @@ contrôleur pose une image de fond sur la mosaïque avec
 | Réglages de transport sur une jointe | acceptés et ignorés | refusés : forcerait le contrôleur à distinguer la section marquée, ce que RFC 8843 rend inutile |
 | MID en émission | sur chaque paquet | au début seulement : plus de code, gain de 4 octets par paquet |
 | Direction d'un flux ≥ 2 | reçu seulement par défaut ; l'émission est permise, non recettée | l'interdire : c'est le chemin même de SLIDES |
-| Famine de `ChangeStream` | chantier préalable au lot 2 (**décidé** 2026-09-29) | la régler dans le lot 2 : mélangerait un correctif de verrou et une refonte de transport |
+| Famine de `ChangeStream` | chantier préalable au lot 2, **fait** : `GetPacket` attend hors verrou (**décidé** 2026-09-29) | la régler dans le lot 2 : mélangerait un correctif de verrou et une refonte de transport |
 | `role` dans MOTELI | `int32` (**décidé** 2026-09-29) | énumération ouverte : dépend du comportement de chaque bibliothèque protobuf sur une valeur inconnue |
 | Rôle sur les RPC JSR-309 | sur tous les RPC qui visent une jambe (**décidé** 2026-09-29) | seulement média et attaches : ferme le SIP SRTP hors BUNDLE ; média, attaches et chiffrement : cinq handlers de moins, une table d'exceptions à retenir |
 | Slot du document sans présentation | vide (**décidé** 2026-09-29) | logo poussé par le code BFCP : plus de pipe où le pousser |
