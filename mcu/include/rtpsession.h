@@ -280,6 +280,11 @@ public:
 
 
 	DWORD 	GetSendSSRC()			const { return sendSSRC;	}
+	//Propriétés `mid` et `remote-ssrc` : la section SDP de cette jambe et le
+	//SSRC que le pair y annonce. Sans BUNDLE elles ne servent qu'à l'écriture
+	//du MID sortant ; le démultiplexage d'une porteuse les lit (lot 2).
+	const std::string& GetMid()		const { return mid;		}
+	DWORD	GetRemoteSSRC()			const { return remoteSSRC;	}
 	const RTPMap* GetRtpMapIn()			const  { return rtpMapIn;	}
 	timeval GetLastSR()				const  { return lastSR;	}
 	timeval GetLastReceivedSR()		const  { return lastReceivedSR;	}
@@ -826,6 +831,9 @@ private:
 	//deux ids gardes a part plutot qu'une seconde table a tenir coherente.
 	BYTE			absSendTimeExtId;
 	BYTE			transportCCExtId;
+	BYTE			midExtId;
+	std::string		mid;
+	DWORD			remoteSSRC;
 	//Estimateur émetteur (lot 6.3) : historique alimenté par le thread
 	//d'émission, consommé par le thread RTCP — le mutex couvre les deux.
 	void ProcessTransportWideFeedback(RTCPRTPFeedback* fb);

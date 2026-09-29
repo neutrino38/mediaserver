@@ -360,6 +360,8 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	transportFeedbackStarted = false;
 	absSendTimeExtId = 0;
 	transportCCExtId = 0;
+	midExtId = 0;
+	remoteSSRC = 0;
 	isNACKEnabled = false;
 	//Fill with 0
 	memset(sendPacket,0,MTU+SRTP_MAX_TRAILER_LEN);
@@ -655,6 +657,20 @@ int RTPSession::SetProperties(const Properties& properties)
 			transportCCExtId = (BYTE)atoi(it->second.c_str());
 			extMap[transportCCExtId] = RTPPacket::HeaderExtension::TransportWideCC;
 			useTransportCC = true;
+		} else if (it->first.compare("urn:ietf:params:rtp-hdrext:sdes:mid")==0) {
+			//Set extension
+			midExtId = (BYTE)atoi(it->second.c_str());
+			extMap[midExtId] = RTPPacket::HeaderExtension::MID;
+		} else if (it->first.compare("mid")==0) {
+			//L'element one-byte plafonne a 16 octets : au-dela, le pair ne
+			//pourrait pas relire ce qu'on ecrit.
+			mid = it->second.substr(0, RTPPacket::HeaderExtension::MaxMidLength);
+			if (mid.size() != it->second.size())
+				Error("RTP property mid [%s] truncated to %u bytes on %s stream %p\n",
+				      it->second.c_str(), RTPPacket::HeaderExtension::MaxMidLength,
+				      MediaFrame::TypeToString(media), this);
+		} else if (it->first.compare("remote-ssrc")==0) {
+			remoteSSRC = (DWORD)strtoul(it->second.c_str(), NULL, 10);
 		} else {
 			Error("Unknown RTP property [%s]\n",it->first.c_str());
 		}
@@ -676,6 +692,9 @@ int RTPSession::SetProperties(const Properties& properties)
 	if (useTransportCC)
 		Log("Activated transport-cc on %s stream %p, extmap id=%d.\n",
 		    MediaFrame::TypeToString(media), this, transportCCExtId);
+	if (midExtId && !mid.empty())
+		Log("Sending MID [%s] on %s stream %p, extmap id=%d.\n",
+		    mid.c_str(), MediaFrame::TypeToString(media), this, midExtId);
 	mutex.unlock();
 	return 1;
 }
@@ -2206,8 +2225,12 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	//Calculamos el inicio
 	int ini = sizeof(rtp_hdr_t);
 	
+	//Le MID s'ecrit sur chaque paquet (RFC 8843 §9.2 ne l'exige qu'au debut
+	//et a chaque changement de SSRC) : le pair demultiplexe alors sans
+	//dependre des a=ssrc de la reponse.
+	const bool sendMid = midExtId && !mid.empty();
 	//If we have are using any sending extensions
-	if (useAbsTime || useTransportCC)
+	if (useAbsTime || useTransportCC || sendMid)
 	{
 		//Get header
 		rtp_hdr_ext_t* ext = (rtp_hdr_ext_t*)(sendPacket + ini);
@@ -2239,6 +2262,12 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			sendPacket[ini] = transportCCExtId << 4 | 0x01;
 			set2(sendPacket,ini+1,(WORD)(++transportSeqNum));
 			ini+=3;
+		}
+		if (sendMid)
+		{
+			sendPacket[ini] = midExtId << 4 | (BYTE)(mid.size()-1);
+			memcpy(sendPacket+ini+1,mid.data(),mid.size());
+			ini+=1+mid.size();
 		}
 		//Pad to 32 bit boundary
 		while ((ini-extIni) & 0x03)
@@ -2994,15 +3023,12 @@ int RTPSession::ReadRTP()
 	//Get ssrc
 	DWORD ssrc = packet->GetSSRC();
 
-	//Lot 4 : le pair attend nos rapports d'arrivee sur SES paquets. L'extension
-	//n'est lue que si elle est negociee — sans cela, aucun appelant ne consomme
-	//les extensions entrantes et le paquet n'a pas a etre relu pour rien.
-	if (useTransportCC)
-	{
-		packet->ProcessExtensions(extMap);
-		if (packet->HasTransportSeqNum())
-			transportFeedback.OnPacketReceived(ssrc,packet->GetTransportSeqNum(),getTime());
-	}
+	//Toujours, et pas seulement sous transport-cc : le MID d'une jambe
+	//jointe arrive sans que transport-cc soit negocie.
+	packet->ProcessExtensions(extMap);
+	//Lot 4 : le pair attend nos rapports d'arrivee sur SES paquets.
+	if (useTransportCC && packet->HasTransportSeqNum())
+		transportFeedback.OnPacketReceived(ssrc,packet->GetTransportSeqNum(),getTime());
 
         streamUse.IncUse();
 

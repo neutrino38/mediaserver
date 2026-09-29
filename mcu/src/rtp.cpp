@@ -14,8 +14,10 @@ void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 	if (!IsValid())
 		//Exit
 		return;
-	//Check extensions
-	if (GetX())
+	//Seul le profil one-byte (RFC 8285 §4.2) est lu. Un en-tete two-byte
+	//(0x100x) a un octet de longueur apres l'id : le lire comme du one-byte
+	//prendrait un octet de donnees pour un id et rendrait des valeurs fausses.
+	if (GetX() && ntohs(GetExtensionType()) == 0xBEDE)
 	{
 		//Get extension data
 		const BYTE* ext = GetExtensionData();
@@ -92,6 +94,16 @@ void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 					extension.hasTransportSeqNum = true;
 					extension.transportSeqNum = get2(ext,0);
+					break;
+				case RTPPacket::HeaderExtension::MID:
+					//  0                   1                   2                   3
+					//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+					// |  ID   | len-1 |      mid (len octets, RFC 8843 §15.1)         |
+					// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+					extension.hasMid = true;
+					memcpy(extension.mid,ext,n);
+					extension.mid[n] = 0;
 					break;
 				default:
 					Debug("-Unknown or unmapped extension [%d]\n",id);

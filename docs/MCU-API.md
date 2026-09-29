@@ -731,6 +731,25 @@ mapping) et pour le RTCP non muxé sur son propre paquet.
   distant, personne ne posera jamais la cible, et le rattrapage est la seule chose
   qui reste.
 
+##### `mid` et `remote-ssrc` — l'identité de la section SDP
+Trois propriétés décrivent la section `m=` que porte la jambe, pour l'extension
+d'en-tête MID (RFC 8843 §15, RFC 8285 profil one-byte) :
+
+| propriété | valeur | effet |
+|---|---|---|
+| `urn:ietf:params:rtp-hdrext:sdes:mid` | l'`extmap` id négocié | lecture du MID reçu ; écriture du MID émis si `mid` est posé |
+| `mid` | la valeur de `a=mid` de la section, 16 octets au plus | écrite sur chaque paquet émis |
+| `remote-ssrc` | le SSRC annoncé par `a=ssrc` de l'offre, s'il y en a un | mémorisé pour le démultiplexage BUNDLE |
+
+- Le MID est écrit sur **chaque** paquet, et non seulement au début et à chaque
+  changement de SSRC : le pair démultiplexe alors sans dépendre des `a=ssrc`
+  de la réponse.
+- Une valeur `mid` de plus de 16 octets est tronquée, avec une trace d'erreur :
+  l'élément one-byte ne porte pas davantage.
+- Les extensions d'en-tête d'un paquet reçu sont lues qu'un transport-cc soit
+  négocié ou non ; seul le profil one-byte (`0xBEDE`) est lu, le profil two-byte
+  est ignoré sans erreur.
+
 #### `GetSupportedCodecs`
 Liste les codecs supportés pour un type de média.
 - **Params** `(i)` : `media` (`MediaFrame::Type`).

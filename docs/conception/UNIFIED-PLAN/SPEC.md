@@ -1,7 +1,8 @@
 # Flux vidéo multiples par participant (RFC 9429, BUNDLE)
 
 > Statut : **en cours**. Branche `feat/unified-plan`. Le chantier préalable
-> (famine de `ChangeStream`, §5) est fait ; les lots 0 à 5 restent à faire.
+> (famine de `ChangeStream`, §5) et le lot 0 (extension MID) sont faits ; les
+> lots 1 à 5 restent à faire.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur par XML-RPC ou par
@@ -107,7 +108,7 @@ Conséquences :
 | Plusieurs SSRC reçus sur une session | `RTPStream`, `AddStream`, `GetPacket(ssrc)` `rtpsession.h:190-266` | OK, réutilisé |
 | Un décodeur lit un SSRC donné d'une session tierce | `VideoStream::SetRTPSession(weak_ptr, ssrc)` `mcu/include/videostream.h:74` | OK, réutilisé |
 | SSRC inconnu = **remplacement** de l'ancien | `RTPSession::Listener::onNewStream` → `ChangeStream` `rtpsession.cpp:4406` | **à encadrer, §5** |
-| Extensions d'en-tête connues | `HeaderExtension::Type` `mcu/include/rtp.h:78-84` : audio level, toffset, abs-send-time, transport-cc | **MID absent, §4.5** |
+| Extensions d'en-tête connues | `HeaderExtension::Type` `mcu/include/rtp.h` : audio level, toffset, abs-send-time, transport-cc, MID | lot 0 livré, §4.5 |
 | Lecture des extensions | `ProcessExtensions` `mcu/src/rtp.cpp:9`, appelée seulement sous `useTransportCC` `rtpsession.cpp:3000` | **à rendre inconditionnelle, §4.5** |
 | Propriété `ssrc` = SSRC **d'émission** ; `cname` | `rtpsession.cpp:599-602` | OK ; il manque le SSRC distant |
 | Source du mixeur vidéo = un `int id > 0`, une entrée + une sortie | `VideoMixer::CreateMixer` `mcu/src/videomixer.cpp:660`, `Mosaic` `mcu/src/mosaic.cpp` | OK, réutilisé tel quel |
@@ -551,12 +552,14 @@ section par section, dans les deux sens.
   BUNDLE, l'audio du participant l'aurait subi. Règle pour le lot 2 : le
   démultiplexage de la porteuse ne prend jamais un verrou qu'un consommateur
   peut tenir pendant une attente (`docs/reference/threads-rtp.md` §7).
-- **`ProcessExtensions` n'est appelée que sous transport-cc.** Sans transport-cc
-  négocié, un MID reçu serait invisible. Lot 0.
-- **Le parseur d'extensions ne vérifie pas le profil** (`0xBEDE` contre
-  `0x100x`) : un en-tête à deux octets serait lu comme un en-tête à un octet.
-  Borné par la longueur, donc sans débordement, mais un MID mal lu. À
-  vérifier au lot 0, un test adverse en fait foi.
+- **`ProcessExtensions` n'était appelée que sous transport-cc.** Sans
+  transport-cc négocié, un MID reçu était invisible. Réglé au lot 0 : elle
+  tourne sur tout paquet reçu (garde-fou
+  `RtpMid.LaSessionLitLeMidSansTransportCC`).
+- **Le parseur d'extensions ne vérifiait pas le profil** (`0xBEDE` contre
+  `0x100x`) : un en-tête à deux octets était lu comme un en-tête à un octet.
+  Réglé au lot 0 : seul le profil one-byte est lu (garde-fou
+  `RtpMid.UnEnTeteTwoByteNEstPasPrisPourDuOneByte`).
 - **`partId+100000`** n'est protégé par rien, et seul son sens descendant est
   câblé. Le lot 1b le retire.
 - **`SharedDocMixer` est à la fois serveur BFCP et `VideoOutput`.** Le lot 1b
@@ -576,15 +579,16 @@ Le lot 1b suit le lot 1. Le correctif de la famine de `ChangeStream` (§5),
 préalable au lot 2, est livré ; sa recette en appel réel reste à faire. Le lot
 4 attend que l'API des lots 1 à 3 soit figée.
 
-### Lot 0 — L'extension MID
+### Lot 0 — L'extension MID (livré)
 
 - `rtp.h` / `rtp.cpp` : type `MID`, lecture, écriture ; vérification du profil
   de l'en-tête d'extension.
 - `rtpsession.cpp` : propriété `sdes:mid`, `midExtId`, `ProcessExtensions`
   inconditionnelle ; propriétés `mid` et `remote-ssrc` mémorisées.
-- Tests gtest (`mcu/tests/`) : un paquet forgé avec MID à un octet est lu ;
-  un en-tête à deux octets n'est pas pris pour un en-tête à un octet ; un
-  paquet émis porte le MID annoncé.
+- Tests gtest (`mcu/tests/test_rtp_mid.cpp`) : un paquet forgé avec MID à un
+  octet est lu ; un en-tête à deux octets n'est pas pris pour un en-tête à un
+  octet ; une session lit le MID reçu sans transport-cc ; un paquet émis porte
+  le MID annoncé.
 
 ### Lot 1 — N sources du mixeur, sans BUNDLE
 
