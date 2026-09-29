@@ -6,7 +6,7 @@ Release:   1.ives%{?dist}
 Summary:   [IVeS] librairies partag꦳ pour asterisk de Fontventa.
 Vendor:    IVeS / Fontventa
 Group:     Applications/Internet
-License:   GPL
+License:   GPL-3.0-only AND BSD-3-Clause
 URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 Requires:  ImageMagick-c++ >= 7, ffmpeg, libsrtp
@@ -63,7 +63,7 @@ cp mcu.csr_conf $RPM_BUILD_ROOT/etc/mediaserver
 # Le binaire embarque le detecteur de voix de libfvad (BSD) : sa notice doit
 # accompagner la distribution binaire. Le sous-module libvad ne la porte pas.
 mkdir -p $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{version}
-cp LICENSE.libfvad $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{version}/
+cp LICENSE.md LICENSE.libfvad $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{version}/
 
 %files
 %defattr(-,root,root,-)
@@ -73,6 +73,7 @@ cp LICENSE.libfvad $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{version}/
 /etc/mediaserver/type-asian.xml
 %attr(0750,root,root) /etc/mediaserver/certcommunication.sh
 %config(noreplace) /etc/mediaserver/mcu.csr_conf
+%license %{_defaultlicensedir}/%{name}-%{version}/LICENSE.md
 %license %{_defaultlicensedir}/%{name}-%{version}/LICENSE.libfvad
 
 %post
@@ -114,7 +115,7 @@ echo "Now (re)starting mediaserver"
 - suppression des vu-mètres
 - version 1.20.0
 
-* Wed Jul 16 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+* Thu Jul 16 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - migration du service SysV (/etc/init.d/mediaserver) vers une unite systemd
   (mediaserver.service, Type=simple). Le binaire tourne desormais en avant-plan
   (plus de "-f"/fork), l'arret propre passe par SIGTERM (signing_handler) et le
