@@ -24,6 +24,7 @@
 #include "rtpsession.h"
 #include "rtpsessionset.h"
 #include "ipaddress.h"
+#include "addressprofiles.h"
 #include "medkit/stunmessage.h"
 extern "C" {
 #include <libavutil/base64.h>
@@ -165,6 +166,14 @@ static std::string DetectAnnouncedIp()
 
 	if (addrs.empty())
 	{
+		//Le nom de l'hôte ne vaut que ce que vaut /etc/hosts : Debian et Ubuntu
+		//l'y font pointer sur 127.0.1.1, qui n'est pas annonçable. On retombe
+		//sur ce que portent réellement les interfaces, ce que --public-ip
+		//documente déjà comme défaut.
+		const IPAddress local = AddressProfiles::FirstAnnounceableLocal(AF_INET);
+		if (local.IsSet())
+			return local.ToString();
+
 		//Erreur
 		Error("-RTPSession cannot resolve \"%s\" to an announceable address (err %d)\n",hostname,err);
 		//Rien

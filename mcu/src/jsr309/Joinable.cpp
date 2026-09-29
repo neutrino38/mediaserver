@@ -37,6 +37,14 @@ int	Joinable::SetEventContextId(int eventContextId )
 	return 1;
 }
 
+int	Joinable::CopyEventContext(const Joinable& from)
+{
+	sessionId		= from.sessionId;
+	eventContextId 	= from.eventContextId;
+	jsrManager=from.jsrManager;
+	return 1;
+}
+
 bool Joinable::PostEvent( JSR309Event *event)
 {
 	if (jsrManager != NULL && sessionId >0 && eventContextId > 0)

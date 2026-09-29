@@ -60,6 +60,26 @@ static int ThreadCount()
 	return n;
 }
 
+// Ce compte est celui du PROCESSUS entier : il voit aussi les threads des
+// suites jouees avant, dont le noyau n'a pas encore retire la tache de
+// /proc/self/task. Une reference prise a cet instant est trop haute, et la
+// comparaison echoue plus loin parce que le compte a BAISSE — l'inverse de ce
+// qu'on garde ici. On attend donc qu'il ne bouge plus avant de la prendre.
+static int StableThreadCount(long deadlineMs = 1000)
+{
+	Clock::time_point t0 = Clock::now();
+	int last = ThreadCount();
+	int same = 0;
+	while (same < 5 && ElapsedMs(t0) < deadlineMs)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		int now = ThreadCount();
+		same = (now == last) ? same + 1 : 0;
+		last = now;
+	}
+	return last;
+}
+
 // Listener minimal : la session en exige un non nul.
 //
 // onNewStream AJOUTE le flux au lieu de remplacer le flux par défaut. C'est ce
@@ -140,7 +160,7 @@ TEST(RtpReactor, ExtraSessionsCostNoExtraThread)
 	Leg first;
 	ASSERT_TRUE(first.Init());
 
-	int baseline = ThreadCount();
+	int baseline = StableThreadCount();
 	ASSERT_GT(baseline, 0);
 
 	{
@@ -152,15 +172,20 @@ TEST(RtpReactor, ExtraSessionsCostNoExtraThread)
 			legs.push_back(leg);
 		}
 
-		// Six jambes de plus : le compte de threads ne bouge pas. Avant ce lot,
+		// Six jambes de plus : le compte de threads ne monte pas. Avant ce lot,
 		// c'étaient six threads.
-		EXPECT_EQ(ThreadCount(), baseline);
+		//
+		// LE et non EQ : ce qui est gardé ici est qu'AUCUN thread ne s'ajoute.
+		// Un thread étranger qui s'éteint pendant le test fait baisser le compte
+		// du processus, ce qui ne viole rien — et faisait pourtant échouer ce
+		// test une fois sur deux en suite complète.
+		EXPECT_LE(ThreadCount(), baseline);
 
 		for (size_t i = 0; i < legs.size(); ++i)
 			delete legs[i];
 	}
 
-	EXPECT_EQ(ThreadCount(), baseline);
+	EXPECT_LE(ThreadCount(), baseline);
 }
 
 // Init inscrit, End retire, le destructeur retire aussi (il passe par End).

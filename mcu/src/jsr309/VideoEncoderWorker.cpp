@@ -359,7 +359,7 @@ int VideoEncoderMultiplexerWorker::Stop()
 		//
 		//Le deinit de l'encodeur a désormais lieu sur ce thread-ci : s'il se
 		//bloque (cas SVT-AV1 0.9.0 du 2026-08-13, contourné dans libmedikit par
-		//medkit/ffcodeclock.h), c'est ce verrou qui retiendra le suivant.
+		//LockSvtAv1() dans ffvideocodec.cpp), c'est ce verrou qui retiendra le suivant.
 		std::lock_guard<std::mutex> lock(encodeLock);
 
 		delete videoEncoder;

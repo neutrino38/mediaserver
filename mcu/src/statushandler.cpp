@@ -224,6 +224,15 @@ void StatusHandler::Collect(Info& info,time_t now)
 	//composition : la sonde a deja eu lieu au demarrage, on ne fait que la relire.
 	info.vaapi = Pict::GetVAAPIDevice() != NULL;
 
+	//Ce que l'acceleration fait REELLEMENT. Le booleen ci-dessus dit seulement
+	//qu'un GPU est la ; le repli logiciel, lui, est silencieux (cf. status-http.md).
+	VideoAccelStats accel = VideoAccel::GetStats();
+	info.videoEncoders	= accel.encoders;
+	info.videoEncodersHw	= accel.encodersHw;
+	info.videoDecoders	= accel.decoders;
+	info.videoDecodersHw	= accel.decodersHw;
+	info.hwFallbacks	= accel.hwFallbacks;
+
 	//Texte temps reel, par transport.
 	info.textRtp		= TextCodec::IsSupported(TextCodec::T140);
 	info.textRtpRedundancy	= TextCodec::IsSupported(TextCodec::T140RED);
@@ -353,7 +362,12 @@ std::string StatusHandler::RenderJSON(const Info& info)
 	out += ",\"rfc8865\":"		+ JsonBool(info.textDataChannel);
 	out += ",\"websocket\":"	+ JsonBool(info.textWebSocket);
 	out += "}";
-	out += ",\"hardware\":{\"vaapi\":" + JsonBool(info.vaapi) + "}";
+	out += ",\"hardware\":{\"vaapi\":" + JsonBool(info.vaapi);
+	out += ",\"videoEncoders\":"	+ JsonInt(info.videoEncoders);
+	out += ",\"videoEncodersHw\":"	+ JsonInt(info.videoEncodersHw);
+	out += ",\"videoDecoders\":"	+ JsonInt(info.videoDecoders);
+	out += ",\"videoDecodersHw\":"	+ JsonInt(info.videoDecodersHw);
+	out += ",\"hwFallbacks\":"	+ JsonInt(info.hwFallbacks) + "}";
 	out += ",\"bfcp\":"		+ JsonBool(info.bfcp);
 	out += "}";
 
@@ -435,6 +449,15 @@ std::string StatusHandler::RenderText(const Info& info)
 	snprintf(buf,sizeof(buf),"  acceleration   VAAPI %s%s\n",
 		YesNo(info.vaapi),
 		info.vaapi ? "" : " (tout le traitement video sur CPU)");
+	out += buf;
+	snprintf(buf,sizeof(buf),"  encodeurs      %d ouverts, dont %d sur GPU\n",
+		info.videoEncoders,info.videoEncodersHw);
+	out += buf;
+	snprintf(buf,sizeof(buf),"  decodeurs      %d ouverts, dont %d sur GPU\n",
+		info.videoDecoders,info.videoDecodersHw);
+	out += buf;
+	snprintf(buf,sizeof(buf),"  replis GPU-CPU %d depuis le demarrage\n",
+		info.hwFallbacks);
 	out += buf;
 	snprintf(buf,sizeof(buf),"  texte          RTP RFC 4103 %s (redondance %s), "
 		"data channel RFC 8865 %s, WebSocket %s\n",

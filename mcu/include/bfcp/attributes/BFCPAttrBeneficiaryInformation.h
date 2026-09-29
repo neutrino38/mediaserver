@@ -8,30 +8,30 @@
 
 // 5.2.14.  BENEFICIARY-INFORMATION
 //
-//  0                   1                   2                   3
-//  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//  |0 0 0 1 1 1 0|M|    Length     |        Beneficiary ID         |
-//  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//       0                   1                   2                   3
+//       0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//      |0 0 0 1 1 1 0|M|    Length     |        Beneficiary ID         |
+//      +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //
-//  BENEFICIARY-INFORMATION =   (BENEFICIARY-INFORMATION-HEADER)
-//                              [USER-DISPLAY-NAME]
-//                              [USER-URI]
-//                             *[EXTENSION-ATTRIBUTE]
+//    BENEFICIARY-INFORMATION =   (BENEFICIARY-INFORMATION-HEADER)
+//                                [USER-DISPLAY-NAME]
+//                                [USER-URI]
+//                               *[EXTENSION-ATTRIBUTE]
 
 
 class BFCPAttrBeneficiaryInformation : public BFCPAttribute
 {
-/* Instance members. */
-
 public:
 	BFCPAttrBeneficiaryInformation(int beneficiaryId);
 	~BFCPAttrBeneficiaryInformation();
 	void Dump();
-	void Stringify(std::wstringstream &json_stream);
+	size_t Serialize(BYTE* out, size_t max, bool mandatory) const;
+	static BFCPAttrBeneficiaryInformation* Parse(const BYTE* contents, size_t len);
+
+	int GetBeneficiaryId() const;
 
 private:
-	// Mandatory attributes.
 	BFCPAttrBeneficiaryId *beneficiaryId;
 };
 

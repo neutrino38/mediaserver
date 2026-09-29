@@ -2424,6 +2424,10 @@ unsigned short HTTPParser::GetHttpMajor() const
 {
 	return http_major;
 }
+unsigned short HTTPParser::GetStatusCode() const
+{
+	return status_code;
+}
 
 unsigned long HTTPParser::Version()
 {

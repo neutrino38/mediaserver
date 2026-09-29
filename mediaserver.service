@@ -7,9 +7,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Options passees au binaire (port XML-RPC, WebSocket, etc.).
-# Surchargeables dans /etc/sysconfig/mediaserver ; NE PAS y remettre "-f" :
-# sous systemd le mediaserver doit rester en avant-plan (pas de fork).
+# Surchargeables dans /etc/sysconfig/mediaserver (RPM) ou /etc/default/mediaserver
+# (paquet Debian) ; NE PAS y remettre "-f" : sous systemd le mediaserver doit
+# rester en avant-plan (pas de fork). Les deux lignes sont prefixees de "-" :
+# chaque distribution n'installe que le sien, l'autre est absent sans erreur.
 EnvironmentFile=-/etc/sysconfig/mediaserver
+EnvironmentFile=-/etc/default/mediaserver
 ExecStart=/opt/ives/bin/mediaserver $OPTIONS
 
 # L'ancien init faisait "cd /var/log" avant de lancer le binaire.

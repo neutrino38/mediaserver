@@ -173,6 +173,24 @@ TEST(StunClientServer, UnLitteralV6ExigeDesCrochets)
 	EXPECT_NE(std::string::npos, error.find("IPv6")) << error;
 }
 
+//Un serveur STUN est une DESTINATION, pas une adresse qu'on publie : un nom qui
+//ne mène qu'à la loopback est joignable, et c'est le cas d'un serveur de test
+//local. Le filtre « adresse annonçable » de Resolve le rejetait (SPEC
+//WS-CLIENT §9.5), alors que le littéral équivalent passait.
+TEST(StunClientServer, UnNomEnLoopbackEstUneDestinationValable)
+{
+	IPEndpoint  server;
+	std::string error;
+
+	int err = 0;
+	if (IPAddress::Resolve("localhost", err, AF_INET, IPAddress::Destination).empty())
+		GTEST_SKIP() << "\"localhost\" ne se résout pas sur cet hôte";
+
+	ASSERT_TRUE(StunClient::ParseServer("localhost:3478", server, error)) << error;
+	EXPECT_TRUE(server.Address() == kLoopback) << server.Address().ToString();
+	EXPECT_EQ(3478, server.Port());
+}
+
 TEST(StunClientServer, RefuseCeQuiNeSeResoutPas)
 {
 	IPEndpoint  server;

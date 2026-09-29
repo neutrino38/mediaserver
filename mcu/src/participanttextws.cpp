@@ -25,11 +25,17 @@ ParticipantTextWS::~ParticipantTextWS()
 
 int ParticipantTextWS::Init()
 {
+	std::lock_guard<std::mutex> lock(lifecycle);
+
 	if (pulling != TaskIdle)
 		return Error("ParticipantTextWS::Init: already started.\n");
 
 	pulling = TaskStarting;
-	StartThread();
+	if (!StartThread())
+	{
+		pulling = TaskIdle;
+		return Error("ParticipantTextWS::Init: pull thread still joinable.\n");
+	}
 
 	Log("ParticipantTextWS: mixer<->websocket text bridge started.\n");
 	return 1;
@@ -37,6 +43,8 @@ int ParticipantTextWS::Init()
 
 int ParticipantTextWS::End()
 {
+	std::lock_guard<std::mutex> stop(lifecycle);
+
 	//Stop the pull thread first: it must not deliver into a socket we are
 	//about to close.
 	if (pulling == TaskRunning || pulling == TaskStarting)
@@ -44,8 +52,11 @@ int ParticipantTextWS::End()
 		pulling = TaskStopping;
 		//Unblock GetFrame
 		mixerInput->Cancel();
-		StopThread();
 	}
+	//Joined unconditionally, outside the test above: StopThread() is
+	//idempotent, and a stop that depends on a state read is a stop that can
+	//be skipped while the thread is still alive.
+	StopThread();
 	pulling = TaskIdle;
 
 	std::lock_guard<std::mutex> lock(mtx);
@@ -61,11 +72,15 @@ int ParticipantTextWS::PullText()
 {
 	//Do NOT overwrite a TaskStopping that End() posted while this thread was
 	//starting: the flag would go back to TaskRunning, the loop would never
-	//exit and StopThread() would join forever.
-	if (pulling == TaskStarting)
-		pulling = TaskRunning;
+	//exit and StopThread() would join forever. A test then a store is not
+	//enough — End() fits between the two, and the store wins. Observed in
+	//production: pull thread at 100% of a core, End() joining forever.
+	TaskState starting = TaskStarting;
+	pulling.compare_exchange_strong(starting,TaskRunning);
 
-	while (pulling == TaskRunning)
+	//Both conditions, because both can stop this loop on their own: Worker
+	//lowers `running` in StopThread(), whoever calls it.
+	while (IsThreadRunning() && pulling == TaskRunning)
 	{
 		//The per-leg mix destined to this participant. Blocks up to the
 		//timeout; Cancel() (from End) unblocks it with NULL.

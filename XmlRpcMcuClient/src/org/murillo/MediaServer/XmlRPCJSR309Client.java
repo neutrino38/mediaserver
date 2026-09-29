@@ -1038,4 +1038,22 @@ public class XmlRPCJSR309Client {
         //Return
         return (((Integer)response.get("returnCode"))==1);
     }
+
+    /**
+     * Arm an OUTGOING text leg: the media server connects to the given ws:// or
+     * wss:// url instead of waiting for a peer. Text only.
+     *
+     * Success means the leg is armed, not open: the connection completes after
+     * this call returns, and the event queue reports it (EndpointConnectedEvent
+     * on every open, EndpointDisconnectedEvent on every loss).
+     */
+    public boolean ConnectMediaConnection(int sessId,int EndpointId,Codecs.MediaType media, Codecs.MediaRole role, String url) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,EndpointId,media.valueOf(),role.valueOf(),url};
+        //Execute
+        HashMap response = (HashMap) client.execute("ConnectMediaConnection", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
 }

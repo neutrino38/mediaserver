@@ -53,6 +53,12 @@ public:
 	/** Reste-t-il des octets à pousser sur le socket ? */
 	virtual bool WantsWrite() = 0;
 
+	/** Le transport accepte-t-il des octets applicatifs ? Faux tant qu'un
+	 *  handshake TLS est en cours : `Send` y JETTE ce qu'on lui donne (il
+	 *  n'a pas de tampon avant handshake), ce qui perdrait silencieusement
+	 *  la première écriture. */
+	virtual bool IsReady() = 0;
+
 	/** Ferme le socket (shutdown + close) et l'invalide. Idempotent. */
 	virtual void Shutdown() = 0;
 
@@ -128,6 +134,7 @@ public:
 	}
 
 	virtual bool WantsWrite()				{ return !pendingOut.empty(); }
+	virtual bool IsReady()					{ return fd != FD_INVALID; }
 	virtual int  GetFd()					{ return fd; }
 
 	virtual void Shutdown()
@@ -163,6 +170,21 @@ public:
 
 	/** Crée une nouvelle instance de transport TLS, ou nullptr si indisponible. */
 	static std::unique_ptr<WebSocketTransport> Create();
+
+	/** Configuration des connexions SORTANTES (wss://), posée au démarrage et lue
+	 *  par WebSocketServer::Connect. `verifyPeer=false` sert les certificats
+	 *  auto-signés de laboratoire, et rien d'autre ; `cafile` ajoute une autorité
+	 *  au magasin du système. Elle BÂTIT le contexte client, donc à poser AVANT
+	 *  la première connexion sortante. Renvoie false si le contexte est
+	 *  inutilisable — typiquement un `cafile` illisible : l'appelant le sait au
+	 *  démarrage, et non au premier appel réel. */
+	static bool SetClientConfig(bool verifyPeer, const std::string& cafile);
+	static bool GetClientVerifyPeer();
+
+	/** Crée un transport TLS CLIENT, ou nullptr si le contexte est inutilisable.
+	 *  `host` est l'hôte de l'URL, sans crochets ni port : il porte le SNI et
+	 *  l'identité vérifiée dans le certificat du pair. */
+	static std::unique_ptr<WebSocketTransport> CreateClient(const std::string& host, bool verifyPeer);
 };
 
 #endif /* _WebSocketTransport_H_ */

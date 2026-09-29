@@ -299,6 +299,57 @@ TEST(Status, LesDeuxRendusRacontentLeMemeEtat)
 	}
 }
 
+/* ------------------ Acceleration materielle ------------------ */
+
+// Le booleen `vaapi` dit qu'un GPU est LA. Il ne dit pas qu'on s'en sert : le
+// repli logiciel est silencieux (FfVideoEncoder::FallbackToSoftware). Sans ces
+// compteurs, un controleur ne peut pas distinguer « l'appel a marche » de
+// « l'appel a marche ET l'encodeur etait materiel » — et un test qui ne sait
+// pas les distinguer serait tout aussi vert avec le GPU debranche.
+TEST(Status, LesCompteursDAccelerationSontPublies)
+{
+	const StatusHandler::Info info = CollectFixture();
+	const std::string json = StatusHandler::RenderJSON(info);
+
+	EXPECT_NE(std::string::npos,json.find("\"videoEncoders\""))   << json;
+	EXPECT_NE(std::string::npos,json.find("\"videoEncodersHw\"")) << json;
+	EXPECT_NE(std::string::npos,json.find("\"videoDecoders\""))   << json;
+	EXPECT_NE(std::string::npos,json.find("\"videoDecodersHw\"")) << json;
+	EXPECT_NE(std::string::npos,json.find("\"hwFallbacks\""))     << json;
+}
+
+// Le materiel est un SOUS-ENSEMBLE de l'ouvert : annoncer plus d'encodeurs GPU
+// que d'encodeurs tout court serait un compteur qui a derive, et un exploitant
+// n'aurait aucun moyen de le voir.
+TEST(Status, LesCompteursMaterielsNeDepassentPasLesCompteursTotaux)
+{
+	const StatusHandler::Info info = CollectFixture();
+
+	EXPECT_GE(info.videoEncoders,info.videoEncodersHw);
+	EXPECT_GE(info.videoDecoders,info.videoDecodersHw);
+	EXPECT_GE(info.videoEncoders,0);
+	EXPECT_GE(info.videoDecoders,0);
+	EXPECT_GE(info.hwFallbacks,0);
+
+	// Sans device, rien ne peut tourner en materiel.
+	if (!info.vaapi)
+	{
+		EXPECT_EQ(0,info.videoEncodersHw);
+		EXPECT_EQ(0,info.videoDecodersHw);
+	}
+}
+
+// Meme invariant que pour le reste du statut : le rendu texte n'est pas une
+// seconde collecte, il dit la meme chose que le JSON.
+TEST(Status, LeRenduTexteDitAussiCeQuiTourneSurGpu)
+{
+	const std::string text = StatusHandler::RenderText(CollectFixture());
+
+	EXPECT_NE(std::string::npos,text.find("encodeurs"))      << text;
+	EXPECT_NE(std::string::npos,text.find("decodeurs"))      << text;
+	EXPECT_NE(std::string::npos,text.find("replis GPU-CPU")) << text;
+}
+
 TEST(Status, LeRenduTexteDitLUptimeEnClairEtEnSecondes)
 {
 	const std::string text = StatusHandler::RenderText(CollectFixture());

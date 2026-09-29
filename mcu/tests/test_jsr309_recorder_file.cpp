@@ -125,7 +125,15 @@ public:
 		if (!pic)
 			return 0;
 
-		VideoFramePtr frame = encoder->EncodeFrame(pic);
+		// Un encodeur MATERIEL retient sa premiere image : EncodeFrame rend alors
+		// nullptr sans que rien n'aille mal. On represente la meme image jusqu'a ce
+		// qu'une trame sorte — sinon ce harnais mesure la latence de l'encodeur au
+		// lieu de ce que le test veut prouver, et tout le fichier devient rouge sur
+		// une machine equipee d'un GPU.
+		VideoFramePtr frame;
+		for (int attempt = 0; attempt < 4 && !frame; ++attempt)
+			frame = encoder->EncodeFrame(pic);
+
 		if (!frame || !frame->HasRtpPacketizationInfo())
 			return 0;
 

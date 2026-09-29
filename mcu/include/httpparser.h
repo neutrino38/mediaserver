@@ -259,6 +259,7 @@ public:
         unsigned char GetMethod()	const;
         unsigned short GetHttpMinor()	const;
         unsigned short GetHttpMajor()	const;
+	unsigned short GetStatusCode()	const;
 
 	const char * GetMethodStr()	const { return http_method_str((enum http_method)method); }
 

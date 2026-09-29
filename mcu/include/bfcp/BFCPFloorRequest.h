@@ -4,7 +4,6 @@
 
 #include "bfcp/messages/BFCPMsgFloorRequestStatus.h"
 #include <set>
-#include <string>
 
 
 class BFCPFloorRequest
@@ -16,26 +15,24 @@ public:
 	void AddFloorId(int floorId);
 	void SetStatus(enum BFCPAttrRequestStatus::Status status);
 	void SetQueuePosition(int queuePosition);
-	bool HasFloorId(int floorId);
-	int GetFloorRequestId();
-	int GetUserId();
-	int GetBeneficiaryId();
-	std::set<int> GetFloorIds();
-	enum BFCPAttrRequestStatus::Status GetStatus();
-	std::wstring GetStatusString();
-	bool IsGranted();
-	bool CanBeGranted();
-	bool CanBeDenied();
-	bool CanBeCancelled();
-	int GetQueuePosition();
+	bool HasFloorId(int floorId) const;
+	int GetFloorRequestId() const;
+	int GetUserId() const;
+	int GetBeneficiaryId() const;
+	std::set<int> GetFloorIds() const;
+	enum BFCPAttrRequestStatus::Status GetStatus() const;
+	const char* GetStatusName() const;
+	bool IsGranted() const;
+	bool CanBeGranted() const;
+	bool CanBeDenied() const;
+	bool CanBeCancelled() const;
+	int GetQueuePosition() const;
 	void Dump();
 
-	// Generates a FloorRequestStatus response.
-	BFCPMsgFloorRequestStatus* CreateFloorRequestStatus(int transactionId);
-	// Generates a FloorRequestStatus notification (transactionId = 0).
-	BFCPMsgFloorRequestStatus* CreateFloorRequestStatus();
+	// Generates a FloorRequestStatus (transactionId = 0 for a notification).
+	BFCPMsgFloorRequestStatus* CreateFloorRequestStatus(int transactionId) const;
 	// Generates a FloorRequestInformation attribute.
-	BFCPAttrFloorRequestInformation* CreateFloorRequestInformation();
+	BFCPAttrFloorRequestInformation* CreateFloorRequestInformation() const;
 
 private:
 	int floorRequestId;

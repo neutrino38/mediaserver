@@ -89,6 +89,8 @@ public:
 	unsigned short GetHttpMinor() const  { return httpMinor;	}
 	std::string GetRequestURI() const    { return requestURI;	}
         std::string GetMethod() const        { return method;		}
+
+	std::string Serialize();
 private:
 	std::string method;
 	std::string requestURI;

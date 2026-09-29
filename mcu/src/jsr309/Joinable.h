@@ -40,6 +40,10 @@ public:
 	int	SetEventHandler(int sessionId,JSR309Manager* jsrManager);
 	int	SetEventContextId(int eventContextId );
 	int	GetEventContextId() {return eventContextId;};
+	//Un port recréé (ConfigureMediaConnection) naît APRÈS EndpointCreate, seul
+	//endroit qui pose ce contexte : sans cette reprise, ses événements ne sont
+	//postés nulle part.
+	int	CopyEventContext(const Joinable& from);
 	
 	virtual void AddListener(Listener *listener) = 0;
 	virtual void Update() = 0;

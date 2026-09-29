@@ -27,7 +27,7 @@ Deux correctifs ont été posés **de notre côté**, en attendant :
 
 | Correctif | Où | Sort au moment du portage |
 |---|---|---|
-| Sérialisation des ouvertures/destructions de contexte d'encodage | `medkit/ffcodeclock.h` + 5 sites dans `ffvideocodec.cpp` | **À retirer** (§2) |
+| Sérialisation des ouvertures/destructions de contexte `libsvtav1` | `LockSvtAv1()` + 5 sites dans `ffvideocodec.cpp` | **À garder** tant qu'une cible lie SVT-AV1 < 4.1 (§2) |
 | Création paresseuse de l'encodeur (rien en mode pont) | `mcu/src/jsr309/VideoEncoderWorker.cpp` | **À garder** (§2) |
 
 ---
@@ -67,30 +67,37 @@ une compatibilité à maintenir. Décider explicitement si on veut le garder ain
 
 ## 2. Le contournement à retirer — et celui à garder
 
-### 2.1 À RETIRER : `medkit/ffcodeclock.h`
+### 2.1 À GARDER : le verrou `libsvtav1` de `FfVideoEncoder`
 
-**Précondition à vérifier avant de retirer**, dans le source de la version
-SVT-AV1 retenue :
+`ffvideocodec.cpp` sérialise, pour le seul encodeur `libsvtav1`, l'ouverture
+et la destruction du contexte d'encodage. La fonction `LockSvtAv1()` rend le
+verrou. Elle rend un verrou vide pour tout autre encodeur.
 
-1. `lp_group` (ou son successeur) n'est plus un global de processus, **ou**
-2. `svt_av1_enc_deinit_handle()` ne le libère plus inconditionnellement (compteur
-   de références, `once`, ou état déplacé dans l'instance).
+Cinq sites le prennent :
 
-Tant qu'aucun des deux n'est vrai, **garder le verrou** : le coût est nul
-(une prise par établissement de patte, aucune par trame).
+- `SelectCodec`, qui libère le contexte précédent ;
+- `CloseCodec` ;
+- `FallbackToSoftware` ;
+- `~FfVideoEncoder` ;
+- `OpenCodec`, autour de `avcodec_open2()` seulement.
 
-Une fois la précondition tenue, retirer :
+Le verrou ne couvre pas `FallbackToSoftware()` dans `OpenCodec`. Cette
+fonction détruit un contexte, donc elle reprend le même verrou, qui n'est pas
+récursif.
 
-- le fichier `third_party/fontventa/libmedikit/medkit/ffcodeclock.h` ;
-- son `#include` en tête de `ffvideocodec.cpp` ;
-- les 5 portées `std::lock_guard<std::mutex> lock(FfCodecOpenLock())` dans
-  `ffvideocodec.cpp` : `SelectCodec` (~l.141), `CloseCodec` (~l.236),
-  `FallbackToSoftware` (~l.274), `~FfVideoEncoder` (~l.295), et `OpenCodec`
-  (~l.439, où il faut aussi remettre `avcodec_open2()` directement dans le `if`
-  et supprimer la variable intermédiaire `openErr`).
+**Pourquoi il reste.** SVT-AV1 4.1 ajoute les mutex qui manquaient. Le paquet
+ffmpeg 9 IVèS embarque SVT-AV1 4.2.0, et le test passe sans verrou avec lui.
+Mais le build vise aussi Debian et Ubuntu pour le développement, avec le
+SVT-AV1 de la distribution. Ubuntu 26.04 livre SVT-AV1 2.3.0. Sans verrou, le
+test `Av1EncoderConcurrency` y plante 3 fois sur 10, dans
+`svt_av1_enc_init_handle`. Avec le verrou, il passe 30 fois sur 30
+(2026-09-23).
 
-Le `Makefile` n'a rien à désapprendre : le suivi de dépendances est en
-`-MMD -MP`, il n'y a pas de liste d'en-têtes à tenir.
+**Coût.** Une prise de verrou à chaque établissement de patte AV1. Aucune prise
+par trame. Aucune pour les autres codecs.
+
+**Condition de retrait.** Toutes les cibles de build lient SVT-AV1 4.1 ou plus.
+Le test `Av1EncoderConcurrency` doit alors passer sans verrou sur chacune.
 
 ### 2.2 À GARDER : la création paresseuse de l'encodeur
 

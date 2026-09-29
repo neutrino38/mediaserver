@@ -195,8 +195,25 @@ public:
 	int onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole role,
 	                         MediaFrame::MediaProtocol transp, WebSocket * ws );
 	
-	int ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::MediaRole role, 
+	int ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::MediaRole role,
 				      MediaFrame::MediaProtocol proto, const char * expectedPayload );
+
+	/**
+	 * ConnectMediaConnection — bascule la jambe en WebSocket SORTANT : c'est le
+	 * mediaserver qui se connecte à `url`, comme le ferait un navigateur
+	 * (SPEC docs/conception/WS-CLIENT §4.8).
+	 *
+	 * Elle fait tout : elle passe le port en `WS` puis lance la connexion. Elle
+	 * n'enregistre AUCUN token — personne n'entrera par notre serveur pour cette
+	 * jambe —, et c'est pourquoi elle ne réutilise pas ConfigureMediaConnection,
+	 * qui en exige un pour `WS`.
+	 *
+	 * Le résultat est ASYNCHRONE : seule une URL inutilisable échoue ici.
+	 * L'ouverture se dit par EndpointConnectedEvent, la perte par
+	 * EndpointDisconnectedEvent.
+	 */
+	int ConnectMediaConnection( MediaFrame::Type media, MediaFrame::MediaRole role,
+				    const char * url );
 
 	//Paramètres SCTP d'une jambe data channel : pose le `a=sctp-port` du pair et
 	//rend les nôtres. Le contrôleur les PUBLIE dans son SDP, il ne doit donc pas

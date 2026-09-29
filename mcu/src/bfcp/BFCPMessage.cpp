@@ -3,304 +3,45 @@
 #include "log.h"
 
 
-// Initialize static members of the class.
-std::map<std::wstring, enum BFCPMessage::CommonField>	BFCPMessage::mapJsonStr2CommonField;
-std::map<enum BFCPMessage::CommonField, std::wstring>	BFCPMessage::mapCommonField2JsonStr;
-std::map<std::wstring, enum BFCPMessage::Primitive>		BFCPMessage::mapJsonStr2Primitive;
-std::map<enum BFCPMessage::Primitive, std::wstring>		BFCPMessage::mapPrimitive2JsonStr;
-
-
-/* Subclasses */
-
 BFCPMessage::AttributeNotFound::AttributeNotFound(const char* description) :
 	std::runtime_error(description)
 {
 }
 
 
-/* Static methods */
-
-void BFCPMessage::Init()
+const char* BFCPMessage::PrimitiveName(enum BFCPMessage::Primitive primitive)
 {
-	mapJsonStr2CommonField[L"ver"] = Ver;
-	mapJsonStr2CommonField[L"primitive"] = Primitive;
-	mapJsonStr2CommonField[L"transactionId"] = TransactionId;
-	mapJsonStr2CommonField[L"conferenceId"] = ConferenceId;
-	mapJsonStr2CommonField[L"userId"] = UserId;
-	mapJsonStr2CommonField[L"attributes"] = Attributes;
-
-	mapCommonField2JsonStr[Ver] = L"ver";
-	mapCommonField2JsonStr[Primitive] = L"primitive";
-	mapCommonField2JsonStr[TransactionId] = L"transactionId";
-	mapCommonField2JsonStr[ConferenceId] = L"conferenceId";
-	mapCommonField2JsonStr[UserId] = L"userId";
-	mapCommonField2JsonStr[Attributes] = L"attributes";
-
-	mapJsonStr2Primitive[L"FloorRequest"] = FloorRequest;
-	mapJsonStr2Primitive[L"FloorRelease"] = FloorRelease;
-	mapJsonStr2Primitive[L"FloorRequestQuery"] = FloorRequestQuery;
-	mapJsonStr2Primitive[L"FloorRequestStatus"] = FloorRequestStatus;
-	mapJsonStr2Primitive[L"UserQuery"] = UserQuery;
-	mapJsonStr2Primitive[L"UserStatus"] = UserStatus;
-	mapJsonStr2Primitive[L"FloorQuery"] = FloorQuery;
-	mapJsonStr2Primitive[L"FloorStatus"] = FloorStatus;
-	mapJsonStr2Primitive[L"ChairAction"] = ChairAction;
-	mapJsonStr2Primitive[L"ChairActionAck"] = ChairActionAck;
-	mapJsonStr2Primitive[L"Hello"] = Hello;
-	mapJsonStr2Primitive[L"HelloAck"] = HelloAck;
-	mapJsonStr2Primitive[L"Error"] = Error;
-
-	mapPrimitive2JsonStr[FloorRequest] = L"FloorRequest";
-	mapPrimitive2JsonStr[FloorRelease] = L"FloorRelease";
-	mapPrimitive2JsonStr[FloorRequestQuery] = L"FloorRequestQuery";
-	mapPrimitive2JsonStr[FloorRequestStatus] = L"FloorRequestStatus";
-	mapPrimitive2JsonStr[UserQuery] = L"UserQuery";
-	mapPrimitive2JsonStr[UserStatus] = L"UserStatus";
-	mapPrimitive2JsonStr[FloorQuery] = L"FloorQuery";
-	mapPrimitive2JsonStr[FloorStatus] = L"FloorStatus";
-	mapPrimitive2JsonStr[ChairAction] = L"ChairAction";
-	mapPrimitive2JsonStr[ChairActionAck] = L"ChairActionAck";
-	mapPrimitive2JsonStr[Hello] = L"Hello";
-	mapPrimitive2JsonStr[HelloAck] = L"HelloAck";
-	mapPrimitive2JsonStr[Error] = L"Error";
+	switch (primitive)
+	{
+		case FloorRequest:		return "FloorRequest";
+		case FloorRelease:		return "FloorRelease";
+		case FloorRequestQuery:		return "FloorRequestQuery";
+		case FloorRequestStatus:	return "FloorRequestStatus";
+		case UserQuery:			return "UserQuery";
+		case UserStatus:		return "UserStatus";
+		case FloorQuery:		return "FloorQuery";
+		case FloorStatus:		return "FloorStatus";
+		case ChairAction:		return "ChairAction";
+		case ChairActionAck:		return "ChairActionAck";
+		case Hello:			return "Hello";
+		case HelloAck:			return "HelloAck";
+		case Error:			return "Error";
+		case FloorRequestStatusAck:	return "FloorRequestStatusAck";
+		case FloorStatusAck:		return "FloorStatusAck";
+		case Goodbye:			return "Goodbye";
+		case GoodbyeAck:		return "GoodbyeAck";
+	}
+	return "Unknown";
 }
 
-
-BFCPMessage* BFCPMessage::Parse(const std::wstring &json)
-{
-	JSONParser parser(json);
-	BFCPMessage *msg = NULL;
-	enum BFCPMessage::Primitive primitive;
-	int transactionId;
-	int conferenceId;
-	int userId;
-	wchar_t *attributes_data_pos;
-	bool hasVer = false;
-	bool hasPrimitive = false;
-	bool hasTransactionId = false;
-	bool hasConferenceId = false;
-	bool hasUserId = false;
-	bool hasAttributes = false;
-
-	// Start of root object.
-	if (! parser.ParseJSONObjectStart()) {
-		::Error("BFCPMessage::Parse() | failed to start root object\n");
-		goto error;
-	}
-
-	// Empty object?
-	if (parser.ParseJSONObjectEnd()) {
-		::Error("BFCPMessage::Parse() | empty JSON root object\n");
-		goto error;
-	}
-
-	// Iterate JSON keys in the root object.
-	do {
-		// Get key name.
-		if (! parser.ParseJSONString()) {
-			::Error("BFCPMessage::Parse() | failed to parse JSON key\n");
-			goto error;
-		}
-
-		enum BFCPMessage::CommonField field = BFCPMessage::mapJsonStr2CommonField[parser.GetValue()];
-
-		if (! parser.ParseDoubleDot()) {
-			::Error("BFCPMessage::Parse() | failed to parse ':'\n");
-			goto error;
-		}
-
-		switch(field) {
-			case BFCPMessage::Ver:
-				if (! parser.ParseJSONNumber()) {
-					::Error("BFCPMessage::Parse() | failed to get 'ver' number\n");
-					goto error;
-				}
-
-				// MUST be 1.
-				if (parser.GetNumberValue() != 1) {
-					::Error("BFCPMessage::Parse() | 'ver' != 1\n");
-					goto error;
-				}
-
-				::Debug("BFCPMessage::Parse() | 'ver' found\n");
-				hasVer = true;
-				break;
-
-			case BFCPMessage::Primitive:
-				if (! parser.ParseJSONString()) {
-					::Error("BFCPMessage::Parse() | failed to get 'primitive' value\n");
-					goto error;
-				}
-
-				// Must be a known "primitive" string.
-				primitive = mapJsonStr2Primitive[parser.GetValue()];
-				if (! primitive) {
-					::Error("BFCPMessage::Parse() | unknown 'primitive'\n");
-					goto error;
-				}
-
-				::Debug("BFCPMessage::Parse() | 'primitive' found\n");
-				hasPrimitive = true;
-				break;
-
-			case BFCPMessage::TransactionId:
-				if (! parser.ParseJSONNumber()) {
-					::Error("BFCPMessage::Parse() | failed to get 'transactionId'\n");
-					goto error;
-				}
-
-				transactionId = (int)parser.GetNumberValue();
-				::Debug("BFCPMessage::Parse() | 'transactionId' found\n");
-				hasTransactionId = true;
-				break;
-
-			case BFCPMessage::ConferenceId:
-				if (! parser.ParseJSONNumber()) {
-					::Error("BFCPMessage::Parse() | failed to get 'conferenceId'\n");
-					goto error;
-				}
-
-				::Debug("BFCPMessage::Parse() | 'conferenceId' found\n");
-				conferenceId = (int)parser.GetNumberValue();
-				hasConferenceId = true;
-				break;
-
-			case BFCPMessage::UserId:
-				if (! parser.ParseJSONNumber()) {
-					::Error("BFCPMessage::Parse() | failed to get 'userId'\n");
-					goto error;
-				}
-
-				::Debug("BFCPMessage::Parse() | 'userId' found\n");
-				userId = (int)parser.GetNumberValue();
-				hasUserId = true;
-				break;
-
-			case BFCPMessage::Attributes:
-				wchar_t *object_start_pos;
-				wchar_t *object_end_pos;
-
-				object_start_pos = parser.Mark();
-
-				// If 'attributes' is found then it MUST be an Object.
-				if (! parser.SkipJSONObject()) {
-					::Error("BFCPMessage::Parse() | 'attributes' is not an object\n");
-					goto error;
-				}
-
-				// Mark this position as the end of the 'attributes' object.
-				object_end_pos = parser.Mark();
-
-				// Go back to the begining of the object.
-				parser.Reset(object_start_pos);
-
-				// Start of object.
-				parser.ParseJSONObjectStart();
-
-				// Store the current position as the begining of the 'attributes' data.
-				attributes_data_pos = parser.Mark();
-
-				// If an empty object do nothing.
-				if (parser.ParseJSONObjectEnd()) {
-					::Debug("BFCPMessage::Parse() | 'attributes' object is empty\n");
-				} else {
-					hasAttributes = true;
-				}
-
-				// Reset to the end of the object to continue parsing other keys in the root object.
-				parser.Reset(object_end_pos);
-				break;
-
-			default:
-				::Debug("BFCPMessage::Parse() | skiping unknown key\n");
-				parser.SkipJSONValue();
-				break;
-		}
-	} while (parser.ParseComma());
-
-	::Debug("BFCPMessage::Parse() | exiting root object\n");
-
-	// End of root object.
-	if (! parser.ParseJSONObjectEnd()) {
-		::Error("BFCPMessage::Parse() | failed to end root object\n");
-		goto error;
-	}
-
-	// Ensure there is nothing else (but spaces).
-	parser.SkipJSONSpaces();
-	if (! parser.IsEnded()) {
-		::Error("BFCPMessage::Parse() | garbage after final '}'\n");
-		goto error;
-	}
-
-	// Check mandatory common fields.
-	if (! (hasVer && hasTransactionId && hasConferenceId && hasUserId)) {
-		::Error("BFCPMessage::Parse() | mandatory common field(s) not present\n");
-		goto error;
-	}
-
-	// Create the corresponding BFCPMessage.
-
-	switch (primitive) {
-		case BFCPMessage::FloorRequest:
-			msg = (BFCPMessage *)new BFCPMsgFloorRequest(transactionId, conferenceId, userId);
-			break;
-
-		case BFCPMessage::FloorRelease:
-			msg = (BFCPMessage *)new BFCPMsgFloorRelease(transactionId, conferenceId, userId);
-			break;
-
-		case BFCPMessage::FloorQuery:
-			msg = (BFCPMessage *)new BFCPMsgFloorQuery(transactionId, conferenceId, userId);
-			break;
-
-		case BFCPMessage::Hello:
-			msg = (BFCPMessage *)new BFCPMsgHello(transactionId, conferenceId, userId);
-			break;
-
-		// TODO: implement more primitives.
-
-		default:
-			// Valid but unknown message. Just create a generic BFCPMessage and return it
-			// (and don't attempt to parse its attributes).
-			msg = new BFCPMessage(primitive, transactionId, conferenceId, userId);
-			return msg;
-	}
-
-	// Parse attributes.
-	if (hasAttributes) {
-		parser.Reset(attributes_data_pos);
-
-		if (! msg->ParseAttributes(parser)) {
-			::Error("BFCPMessage::Parse() | failed to parse 'attributes' object\n");
-			goto error;
-		}
-
-		// Ensure mandatory attributes are present among with other checks.
-		if (! msg->IsValid()) {
-			::Error("BFCPMessage::Parse() | invalid attributes\n");
-			goto error;
-		}
-	}
-
-	// Return parsed message.
-	return (BFCPMessage *)msg;
-
-
-error:
-	if (msg)
-		delete msg;
-	return NULL;
-}
-
-
-/* Instance methods */
 
 BFCPMessage::BFCPMessage(enum BFCPMessage::Primitive primitive, int transactionId, int conferenceId, int userId) :
 	primitive(primitive),
 	transactionId(transactionId),
 	conferenceId(conferenceId),
-	userId(userId)
+	userId(userId),
+	version(VersionReliable),
+	responder(false)
 {
 }
 
@@ -310,15 +51,165 @@ BFCPMessage::~BFCPMessage()
 }
 
 
-bool BFCPMessage::ParseAttributes(JSONParser &parser)
+bool BFCPMessage::IsValid()
 {
 	return true;
 }
 
 
-bool BFCPMessage::IsValid()
+size_t BFCPMessage::SerializeAttributes(BYTE* out, size_t max) const
 {
-	return true;
+	return 0;
+}
+
+
+bool BFCPMessage::ParseAttributes(const BYTE* data, size_t size)
+{
+	// A primitive we do not model: walk its attributes to prove they are well
+	// formed, keep none.
+	BFCPAttrCursor cursor(data, size);
+	while (cursor.Next())
+		;
+	return ! cursor.Malformed();
+}
+
+
+size_t BFCPMessage::Serialize(BYTE* out, size_t max) const
+{
+	return Serialize(out, max, this->version);
+}
+
+
+size_t BFCPMessage::Serialize(BYTE* out, size_t max, int version) const
+{
+	if (max < HeaderLen)
+		return Failed;
+
+	const size_t payload = SerializeAttributes(out + HeaderLen, max - HeaderLen);
+	if (payload == Failed)
+		return Failed;
+
+	// Every attribute is padded to 4 octets, so the payload always is too. If
+	// it were not, Payload Length could not say its size.
+	if (payload % 4) {
+		::Error("BFCPMessage::Serialize() | payload of %zu octets is not a multiple of 4\n", payload);
+		return Failed;
+	}
+	if (payload / 4 > 0xFFFF) {
+		::Error("BFCPMessage::Serialize() | payload of %zu octets overflows Payload Length\n", payload);
+		return Failed;
+	}
+
+	out[0] = (BYTE)((version << 5) | (this->responder ? 0x10 : 0x00));
+	out[1] = (BYTE)this->primitive;
+	set2(out, 2, payload / 4);
+	set4(out, 4, this->conferenceId);
+	set2(out, 8, this->transactionId);
+	set2(out, 10, this->userId);
+
+	return HeaderLen + payload;
+}
+
+
+BFCPMessage* BFCPMessage::Parse(const BYTE* data, size_t size)
+{
+	if (size < HeaderLen) {
+		::Error("BFCPMessage::Parse() | %zu octets, too few for a common header\n", size);
+		return NULL;
+	}
+
+	const int version	= data[0] >> 5;
+	const bool responder	= (data[0] & 0x10) != 0;
+	const bool fragmented	= (data[0] & 0x08) != 0;
+
+	if (version != VersionReliable && version != VersionUnreliable) {
+		::Error("BFCPMessage::Parse() | unsupported version %d\n", version);
+		return NULL;
+	}
+
+	// We never fragment and never reassemble: a fragment is dropped, loudly,
+	// rather than half-read (docs/conception/BFCP-INTERNE/SPEC.md §4.3).
+	if (fragmented) {
+		::Error("BFCPMessage::Parse() | fragmented message dropped, reassembly is not supported\n");
+		return NULL;
+	}
+
+	const size_t payload = get2(data, 2) * 4;
+	if (HeaderLen + payload > size) {
+		::Error("BFCPMessage::Parse() | header claims %zu octets of payload, %zu held\n", payload, size - HeaderLen);
+		return NULL;
+	}
+
+	const int primitive	= data[1];
+	const int conferenceId	= get4(data, 4);
+	const int transactionId	= get2(data, 8);
+	const int userId	= get2(data, 10);
+
+	BFCPMessage* msg = NULL;
+	switch (primitive)
+	{
+		case FloorRequest:	msg = new BFCPMsgFloorRequest(transactionId, conferenceId, userId);	break;
+		case FloorRelease:	msg = new BFCPMsgFloorRelease(transactionId, conferenceId, userId);	break;
+		case FloorQuery:	msg = new BFCPMsgFloorQuery(transactionId, conferenceId, userId);	break;
+		case FloorRequestStatus:msg = new BFCPMsgFloorRequestStatus(transactionId, conferenceId, userId);break;
+		case FloorStatus:	msg = new BFCPMsgFloorStatus(transactionId, conferenceId, userId);	break;
+		case Hello:		msg = new BFCPMsgHello(transactionId, conferenceId, userId);		break;
+		case HelloAck:		msg = new BFCPMsgHelloAck(transactionId, conferenceId, userId);		break;
+		case Error:		msg = new BFCPMsgError(transactionId, conferenceId, userId);		break;
+		case Goodbye:
+		case GoodbyeAck:
+		case FloorRequestStatusAck:
+		case FloorStatusAck:
+			// These carry no attribute: the base class is the whole message.
+			msg = new BFCPMessage((enum Primitive)primitive, transactionId, conferenceId, userId);
+			break;
+		default:
+			// A primitive we do not model is still handed up, so the server can
+			// answer UnknownPrimitive rather than stay silent.
+			msg = new BFCPMessage((enum Primitive)primitive, transactionId, conferenceId, userId);
+			break;
+	}
+
+	msg->version	= version;
+	msg->responder	= responder;
+
+	if (! msg->ParseAttributes(data + HeaderLen, payload)) {
+		::Error("BFCPMessage::Parse() | bad attributes in a %s\n", PrimitiveName(msg->GetPrimitive()));
+		delete msg;
+		return NULL;
+	}
+
+	if (! msg->IsValid()) {
+		::Error("BFCPMessage::Parse() | a %s is missing a mandatory attribute\n", PrimitiveName(msg->GetPrimitive()));
+		delete msg;
+		return NULL;
+	}
+
+	return msg;
+}
+
+
+void BFCPMessage::SetVersion(int version)
+{
+	this->version = version;
+}
+
+
+int BFCPMessage::GetVersion() const
+{
+	return this->version;
+}
+
+
+void BFCPMessage::SetResponder(bool responder)
+{
+	this->responder = responder;
+}
+
+
+bool BFCPMessage::IsResponder() const
+{
+	return this->responder;
 }
 
 
@@ -328,25 +219,31 @@ void BFCPMessage::SetUserId(int userId)
 }
 
 
-enum BFCPMessage::Primitive BFCPMessage::GetPrimitive()
+void BFCPMessage::SetTransactionId(int transactionId)
+{
+	this->transactionId = transactionId;
+}
+
+
+enum BFCPMessage::Primitive BFCPMessage::GetPrimitive() const
 {
 	return this->primitive;
 }
 
 
-int BFCPMessage::GetTransactionId()
+int BFCPMessage::GetTransactionId() const
 {
 	return this->transactionId;
 }
 
 
-int BFCPMessage::GetConferenceId()
+int BFCPMessage::GetConferenceId() const
 {
 	return this->conferenceId;
 }
 
 
-int BFCPMessage::GetUserId()
+int BFCPMessage::GetUserId() const
 {
 	return this->userId;
 }
@@ -355,30 +252,6 @@ int BFCPMessage::GetUserId()
 void BFCPMessage::Dump()
 {
 	::Debug("[BFCPMessage]\n");
-	// NOTE: We can print mapPrimitive2JsonStr[this->primitive].c_str() (which is a wchar_t*)
-	// with %ls as long as all its symbols are ASCII (which is true).
-	::Debug("- [primitive: %ls, conferenceId: %d, userId: %d, transactionId: %d]\n", mapPrimitive2JsonStr[this->primitive].c_str(), this->conferenceId, this->userId, this->transactionId);
+	::Debug("- [primitive: %s, conferenceId: %d, userId: %d, transactionId: %d]\n", PrimitiveName(this->primitive), this->conferenceId, this->userId, this->transactionId);
 	::Debug("[/BFCPMessage]\n");
-}
-
-
-std::wstring BFCPMessage::Stringify()
-{
-	std::wstringstream json_stream;
-
-	json_stream << L"{";
-	StringifyCommonHeader(json_stream);
-	json_stream << L"\n}";
-
-	return json_stream.str();
-}
-
-
-void BFCPMessage::StringifyCommonHeader(std::wstringstream &json_stream)
-{
-	json_stream << L"\n\"ver\": 1,";
-	json_stream << L"\n\"primitive\": \"" << BFCPMessage::mapPrimitive2JsonStr[this->primitive] << L"\",";
-	json_stream << L"\n\"transactionId\": " << this->transactionId << L",";
-	json_stream << L"\n\"conferenceId\": " << this->conferenceId << L",";
-	json_stream << L"\n\"userId\": " << this->userId;
 }

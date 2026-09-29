@@ -95,8 +95,7 @@ long ProcessCpuMs()
 const int kIdleWindowMs = 300;
 const int kIdleCpuBudgetMs = 100;
 
-// Durée d'un appel, en ms. Un arrêt qui ne rend pas la main est un join
-// éternel : le test ne doit pas mourir sur un timeout de suite entière.
+// Durée d'un appel, en ms.
 template <typename F>
 long TimedMs(F&& f)
 {
@@ -104,6 +103,35 @@ long TimedMs(F&& f)
 	f();
 	return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::steady_clock::now() - start).count();
+}
+
+// Même mesure, BORNÉE. Mesurer un arrêt en ligne ne protège que d'un arrêt
+// LENT : un arrêt qui ne rend JAMAIS la main — le join éternel du 2026-09-02 —
+// fige la suite entière avant d'avoir pu être comparé à quoi que ce soit. Le
+// gel a été observé ici le 2026-09-22 : boucle chaude sur un cœur, thread
+// principal dans le join, aucune sortie pendant 18 minutes.
+//
+// L'appel part donc dans un thread à part. Au dépassement, rend -1 et ABANDONNE
+// ce thread, qui tourne toujours : l'appelant DOIT alors fuir l'objet au lieu
+// de le détruire, et `f` ne doit capturer que des choses qui survivront au test.
+template <typename F>
+long BoundedMs(F f, long budgetMs)
+{
+	std::shared_ptr< std::atomic<long> > done = std::make_shared< std::atomic<long> >(-1);
+	std::thread worker([f, done]() mutable { done->store(TimedMs(f)); });
+
+	const auto deadline = std::chrono::steady_clock::now()
+			    + std::chrono::milliseconds(budgetMs);
+	while (done->load() < 0 && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+
+	if (done->load() < 0)
+	{
+		worker.detach();
+		return -1;
+	}
+	worker.join();
+	return done->load();
 }
 
 } // namespace
@@ -485,6 +513,10 @@ TEST(SendLoopPacing, LeTirageWebSocketNeTournePasAVide)
 // posait `pulling = TaskRunning` sans garde, écrasant le `TaskStopping` que
 // End() venait d'écrire — la boucle ne sortait plus et StopThread() joignait à
 // vie. Vingt cycles, chacun borné.
+//
+// Le pont est sur le TAS, et il n'est pas détruit si un End() dépasse : son
+// thread tourne encore, et écrirait dans un objet libéré. On fuit l'objet — il
+// détient une copie des deux pipes, qui lui survivent donc aussi — et on échoue.
 TEST(SendLoopPacing, LeTirageWebSocketSArreteMemeAPeineDemarre)
 {
 	auto input  = std::make_shared<PipeTextInput>();
@@ -492,14 +524,20 @@ TEST(SendLoopPacing, LeTirageWebSocketSArreteMemeAPeineDemarre)
 	input->Init();
 	output->Init();
 
-	ParticipantTextWS bridge(input, output);
+	ParticipantTextWS* bridge = new ParticipantTextWS(input, output);
 
 	for (int cycle = 0; cycle < 20; cycle++)
 	{
-		ASSERT_GT(bridge.Init(), 0) << "cycle " << cycle;
-		const long endMs = TimedMs([&] { bridge.End(); });
-		EXPECT_LT(endMs, kStopBudgetMs) << "cycle " << cycle << " : join eternel";
+		ASSERT_GT(bridge->Init(), 0) << "cycle " << cycle;
+
+		const long endMs = BoundedMs([bridge] { bridge->End(); }, kStopBudgetMs);
+		if (endMs < 0)
+			FAIL() << "cycle " << cycle << " : End() n'a jamais rendu la main";
+
+		EXPECT_LT(endMs, kStopBudgetMs) << "cycle " << cycle << " : arret trop lent";
 	}
+
+	delete bridge;
 }
 
 /* ------------------------------------------------------------------------- *

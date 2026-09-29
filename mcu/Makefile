@@ -15,10 +15,10 @@ DEBUG           = yes
 FLASHSTREAMER   = no
 ADDLIBPATH      = ../staticdeps
 MEDKITDIR       = ../third_party/fontventa/libmedikit
-# libbfcp est desormais un sous-module bati in-tree (comme libmedkit) : en-tetes
 # et archive pris dans l'arbre du sous-module, plus de dependance a /opt/ives.
-BFCPDIR         = ../third_party/libbfcp
-BFCPINCLUDE     = $(BFCPDIR)/include
+# libvad (fvad) est bati de meme, in-tree : l'archive et l'en-tete fvad.h sont
+# pris dans l'arbre du sous-module. Voir compile_libvad dans install.ksh.
+VADDIR          = ../third_party/libvad/sources
 # libmedkit (sous-module) est desormais la source unique des codecs : liaison
 # inconditionnelle de libmedkit.a. Le mode sans-medkit a ete supprime (les .o de
 # codecs repris par medkit ont ete retires de OBJS). Voir integration_libmedkit.md.
@@ -35,11 +35,9 @@ endif
 ifeq ($(DEBUG),yes)
 	TAG=debug
 	OPTS+= -g -O0
-	BFCPLIBS=$(BFCPDIR)/lib/libbfcpdbg.a
 else
 	OPTS+= -O3
 	TAG=release
-	BFCPLIBS=$(BFCPDIR)/lib/libbfcprel.a
 endif
 
 #LOG
@@ -85,6 +83,17 @@ MOTELIOBJ=rabbitmqmcu.o mcu.pb.o rabbitmqserver.o
 SCTPDIR=sctp
 SCTPOBJ=sctptransport.o datachannel.o t140datachannel.o t140bridge.o
 
+# BFCP : la pile interne du mcu (docs/conception/BFCP-INTERNE/SPEC.md,
+# docs/reference/bfcp.md). Contrôle de parole, codec RFC 4582/8855, transports
+# TCP et UDP. Il n'y a plus de sous-module BFCP.
+BFCPSTACKOBJ=BFCPMessage.o BFCPUser.o BFCPFloorRequest.o BFCPFloorControlServer.o BFCPAttribute.o BFCPTcpTransport.o BFCPUdpTransport.o \
+      BFCPAttrBeneficiaryId.o BFCPAttrBeneficiaryInformation.o BFCPAttrErrorCode.o BFCPAttrErrorInfo.o \
+      BFCPAttrFloorId.o BFCPAttrFloorRequestId.o BFCPAttrFloorRequestInformation.o BFCPAttrFloorRequestStatus.o \
+      BFCPAttrOverallRequestStatus.o BFCPAttrParticipantProvidedInfo.o BFCPAttrRequestedByInformation.o \
+      BFCPAttrRequestStatus.o BFCPAttrStatusInfo.o BFCPAttrSupportedAttributes.o BFCPAttrSupportedPrimitives.o \
+      BFCPMsgError.o BFCPMsgFloorQuery.o BFCPMsgFloorRelease.o BFCPMsgFloorRequest.o \
+      BFCPMsgFloorRequestStatus.o BFCPMsgFloorStatus.o BFCPMsgHello.o BFCPMsgHelloAck.o
+
 OBJS=httpparser.o websocketserver.o websocketconnection.o websockettransport.o mcu.o multiconf.o rtpparticipant.o rtmpparticipant.o videomixer.o audiomixer.o xmlrpcserver.o xmlhandler.o xmlstreaminghandler.o statushandler.o xmlrpcmcu.o rtpsession.o audiostream.o videostream.o pipeaudioinput.o pipeaudiooutput.o pipevideoinput.o pipevideooutput.o
 # logo.o : fourni par libmedkit.a (medkit/logo.h). mcu ne compile plus son propre
 # logo.cpp pour eviter la double definition au link (picturestreamer/mp4writer de
@@ -95,9 +104,9 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
-OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o
+OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o hwprobe.o
 
-OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ)
+OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ) $(BFCPSTACKOBJ)
 TARGETS=mcu rtmptest
 
 ifeq ($(FLASHSTREAMER),yes)
@@ -106,10 +115,10 @@ ifeq ($(FLASHSTREAMER),yes)
 	TARGETS += flashstreamer
 endif
 
-# VAD via le paquet systeme webrtc-audio-processing (module APM).
-VADINCLUDE = $(shell pkg-config --cflags webrtc-audio-processing)
-VADLD = $(shell pkg-config --libs webrtc-audio-processing)
-OPTS+= -DVADWEBRTC
+# VAD : archive du sous-module libvad, batie in-tree par install.ksh. Aucun
+# paquet systeme en jeu. Voir docs/reference/vad.md.
+VADINCLUDE = -I$(VADDIR)/sources
+VADLD = $(VADDIR)/libfvad.a
 
 ifeq ($(MOTELI),yes)
 	OPTS+= -DMOTELI=yes
@@ -132,8 +141,8 @@ endif
 # TSAN=yes : detecteur de courses (ThreadSanitizer). Meme usage qu'ASAN, meme
 # piege sur le melange d'objets : passer TAG=tsan pour les isoler du build
 # normal (make check TSAN=yes TAG=tsan, qui joue tests/runtests-tsan).
-# libmedkit et libbfcp ne sont pas
-# instrumentes : une course INTERNE a ces bibliotheques ne sera pas vue.
+# libmedkit n'est pas instrumentee : une course INTERNE a cette
+# bibliotheque ne sera pas vue.
 ifeq ($(TSAN),yes)
 	OPTS    += -fsanitize=thread -fno-omit-frame-pointer
 	LDFLAGS += -fsanitize=thread
@@ -156,6 +165,9 @@ VPATH +=  %.c src/
 VPATH +=  %.cpp src/
 VPATH +=  %.cpp src/$(JSR309DIR)
 VPATH +=  %.cpp src/$(SCTPDIR)
+VPATH +=  %.cpp src/bfcp
+VPATH +=  %.cpp src/bfcp/attributes
+VPATH +=  %.cpp src/bfcp/messages
 
 ifeq ($(MOTELI),yes)
     VPATH +=  %.cpp src/$(MOTELIDIR)
@@ -183,7 +195,7 @@ $(warning Installer la dependance : ./install.ksh prereq)
 SCTPLIBS := -lusrsctp
 endif
 
-INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCTPCFLAGS) -I$(BFCPINCLUDE)
+INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCTPCFLAGS)
 
 ###################################
 # libmedkit + ffmpeg, par pkg-config
@@ -196,10 +208,11 @@ INCLUDE+= -Iinclude/ -I$(ADDLIBPATH)/include $(VADINCLUDE) $(MAGICKCFLAGS) $(SCT
 # PKG_CONFIG_PATH, ce dont le portage ffmpeg 9 a besoin (voir, a la racine,
 # ffmpeg9_migration_plan.md).
 #
-# Trois modules restent en propre au mcu, que libmedkit n'utilise pas :
-# libavfilter (mosaiques), libavdevice et libpostproc.
+# Deux modules restent en propre au mcu, que libmedkit n'utilise pas :
+# libavfilter (mosaiques) et libavdevice. libpostproc a ete retire : aucune
+# source du depot ne l'inclut, et Debian/Ubuntu ne le paquetise pas.
 MEDKITPCDIR = $(abspath $(MEDKITDIR))
-PKGMODULES  = libmedkit libavfilter libavdevice libpostproc
+PKGMODULES  = libmedkit libavfilter libavdevice
 PKGCFLAGS  := $(shell PKG_CONFIG_PATH=$(MEDKITPCDIR):$$PKG_CONFIG_PATH pkg-config --cflags $(PKGMODULES) 2>/dev/null)
 PKGLIBS    := $(shell PKG_CONFIG_PATH=$(MEDKITPCDIR):$$PKG_CONFIG_PATH pkg-config --libs   $(PKGMODULES) 2>/dev/null)
 
@@ -211,7 +224,7 @@ ifeq ($(strip $(PKGLIBS)),)
 $(warning pkg-config n'a pas resolu [$(PKGMODULES)] : repli sur les chemins en dur.)
 $(warning Batir d'abord le sous-module : make -C $(MEDKITDIR) all ASTERISK=no)
 PKGCFLAGS := -I$(MEDKITDIR) -I/usr/include/ffmpeg
-PKGLIBS   := $(MEDKITDIR)/libmedkit.a -lavcodec -lswscale -lavformat -lavutil -lswresample -lavfilter -lavdevice -lpostproc
+PKGLIBS   := $(MEDKITDIR)/libmedkit.a -lavcodec -lswscale -lavformat -lavutil -lswresample -lavfilter -lavdevice
 endif
 
 # Les -I de libmedkit passent AVANT -Iinclude/ : les en-tetes du sous-module
@@ -219,7 +232,7 @@ endif
 # medkit et non son homonyme dans mcu/src.
 INCLUDE := $(PKGCFLAGS) $(INCLUDE)
 
-LDFLAGS+= $(BFCPLIBS) -L$(ADDLIBPATH)/lib
+LDFLAGS+= -L$(ADDLIBPATH)/lib
 # libmedkit.a d'abord, puis ce dont elle depend : pour une archive, l'ordre du
 # lien decide. pkg-config rend deja -lmedkit avant les -lav*.
 LDFLAGS+= $(PKGLIBS)
@@ -260,16 +273,16 @@ DEPFLAGS = -MMD -MP -MF $(BUILD)/$(@:.o=.d) -MT $@
 mcu.pb.cc: mcu.proto
 	$(PROTOC) --cpp_out=$(PWD) src/moteli/mcu.proto
 
-rabbitmqmcu.o: rabbitmqmcu.cpp rabbitmqmcu.h mcu.pb.cc
+rabbitmqmcu.o: rabbitmqmcu.cpp rabbitmqmcu.h mcu.pb.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
-mcu.pb.o: mcu.pb.cc
+mcu.pb.o: mcu.pb.cc | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -I$(PWD) -c $< -o $(BUILD)/$@
 
-%.o: %.c
+%.o: %.c | $(BUILD)
 	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
-%.o: %.cpp
+%.o: %.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c $< -o $(BUILD)/$@
 
 ############################################
@@ -312,7 +325,14 @@ install:
 .PHONY: mcu
 mcu: $(BIN)/mcu
 
-$(BIN)/mcu: $(OBJSMCU) | $(BUILD) $(BIN)
+# libmedkit.a en prerequis : sans lui, un sous-module rebati ne reliait RIEN ici,
+# et l'on testait un binaire portant l'ANCIENNE bibliotheque sans qu'aucun message
+# ne le signale. Passe par $(wildcard) : sur un arbre neuf ou le sous-module n'est
+# pas encore bati, la dependance disparait au lieu de faire echouer make sur une
+# cible sans regle -- le lien, lui, dira ce qui manque.
+MEDKITLIB = $(wildcard $(MEDKITDIR)/libmedkit.a)
+
+$(BIN)/mcu: $(OBJSMCU) $(MEDKITLIB) | $(BUILD) $(BIN)
 	$(CXX) -o $@ $(BUILDOBJSMCU) $(LDFLAGS) $(VADLD)
 
 rtmptest: $(OBJSRTMPTEST)
@@ -334,10 +354,8 @@ flashstreamer: $(OBJSFS) $(OBJS)
 # WebSocket) par des tests autonomes et assertifs.
 # Usage : make check   (build + execution)
 #         make tests   (build seul -> tests/runtests)
-# NB : PAS de -lgtest_main. La suite fournit son propre main() (tests/test_env.cpp)
-# car libwebrtc_audio_processing.so (VAD) exporte un symbole `main` parasite qui,
-# .so contre .so, l'emportait sur celui de libgtest_main dans la resolution
-# dynamique. Un main() defini dans l'executable est une definition forte.
+# NB : PAS de -lgtest_main. La suite fournit son propre main() (tests/test_env.cpp),
+# qui installe l'environnement global de la suite.
 GTEST_CFLAGS := $(shell pkg-config --cflags gtest 2>/dev/null)
 GTEST_LIBS   := $(shell pkg-config --libs gtest 2>/dev/null)
 TESTSRCS     := $(wildcard tests/*.cpp)
@@ -357,7 +375,7 @@ TESTBIN = tests/runtests$(if $(filter-out debug,$(TAG)),-$(TAG),)
 # $(BUILD) en prerequis ORDER-ONLY, pas `mkdirs` : celui-ci n'etant pas un fichier,
 # il etait toujours plus recent que tests/runtests et forcait la recompilation de
 # TOUTE la suite gtest a chaque `make check`, meme sans modification.
-$(TESTBIN): $(OBJS) $(TESTSRCS) | $(BUILD)
+$(TESTBIN): $(OBJS) $(TESTSRCS) $(MEDKITLIB) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) -DTEST_PCAP_FILE='"$(TEST_PCAP)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
 		-o $(TESTBIN) $(LDFLAGS) $(VADLD) $(GTEST_LIBS)

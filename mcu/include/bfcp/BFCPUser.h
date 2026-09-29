@@ -2,48 +2,47 @@
 #define BFCPUSER_H
 
 
-#include <mutex>
 #include "bfcp/BFCPMessage.h"
-#include "websocketconnection.h"
-#include <pthread.h>
+#include "bfcp/BFCPTransport.h"
 #include <vector>
-#include <string>
 
 
+/**
+ * One user of a BFCP conference. All access is serialised by the lock of the
+ * owning BFCPFloorControlServer.
+ */
 class BFCPUser
 {
 public:
 	BFCPUser(int userId, int conferenceId);
-	~BFCPUser();
 
-	int GetUserId();
+	int GetUserId() const;
 	void SetChair();
 	void UnsetChair();
-	bool IsChair();
-	void SetTransport(WebSocket *transport);
+	bool IsChair() const;
+
+	void SetTransport(BFCPTransport *transport);
 	void UnsetTransport();
-	void CloseTransport(const WORD code, const std::wstring& reason);
-	bool IsConnected();
-	void SendMessage(BFCPMessage *msg);
+	void CloseTransport();
+	BFCPTransport* GetTransport() const;
+	bool IsConnected() const;
+	bool IsReliable() const;
+	bool SendMessage(const BFCPMessage& msg);
+
 	void ResetQueriedFloorIds();
 	void AddQueriedFloorId(int floorId);
-	int CountQueriedFloorIds();
-	bool HasQueriedFloorId(int floorId);
-	int GetQueriedFloorId(unsigned int index);
+	int CountQueriedFloorIds() const;
+	bool HasQueriedFloorId(int floorId) const;
+	int GetQueriedFloorId(unsigned int index) const;
+
 	void Dump();
 
 private:
 	int userId;
 	int conferenceId;
 	bool isChair;
-	// The transport of the user.
-	// TODO: Must be a generic BFCPTransport class for both TCP/WS.
-	WebSocket *transport;
-	// The list of floors the user has subscribed to via FloorQuery request.
-	// Note that just the floors within the last received FloorQuery are considered.
+	BFCPTransport *transport;
 	std::vector<int> queriedFloorIds;
-	// Mutex for blocking access to the transport.
-	std::mutex mutex;
 };
 
 

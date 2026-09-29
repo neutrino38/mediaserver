@@ -8,7 +8,7 @@
 
 
 // 5.3.7.  FloorQuery
-
+//
 //    FloorQuery =   (COMMON-HEADER)
 //                  *(FLOOR-ID)
 //                  *[EXTENSION-ATTRIBUTE]
@@ -19,16 +19,20 @@ class BFCPMsgFloorQuery : public BFCPMessage
 public:
 	BFCPMsgFloorQuery(int transactionId, int conferenceId, int userId);
 	~BFCPMsgFloorQuery();
-	bool ParseAttributes(JSONParser &parser);
 	bool IsValid();
 	void Dump();
 
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
+
 	void AddFloorId(int);
-	int GetFloorId(unsigned int);
-	int CountFloorIds();
+	int GetFloorId(unsigned int) const;
+	int CountFloorIds() const;
 
 private:
-	// Optional attributes.
 	std::vector<BFCPAttrFloorId *> floorIds;
 };
 

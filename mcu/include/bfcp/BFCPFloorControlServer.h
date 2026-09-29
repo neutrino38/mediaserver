@@ -5,129 +5,140 @@
 #include "bfcp/BFCPMessage.h"
 #include "bfcp/messages.h"
 #include "bfcp/attributes.h"
+#include "bfcp/BFCPTransport.h"
 #include "bfcp/BFCPUser.h"
 #include "bfcp/BFCPFloorRequest.h"
-#include "websocketconnection.h"
+#include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <set>
-#include <vector>
 #include <string>
-#include "use.h"
+#include <vector>
 
 
 /**
  * A BFCPFloorControlServer handles a BFCP conference.
+ *
+ * Two threads call it: the transport (MessageReceived, UserDisconnected) and
+ * the chair (Grant, Deny, Revoke, AddUser...). One lock serialises them. The
+ * lock is never held while the Listener runs, so a listener may call back
+ * into the server from inside a notification.
  */
 class BFCPFloorControlServer
 {
 public:
 	/**
-	 * When a media conference takes place it may create a conference and insert itself as listener,
-	 * so the media conference becomes a "BFCP chair".
+	 * The chair of the conference (the media conference inserts itself here).
 	 */
 	class Listener
 	{
 	public:
+		virtual ~Listener() {}
 
 		/**
-		 * Event called when a FloorRequest is received.
-		 *
-		 * The chair MUST later call
-		 * BFCPFloorControlServer::GrantFloorRequest() or BFCPFloorControlServer::DenyFloorRequest()
-		 * by passing the same floorRequestId as argument.
-		 *
-		 * @param floorRequestId  The FloorRequest identifier.
-		 * @param userId          The sender of the FloorRequest.
-		 * @param beneficiaryId   The beneficiary of the FloorRequest (may be same as userId).
-		 * @param floorIds        The floors being requested.
+		 * A FloorRequest was received. The chair MUST later call
+		 * GrantFloorRequest() or DenyFloorRequest() with the same floorRequestId.
 		 */
 		virtual void onFloorRequest(int floorRequestId, int userId, int beneficiaryId, std::set<int> floorIds) = 0;
 
 		/**
-		 * This event is called when the BFCP Floor Control Server has granted a FloorRequest
-		 * (so after the chair called to BFCPFloorControlServer::GrantFloorRequest(), but
-		 * may happen some time later).
-		 *
-		 * This is just a notification for the chair.
-		 *
-		 * @param floorRequestId  The FloorRequest identifier.
-		 * @param beneficiaryId   The user currently owning the floors.
-		 * @param floorIds        The floors of the associated FloorRequest.
+		 * A FloorRequest has been granted (after GrantFloorRequest()).
 		 */
 		virtual void onFloorGranted(int floorRequestId, int beneficiaryId, std::set<int> floorIds) = 0;
 
 		/**
-		 * This event is called when the BFCP Floor Control Server has released/revoked a FloorRelease
-		 * (so after the chair called to BFCPFloorControlServer::RejectFloorRelease() if it
-		 * was requested by a different user than the original FloorRequest, or after the chair
-		 * called to BFCPFloorControlServer::RevokeFloorRequest(), or after the owner
-		 * itself released it, which requires no permission from the chair).
-		 *
-		 * This is just a notification for the receiver.
-		 *
-		 * @param floorRequestId  The FloorRequest identifier.
-		 * @param beneficiaryId   The user that was owing the floors until now.
-		 * @param floorIds        The floors of the associated FloorRequest.
+		 * A granted FloorRequest is no longer held: released by its owner,
+		 * revoked by the chair, or lost with the user (removed, disconnected,
+		 * Goodbye).
 		 */
 		virtual void onFloorReleased(int floorRequestId, int beneficiaryId, std::set<int> floorIds) = 0;
+
+		/**
+		 * A user has completed its Hello (HelloAck sent).
+		 */
+		virtual void onUserConnected(int userId) = 0;
 	};
 
 public:
 	BFCPFloorControlServer(int conferenceId, Listener *listener);
 	~BFCPFloorControlServer();
 
-	int GetConferenceId();
+	int GetConferenceId() const;
 
-	// Called by chair.
+	// Called by the chair.
 	bool AddUser(int userId);
 	bool RemoveUser(int userId);
 	bool SetChair(int userId);
 	bool AddFloor(int floorId);
 	bool GrantFloorRequest(int floorRequestId);
-	bool DenyFloorRequest(int floorRequestId, std::wstring statusInfo = L"");
-	bool RevokeFloorRequest(int floorRequestId, std::wstring statusInfo = L"");
-	// Returns 0 if there is no a Granted FloorRequest owning the given floor.
+	bool DenyFloorRequest(int floorRequestId, const std::string& statusInfo = "");
+	bool RevokeFloorRequest(int floorRequestId, const std::string& statusInfo = "");
+	// Returns 0 if there is no Granted FloorRequest owning the given floor.
 	int GetGrantedFloorRequestId(int floorId);
+	// Whether the user still has a transport attached. Reads the server's own
+	// bookkeeping: it never touches the transport, so it stays safe to call
+	// after one has been destroyed.
+	bool IsUserConnected(int userId);
+	// Sends the state of a floor to one user, unsolicited.
+	bool NotifyFloorStatus(int userId, int floorId);
 	void End();
 
 	// Called by the transport.
-	bool UserConnected(int announcedUserId, WebSocket *ws);
-	void UserDisconnected(int userId, bool revoked);
-	void DisconnectUser(int userId, const WORD code, const std::wstring& reason);
-	void MessageReceived(BFCPMessage *msg);
+	bool UserConnected(int userId, BFCPTransport *transport);
+	void UserDisconnected(int userId, BFCPTransport *transport);
+	// Same, for a transport that does not know which user it carried: the
+	// server knows, it handed the attachment out in the first place.
+	void TransportClosed(BFCPTransport *transport);
+	void MessageReceived(BFCPMessage *msg, BFCPTransport *from);
 
 private:
-	bool HasUser(int userId);
-	BFCPUser* GetUser(int userId);
-	BFCPFloorRequest* GetFloorRequest(int floorRequestId);
-	std::vector<BFCPFloorRequest*> GetFloorRequestsForFloor(int floorId);
-	std::vector<BFCPFloorRequest*> GetFloorRequestsForFloors(std::set<int> floorIds);
-	void NotifyForFloorRequest(BFCPFloorRequest* floorRequest);
-	void RevokeUserFloorRequests(BFCPUser* user);
-	bool HasFloor(int floorId);
-	void ProcessFloorRequest(BFCPMsgFloorRequest *req, BFCPUser* user);
-	void ProcessFloorRelease(BFCPMsgFloorRelease *req, BFCPUser* user);
-	void ProcessFloorQuery(BFCPMsgFloorQuery *req, BFCPUser* user);
-	void ProcessHello(BFCPMsgHello *req, BFCPUser* user);
-	void SendMessage(BFCPMessage *msg);
-	void ReplyError(BFCPMessage *msg, BFCPAttrErrorCode::ErrorCode errorCode);
-	void ReplyError(BFCPMessage *msg, BFCPAttrErrorCode::ErrorCode errorCode, std::wstring errorInfo);
+	typedef std::vector<std::function<void()> > Notifications;
+
+	BFCPUser* GetUserLocked(int userId);
+	BFCPFloorRequest* GetFloorRequestLocked(int floorRequestId);
+	std::vector<BFCPFloorRequest*> GetFloorRequestsForFloorLocked(int floorId);
+	std::vector<BFCPFloorRequest*> GetFloorRequestsForFloorsLocked(const std::set<int>& floorIds);
+	bool HasFloorLocked(int floorId) const;
+	int NextTransactionIdLocked();
+	int NotificationTransactionIdLocked(const BFCPUser* user);
+
+	bool AttachTransportLocked(BFCPUser* user, BFCPTransport* transport, Notifications& pending);
+	void DetachTransportLocked(BFCPUser* user, Notifications& pending);
+	bool RemoveUserLocked(int userId, bool sendGoodbye, Notifications& pending);
+	bool GrantFloorRequestLocked(int floorRequestId, Notifications& pending);
+	bool DenyFloorRequestLocked(int floorRequestId, const std::string& statusInfo, Notifications& pending);
+	bool RevokeFloorRequestLocked(int floorRequestId, const std::string& statusInfo, Notifications& pending);
+	void RevokeUserFloorRequestsLocked(BFCPUser* user, Notifications& pending);
+	void NotifyForFloorRequestLocked(const BFCPFloorRequest* floorRequest);
+	std::unique_ptr<BFCPMsgFloorStatus> BuildFloorStatusLocked(int floorId, int transactionId, int userId);
+
+	void ProcessFloorRequestLocked(BFCPMsgFloorRequest *req, BFCPUser* user, Notifications& pending);
+	void ProcessFloorReleaseLocked(BFCPMsgFloorRelease *req, BFCPUser* user, Notifications& pending);
+	void ProcessFloorQueryLocked(BFCPMsgFloorQuery *req, BFCPUser* user);
+	void ProcessHelloLocked(BFCPMsgHello *req, BFCPUser* user, Notifications& pending);
+	void ProcessGoodbyeLocked(BFCPMessage *req, BFCPUser* user, Notifications& pending);
+
+	void SendFloorRequestStatusLocked(const BFCPFloorRequest* floorRequest, int transactionId, int toUserId, const std::string& statusInfo, bool isResponse);
+	void SendMessageLocked(const BFCPMessage& msg);
+	void ReplyErrorLocked(const BFCPMessage *msg, BFCPTransport *to, BFCPAttrErrorCode::ErrorCode errorCode, const std::string& errorInfo);
+
+	static void Fire(Notifications& pending);
 
 private:
-	typedef UseMap<int, BFCPUser*> Users;
+	typedef std::map<int, std::unique_ptr<BFCPUser> > Users;
 	typedef std::set<int> Floors;
-	typedef UseMap<int, BFCPFloorRequest*> FloorRequests;
-	// A vector to store removed users.
-	typedef std::vector<BFCPUser*> RemovedUsers;
+	typedef std::map<int, std::unique_ptr<BFCPFloorRequest> > FloorRequests;
 
 private:
 	Listener *listener;
 	int conferenceId;
+	std::mutex mutex;
 	Users users;
-	RemovedUsers removedUsers;
 	Floors floors;
 	FloorRequests floorRequests;
 	int floorRequestCounter;
+	int transactionCounter;
 	bool ending;
 };
 

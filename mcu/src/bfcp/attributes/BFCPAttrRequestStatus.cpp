@@ -2,25 +2,21 @@
 #include "log.h"
 
 
-// Initialize static members of the class.
-std::map<enum BFCPAttrRequestStatus::Status, std::wstring>  BFCPAttrRequestStatus::mapStatus2JsonStr;
-
-
-/* Static methods */
-
-void BFCPAttrRequestStatus::Init()
+const char* BFCPAttrRequestStatus::StatusName(enum BFCPAttrRequestStatus::Status status)
 {
-	mapStatus2JsonStr[Pending] = L"Pending";
-	mapStatus2JsonStr[Accepted] = L"Accepted";
-	mapStatus2JsonStr[Granted] = L"Granted";
-	mapStatus2JsonStr[Denied] = L"Denied";
-	mapStatus2JsonStr[Cancelled] = L"Cancelled";
-	mapStatus2JsonStr[Released] = L"Released";
-	mapStatus2JsonStr[Revoked] = L"Revoked";
+	switch (status)
+	{
+		case Pending:	return "Pending";
+		case Accepted:	return "Accepted";
+		case Granted:	return "Granted";
+		case Denied:	return "Denied";
+		case Cancelled:	return "Cancelled";
+		case Released:	return "Released";
+		case Revoked:	return "Revoked";
+	}
+	return "Unknown";
 }
 
-
-/* Instance methods */
 
 BFCPAttrRequestStatus::BFCPAttrRequestStatus() :
 	status(BFCPAttrRequestStatus::Pending),
@@ -39,18 +35,9 @@ BFCPAttrRequestStatus::BFCPAttrRequestStatus(enum BFCPAttrRequestStatus::Status 
 void BFCPAttrRequestStatus::Dump()
 {
 	::Debug("[BFCPAttrRequestStatus]\n");
-	::Debug("- status: %ls\n", GetStatusString().c_str());
+	::Debug("- status: %s\n", StatusName(this->status));
 	::Debug("- queuePosition: %d\n", this->queuePosition);
 	::Debug("[/BFCPAttrRequestStatus]\n");
-}
-
-
-void BFCPAttrRequestStatus::Stringify(std::wstringstream &json_stream)
-{
-	json_stream << L"{";
-	json_stream << L"\n  \"status\": \"" << GetStatusString().c_str() << L"\"";
-	json_stream << L",\n  \"queuePosition\": " << this->queuePosition;
-	json_stream << L"\n}";
 }
 
 
@@ -66,19 +53,36 @@ void BFCPAttrRequestStatus::SetQueuePosition(int queuePosition)
 }
 
 
-enum BFCPAttrRequestStatus::Status BFCPAttrRequestStatus::GetStatus()
+enum BFCPAttrRequestStatus::Status BFCPAttrRequestStatus::GetStatus() const
 {
 	return this->status;
 }
 
 
-std::wstring BFCPAttrRequestStatus::GetStatusString()
+int BFCPAttrRequestStatus::GetQueuePosition() const
 {
-	return BFCPAttrRequestStatus::mapStatus2JsonStr[this->status];
+	return this->queuePosition;
 }
 
 
-int BFCPAttrRequestStatus::GetQueuePosition()
+size_t BFCPAttrRequestStatus::Serialize(BYTE* out, size_t max, bool mandatory) const
 {
-	return this->queuePosition;
+	BYTE contents[2];
+	contents[0] = (BYTE)this->status;
+	contents[1] = (BYTE)this->queuePosition;
+	return Write(out, max, BFCPAttribute::RequestStatus, mandatory, contents, sizeof(contents));
+}
+
+
+BFCPAttrRequestStatus* BFCPAttrRequestStatus::Parse(const BYTE* contents, size_t len)
+{
+	if (len < 2)
+		return NULL;
+	// Any status outside the enum is refused here rather than carried around
+	// as an int nobody can name.
+	if (contents[0] < Pending || contents[0] > Revoked) {
+		::Error("BFCPAttrRequestStatus::Parse() | unknown request status %d\n", contents[0]);
+		return NULL;
+	}
+	return new BFCPAttrRequestStatus((enum Status)contents[0], contents[1]);
 }

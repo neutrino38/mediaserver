@@ -119,6 +119,46 @@ bool MosaicCompositor::Configure(const MosaicGraphDesc& desc)
 	return false;
 }
 
+#if LIBAVFILTER_VERSION_MAJOR >= 11
+// hwupload exige son device dès son init, que parse_ptr fait : seule l'API
+// segment permet de le poser entre la création des filtres et leur init.
+static int ParseWithDevice(AVFilterGraph* graph, const char* desc, AVBufferRef* device,
+                           AVFilterInOut* srcs, AVFilterInOut* sink)
+{
+	AVFilterGraphSegment* seg = NULL;
+	AVFilterInOut* ins  = NULL;
+	AVFilterInOut* outs = NULL;
+
+	int ret = avfilter_graph_segment_parse(graph, desc, 0, &seg);
+	if (ret >= 0)
+		ret = avfilter_graph_segment_create_filters(seg, 0);
+	if (ret >= 0)
+		for (unsigned i = 0; i < graph->nb_filters; i++)
+			if (!graph->filters[i]->hw_device_ctx)
+				graph->filters[i]->hw_device_ctx = av_buffer_ref(device);
+	if (ret >= 0)
+		ret = avfilter_graph_segment_apply(seg, 0, &ins, &outs);
+
+	for (AVFilterInOut* in = ins; ret >= 0 && in; in = in->next)
+	{
+		AVFilterInOut* src = srcs;
+		while (src && (!in->name || strcmp(src->name, in->name)))
+			src = src->next;
+		ret = src ? avfilter_link(src->filter_ctx, src->pad_idx, in->filter_ctx, in->pad_idx)
+		          : AVERROR(EINVAL);
+	}
+	for (AVFilterInOut* out = outs; ret >= 0 && out; out = out->next)
+		ret = out->name && !strcmp(out->name, sink->name)
+		    ? avfilter_link(out->filter_ctx, out->pad_idx, sink->filter_ctx, sink->pad_idx)
+		    : AVERROR(EINVAL);
+
+	avfilter_inout_free(&ins);
+	avfilter_inout_free(&outs);
+	avfilter_graph_segment_free(&seg);
+	return ret;
+}
+#endif
+
 bool MosaicCompositor::BuildGraph(bool gpu)
 {
 	if (cur.width <= 0 || cur.height <= 0)
@@ -172,31 +212,34 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	for (size_t i = 0; i < cur.slots.size(); i++)
 	{
 		const MosaicSlotDesc& s = cur.slots[i];
-		snprintf(args, sizeof(args),
-		         "video_size=%dx%d:pix_fmt=%d:time_base=1/1000:pixel_aspect=1/1",
-		         s.inW, s.inH, s.inFmt);
 		snprintf(name, sizeof(name), "in%zu", i);
-		if (avfilter_graph_create_filter(&slotSrcs[i], avfilter_get_by_name("buffer"),
-		                                 name, args, NULL, graph) < 0)
+
+		// Alloué puis initialise EN DEUX TEMPS (même patron que VideoRescaler, et
+		// pour la même raison) : un buffersrc refuse un pix_fmt materiel tant qu'il
+		// n'a pas son hw_frames_ctx, et avfilter_graph_create_filter initialiserait
+		// le filtre avant qu'on puisse le lui donner. La composition echouerait alors
+		// des qu'un slot porte une surface GPU.
+		slotSrcs[i] = avfilter_graph_alloc_filter(graph, avfilter_get_by_name("buffer"), name);
+		if (!slotSrcs[i])
 			return false;
 
-		// Entrée GPU : le buffersrc doit connaître le hw_frames_ctx de la
-		// surface (même patron que VideoRescaler) pour que scale_vaapi négocie.
-		if (s.hwFramesCtx)
-		{
-			AVBufferSrcParameters* par = av_buffersrc_parameters_alloc();
-			if (!par)
-				return false;
-			par->format        = s.inFmt;
-			par->width         = s.inW;
-			par->height        = s.inH;
-			par->time_base     = av_make_q(1, 1000);
-			par->hw_frames_ctx = s.hwFramesCtx;
-			int ret = av_buffersrc_parameters_set(slotSrcs[i], par);
-			av_free(par);
-			if (ret < 0)
-				return false;
-		}
+		AVBufferSrcParameters* par = av_buffersrc_parameters_alloc();
+		if (!par)
+			return false;
+		par->format              = s.inFmt;
+		par->width               = s.inW;
+		par->height              = s.inH;
+		par->time_base           = av_make_q(1, 1000);
+		par->sample_aspect_ratio = av_make_q(1, 1);
+		//Non nul pour une surface GPU seulement ; un NULL est ignore.
+		par->hw_frames_ctx       = s.hwFramesCtx;
+		int ret = av_buffersrc_parameters_set(slotSrcs[i], par);
+		av_free(par);
+		if (ret < 0)
+			return false;
+
+		if (avfilter_init_str(slotSrcs[i], NULL) < 0)
+			return false;
 
 		if (s.hasOverlay)
 		{
@@ -222,14 +265,21 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	}
 
 	// --- buffersink : yuv420p (CPU, ou GPU avec queue overlays), sinon VAAPI -
-	if (avfilter_graph_create_filter(&sinkCtx, avfilter_get_by_name("buffersink"),
-	                                 "out", NULL, NULL, graph) < 0)
+	// Le format de sortie n'est pas une option de runtime : depuis ffmpeg 8 elle
+	// est refusee sur un filtre deja initialise. On alloue donc le sink, on la
+	// pose, puis on initialise — ce que avfilter_graph_create_filter fait d'un
+	// bloc. L'option s'appelle "pixel_formats" et porte un TABLEAU de formats :
+	// ni l'ancien nom "pix_fmts", ni la liste terminee par AV_PIX_FMT_NONE que
+	// prenait av_opt_set_int_list n'existent plus.
+	sinkCtx = avfilter_graph_alloc_filter(graph, avfilter_get_by_name("buffersink"), "out");
+	if (!sinkCtx)
 		return false;
 	const enum AVPixelFormat outFmt =
 		(gpu && !anyOverlay) ? AV_PIX_FMT_VAAPI : AV_PIX_FMT_YUV420P;
-	const enum AVPixelFormat pix_fmts[] = { outFmt, AV_PIX_FMT_NONE };
-	if (av_opt_set_int_list(sinkCtx, "pix_fmts", pix_fmts, AV_PIX_FMT_NONE,
-	                        AV_OPT_SEARCH_CHILDREN) < 0)
+	if (av_opt_set_array(sinkCtx, "pixel_formats", AV_OPT_SEARCH_CHILDREN,
+	                     0, 1, AV_OPT_TYPE_PIXEL_FMT, &outFmt) < 0)
+		return false;
+	if (avfilter_init_dict(sinkCtx, NULL) < 0)
 		return false;
 
 	// --- description du graphe (chaînes scale + cascade overlay) -----------
@@ -386,16 +436,12 @@ bool MosaicCompositor::BuildGraph(bool gpu)
 	int ret = -1;
 	if (ok)
 	{
+#if LIBAVFILTER_VERSION_MAJOR >= 11
+		ret = gpu ? ParseWithDevice(graph, desc.c_str(), device, outputs, inputs)
+		          : avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
+#else
 		ret = avfilter_graph_parse_ptr(graph, desc.c_str(), &inputs, &outputs, NULL);
-		if (ret >= 0 && gpu)
-		{
-			// Équivalent du -filter_hw_device de ffmpeg : les hwupload (et tout
-			// filtre créé par le parse qui en aurait besoin) reçoivent le device
-			// VAAPI partagé AVANT la config, faute de quoi la négociation échoue.
-			for (unsigned i = 0; i < graph->nb_filters; i++)
-				if (!graph->filters[i]->hw_device_ctx)
-					graph->filters[i]->hw_device_ctx = av_buffer_ref(device);
-		}
+#endif
 		if (ret >= 0)
 			ret = avfilter_graph_config(graph, NULL);
 		ok = (ret >= 0);

@@ -55,7 +55,10 @@ Le réserver au réseau d'administration.
     "video": { "decode": ["H264","VP8","AV1","VP6"], "encode": ["H264","VP8","AV1"] },
     "text":  { "rfc4103": true, "rfc4103Redundancy": true,
                "rfc8865": true, "websocket": true },
-    "hardware": { "vaapi": false },
+    "hardware": { "vaapi": true,
+                  "videoEncoders": 3, "videoEncodersHw": 3,
+                  "videoDecoders": 3, "videoDecodersHw": 3,
+                  "hwFallbacks": 0 },
     "bfcp": true
   },
   "security": {
@@ -172,9 +175,60 @@ participants. **Vide** si aucune adresse n'est annonçable.
 
 ### 3.7 `hardware.vaapi`
 
-Le device VAAPI partagé est sondé une fois au démarrage. `false` = tout le
-traitement vidéo se fait sur CPU. Décodage, encodage et composition de mosaïque
-dérivent tous de ce même device.
+Le device VAAPI partagé est sondé une fois au démarrage. Ce champ dit si la
+sonde a abouti. Décodage, encodage et composition de mosaïque dérivent tous de
+ce même device.
+
+L'option `--no-hwaccel` éteint l'accélération matérielle. Le device n'est alors
+même pas créé, et ce champ vaut `false`, même sur une machine équipée d'un GPU.
+Elle sert quand le driver VAAPI se comporte mal. Exemple : sur Iris Xe avec le
+driver iHD et libavcodec 62, `h264_vaapi` arrête le processus.
+
+`false` se lit donc de deux façons : option présente, ou device introuvable. Le
+log de démarrage distingue les deux.
+
+### 3.8 Une capacité n'est pas un usage
+
+`vaapi` dit qu'un GPU est **disponible**. Les cinq compteurs qui suivent disent
+ce qui s'en sert **vraiment**. La distinction n'est pas théorique : le repli du
+matériel vers le logiciel est **silencieux par conception**
+(`FfVideoEncoder::FallbackToSoftware`). Un appel peut donc réussir de bout en
+bout, GPU présent, sans qu'une seule image soit encodée par lui.
+
+| Champ | Sens |
+|---|---|
+| `videoEncoders` | encodeurs vidéo ouverts à cet instant |
+| `videoEncodersHw` | ... dont matériels. Toujours ≤ `videoEncoders` |
+| `videoDecoders` | décodeurs vidéo ouverts à cet instant |
+| `videoDecodersHw` | ... dont la dernière image rendue est une surface GPU. Toujours ≤ `videoDecoders` |
+| `hwFallbacks` | replis matériel → logiciel depuis le démarrage, **cumulatif** |
+
+Les quatre premiers sont une photo : ils montent et descendent avec les appels.
+Une renégociation (changement de taille ou de débit) ferme puis rouvre
+l'encodeur — le compteur ne doit pas dériver pour autant.
+
+Un décodeur n'est compté matériel qu'**après sa première surface GPU**. Qu'un
+device lui soit attaché ne suffit pas : libavcodec passe en logiciel sans le
+dire quand le driver ne décode pas le profil du flux. Un décodeur ouvert qui n'a
+encore rien rendu est donc compté logiciel.
+
+`hwFallbacks` ne compte que les replis **subis alors qu'un device était
+utilisable**. Sur une machine sans GPU, tout est logiciel : compter chaque codec
+comme un repli ferait monter le compteur sans rien apprendre. Un `hwFallbacks`
+qui grimpe pendant que `vaapi` vaut `true` est donc un vrai signal — le GPU est
+là et quelque chose l'empêche de servir. Exemple : un décodeur qui avait un
+device et rend ses images en logiciel compte un repli, une fois par épisode et
+non une fois par image.
+
+Deux cas ne sont **pas** des replis :
+
+- un codec sans chemin VAAPI, qui ne visait pas le matériel (AV1 par libdav1d,
+  encodeur VP8 par libvpx) ;
+- un chemin que la sonde de démarrage a refusé : c'est une décision connue, pas
+  un incident (`docs/conception/HWACCEL-SONDE/SPEC.md` §5).
+
+Ce que ces compteurs ne disent pas : **quel** appel tourne sur GPU. Ils sont
+globaux au processus.
 
 ## 4. Ce que ce point ne dit pas
 
@@ -190,4 +244,6 @@ dérivent tous de ce même device.
 | Collecte + les deux rendus | `mcu/src/statushandler.cpp` |
 | Structure des faits publiés | `mcu/include/statushandler.h` |
 | Autorité des capacités codec | `third_party/fontventa/libmedikit/codecs.cpp` |
-| Tests | `mcu/tests/test_status.cpp` (suite `Status`) |
+| Compteurs d'accélération | `third_party/fontventa/libmedikit/video.cpp` (`VideoAccel`) |
+| Extinction du GPU | `Pict::DisableVAAPI`, posée par `main()` sur `--no-hwaccel` |
+| Tests | `mcu/tests/test_status.cpp` (suite `Status`), `third_party/fontventa/libmedikit/tests/test_video_accel.cpp` |

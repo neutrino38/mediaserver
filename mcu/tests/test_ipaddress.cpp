@@ -818,6 +818,38 @@ TEST(IPAddressResolve, LocalhostNeDonneRienDAnnoncable)
 	EXPECT_EQ(ENOENT, err);
 }
 
+// ... mais la MÊME résolution, demandée pour JOINDRE, rend la loopback : on ne
+// publie pas 127.0.0.1 dans un SDP, on s'y connecte tous les jours. Les deux
+// politiques vivent dans la même fonction, et c'est l'appelant qui dit laquelle
+// il lui faut.
+TEST(IPAddressResolve, LocalhostEstUneDestinationValable)
+{
+	int err = -1;
+	const std::list<IPAddress> out =
+		IPAddress::Resolve("localhost", err, AF_INET, IPAddress::Destination);
+
+	if (out.empty())
+		GTEST_SKIP() << "\"localhost\" ne se résout pas sur cet hôte (err " << err << ")";
+
+	EXPECT_EQ(0, err);
+	for (std::list<IPAddress>::const_iterator it = out.begin(); it != out.end(); ++it)
+		EXPECT_TRUE(it->IsUnicastDestination()) << it->ToString();
+}
+
+// L'usage par défaut est ANNONCE : un appelant qui ne dit rien garde le filtre
+// le plus strict. C'est ce qui protège la ligne c= d'un SDP d'une distraction.
+TEST(IPAddressResolve, LUsageParDefautEstLAnnonce)
+{
+	int errDefaut = 0, errExplicite = 0;
+	const std::list<IPAddress> defaut =
+		IPAddress::Resolve("localhost", errDefaut);
+	const std::list<IPAddress> explicite =
+		IPAddress::Resolve("localhost", errExplicite, AF_INET, IPAddress::Announce);
+
+	EXPECT_EQ(defaut.size(), explicite.size());
+	EXPECT_EQ(errDefaut, errExplicite);
+}
+
 // L'ordre est le NÔTRE : la famille préférée d'abord, quel que soit l'ordre du
 // résolveur — sinon l'adresse publiée dans le SDP dépendrait de /etc/gai.conf.
 TEST(IPAddressResolve, LaFamillePrefereeVientEnTete)

@@ -37,10 +37,9 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 - La cible se lie contre **tous les objets du mcu** (`$(OBJS)` de `mcu/Makefile`),
   qui doivent avoir été bâtis au préalable : lancer d'abord `./install.ksh localcompile`.
 
-> **Piège du `main` parasite.** La suite fournit son **propre `main()`**
-> (`test_env.cpp`) et **n'utilise pas `-lgtest_main`** : `libwebrtc_audio_processing.so`
-> exporte un symbole `main` qui, `.so` contre `.so`, l'emportait sur celui de
-> `libgtest_main`. Détails dans [`TEST.md`](../../TEST.md).
+> **Pas de `-lgtest_main`.** La suite fournit son **propre `main()`**
+> (`test_env.cpp`), qui installe l'environnement global de la suite.
+> Détails dans [`TEST.md`](../../TEST.md).
 
 ## Fichiers
 
@@ -62,6 +61,12 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_red_fec_hardening.cpp` | `RedPayload`, `FecData`, `FecDecoder` | — (suite ADVERSE RED/ULPFEC : blocs sans fin, longueurs de protection mensongères) |
 | `test_rtmp_hardening.cpp` | `RtmpMessage`, `RtmpMediaFrame`, `RtmpChunkInput` | — (suite ADVERSE RTMP : message de longueur nulle, trame vide, flux sans message ouvert) |
 | `test_websocket_http_hardening.cpp` | `WebSocketHandshake` | — (poignée de main envoyée octet par octet : URL et en-têtes doivent être réassemblés) |
+| `test_ws_client_seams.cpp` | `WsClientSeams` | — (coutures du mode client WebSocket : code de statut, reliquat, sérialisation de la requête, transport prêt) |
+| `test_ws_client_handshake.cpp` | `WsClientHandshake` | — (connexion WebSocket **sortante** : poignée de main contre le vrai serveur, trame collée au 101, échec avant le 101, masquage sur le fil) |
+| `test_ws_client_connect.cpp` | `WsClientConnect` | — (`WebSocketServer::Connect` : une URL `ws://` devient une jambe ouverte, en v4 et en v6 entre crochets ; chemin et query sur le fil ; échec synchrone sans notification, port fermé notifié) |
+| `test_ws_client_tls.cpp` | `WsClientTls` | — (jambe `wss://` **sortante** : ouverture et écho dans le tunnel, vérification du pair refusée sans son autorité et acceptée avec, sur une adresse littérale ; certificat et autorité jetables de `wstlsfixture.h`) |
+| `test_ws_client_endpoint.cpp` | `WsClientEndpoint` | — (la jambe texte JSR-309 en mode **client** : pontage RTP ↔ WebSocket dans les deux sens, coupure annoncée par U+FFFD des deux côtés et texte de la coupure perdu, reprise indéfinie arrêtée par `End()`, URL inutilisable refusée tout de suite, cible publiée au lieu de l'écoute, ouverture muette abandonnée. **Deux tests durent 5 à 7 s** : ils attendent le backoff de reprise, qui est la chose à prouver) |
+| `test_ws_client_xmlrpc.cpp` | `WsClientXmlRpc` | — (la jambe sortante vue du CONTRÔLEUR : `ConnectMediaConnection` recensée dans `jsr309CmdList`, ordre et typage des paramètres, jambe armée qui atteint le pair, média non texte et URL inutilisable refusés, identifiants inconnus, appel mal typé qui ne tue pas le serveur) |
 | `test_rate_control.cpp` | `RateControlEstimator`, `RateControlDetector`, `RateControlThrottler`, `RateControlRemb` | — (contrôle de débit, chantier rate-control : les 7 caractérisations du lot 0 ont été levées par le lot 1, les 20 tests sont des garde-fous joués par `make check` ; `make check-ratecontrol` reste le raccourci de la suite) |
 
 ## `tools/` — ce qui n'est pas un test

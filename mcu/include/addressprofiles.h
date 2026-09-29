@@ -145,6 +145,13 @@ public:
 	// routeur, pas sur nous.
 	static bool IsLocallyAttached(const IPAddress& addr);
 
+	// Première adresse annonçable portée par une interface de CETTE machine,
+	// famille `prefer` d'abord. Repli de l'auto-détection quand le nom de
+	// l'hôte ne résout vers rien d'annonçable : Debian et Ubuntu le font
+	// pointer sur 127.0.1.1 dans /etc/hosts, et le serveur refusait alors de
+	// démarrer sur une machine parfaitement adressable.
+	static IPAddress FirstAnnounceableLocal(int prefer = AF_INET);
+
 	// Remet la table à zéro. RÉSERVÉ AUX TESTS : en production la table est
 	// posée une fois et figée.
 	static void Reset();

@@ -22,6 +22,17 @@ TEMPDIR=/tmp
 #Creation de l'environnement de packaging rpm
 function create_rpm
 {
+    #Le spec est reserve a AlmaLinux 9 : dependances, scriptlets systemd et
+    #chemins y sont ceux de la famille rpm. Le dire ici plutot que de laisser
+    #rpmbuild manquer a l'appel, ou pire, produire un paquet inutilisable.
+    detect_distro
+    if [ "$DISTRO_FAMILY" != "rpm" ]
+    then
+        echo "La cible rpm demande une distribution de la famille RPM (AlmaLinux 9)."
+        echo "Sur Debian/Ubuntu : ./install.ksh deb"
+        exit 20
+    fi
+
     #Cree l'environnement de creation de package
     #Creation des macros rpmbuild
     rm ~/.rpmmacros
@@ -80,11 +91,161 @@ function create_rpm
 	fi
 }
 
+# Dependances du paquet .deb : celles que le binaire DECLARE lui-meme (DT_NEEDED),
+# traduites en noms de paquets. Pas de liste ecrite a la main — elle vieillirait
+# a chaque changement de version de ffmpeg — et pas la fermeture transitive
+# d'ldd non plus : dpkg tire les dependances indirectes tout seul.
+function deb_runtime_depends
+{
+	BINARY=$1
+
+	for SONAME in $(objdump -p "$BINARY" | awk '/NEEDED/{print $2}')
+	do
+		SOPATH=$(ldd "$BINARY" | awk -v s="$SONAME" '$1==s{print $3}')
+		[ -n "$SOPATH" ] && realpath -q "$SOPATH"
+	done | sort -u | xargs -r dpkg -S 2>/dev/null \
+	     | cut -d: -f1 | tr ',' '\n' | sed 's/ //g' | sort -u \
+	     | paste -sd, - | sed 's/,/, /g'
+}
+
+# Paquet Debian/Ubuntu. Il installe les memes fichiers que le RPM, aux deux
+# conventions Debian pres : les options vont dans /etc/default/mediaserver (que
+# l'unite lit aussi, cf. mediaserver.service) et l'unite systemd dans
+# /lib/systemd/system.
+function create_deb
+{
+	detect_distro
+	if [ "$DISTRO_FAMILY" != "deb" ]
+	then
+		echo "La cible deb demande une distribution Debian/Ubuntu (dpkg)."
+		echo "Sur AlmaLinux 9 : ./install.ksh rpm"
+		exit 20
+	fi
+
+	for TOOL in dpkg-deb dpkg-architecture objdump
+	do
+		command -v $TOOL > /dev/null 2>&1 || { echo "$TOOL absent : installer dpkg-dev et binutils"; exit 20; }
+	done
+
+	if [ ! -x bin/debug/mcu ]
+	then
+		echo "bin/debug/mcu absent : lancer d'abord ./install.ksh localcompile"
+		exit 20
+	fi
+
+	ARCH=$(dpkg-architecture -qDEB_HOST_ARCH)
+	PKGROOT=$PWD/debbuild/${PROJET}_${VERSION}_${ARCH}
+
+	echo "Construction du paquet ${PROJET}_${VERSION}_${ARCH}.deb"
+	rm -rf "$PKGROOT"
+	mkdir -p "$PKGROOT/DEBIAN"
+
+	install -D -m 750 bin/debug/mcu            "$PKGROOT/opt/ives/bin/mediaserver"
+	install -D -m 644 mediaserver.service      "$PKGROOT/lib/systemd/system/mediaserver.service"
+	install -D -m 644 mediaserver.sysconfig    "$PKGROOT/etc/default/mediaserver"
+	install -D -m 644 type-asian.xml           "$PKGROOT/etc/mediaserver/type-asian.xml"
+	install -D -m 750 certcommunication.sh     "$PKGROOT/etc/mediaserver/certcommunication.sh"
+	install -D -m 644 mcu.csr_conf             "$PKGROOT/etc/mediaserver/mcu.csr_conf"
+	# Le binaire embarque le detecteur de voix de libfvad (BSD) : sa notice doit
+	# accompagner la distribution binaire. Le sous-module libvad ne la porte pas.
+	install -D -m 644 LICENSE.libfvad          "$PKGROOT/usr/share/doc/$PROJET/LICENSE.libfvad"
+
+	DEPENDS=$(deb_runtime_depends bin/debug/mcu)
+	INSTALLEDSIZE=$(du -ks "$PKGROOT" | cut -f1)
+
+	cat > "$PKGROOT/DEBIAN/control" <<EOF
+Package: $PROJET
+Version: $VERSION
+Section: comm
+Priority: optional
+Architecture: $ARCH
+Maintainer: IVeS <support@ives.fr>
+Homepage: http://www.ives.fr
+Installed-Size: $INSTALLEDSIZE
+Depends: $DEPENDS
+Description: IVeS mediaserver (MCU / serveur de media)
+ Unite de conference multipoint et serveur de media : mixage audio, video,
+ texte et partage de document, pilote en XML-RPC.
+EOF
+
+	# Equivalent de %config(noreplace) : dpkg n'ecrase pas un fichier modifie.
+	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
+/etc/default/mediaserver
+/etc/mediaserver/mcu.csr_conf
+EOF
+
+	cat > "$PKGROOT/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]
+then
+    systemctl daemon-reload || true
+    systemctl enable mediaserver.service || true
+
+    if [ ! -r /etc/ImageMagick-7/type.xml ]
+    then
+        echo "ImageMagick font are not configured. Participant name may not be displayed correctly"
+    else
+        cp /etc/mediaserver/type-asian.xml /etc/ImageMagick-7/
+        if grep -q "type-asian.xml" /etc/ImageMagick-7/type.xml
+        then
+            echo "Asian font support has been correctly enabled"
+        else
+            echo "You need to change font configuration of ImageMagick for asian font support."
+            echo 'Add the following line in type.xml: <include file="type-asian.xml" />'
+        fi
+    fi
+
+    echo "Generating DTLS/OpenSSL certificate (ECDSA P-256) if needed"
+    /etc/mediaserver/certcommunication.sh
+
+    echo "Now (re)starting mediaserver"
+    systemctl restart mediaserver.service || true
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ]
+then
+    systemctl stop mediaserver.service || true
+    systemctl disable mediaserver.service || true
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]
+then
+    systemctl daemon-reload || true
+fi
+EOF
+
+	chmod 755 "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/prerm" "$PKGROOT/DEBIAN/postrm"
+
+	# --root-owner-group : les fichiers appartiennent a root dans le paquet sans
+	# qu'il faille construire en root.
+	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${PROJET}_${VERSION}_${ARCH}.deb"
+	if [ $? != 0 ]
+	then
+		echo "*** error during build ***"
+		exit 20
+	fi
+
+	rm -rf "$PWD/debbuild"
+	echo "Paquet produit : ${PROJET}_${VERSION}_${ARCH}.deb"
+}
+
 function clean
 {
 	BASESRCDIR=$PWD
 	MEDKITDIR=$BASESRCDIR/third_party/fontventa/libmedikit
-	BFCPDIR=$BASESRCDIR/third_party/libbfcp
+	VADDIR=$BASESRCDIR/third_party/libvad/sources
 
   	# On efface les liens ainsi que le package precedemment cr.
   	echo Effacement des fichiers et liens gnupg rpmbuild ${PROJET}.rpm ${TEMPDIR}/${PROJET}
@@ -95,9 +256,10 @@ function clean
 	make clean
 	cd "$BASESRCDIR"
 
-	# Nettoyage des objets et archives des sous-modules (libmedkit + libbfcp),
-	# pour qu'un "clean" reparte reellement d'un arbre vierge. On garde les memes
-	# options que la construction (compile_libmedkit / compile_libbfcp).
+	# Nettoyage des objets et archives des sous-modules (libmedkit +
+	# libvad), pour qu'un "clean" reparte reellement d'un arbre vierge. On garde
+	# les memes options que la construction (compile_libmedkit
+	# / compile_libvad).
 	if [ -f "$MEDKITDIR/Makefile" ]
 	then
 		echo "Nettoyage libmedkit (in-tree) : objets + libmedkit.a"
@@ -108,85 +270,112 @@ function clean
 		find "$MEDKITDIR" -name '*.o' -delete
 		rm -f "$MEDKITDIR/libmedkit.a"
 	fi
-	if [ -f "$BFCPDIR/Makefile" ]
+	if [ -f "$VADDIR/Makefile" ]
 	then
-		echo "Nettoyage libbfcp (in-tree) : objets + libbfcp{dbg,rel}.a"
-		make -C "$BFCPDIR" clean DEBUG=yes
-		make -C "$BFCPDIR" clean DEBUG=no
-		find "$BFCPDIR" -name '*.o' -delete
-		rm -f "$BFCPDIR"/lib/libbfcp*.a "$BFCPDIR"/lib/libbfcp*.so
+		echo "Nettoyage libvad (in-tree) : objets + libfvad.a"
+		# Sa cible clean efface les .o des trois repertoires et tous les .a.
+		make -C "$VADDIR" clean
 	fi
+}
+
+# Famille de la distribution : elle decide du gestionnaire de paquets, des noms
+# de paquets et de la facon d'interroger l'installe. Deux familles supportees,
+# AlmaLinux 9 (la cible de production) et Debian/Ubuntu.
+function detect_distro
+{
+	if command -v rpm > /dev/null 2>&1
+	then
+		DISTRO_FAMILY=rpm
+	elif command -v dpkg-query > /dev/null 2>&1
+	then
+		DISTRO_FAMILY=deb
+	else
+		echo "Distribution non reconnue : ni rpm ni dpkg."
+		exit 20
+	fi
+}
+
+# Paquets de developpement requis, par famille. Les deux listes decrivent les
+# MEMES bibliotheques : ffmpeg, libsrtp2, xmlrpc-c, usrsctp, Magick++, libtool.
+#
+# gsm n'y figure plus : le codec GSM passe par ffmpeg (libmedikit/gsm/ enveloppe
+# FfAudioCodec), plus aucun appel direct a l'API gsm.
+#
+# webrtc-audio-processing n'y figure plus non plus : la VAD passe par le
+# sous-module libvad (fvad), bati in-tree. C'en etait le seul consommateur.
+RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool"
+DEB_PREREQ="libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
+
+function check_prereq
+{
+	detect_distro
+	echo "checking if dependencies are installed ($DISTRO_FAMILY)"
+
+	if [ "$DISTRO_FAMILY" == "rpm" ]
+	then
+		PKGLIST="$RPM_PREREQ"
+	else
+		PKGLIST="$DEB_PREREQ"
+	fi
+
+	MISSING=""
+	for PKG in $PKGLIST
+	do
+		if [ "$DISTRO_FAMILY" == "rpm" ]
+		then
+			rpm -q "$PKG" > /dev/null 2>&1 || MISSING="$MISSING $PKG"
+		else
+			dpkg-query -W -f='${Status}' "$PKG" 2>/dev/null | grep -q "install ok installed" || MISSING="$MISSING $PKG"
+		fi
+	done
+
+	if [ -n "$MISSING" ]
+	then
+		echo "Paquets manquants :$MISSING"
+		echo "Les installer : ./install.ksh prereq"
+		exit 20
+	fi
+}
+
+function compile_mp4v2
+{
+	BASESRCDIR=$1
+
+	if [ -f staticdeps/lib/libmp4v2.a ]
+	then
+		return
+	fi
+
+	echo "compilation libmp4v2"
+	cd $HOME
+	if [ ! -r mp4v2 ]
+	then
+		git clone https://github.com/InteractiviteVideoEtSystemes/mp4v2.git
+	fi
+	cd mp4v2
+	# Les autotools versionnes dans mp4v2 datent d'automake 1.13 : ailleurs que
+	# sur la machine qui les a produits, config.status regenere un script libtool
+	# tronque, et le lien de la bibliotheque ne produit alors rien, sans erreur.
+	# On les regenere avec ceux de la distribution.
+	autoreconf -fi
+	./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
+	make clean
+	# mp4v2 est du C++ d'avant C++11 : GCC >= 14 refuse ses conversions
+	# retrecissantes en liste et sa comparaison pointeur/entier de rtphint.cpp.
+	make CXXFLAGS="-g -O2 -Wno-narrowing -fpermissive"
+	make install
+	cd $BASESRCDIR
 }
 
 function local_compile
 {
 	# compiler localement
-	echo checking if dependencies are installed
-	rpm -q gsm-devel
-    	if [ $? != 0 ]
-	then
-		echo "installer gsm-devel"
-		exit 20
-	fi
+	check_prereq
 
-	rpm -q ffmpeg-devel
-    if [ $? != 0 ]
-	then
-		echo "installer ffmpeg-free-devel depuis RPMFUSION free et non free"
-		exit 20
-	fi
-
-	rpm -q libtool
-    if [ $? != 0 ]
-	then
-		echo "installer libtool"
-		exit 20
-	fi
-
-	rpm -q webrtc-audio-processing-devel
-    if [ $? != 0 ]
-	then
-		echo "installer webrtc-audio-processing-devel"
-		exit 20
-	fi
-
-	# libsrtp2 (l'ABI utilisee) est fournie par le paquet libsrtp-devel, pas libsrtp2-devel.
-	rpm -q libsrtp-devel
-    if [ $? != 0 ]
-	then
-		echo "installer libsrtp-devel"
-		exit 20
-	fi
-
-	# xmlrpc-c : plus construit depuis les sources, on utilise le paquet systeme.
-	rpm -q xmlrpc-c-devel
-    if [ $? != 0 ]
-	then
-		echo "installer xmlrpc-c-devel (depot crb)"
-		exit 20
-	fi
-
-
-	# compiler openssl en statique
 	BASESRCDIR=$PWD
 
-	# compiler mp4v2 en static 
-	if [ ! -f staticdeps/lib/libmp4v2.a ]
-	then
-		echo "compilation libmp4v2"
-		cd $HOME
-		if [ ! -r mp4v2 ]
-		then
-			git clone https://github.com/InteractiviteVideoEtSystemes/mp4v2.git
-		fi
-		cd mp4v2
-		./configure --prefix=$BASESRCDIR/staticdeps --exec-prefix=$BASESRCDIR/staticdeps --enable-shared=no
-		make clean
-		make
-		make install
-		cd $BASESRCDIR
-	fi
-	
+	compile_mp4v2 "$BASESRCDIR"
+
 	# speex : plus de build statique. Le codec Speex est fourni par libmedikit
 	# au-dessus de ffmpeg (AV_CODEC_ID_SPEEX, cf. libmedikit/speex/speexcodec.cpp)
 	# et la ligne de lien el9 par defaut ne reference plus -lspeex.
@@ -203,16 +392,16 @@ function local_compile
 
 	cd $BASESRCDIR
 
-	# Sous-modules (libmedkit = codecs, libbfcp = BFCP) : on les initialise au
-	# besoin puis on construit leurs archives in-tree, pour qu'un seul
-	# "install.ksh localcompile" suffise a produire le binaire.
-	if [ ! -f third_party/fontventa/libmedikit/medkit/media.h ] || [ ! -f third_party/libbfcp/Makefile ]
+	# Sous-modules (libmedkit = codecs, libvad = VAD) : on les
+	# initialise au besoin puis on construit leurs archives in-tree, pour qu'un
+	# seul "install.ksh localcompile" suffise a produire le binaire.
+	if [ ! -f third_party/fontventa/libmedikit/medkit/media.h ] || [ ! -f third_party/libvad/sources/Makefile ]
 	then
-		echo "initialisation des sous-modules (libmedikit, libbfcp)"
+		echo "initialisation des sous-modules (libmedikit, libvad)"
 		git submodule update --init --recursive
 	fi
 	compile_libmedkit
-	compile_libbfcp
+	compile_libvad
 
 	cd $BASESRCDIR
 
@@ -294,28 +483,38 @@ function compile_libmedkit
 	cd $MEDIASERVERPATH
 }
 
-function compile_libbfcp
+function compile_libvad
 {
-	# Construit libbfcp DANS l'arbre du sous-module (cible 'all', pas d'install
-	# dans /opt/ives). Le mediaserver s'y lie directement via BFCPDIR dans
-	# mcu/Makefile. On produit les deux variantes (dbg + rel) pour couvrir
-	# les deux valeurs de DEBUG du build mcu.
+	# Construit l'archive fvad DANS l'arbre du sous-module libvad, SANS y ecrire
+	# le moindre fichier : LIB_SRC, ST_LIB et CFLAGS sont surcharges en ligne de
+	# commande. Le sous-module pointe sur un depot tiers qu'IVeS ne forke pas,
+	# donc tout ce qui nous est propre doit tenir ici.
+	#
+	# LIB_SRC='$(FVAD_SRC)' n'est pas une liste ecrite a la main : c'est la
+	# variable du Makefile amont, reevaluee chez lui. Elle designe les 12 sources
+	# fvad et rien d'autre. On ecarte ainsi sivr-vad.c, pour deux raisons :
+	#  - il ne compile pas hors FreeSWITCH. Il emploie int16_t, malloc, free,
+	#    memset, strcmp et abs sans leurs en-tetes ; c'est switch.h qui les
+	#    fournissait ;
+	#  - sa machine a etats (start/stop talking, hysteresis) ne rend pas le 0/1
+	#    par trame que pipeaudiooutput cumule. Le mediaserver appelle fvad_* en
+	#    direct, comme le fait sivr-vad lui-meme.
+	# ST_LIB=libfvad.a nomme l'archive pour ce qu'elle contient : la libsivrvad.a
+	# par defaut ne porterait aucun objet sivr.
 	MEDIASERVERPATH=$PWD
-	BFCPDIR=$MEDIASERVERPATH/third_party/libbfcp
-	if [ ! -f "$BFCPDIR/Makefile" ]
+	VADDIR=$MEDIASERVERPATH/third_party/libvad/sources
+	if [ ! -f "$VADDIR/Makefile" ]
 	then
-		echo "Sous-module libbfcp absent. Lancer : git submodule update --init"
+		echo "Sous-module libvad absent. Lancer : git submodule update --init"
 		exit 20
 	fi
-	if [ ! -f "$BFCPDIR/lib/libbfcpdbg.a" ]
+	if [ ! -f "$VADDIR/libfvad.a" ]
 	then
-		echo "Compilation libbfcp (in-tree, debug)"
-		make -C "$BFCPDIR" all DEBUG=yes
-	fi
-	if [ ! -f "$BFCPDIR/lib/libbfcprel.a" ]
-	then
-		echo "Compilation libbfcp (in-tree, release)"
-		make -C "$BFCPDIR" all DEBUG=no
+		echo "Compilation libvad (in-tree, sous-ensemble fvad)"
+		make -C "$VADDIR" \
+			CFLAGS="-g -O2 -fPIC -I./sources -I./sources/signal_processing" \
+			LIB_SRC='$(FVAD_SRC)' \
+			ST_LIB=libfvad.a
 	fi
 	cd $MEDIASERVERPATH
 }
@@ -346,6 +545,9 @@ case $1 in
   	"rpm")
 		echo "Creation du rpm"
 		create_rpm "$@";;
+
+	"deb")
+		create_deb;;
 	"export")
         echo "{" >> build.properties
         echo "'VERSION': '$VERSION'," >> build.properties
@@ -365,21 +567,29 @@ case $1 in
 	"libmedkit")
 		compile_libmedkit;;
 
-	"libbfcp")
-		compile_libbfcp;;
+
+	"libvad")
+		compile_libvad;;
 
 	"upload")
 		upload_rpm ;;
 	"prereq")
-		sudo yum install -y gsm-devel ffmpeg-devel webrtc-audio-processing-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ;;
+		detect_distro
+		if [ "$DISTRO_FAMILY" == "rpm" ]
+		then
+			sudo yum install -y $RPM_PREREQ
+		else
+			sudo apt-get install -y $DEB_PREREQ
+		fi ;;
   	*)
   		echo "usage: install.ksh [options]" 
   		echo "options :"
-  		echo "  rpm				Generation d'un package rpm"
+  		echo "  rpm				Generation d'un package rpm (AlmaLinux 9)"
+		echo "  deb             Generation d'un package deb (Debian/Ubuntu)"
 		echo "  localcompile	Compilation du logiciel sans creation de paquet rpm"
 		echo "  rabbitmq        Compilation des libs RABBITMQ (projet moteli)"
 		echo "  libmedkit       Compilation de libmedkit.a (sous-module, in-tree)"
-		echo "  libbfcp         Compilation de libbfcp (sous-module, in-tree)"
+		echo "  libvad          Compilation de libfvad.a (sous-module, in-tree)"
 		echo "  upload          TODO: envoi les paquets RPM dans le repo"
-  		echo "  clean			Nettoie les fichiers crees par ce script (liens, rpm) + les objets/archives de mcu et des sous-modules (libmedkit, libbfcp)";;
+  		echo "  clean			Nettoie les fichiers crees par ce script (liens, rpm) + les objets/archives de mcu et des sous-modules (libmedkit, libvad)";;
 esac

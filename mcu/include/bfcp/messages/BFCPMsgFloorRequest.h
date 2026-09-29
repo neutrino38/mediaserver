@@ -5,6 +5,7 @@
 #include "bfcp/BFCPMessage.h"
 #include "bfcp/attributes.h"
 #include <vector>
+#include <string>
 
 
 // 5.3.1.  FloorRequest
@@ -22,19 +23,24 @@ class BFCPMsgFloorRequest : public BFCPMessage
 public:
 	BFCPMsgFloorRequest(int transactionId, int conferenceId, int userId);
 	~BFCPMsgFloorRequest();
-	bool ParseAttributes(JSONParser &parser);
 	bool IsValid();
 	void Dump();
 
+protected:
+	size_t SerializeAttributes(BYTE* out, size_t max) const;
+	bool ParseAttributes(const BYTE* data, size_t size);
+
+public:
+
 	void AddFloorId(int);
 	void SetBeneficiaryId(int);
-	void SetParticipantProvidedInfo(std::wstring);
-	bool HasBeneficiaryId();
-	bool HasParticipantProvidedInfo();
-	int GetFloorId(unsigned int);
-	int CountFloorIds();
-	int GetBeneficiaryId();
-	std::wstring GetParticipantProvidedInfo();
+	void SetParticipantProvidedInfo(const std::string&);
+	bool HasBeneficiaryId() const;
+	bool HasParticipantProvidedInfo() const;
+	int GetFloorId(unsigned int) const;
+	int CountFloorIds() const;
+	int GetBeneficiaryId() const;
+	const std::string& GetParticipantProvidedInfo() const;
 
 private:
 	// Mandatory attributes.

@@ -24,7 +24,9 @@ struct MosaicSlotDesc
 	int  inW       = 0;      // largeur de la trame d'entrée (clé de reconfig)
 	int  inH       = 0;      // hauteur de la trame d'entrée (clé de reconfig)
 	int  inFmt     = 0;      // format de la trame d'entrée (AVPixelFormat, clé de reconfig)
-	AVBufferRef* hwFramesCtx = nullptr; // ctx trames VAAPI de l'entrée (non possédé), clé de reconfig
+	AVBufferRef* hwFramesCtx = nullptr; // ctx trames VAAPI de l'entrée (non possédé)
+	const uint8_t* hwFrames = nullptr;  // pool VAAPI de l'entrée (hwFramesCtx->data), clé de reconfig :
+	                                    // chaque trame porte sa propre référence vers le même pool
 	bool hasOverlay = false; // overlay participant à empiler sur ce slot
 	int  ovX       = 0;      // position de l'overlay participant (slot utile, liseré déduit)
 	int  ovY       = 0;      // position de l'overlay participant (slot utile, liseré déduit)
@@ -36,7 +38,7 @@ struct MosaicSlotDesc
 		return pos == o.pos && x == o.x && y == o.y && w == o.w && h == o.h &&
 		       border == o.border &&
 		       inW == o.inW && inH == o.inH && inFmt == o.inFmt &&
-		       hwFramesCtx == o.hwFramesCtx && hasOverlay == o.hasOverlay &&
+		       hwFrames == o.hwFrames && hasOverlay == o.hasOverlay &&
 		       ovX == o.ovX && ovY == o.ovY && ovW == o.ovW && ovH == o.ovH;
 	}
 	bool operator!=(const MosaicSlotDesc& o) const { return !(*this == o); }
