@@ -268,7 +268,7 @@ int VideoStream::StartSending()
 {
 	RTPMap dummy;
 
-	return StartSending(nullptr, 0, dummy);
+	return StartSending(nullptr, rtp.GetRemotePort(), dummy);
 }
 
 /***************************************
