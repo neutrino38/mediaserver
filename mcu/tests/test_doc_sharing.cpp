@@ -304,3 +304,47 @@ TEST(VideoStreamRestart, UneJambeArreteeRepartSansArgument)
 }
 
 }
+
+namespace {
+
+// Un SSRC inconnu sur une jambe d'un participant BFCP. Seule une jambe vidéo
+// MAIN ou SLIDES porte un contenu BFCP ; toute autre suit la règle ordinaire,
+// qui remplace l'ancien SSRC.
+class BfcpNewStream : public ::testing::Test
+{
+protected:
+	void SetUp() override
+	{
+		part = std::make_shared<RTPParticipant>(1, L"bfcp-new-stream");
+		part->SetDocSharingMode(Participant::BFCP_TCP);
+	}
+
+	void TearDown() override
+	{
+		part->End();
+	}
+
+	std::shared_ptr<RTPParticipant> part;
+};
+
+TEST_F(BfcpNewStream, UnNouveauSsrcAudioRemplaceLAncien)
+{
+	RTPSession audio(MediaFrame::Audio, NULL);
+	ASSERT_TRUE(audio.SetDefaultStream(true, 0x1111));
+
+	part->onNewStream(&audio, 0x2222, true);
+
+	EXPECT_EQ(audio.GetDefaultStream(true), 0x2222u) << "l'audio doit suivre le nouveau SSRC";
+}
+
+TEST_F(BfcpNewStream, UnNouveauSsrcSurMainResteLeDocument)
+{
+	RTPSession main(MediaFrame::Video, NULL);
+	ASSERT_TRUE(main.SetDefaultStream(true, 0x1111));
+
+	part->onNewStream(&main, 0x2222, true);
+
+	EXPECT_EQ(main.GetDefaultStream(true), 0x1111u) << "la caméra garde son SSRC, le second est le document";
+}
+
+}

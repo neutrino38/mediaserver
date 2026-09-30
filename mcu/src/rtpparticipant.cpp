@@ -827,9 +827,10 @@ void RTPParticipant::onNewStream( RTPSession *session, DWORD newSsrc, bool recei
 	Debug("RTPParticipant::onNewStream ssrc=%x\n",newSsrc);
 	session->AddStream(receiving,newSsrc);
 	
-	//Un flux de rôle >= 2 a sa propre section : son SSRC inconnu n'est pas un
-	//contenu BFCP, il suit la règle ordinaire.
+	//Seule une jambe vidéo MAIN ou SLIDES porte un contenu BFCP. L'audio, et un
+	//flux de rôle >= 2 qui a sa propre section, suivent la règle ordinaire.
 	if ((GetDocSharingMode() == Participant::BFCP_TCP || GetDocSharingMode() == Participant::BFCP_UDP)
+	    && session->GetMediaType() == MediaFrame::Video
 	    && session->GetMediaRole() < MediaFrame::VIDEO_EXTRA)
 	{
 		session->AddStream(receiving,newSsrc);
