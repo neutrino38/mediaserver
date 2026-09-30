@@ -27,8 +27,8 @@ jambes reçues **4**, un appel B2BUA **8**.
 
 ## 2. Les groupes
 
-**Deux réacteurs par jambe** : `{audio, texte}` d'un côté, `{vidéo MAIN, vidéo
-SLIDES}` de l'autre. L'audio veut la main toutes les 20 ms ; il ne doit pas
+**Deux réacteurs par jambe** : `{audio, texte}` d'un côté, tous les flux vidéo
+du participant de l'autre (MAIN, SLIDES et les rôles ≥ 2). L'audio veut la main toutes les 20 ms ; il ne doit pas
 attendre derrière la vidéo.
 
 Les propriétaires sont `RTPParticipant` (membres `mediaGroup` et `videoGroup`)

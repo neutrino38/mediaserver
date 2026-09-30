@@ -95,11 +95,11 @@ Conséquences :
 
 | Élément | Emplacement | État |
 |---|---|---|
-| Deux jambes vidéo au plus, indexées par le rôle | `MAX_VIDEO_STREAM 2`, `video[]` `mcu/include/rtpparticipant.h:22,145` | **à ouvrir, §4.2** |
-| Énumération du rôle | `MediaRole {VIDEO_MAIN=0, VIDEO_SLIDES=1}` `libmedikit/medkit/media.h:52` | **à ouvrir, §4.2** |
+| N jambes vidéo, indexées par le rôle | `RTPParticipant::videos` (map rôle → `VideoStream`) `mcu/include/rtpparticipant.h` | fait (lot 1) |
+| Énumération du rôle | `MediaRole : int {VIDEO_MAIN=0, VIDEO_SLIDES=1, VIDEO_EXTRA=2}` `libmedikit/medkit/media.h:52` | fait (lot 1) |
 | Second flux vidéo BFCP : un `VideoStream` SLIDES, ses deux pipes | §4.1 | **précédent du modèle** |
-| Relais des slides du présentateur vers la source 2 | `SharedDocMixer::NextFrame` `mcu/src/shareddocmixer.cpp:219` | **à retirer, §4.3** |
-| Source d'émission des slides, `partId+100000` | `MultiConf::SetAppCodec` `mcu/src/multiconf.cpp:1880`, `SetDocSharingMosaic` `:1293` | **à remplacer, §4.3** |
+| La parole pose la source du présentateur dans la mosaïque partagée | `MultiConf::StartPresentation` / `StopPresentation`, appelés par `SharedDocMixer` | fait (lot 1b) ; le relais vers la source 2 est supprimé |
+| Source de SLIDES d'un participant BFCP | `MultiConf::CreateSlidesSource`, appelé par `SetAppCodec(BFCP)` | fait (lot 1b) ; `partId+100000` est supprimé |
 | Paramètre `role` sur l'API MCU, avec repli de signature | `mcu/src/xmlrpcmcu.cpp`, `docs/MCU-API.md` §4 | OK, réutilisé tel quel |
 | Paramètre `role` absent des RPC JSR-309 `Endpoint*` | `mcu/src/jsr309/xmlrpcjsr309.cpp`, `MediaSession.cpp:1089` | **à ajouter, §4.6** |
 | Une `RTPSession` = une paire de sockets + ICE + DTLS + SRTP | `mcu/src/rtpsession.cpp:1869` (`Init`), `:3149` (`GetPollFds`) | **à ouvrir, §4.4** |
@@ -108,25 +108,26 @@ Conséquences :
 | SRTP sans SSRC fixé | `ssrc_any_outbound` `rtpsession.cpp:513`, `ssrc_any_inbound` `:835` | OK : plusieurs SSRC par contexte |
 | Plusieurs SSRC reçus sur une session | `RTPStream`, `AddStream`, `GetPacket(ssrc)` `rtpsession.h:190-266` | OK, réutilisé |
 | Un décodeur lit un SSRC donné d'une session tierce | `VideoStream::SetRTPSession(weak_ptr, ssrc)` `mcu/include/videostream.h:74` | OK, réutilisé |
-| SSRC inconnu = **remplacement** de l'ancien | `RTPSession::Listener::onNewStream` → `ChangeStream` `rtpsession.cpp:4406` | **à encadrer, §5** |
+| SSRC inconnu = **remplacement** de l'ancien | `RTPSession::Listener::onNewStream` → `ChangeStream` | famine réglée (chantier préalable) ; le démultiplexage qui l'encadre est au lot 2, §5 |
 | Extensions d'en-tête connues | `HeaderExtension::Type` `mcu/include/rtp.h` : audio level, toffset, abs-send-time, transport-cc, MID | lot 0 livré, §4.5 |
-| Lecture des extensions | `ProcessExtensions` `mcu/src/rtp.cpp:9`, appelée seulement sous `useTransportCC` `rtpsession.cpp:3000` | **à rendre inconditionnelle, §4.5** |
-| Propriété `ssrc` = SSRC **d'émission** ; `cname` | `rtpsession.cpp:599-602` | OK ; il manque le SSRC distant |
+| Lecture des extensions | `ProcessExtensions` `mcu/src/rtp.cpp`, appelée sur tout paquet reçu | fait (lot 0) |
+| Propriété `ssrc` = SSRC **d'émission** ; `cname` ; `remote-ssrc` = SSRC distant | `RTPSession::SetProperties` | fait (lot 0) |
 | Source du mixeur vidéo = un `int id > 0`, une entrée + une sortie | `VideoMixer::CreateMixer` `mcu/src/videomixer.cpp:660`, `Mosaic` `mcu/src/mosaic.cpp` | OK, réutilisé tel quel |
-| Sources réservées | `AppMixerId=1`, `SharedDocMixerId=2`, `RecorderId=10` `mcu/include/multiconf.h:36-38` ; `maxId` part de 500 | OK ; la 2 disparaît, §4.3 |
+| Sources réservées | `AppMixerId=1`, `RecorderId=10` `mcu/include/multiconf.h` ; `maxId` part de 500 | OK ; la 2 est supprimée (lot 1b) |
 | VAD d'une source sans audio | `AudioMixer::GetVAD` `audiomixer.cpp:822` rend 0 | OK, §4.2 |
 | Endpoint JSR-309 : deux ports vidéo | `ports[4]`, `ports2[4]` `src/jsr309/Endpoint.h:298`, `GetPort` `:253` | **à ouvrir, §4.6** |
 | Ports du mixeur JSR-309, anonymes, N par endpoint possible | `VideoMixerResource::CreatePort` `src/jsr309/VideoMixerResource.cpp:36` | OK ; rôle en dur à l'attache, §4.6 |
-| Contrôleur : une section par type, pas de BUNDLE, pas de BFCP | elixip `MediaServerMendoozeSdp.ex:459-463`, `adapter/conn.ex:559-580`, `docs/kelixip/modules/mcu_module_guide.md:292` | **§4.7** |
-| MOTELI : `MediaRole` énuméré, `EndpointCreate` à trois booléens | elixip `moteli_common.proto:53`, `moteli_jsr309.proto:131` | **§4.5** |
+| Contrôleur : une section par type, pas de BUNDLE, pas de BFCP | elixip `MediaServerMendoozeSdp.ex:459-463`, `adapter/conn.ex:559-580`, `docs/kelixip/modules/mcu_module_guide.md:292` | **§4.7** ; plan : elixip `docs/conception/UNIFIED-PLAN/SPEC.md` |
+| MOTELI | elixip `apps/elixip2/priv/proto/` | plan MCU fait (rôle `int32`, `bundle`, 4 verbes, `source_id`) ; plan JSR-309 au lot 3 |
 | Tests BFCP | `mcu/tests/test_bfcp_{codec,server,tcp,udp}.cpp` | garde-fous du lot 1b |
 
 ## 4. Conception
 
-### 4.1 Le précédent : comment le partage de document BFCP est monté
+### 4.1 Le précédent : le montage BFCP que le lot 1b remplace
 
-Le serveur porte déjà un second flux vidéo par participant. Le lire en détail
-dit tout le modèle, parce que c'en est déjà une instance.
+Ce paragraphe décrit le partage de document tel qu'il était monté avant le
+lot 1b. Il justifie le modèle, parce qu'il en était déjà une instance. Le
+montage en service est celui du §4.3.
 
 **Deux `VideoStream` par participant, dès la construction.** `video[0]` est la
 caméra (MAIN), `video[1]` est construit avec le rôle `VIDEO_SLIDES`
