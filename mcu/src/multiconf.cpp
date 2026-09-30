@@ -27,6 +27,7 @@ MultiConf::MultiConf(const std::wstring &tag) : broadcast(tag), sharedDocMixer()
 
 	//Inicializamos el contador
 	maxId = 500;
+	presenterId = 0;
 
 	//Y no tamos iniciados
 	inited = 0;
@@ -105,20 +106,14 @@ int MultiConf::Init(int vad, DWORD rate)
 	//Create one mixer for the app Mixer ouuput
 	videoMixer.CreateMixer(AppMixerId);
 	
-	//Create one mixer for the shared video output
-	videoMixer.CreateMixer(SharedDocMixerId);
-
 	//Init
 	appMixer.Init(videoMixer.GetOutput(AppMixerId));
 	
 	//Init
-	sharedDocMixer.Init(videoMixer.GetOutput(SharedDocMixerId),videoMixer.GetLogo(),this);
+	sharedDocMixer.Init(this);
 
 	//Init mixer for the app mixer
 	videoMixer.InitMixer(AppMixerId,-1);
-	
-	//Init mixer for the app mixer
-	videoMixer.InitMixer(SharedDocMixerId,-1);
 
 	return res;
 }
@@ -467,9 +462,6 @@ int MultiConf::RemoveMosaicParticipant(int mosaicId,int partId)
 				appMixer.DisplayImage( videoMixer.GetLogo() );
 				
 				break;
-		case SharedDocMixerId:
-				
-				break;
 
 		default:
 				break;
@@ -770,6 +762,15 @@ int MultiConf::CreateVideoStream(int partId,int& role,int& sourceId)
 
 	videoMixer.InitMixer(sourceId,-1);
 
+	if (!RegisterVideoSource(partId,role,sourceId,part))
+		return Error("-CreateVideoStream: participant %d deleted meanwhile\n",partId);
+
+	Log("<CreateVideoStream [partId:%d,role:%d,sourceId:%d]\n",partId,role,sourceId);
+	return 1;
+}
+
+bool MultiConf::RegisterVideoSource(int partId,int role,int sourceId,const RTPParticipantPtr& part)
+{
 	{
 		std::lock_guard<std::mutex> lock(videoSourcesMutex);
 		videoSources[partId][role] = sourceId;
@@ -782,25 +783,50 @@ int MultiConf::CreateVideoStream(int partId,int& role,int& sourceId)
 	bool alive = it != participants.end() && it->second == part;
 	participantsLock.DecUse();
 
-	if (!alive)
-	{
-		bool owned = false;
-		{
-			std::lock_guard<std::mutex> lock(videoSourcesMutex);
-			VideoSources::iterator p = videoSources.find(partId);
-			if (p != videoSources.end() && p->second.erase(role))
-			{
-				owned = true;
-				if (p->second.empty())
-					videoSources.erase(p);
-			}
-		}
-		if (owned)
-			DestroyVideoSource(sourceId);
-		return Error("-CreateVideoStream: participant %d deleted meanwhile\n",partId);
-	}
+	if (alive)
+		return true;
 
-	Log("<CreateVideoStream [partId:%d,role:%d,sourceId:%d]\n",partId,role,sourceId);
+	bool owned = false;
+	{
+		std::lock_guard<std::mutex> lock(videoSourcesMutex);
+		VideoSources::iterator p = videoSources.find(partId);
+		if (p != videoSources.end() && p->second.erase(role))
+		{
+			owned = true;
+			if (p->second.empty())
+				videoSources.erase(p);
+		}
+	}
+	if (owned)
+		DestroyVideoSource(sourceId);
+	return false;
+}
+
+/************************
+* CreateSlidesSource
+*	La source du rôle 1, câblée dans les deux sens comme n'importe quel flux :
+*	le document décodé nourrit sa sortie, la mosaïque partagée son entrée.
+*************************/
+int MultiConf::CreateSlidesSource(int partId,const RTPParticipantPtr& part)
+{
+	if (GetVideoStreamSource(partId,MediaFrame::VIDEO_SLIDES))
+		return 1;
+
+	participantsLock.WaitUnusedAndLock();
+	int sourceId = maxId++;
+	participantsLock.Unlock();
+
+	if (!videoMixer.CreateMixer(sourceId))
+		return Error("-CreateSlidesSource: couldn't create video mixer %d\n",sourceId);
+
+	part->SetVideoOutput(videoMixer.GetSharedOutput(sourceId),MediaFrame::VIDEO_SLIDES);
+	part->SetVideoInput(videoMixer.GetSharedInput(sourceId),MediaFrame::VIDEO_SLIDES);
+	videoMixer.InitMixer(sourceId,-1);
+
+	if (!RegisterVideoSource(partId,MediaFrame::VIDEO_SLIDES,sourceId,part))
+		return Error("-CreateSlidesSource: participant %d deleted meanwhile\n",partId);
+
+	Log("-CreateSlidesSource [partId:%d,sourceId:%d]\n",partId,sourceId);
 	return 1;
 }
 
@@ -852,7 +878,7 @@ int MultiConf::SetVideoStreamMosaic(int partId,int role,int mosaicId)
 	if (role == MediaFrame::VIDEO_MAIN)
 		return SetParticipantMosaic(partId,mosaicId);
 
-	int sourceId = role >= MediaFrame::VIDEO_EXTRA ? GetVideoStreamSource(partId,role) : 0;
+	int sourceId = GetVideoStreamSource(partId,role);
 	if (!sourceId)
 		return Error("-SetVideoStreamMosaic: no video source [partId:%d,role:%d]\n",partId,role);
 
@@ -933,7 +959,6 @@ int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 	textMixer.EndMixer(partId);
 	//End participant video input/output
 	videoMixer.EndMixer(partId);
-	videoMixer.EndMixer(partId+100000);
 	for (std::map<int,int>::iterator it = extraSources.begin(); it != extraSources.end(); ++it)
 		videoMixer.EndMixer(it->second);
 
@@ -948,7 +973,6 @@ int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 
 	//QUitamos los mixers
 	videoMixer.DeleteMixer(partId);
-	videoMixer.DeleteMixer(partId+100000);
 	for (std::map<int,int>::iterator it = extraSources.begin(); it != extraSources.end(); ++it)
 		videoMixer.DeleteMixer(it->second);
 	
@@ -1092,13 +1116,11 @@ int MultiConf::End()
 
 	//Stop app mixer
 	videoMixer.EndMixer(AppMixerId);
-	videoMixer.EndMixer(SharedDocMixerId);
 	//End it
 	appMixer.End();
 
 	//Delete mixer
 	videoMixer.DeleteMixer(AppMixerId);
-	videoMixer.DeleteMixer(SharedDocMixerId);
 
 	Log("-End conference mixers\n");
 
@@ -1413,86 +1435,113 @@ int  MultiConf::StopDocSharing(int confId,int partId)
 
 int MultiConf::SetDocSharingMosaic(int mosaicId, int id)
 {
-	Log(">SetDocSharingMosaic\n");
+	Log(">SetDocSharingMosaic [mosaic:%d,partId:%d]\n",mosaicId,id);
 
-	int partId =0;
-
-	//Use list (protège part contre un DeleteParticipant concurrent ;
-	//les IncUse imbriqués des boucles ci-dessous restent valides)
-	participantsLock.IncUse();
-
-	
-	RTPParticipantPtr part = GetRTPParticipant(id);
-
-	if ( mosaicId == -1 )
-	{
-		participantsLock.IncUse();
-
-			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
-			{
-				partId 	= it->first;
-
-				RTPParticipantPtr rtpPart = GetRTPParticipant(partId);
-				if (!rtpPart)
-					continue;
-
-				if (rtpPart->GetDocSharingMode() == Participant::BFCP_TCP ||  rtpPart->GetDocSharingMode() == Participant::BFCP_UDP)
-				{
-					rtpPart->StopSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-				}
-
-			}
-
-			participantsLock.DecUse();
-
-
-	}
-	else
-	{
-		if (part)
-		{
-			videoMixer.InitMixer(id+100000,mosaicId);
-			part->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-
-		}
-		else
-		{
-
-			participantsLock.IncUse();
-
-			for(Participants::iterator it=participants.begin(); it!=participants.end(); it++)
-			{
-				partId 	= it->first;
-
-				RTPParticipantPtr rtpPart = GetRTPParticipant(partId);
-				if (!rtpPart)
-					continue;
-
-				if (rtpPart->GetDocSharingMode() == Participant::BFCP_TCP ||  rtpPart->GetDocSharingMode() == Participant::BFCP_UDP )
-				{
-
-					videoMixer.InitMixer(partId+100000,mosaicId);
-					rtpPart->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
-
-				}
-
-			}
-
-			participantsLock.DecUse();
-
-
-		}
-	}
+	//Retenue même quand personne ne partage : le prochain présentateur y entre.
+	const int previous = sharedDocMixer.GetSharedMosaic();
 	sharedDocMixer.SetSharedMosaic(mosaicId);
 
-	//Desprotegemos
-	participantsLock.DecUse();
+	const int presenter = GetPresenter();
+	const int presenterSource = presenter ? GetVideoStreamSource(presenter,MediaFrame::VIDEO_SLIDES) : 0;
+	if (presenterSource && previous != mosaicId)
+	{
+		if (previous >= 0)
+			videoMixer.RemoveMosaicParticipant(previous,presenterSource);
+		if (mosaicId >= 0)
+			videoMixer.AddMosaicParticipant(mosaicId,presenterSource);
+	}
+
+	if (id)
+	{
+		participantsLock.IncUse();
+		RTPParticipantPtr part = GetRTPParticipant(id);
+		participantsLock.DecUse();
+		if (part)
+			ApplyDocSharing(id,part,mosaicId,presenter != 0);
+	}
+	else
+		ApplyDocSharingToAll(mosaicId,presenter != 0);
 
 	Log("<SetDocSharingMosaic\n");
 
 	return 1;
+}
 
+int MultiConf::GetPresenter()
+{
+	std::lock_guard<std::mutex> lock(videoSourcesMutex);
+	return presenterId;
+}
 
+/************************
+* ApplyDocSharing
+*	La jambe SLIDES d'un participant BFCP reçoit la mosaïque partagée, et
+*	n'émet que pendant une présentation.
+*************************/
+void MultiConf::ApplyDocSharing(int partId,const RTPParticipantPtr& part,int mosaicId,bool presenting)
+{
+	if (part->GetDocSharingMode() != Participant::BFCP_TCP && part->GetDocSharingMode() != Participant::BFCP_UDP)
+		return;
+
+	const int sourceId = GetVideoStreamSource(partId,MediaFrame::VIDEO_SLIDES);
+	if (!sourceId)
+		return;
+
+	videoMixer.SetMixerMosaic(sourceId,mosaicId);
+
+	if (presenting && mosaicId >= 0)
+		part->StartSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
+	else
+		part->StopSending(MediaFrame::Video,MediaFrame::VIDEO_SLIDES);
+}
+
+void MultiConf::ApplyDocSharingToAll(int mosaicId,bool presenting)
+{
+	participantsLock.IncUse();
+	for (Participants::iterator it=participants.begin(); it!=participants.end(); ++it)
+	{
+		RTPParticipantPtr part = GetRTPParticipant(it->first);
+		if (part)
+			ApplyDocSharing(it->first,part,mosaicId,presenting);
+	}
+	participantsLock.DecUse();
+}
+
+void MultiConf::StartPresentation(int partId)
+{
+	Log(">StartPresentation [partId:%d]\n",partId);
+
+	{
+		std::lock_guard<std::mutex> lock(videoSourcesMutex);
+		presenterId = partId;
+	}
+
+	const int mosaicId = sharedDocMixer.GetSharedMosaic();
+	const int sourceId = GetVideoStreamSource(partId,MediaFrame::VIDEO_SLIDES);
+	if (!sourceId)
+		Error("-StartPresentation: participant %d has no slides source\n",partId);
+	else if (mosaicId >= 0)
+		videoMixer.AddMosaicParticipant(mosaicId,sourceId);
+
+	ApplyDocSharingToAll(mosaicId,true);
+}
+
+void MultiConf::StopPresentation(int partId)
+{
+	Log(">StopPresentation [partId:%d]\n",partId);
+
+	{
+		std::lock_guard<std::mutex> lock(videoSourcesMutex);
+		if (presenterId == partId)
+			presenterId = 0;
+	}
+
+	const int mosaicId = sharedDocMixer.GetSharedMosaic();
+	const int sourceId = GetVideoStreamSource(partId,MediaFrame::VIDEO_SLIDES);
+	if (sourceId && mosaicId >= 0)
+		videoMixer.RemoveMosaicParticipant(mosaicId,sourceId);
+
+	ApplyDocSharingToAll(mosaicId,false);
 }
 
 int MultiConf::SetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd, MediaFrame::MediaRole role)
@@ -1568,7 +1617,6 @@ int MultiConf::StartSending(int id,MediaFrame::Type media,char *sendIp,int sendP
 	if (media == MediaFrame::Text && TextOnWebSocket(id))
 		return Error("-StartSending: text is on WebSocket for participant %d, refusing RTP text.\n",id);
 
-	int mosaicId= sharedDocMixer.GetSharedMosaic();
 	//Use list
 	participantsLock.IncUse();
 
@@ -1591,11 +1639,8 @@ int MultiConf::StartSending(int id,MediaFrame::Type media,char *sendIp,int sendP
 		
 		//Set  codec
 		ret = part->StartSending(media,sendIp,sendPort,rtpMap,role);
-		if (role ==MediaFrame::VIDEO_SLIDES)
-		{
-			if (mosaicId >=0)
-					SetDocSharingMosaic(mosaicId,id);
-		}
+		if (ret && media == MediaFrame::Video && role == MediaFrame::VIDEO_SLIDES)
+			ApplyDocSharing(id,part,sharedDocMixer.GetSharedMosaic(),GetPresenter() != 0);
 	}
 	
 	
@@ -2032,29 +2077,26 @@ int MultiConf::SetAppCodec(int confId, int id,int codec)
 
 	//Get the participant
 	ParticipantPtr part = GetParticipant(id);
+
+	//Unlock : CreateSlidesSource prend le verrou en écriture pour allouer
+	participantsLock.DecUse();
+
 	//Check participant
 	if (part)
 	{
 		switch (codec)
 		{
 			case AppCodec::BFCP:
-				videoMixer.CreateMixer(id+100000);
-				videoMixer.InitMixer(id+100000,-1);
-				part->SetVideoInput(videoMixer.GetSharedInput(id+100000),MediaFrame::VIDEO_SLIDES);
-				
-				
+			{
+				RTPParticipantPtr rtp = std::dynamic_pointer_cast<RTPParticipant>(part);
+				ret = rtp ? CreateSlidesSource(id,rtp) : Error("-SetAppCodec: BFCP needs an RTP participant [%d]\n",id);
 				break;
+			}
 			default:
-				
+				ret = 1;
 				break;
 		}
-
-		ret =1;
 	}
-	
-	
-	//Unlock
-	participantsLock.DecUse();
 
 	//Exit
 	return ret;
@@ -3004,7 +3046,7 @@ void MultiConf::onRequestDocSharing(int partId,std::wstring status)
 	//Check listener
 	if (listener)
 		//Send event
-		listener->onParticipantRequestDocSharing(this,partId,status);
+		listener->onParticipantRequestDocSharing(this,partId,status,GetVideoStreamSource(partId,MediaFrame::VIDEO_SLIDES));
 }
 
 int MultiConf::AppMixerDisplayImage(const char* filename)

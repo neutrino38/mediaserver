@@ -2,8 +2,8 @@
 
 > Statut : **en cours**. Branche `feat/unified-plan`. Le chantier préalable
 > (famine de `ChangeStream`, §5) et le lot 0 (extension MID) sont faits. Le
-> lot 1 est codé et testé ; sa recette reste à faire. Les lots 1b à 5 restent
-> à faire.
+> lot 1 et le lot 1b sont codés et testés ; leurs recettes restent à faire.
+> Les lots 2 à 5 restent à faire.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur par XML-RPC ou par
@@ -274,11 +274,13 @@ présentation** :
   présentation courante.
 
 **La parole place la source dans la mosaïque partagée.** `SetDocSharingMosaic`
-dit déjà au serveur quelle mosaïque est partagée. À `onFloorGranted`,
-`MultiConf` y ajoute le `sourceId` de SLIDES du présentateur
-(`AddMosaicParticipant`) ; à la libération ou à la révocation, il l'en retire
-(`RemoveMosaicParticipant`). Le chemin BFCP reste autonome : aucun appel du
-contrôleur n'est nécessaire, comme aujourd'hui. La source réservée
+dit au serveur quelle mosaïque est partagée, et le serveur la retient d'un
+partage à l'autre. À `onFloorGranted`, `MultiConf` y ajoute le `sourceId` de
+SLIDES du présentateur (`AddMosaicParticipant`), et la jambe SLIDES de chaque
+participant BFCP se met à émettre. À la libération ou à la révocation, il
+l'en retire (`RemoveMosaicParticipant`), et les jambes SLIDES s'arrêtent. Le
+chemin BFCP est autonome : aucun appel du contrôleur n'est nécessaire d'un
+partage à l'autre. La source réservée
 `SharedDocMixerId = 2`, son pipe, son logo et son cas particulier dans
 `RemoveMosaicParticipant` (`multiconf.cpp:109-121`, `:470`) disparaissent.
 Le contrôleur qui posait l'identifiant 2 n'est plus en service (décision du
@@ -613,7 +615,12 @@ source n'existe pas encore.
 - Recette : page web `bundlePolicy: 'max-compat'`, caméra + écran, contrôleur
   patché à la main ou script XML-RPC : deux slots dans la mosaïque.
 
-### Lot 1b — Le BFCP sur le modèle
+### Lot 1b — Le BFCP sur le modèle (codé, recette à faire)
+
+Tests : `mcu/tests/test_doc_sharing.cpp` (suites `DocSharing` et
+`VideoStreamRestart`), sur une vraie parole BFCP en TCP. Le lot porte aussi le
+correctif de `VideoStream::StartSending()` sans argument : il relit l'adresse
+distante de la jambe, sans quoi une jambe SLIDES arrêtée ne repart pas.
 
 - `multiconf.*` : source allouée pour le rôle 1 dans `SetAppCodec`, câblée
   dans les deux sens ; `SetDocSharingMosaic` par `SetVideoStreamMosaic` ;
@@ -758,6 +765,7 @@ contrôleur pose une image de fond sur la mosaïque avec
 | `role` dans MOTELI | `int32` (**décidé** 2026-09-29) | énumération ouverte : dépend du comportement de chaque bibliothèque protobuf sur une valeur inconnue |
 | Rôle sur les RPC JSR-309 | sur tous les RPC qui visent une jambe (**décidé** 2026-09-29) | seulement média et attaches : ferme le SIP SRTP hors BUNDLE ; média, attaches et chiffrement : cinq handlers de moins, une table d'exceptions à retenir |
 | Slot du document sans présentation | vide (**décidé** 2026-09-29) | logo poussé par le code BFCP : plus de pipe où le pousser |
+| Libération de la parole | la source sort, SLIDES s'arrête, la mosaïque partagée reste retenue (**décidé** 2026-09-30) | oublier la mosaïque : le contrôleur la repose à chaque partage ; émettre en continu : un flux de contenu sans parole, que BFCP ne prévoit pas |
 
 ### À trancher
 

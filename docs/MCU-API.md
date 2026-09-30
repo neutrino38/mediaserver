@@ -389,7 +389,7 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
 | Type | Nom | Tuple |
 |------|-----|-------|
 | 1 | ParticipantRequestFPU | `(int type, int confId, string tag, int partId)` |
-| 2 | ParticipantRequestDocSharing | `(int type, int confId, string tag, int partId, string status)` |
+| 2 | ParticipantRequestDocSharing | `(int type, int confId, string tag, int partId, string status, int sourceId)` |
 | 3 | ParticipantMediaTimeout | `(int type, int confId, string tag, int partId, int media, int role)` |
 | 4 | ParticipantMediaConnected | `(int type, int confId, string tag, int partId, int media, int role)` |
 
@@ -403,7 +403,11 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
 - **ParticipantRequestDocSharing** (2) : un participant demande à (dé)partager
   un document (BFCP). `status` ∈ `{ACTIVE, WAITING_ACCEPT, NONE, FAILED}`. À
   traiter avec `AcceptDocSharingRequest` / `RefuseDocSharingRequest` /
-  `StopDocSharing` (§6.10). Émis par `onParticipantRequestDocSharing`.
+  `StopDocSharing` (§6.12). Émis par `onParticipantRequestDocSharing`.
+  `sourceId` est la source du document de ce participant (0 s'il n'en a
+  pas). Pour montrer le document dans une autre mosaïque que la mosaïque
+  partagée, le contrôleur y place ce `sourceId` sur `ACTIVE`, et l'en retire
+  sur `NONE`.
 
 - **ParticipantMediaTimeout** (3) : le flux RTP d'un média de ce participant s'est
   **tu**. Émis **une seule fois** par transition actif → inactif, sur le média et le
@@ -618,14 +622,16 @@ mosaïques, et son slot se libère.
 Change la mosaïque de sortie d'un flux vidéo : ce que sa jambe émet.
 - **Params** `(iiii)` : `confId`, `partId`, `role`, `mosaicId` (`-1` = aucune).
 - **Retour** : vide.
-- Rôle 0 : même effet que `SetParticipantMosaic`. Rôle 1 : pas encore pris
-  en charge, utiliser `SetDocSharingMosaic`.
+- Rôle 0 : même effet que `SetParticipantMosaic`. Rôle 1 : la mosaïque est
+  remplacée par la mosaïque partagée au prochain changement de parole ;
+  utiliser `SetDocSharingMosaic`.
 
 #### `GetVideoStreamSource`
 Rend l'identifiant de source d'un flux vidéo.
 - **Params** `(iii)` : `confId`, `partId`, `role`.
-- **Retour** : `(i)` = `sourceId`. Rôle 0 : le `partId`. Erreur si le flux
-  n'existe pas. Rôle 1 : pas encore pris en charge.
+- **Retour** : `(i)` = `sourceId`. Rôle 0 : le `partId`. Rôle 1 : la source
+  du document, qui existe dès `SetAppCodec(BFCP)`. Erreur si le flux n'existe
+  pas.
 
 #### `SetParticipantSidebar`
 Change le sidebar de sortie du participant.
@@ -1239,9 +1245,17 @@ Arrête le partage de document en cours.
 - **Retour** : vide.
 
 #### `SetDocSharingMosaic`
-Définit la mosaïque utilisée pour l'affichage du document partagé.
-- **Params** `(ii)` : `confId`, `mosaicId` (défaut 0).
+Définit la mosaïque partagée : celle que les participants BFCP reçoivent sur
+leur jambe SLIDES.
+- **Params** `(ii)` : `confId`, `mosaicId` (`-1` = aucune).
 - **Retour** : vide.
+- La mosaïque reste retenue d'un partage à l'autre. Il suffit de l'appeler
+  une fois.
+- Le serveur gère seul le reste de la présentation. Quand la parole est
+  accordée, il place la source du présentateur dans cette mosaïque, et la
+  jambe SLIDES de chaque participant BFCP émet. Quand la parole est rendue,
+  il retire la source, et les jambes SLIDES s'arrêtent. Le slot reste vide :
+  pour y voir une image, poser une incrustation avec `SetMosaicOverlayImage`.
 
 ---
 

@@ -34,7 +34,6 @@ class MultiConf :
 {
 public:
 	static const int AppMixerId = 1;
-	static const int SharedDocMixerId = 2;
 	static const int RecorderId = 10;
 	
 public:
@@ -66,7 +65,8 @@ public:
 		//Virtual desctructor
 		virtual ~Listener(){};
 		virtual void onParticipantRequestFPU(MultiConf *conf,int partId) = 0;
-		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status) = 0;
+		//sourceId : la source de SLIDES du participant, 0 s'il n'en a pas.
+		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status,int sourceId) = 0;
 
 		//P7/S1-S2 : le flux RTP d'un media d'un participant s'est tu, ou son
 		//premier paquet vient d'arriver. Non pures (cf. Participant::Listener).
@@ -158,6 +158,11 @@ public:
 	int RefuseDocSharingRequest(int confId,int partId);
 	int StopDocSharing(int confId,int partId);
 	int SetDocSharingMosaic(int mosaicId, int partId=0);
+	//La parole BFCP (SharedDocMixer) : la source de SLIDES du présentateur
+	//entre dans la mosaïque partagée, ou en sort, et SLIDES émet ou s'arrête
+	//vers tous les participants BFCP.
+	void StartPresentation(int partId);
+	void StopPresentation(int partId);
 	
 	int SetVideoCodec(int partId,int codec,int mode,int fps,int bitrate,int intraPeriod,const Properties &properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetAudioCodec(int partId,int codec,const Properties& properties);
@@ -246,6 +251,11 @@ private:
 
 	int DestroyParticipant(int partId,ParticipantPtr part);
 	void DestroyVideoSource(int sourceId);
+	bool RegisterVideoSource(int partId,int role,int sourceId,const RTPParticipantPtr& part);
+	int CreateSlidesSource(int partId,const RTPParticipantPtr& part);
+	void ApplyDocSharing(int partId,const RTPParticipantPtr& part,int mosaicId,bool presenting);
+	void ApplyDocSharingToAll(int mosaicId,bool presenting);
+	int GetPresenter();
 
 
 private:
@@ -295,6 +305,7 @@ private:
 	//partId → (rôle >= 2 → sourceId). Qui retire une entrée détruit sa source.
 	typedef std::map<int,std::map<int,int>> VideoSources;
 	VideoSources		videoSources;
+	int			presenterId;
 	std::mutex		videoSourcesMutex;
 	Players			players;
 
