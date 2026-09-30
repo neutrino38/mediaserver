@@ -25,11 +25,13 @@ RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag) :
 	videoGroup(PollGroupName(partId,"video").c_str()),
 	audio(this),
 	text(NULL),
-	eventSource(tag)
+	eventSource(tag),
+	nextVideoRole(MediaFrame::VIDEO_EXTRA),
+	videosEnded(false)
 {
 	Log("-RTPParticipant [id:%d,tag:%ls]\n",partId,tag.c_str());
-	video[0]	=	new VideoStream(this,logo);
-	video[1]	=	new VideoStream(this,logo,MediaFrame::VIDEO_SLIDES);
+	videos[MediaFrame::VIDEO_MAIN]		= std::make_shared<VideoStream>(this,logo);
+	videos[MediaFrame::VIDEO_SLIDES]	= std::make_shared<VideoStream>(this,logo,MediaFrame::VIDEO_SLIDES);
 	estimator.SetEventSource(&eventSource);
 }
 
@@ -40,15 +42,82 @@ RTPParticipant::~RTPParticipant()
 	//idempotent (DestroyParticipant/MultiConf::End l'appellent déjà).
 	End();
 
-	for(int i=0; i < MAX_VIDEO_STREAM && video[i] != NULL ; ++i)
-		delete(video[i]);
+	//Avant les membres : un VideoStream se retire de `estimator` en mourant.
+	videos.clear();
+}
 
+std::shared_ptr<VideoStream> RTPParticipant::GetVideo(MediaFrame::MediaRole role)
+{
+	std::lock_guard<std::mutex> lock(videosMutex);
+	VideoStreams::iterator it = videos.find(role);
+	return it != videos.end() ? it->second : std::shared_ptr<VideoStream>();
+}
+
+bool RTPParticipant::HasVideoStream(MediaFrame::MediaRole role)
+{
+	return (bool)GetVideo(role);
+}
+
+static int NoVideoStream(const char* method,int partId,MediaFrame::MediaRole role)
+{
+	return Error("-RTPParticipant::%s: no video stream [partId:%d,role:%d]\n",method,partId,(int)role);
+}
+
+int RTPParticipant::SetVideoInput(VideoInput* input,MediaFrame::MediaRole role)
+{
+	std::shared_ptr<VideoStream> v = GetVideo(role);
+	if (!v)
+		return NoVideoStream("SetVideoInput",partId,role);
+	v->SetVideoInput(input);
+	return 1;
+}
+
+int RTPParticipant::SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role)
+{
+	std::shared_ptr<VideoStream> v = GetVideo(role);
+	if (!v)
+		return NoVideoStream("SetVideoOutput",partId,role);
+	v->SetVideoOutput(output);
+	return 1;
+}
+
+int RTPParticipant::SetVideoInput(std::shared_ptr<VideoInput> input,MediaFrame::MediaRole role)
+{
+	std::shared_ptr<VideoStream> v = GetVideo(role);
+	if (!v)
+		return NoVideoStream("SetVideoInput",partId,role);
+	v->SetVideoInput(std::move(input));
+	return 1;
+}
+
+int RTPParticipant::SetVideoOutput(std::shared_ptr<VideoOutput> output,MediaFrame::MediaRole role)
+{
+	std::shared_ptr<VideoStream> v = GetVideo(role);
+	if (!v)
+		return NoVideoStream("SetVideoOutput",partId,role);
+	v->SetVideoOutput(std::move(output));
+	return 1;
+}
+
+VideoOutput* RTPParticipant::GetVideoOutput(MediaFrame::MediaRole role)
+{
+	std::shared_ptr<VideoStream> v = GetVideo(role);
+	return v ? v->GetVideoOutput() : NULL;
+}
+
+int RTPParticipant::SetMediaListener(MediaFrame::Listener *listener,MediaFrame::MediaRole role)
+{
+	std::shared_ptr<VideoStream> v = GetVideo(role);
+	return v ? v->SetMediaListener(listener) : NoVideoStream("SetMediaListener",partId,role);
 }
 
 int RTPParticipant::SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties,MediaFrame::MediaRole role)
 {
 	//Set it
-	return video[role]->SetVideoCodec(codec,mode,fps,bitrate,intraPeriod,properties);
+	{
+		std::shared_ptr<VideoStream> v = GetVideo(role);
+		return v ? v->SetVideoCodec(codec,mode,fps,bitrate,intraPeriod,properties) : NoVideoStream("SetVideoCodec",partId,role);
+	}
 }
 
 int RTPParticipant::SetAudioCodec(AudioCodec::Type codec,const Properties& properties)
@@ -66,7 +135,10 @@ int RTPParticipant::SetTextCodec(TextCodec::Type codec)
 int RTPParticipant::SendVideoFPU(MediaFrame::MediaRole role)
 {
 	//Send it
-	return video[role]->SendFPU();
+	{
+		std::shared_ptr<VideoStream> v = GetVideo(role);
+		return v ? v->SendFPU() : NoVideoStream("SendFPU",partId,role);
+	}
 }
 
 int RTPParticipant::SendDTMF(DTMFMessage* dtmf)
@@ -86,8 +158,12 @@ MediaStatistics RTPParticipant::GetStatistics(MediaFrame::Type type,MediaFrame::
                         break;
 
                 case MediaFrame::Video:
-                        stats = video[role]->GetStatistics();
+                {
+                        std::shared_ptr<VideoStream> v = GetVideo(role);
+                        if (v)
+                                stats = v->GetStatistics();
                         break;
+                }
 
                 default:
                         stats = text.GetStatistics();
@@ -112,9 +188,14 @@ int RTPParticipant::End()
 	//index le plus haut) AVANT le flux "observé" (MAIN, index 0) — jamais
 	//l'inverse — sinon rtp.End() de MAIN ferme les sockets pendant que le
 	//recVideoThread de SLIDES lit encore dessus (fd reuse race).
-	for(int i = MAX_VIDEO_STREAM - 1; i >= 0 ; --i)
-		if (video[i] != NULL)
-			ret &= video[i]->End();
+	VideoStreams streams;
+	{
+		std::lock_guard<std::mutex> lock(videosMutex);
+		videosEnded = true;
+		streams = videos;
+	}
+	for(VideoStreams::reverse_iterator it = streams.rbegin(); it != streams.rend(); ++it)
+		ret &= it->second->End();
 
 
 	//aggregater results
@@ -136,22 +217,13 @@ int RTPParticipant::Init()
 	mediaGroup.Start();
 	videoGroup.Start();
 
-	for(int i=0; i < MAX_VIDEO_STREAM && video[i] != NULL ; ++i)
-
+	VideoStreams streams;
 	{
-		//Set estimator for video
-		video[i]->SetRemoteRateEstimator(&estimator);
-		//Init each stream
-		video[i]->GetOwnSession().SetPollGroup(&videoGroup);
-		ret &= video[i]->Init(NULL,NULL);
-		//Observe sa propre session par défaut
-		video[i]->SetRTPSession(std::shared_ptr<RTPSession>(self,&video[i]->GetOwnSession()),0);
-		//M-6 : arme le listener RTP en weak_ptr. static_pointer_cast obligatoire :
-		//RTPParticipant hérite de RTPSession::Listener par DEUX chemins non
-		//virtuels (VideoStream::Listener et AudioStream::Listener) → conversion
-		//directe ambiguë. On passe par le sous-objet VideoStream::Listener.
-		video[i]->SetWeakListener(std::static_pointer_cast<VideoStream::Listener>(self));
+		std::lock_guard<std::mutex> lock(videosMutex);
+		streams = videos;
 	}
+	for(VideoStreams::iterator it = streams.begin(); it != streams.end(); ++it)
+		ret &= StartVideoStream(*it->second,std::shared_ptr<RTPSession>(self,&it->second->GetOwnSession()));
 
 	audio.GetOwnSession().SetPollGroup(&mediaGroup);
 	ret &= audio.Init(audioInput,audioOutput);
@@ -165,6 +237,82 @@ int RTPParticipant::Init()
 	return ret;
 }
 
+int RTPParticipant::StartVideoStream(VideoStream& stream,std::shared_ptr<RTPSession> ownSession)
+{
+	//Set estimator for video
+	stream.SetRemoteRateEstimator(&estimator);
+	//Init each stream
+	stream.GetOwnSession().SetPollGroup(&videoGroup);
+	int ret = stream.Init(NULL,NULL);
+	//Observe sa propre session par défaut
+	stream.SetRTPSession(std::move(ownSession),0);
+	//M-6 : arme le listener RTP en weak_ptr. static_pointer_cast obligatoire :
+	//RTPParticipant hérite de RTPSession::Listener par DEUX chemins non
+	//virtuels (VideoStream::Listener et AudioStream::Listener) → conversion
+	//directe ambiguë. On passe par le sous-objet VideoStream::Listener.
+	stream.SetWeakListener(std::static_pointer_cast<VideoStream::Listener>(shared_from_this()));
+	return ret;
+}
+
+int RTPParticipant::CreateVideoStream(std::shared_ptr<VideoInput> input,std::shared_ptr<VideoOutput> output)
+{
+	int role;
+	{
+		std::lock_guard<std::mutex> lock(videosMutex);
+		if (videosEnded)
+			return Error("-RTPParticipant::CreateVideoStream: participant ended [partId:%d]\n",partId);
+		role = nextVideoRole++;
+	}
+
+	std::shared_ptr<VideoStream> stream = std::make_shared<VideoStream>(this,logo,(MediaFrame::MediaRole)role);
+	stream->SetVideoInput(std::move(input));
+	stream->SetVideoOutput(std::move(output));
+	//Aliasée sur le flux et non sur le participant : la session d'un flux
+	//supprimé ne doit rien garder en vie.
+	if (!StartVideoStream(*stream,std::shared_ptr<RTPSession>(stream,&stream->GetOwnSession())))
+	{
+		stream->End();
+		return Error("-RTPParticipant::CreateVideoStream: init failed [partId:%d,role:%d]\n",partId,role);
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(videosMutex);
+		if (!videosEnded)
+		{
+			videos[role] = stream;
+			stream.reset();
+		}
+	}
+	//End() est passé pendant l'Init : il n'a pas vu ce flux.
+	if (stream)
+	{
+		stream->End();
+		return Error("-RTPParticipant::CreateVideoStream: participant ended [partId:%d]\n",partId);
+	}
+
+	Log("-RTPParticipant::CreateVideoStream [partId:%d,role:%d]\n",partId,role);
+	return role;
+}
+
+int RTPParticipant::DeleteVideoStream(MediaFrame::MediaRole role)
+{
+	if (role < MediaFrame::VIDEO_EXTRA)
+		return Error("-RTPParticipant::DeleteVideoStream: role %d is not deletable [partId:%d]\n",(int)role,partId);
+
+	std::shared_ptr<VideoStream> stream;
+	{
+		std::lock_guard<std::mutex> lock(videosMutex);
+		VideoStreams::iterator it = videos.find(role);
+		if (it == videos.end())
+			return NoVideoStream("DeleteVideoStream",partId,role);
+		stream = it->second;
+		videos.erase(it);
+	}
+
+	Log("-RTPParticipant::DeleteVideoStream [partId:%d,role:%d]\n",partId,(int)role);
+	return stream->End();
+}
+
 int RTPParticipant::SetLocalCryptoSDES(MediaFrame::Type media,const char* suite, const char* key,MediaFrame::MediaRole role )
 {
 	switch (media)
@@ -172,7 +320,10 @@ int RTPParticipant::SetLocalCryptoSDES(MediaFrame::Type media,const char* suite,
 		case MediaFrame::Audio:
 			return audio.SetLocalCryptoSDES(suite,key);
 		case MediaFrame::Video:
-			return video[role]->SetLocalCryptoSDES(suite,key);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetLocalCryptoSDES(suite,key) : NoVideoStream("SetLocalCryptoSDES",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.SetLocalCryptoSDES(suite,key);
 	}
@@ -187,7 +338,10 @@ int RTPParticipant::SetRemoteCryptoSDES(MediaFrame::Type media,const char* suite
 		case MediaFrame::Audio:
 			return audio.SetRemoteCryptoSDES(suite,key);
 		case MediaFrame::Video:
-			return video[role]->SetRemoteCryptoSDES(suite,key,keyRank);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetRemoteCryptoSDES(suite,key,keyRank) : NoVideoStream("SetRemoteCryptoSDES",partId,role);
+			}
 			
 		case MediaFrame::Text:
 			return text.SetRemoteCryptoSDES(suite,key);
@@ -204,7 +358,10 @@ int RTPParticipant::SetRemoteCryptoDTLS(MediaFrame::Type media,const char *setup
 		case MediaFrame::Audio:
 			return audio.SetRemoteCryptoDTLS(setup,hash,fingerprint);
 		case MediaFrame::Video:
-			return video[role]->SetRemoteCryptoDTLS(setup,hash,fingerprint);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetRemoteCryptoDTLS(setup,hash,fingerprint) : NoVideoStream("SetRemoteCryptoDTLS",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.SetRemoteCryptoDTLS(setup,hash,fingerprint);
 		default:
@@ -223,7 +380,10 @@ int RTPParticipant::SetLocalSTUNCredentials(MediaFrame::Type media,const char* u
 		case MediaFrame::Audio:
 			return audio.SetLocalSTUNCredentials(username,pwd);
 		case MediaFrame::Video:
-			return video[role]->SetLocalSTUNCredentials(username,pwd);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetLocalSTUNCredentials(username,pwd) : NoVideoStream("SetLocalSTUNCredentials",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.SetLocalSTUNCredentials(username,pwd);
 	}
@@ -237,7 +397,10 @@ int RTPParticipant::SetRTPProperties(MediaFrame::Type media,const Properties& pr
 		case MediaFrame::Audio:
 			return audio.SetRTPProperties(properties);
 		case MediaFrame::Video:
-			return video[role]->SetRTPProperties(properties);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetRTPProperties(properties) : NoVideoStream("SetRTPProperties",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.SetRTPProperties(properties);
 	}
@@ -251,7 +414,10 @@ int RTPParticipant::SetRemoteSTUNCredentials(MediaFrame::Type media,const char* 
 		case MediaFrame::Audio:
 			return audio.SetRemoteSTUNCredentials(username,pwd);
 		case MediaFrame::Video:
-			return video[role]->SetRemoteSTUNCredentials(username,pwd);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetRemoteSTUNCredentials(username,pwd) : NoVideoStream("SetRemoteSTUNCredentials",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.SetRemoteSTUNCredentials(username,pwd);
 	}
@@ -273,12 +439,15 @@ int RTPParticipant::SetAddressProfile(MediaFrame::Type media,const char* profile
 		case MediaFrame::Audio:
 			return audio.GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
 		case MediaFrame::Video:
-			if (role>=MAX_VIDEO_STREAM || !video[role])
+		{
+			std::shared_ptr<VideoStream> v = GetVideo(role);
+			if (!v)
 			{
 				error = "role video inconnu";
 				return 0;
 			}
-			return video[role]->GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
+			return v->GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
+		}
 		case MediaFrame::Text:
 			return text.GetOwnSession().SetAddressProfile(profile,error) ? 1 : 0;
 		default:
@@ -294,9 +463,10 @@ IPAddress RTPParticipant::GetAnnouncedAddress(MediaFrame::Type media,MediaFrame:
 		case MediaFrame::Audio:
 			return audio.GetOwnSession().GetAnnouncedAddress();
 		case MediaFrame::Video:
-			if (role<MAX_VIDEO_STREAM && video[role])
-				return video[role]->GetOwnSession().GetAnnouncedAddress();
-			return IPAddress();
+		{
+			std::shared_ptr<VideoStream> v = GetVideo(role);
+			return v ? v->GetOwnSession().GetAnnouncedAddress() : IPAddress();
+		}
 		case MediaFrame::Text:
 			return text.GetOwnSession().GetAnnouncedAddress();
 		default:
@@ -311,7 +481,10 @@ int RTPParticipant::StartSending(MediaFrame::Type media,char *ip, int port,RTPMa
 		case MediaFrame::Audio:
 			return audio.StartSending(ip,port,rtpMap);
 		case MediaFrame::Video:
-			return video[role]->StartSending(ip,port,rtpMap);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->StartSending(ip,port,rtpMap) : NoVideoStream("StartSending",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.StartSending(ip,port,rtpMap);
 	}
@@ -326,7 +499,10 @@ int RTPParticipant::StartSending(MediaFrame::Type media,MediaFrame::MediaRole ro
 		case MediaFrame::Audio:
 			return 0;
 		case MediaFrame::Video:
-			return video[role]->StartSending();
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->StartSending() : NoVideoStream("StartSending",partId,role);
+			}
 		case MediaFrame::Text:
 			return 0;
 	}
@@ -341,7 +517,10 @@ int RTPParticipant::StopSending(MediaFrame::Type media,MediaFrame::MediaRole rol
 		case MediaFrame::Audio:
 			return audio.StopSending();
 		case MediaFrame::Video:
-			return video[role]->StopSending();
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->StopSending() : NoVideoStream("StopSending",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.StopSending();
 	}
@@ -357,7 +536,10 @@ int RTPParticipant::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,MediaFr
 		case MediaFrame::Audio:
 			return audio.StartReceiving(rtpMap);
 		case MediaFrame::Video:
-			return video[role]->StartReceiving(rtpMap);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->StartReceiving(rtpMap) : NoVideoStream("StartReceiving",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.StartReceiving(rtpMap);
 	}
@@ -416,15 +598,17 @@ int RTPParticipant::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,
 	//T140RED se derive de la seule map proposee), d'ou la map vide.
 	static const Properties noProps;
 	const Properties* localProps = &noProps;
+	std::shared_ptr<VideoStream> v;
 	switch (media)
 	{
 		case MediaFrame::Audio:
 			localProps = &audio.GetCodecProperties();
 			break;
 		case MediaFrame::Video:
-			if (!video[role])
+			v = GetVideo(role);
+			if (!v)
 				return Error("StartReceiving: no video stream for role %d\n",(int)role);
-			localProps = &video[role]->GetCodecProperties();
+			localProps = &v->GetCodecProperties();
 			break;
 		default:
 			break;
@@ -470,7 +654,10 @@ int RTPParticipant::StartReceiving(MediaFrame::Type media,MediaFrame::MediaRole 
 		case MediaFrame::Audio:
 			return 0;
 		case MediaFrame::Video:
-			return video[role]->StartReceiving();
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->StartReceiving() : NoVideoStream("StartReceiving",partId,role);
+			}
 		case MediaFrame::Text:
 			return 0;
 	}
@@ -485,7 +672,10 @@ int RTPParticipant::StopReceiving(MediaFrame::Type media,MediaFrame::MediaRole r
 		case MediaFrame::Audio:
 			return audio.StopReceiving();
 		case MediaFrame::Video:
-			return video[role]->StopReceiving();
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->StopReceiving() : NoVideoStream("StopReceiving",partId,role);
+			}
 		case MediaFrame::Text:
 			return text.StopReceiving();
 	}
@@ -495,14 +685,16 @@ int RTPParticipant::StopReceiving(MediaFrame::Type media,MediaFrame::MediaRole r
 void RTPParticipant::onFPURequested(RTPSession *session)
 {
 	//Request it
-	video[session->GetMediaRole()]->SendFPU();
+	if (std::shared_ptr<VideoStream> v = GetVideo(session->GetMediaRole()))
+		v->SendFPU();
 }
 
 
 void RTPParticipant::onReceiverEstimatedMaxBitrate(RTPSession *session,DWORD estimation)
 {
 	//Limit video taking into count max audio
-	video[session->GetMediaRole()]->SetTemporalBitrateLimit(estimation);
+	if (std::shared_ptr<VideoStream> v = GetVideo(session->GetMediaRole()))
+		v->SetTemporalBitrateLimit(estimation);
 }
 
 void RTPParticipant::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWORD estimation,DWORD overhead)
@@ -510,13 +702,15 @@ void RTPParticipant::onTempMaxMediaStreamBitrateRequest(RTPSession *session,DWOR
 	//Check which session is
 	if (session->GetMediaType()==MediaFrame::Video)
 		//Limit video
-		video[session->GetMediaRole()]->SetTemporalBitrateLimit(estimation);
+		if (std::shared_ptr<VideoStream> v = GetVideo(session->GetMediaRole()))
+			v->SetTemporalBitrateLimit(estimation);
 }
 
 void RTPParticipant::onSenderEstimatedBitrate(RTPSession *session,DWORD estimation)
 {
 	if (session->GetMediaType()==MediaFrame::Video)
-		video[session->GetMediaRole()]->SetSenderEstimatedBitrate(estimation);
+		if (std::shared_ptr<VideoStream> v = GetVideo(session->GetMediaRole()))
+			v->SetSenderEstimatedBitrate(estimation);
 }
 
 void RTPParticipant::onRequestFPU()
@@ -589,10 +783,13 @@ int RTPParticipant::StartRTPTimeout(MediaFrame::Type media,DWORD timeoutMs,Media
 			audio.ArmRTPTimeout(timeoutMs);
 			return 1;
 		case MediaFrame::Video:
-			if (!video[role])
+		{
+			std::shared_ptr<VideoStream> v = GetVideo(role);
+			if (!v)
 				return Error("StartRTPTimeout: no video stream for role %d\n",(int)role);
-			video[role]->ArmRTPTimeout(timeoutMs);
+			v->ArmRTPTimeout(timeoutMs);
 			return 1;
+		}
 		case MediaFrame::Text:
 			text.ArmRTPTimeout(timeoutMs);
 			return 1;
@@ -611,7 +808,10 @@ int RTPParticipant::SetMute(MediaFrame::Type media, bool isMuted,MediaFrame::Med
 			return audio.SetMute(isMuted);
 		case MediaFrame::Video:
 			//Attach audio
-			return video[role]->SetMute(isMuted);
+			{
+				std::shared_ptr<VideoStream> v = GetVideo(role);
+				return v ? v->SetMute(isMuted) : NoVideoStream("SetMute",partId,role);
+			}
 		case MediaFrame::Text:
 			//text
 			return text.SetMute(isMuted);
@@ -627,13 +827,17 @@ void RTPParticipant::onNewStream( RTPSession *session, DWORD newSsrc, bool recei
 	Debug("RTPParticipant::onNewStream ssrc=%x\n",newSsrc);
 	session->AddStream(receiving,newSsrc);
 	
-	if (GetDocSharingMode() == Participant::BFCP_TCP || GetDocSharingMode() == Participant::BFCP_UDP)
+	//Un flux de rôle >= 2 a sa propre section : son SSRC inconnu n'est pas un
+	//contenu BFCP, il suit la règle ordinaire.
+	if ((GetDocSharingMode() == Participant::BFCP_TCP || GetDocSharingMode() == Participant::BFCP_UDP)
+	    && session->GetMediaRole() < MediaFrame::VIDEO_EXTRA)
 	{
 		session->AddStream(receiving,newSsrc);
 		//SLIDES observe la session de MAIN (H-3) : weak_ptr aliasé sur le bloc de
 		//contrôle de ce participant (session appartient à ce participant), pour
 		//que lock() garde MAIN vivant pendant que SLIDES lit.
-		video[MediaFrame::VIDEO_SLIDES]->SetRTPSession(std::shared_ptr<RTPSession>(shared_from_this(),session),newSsrc);
+		if (std::shared_ptr<VideoStream> slides = GetVideo(MediaFrame::VIDEO_SLIDES))
+			slides->SetRTPSession(std::shared_ptr<RTPSession>(shared_from_this(),session),newSsrc);
 	}
 	else
 	{
@@ -667,7 +871,7 @@ int RTPParticipant::DumpInfo(std::string& info)
     sprintf(partInfo,
             "  Video: nb packets rcved %d, nb packets sent %d, lost packets %d, is_receiving=%d, is_sending=%d\n",
             s.numRecvPackets, s.numSendPackets, s.lostRecvPackets,
-            video[0]->IsReceiving(), video[0]->IsSending());
+            GetVideo(MediaFrame::VIDEO_MAIN)->IsReceiving(), GetVideo(MediaFrame::VIDEO_MAIN)->IsSending());
 
     info += partInfo;
 

@@ -1,8 +1,9 @@
 # Flux vidéo multiples par participant (RFC 9429, BUNDLE)
 
 > Statut : **en cours**. Branche `feat/unified-plan`. Le chantier préalable
-> (famine de `ChangeStream`, §5) et le lot 0 (extension MID) sont faits ; les
-> lots 1 à 5 restent à faire.
+> (famine de `ChangeStream`, §5) et le lot 0 (extension MID) sont faits. Le
+> lot 1 est codé et testé ; sa recette reste à faire. Les lots 1b à 5 restent
+> à faire.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur par XML-RPC ou par
@@ -590,7 +591,11 @@ préalable au lot 2, est livré ; sa recette en appel réel reste à faire. Le l
   octet ; une session lit le MID reçu sans transport-cc ; un paquet émis porte
   le MID annoncé.
 
-### Lot 1 — N sources du mixeur, sans BUNDLE
+### Lot 1 — N sources du mixeur, sans BUNDLE (codé, recette à faire)
+
+Tests : `mcu/tests/test_multi_video.cpp` (suite `MultiVideo`). Jusqu'au lot
+1b, `SetVideoStreamMosaic` et `GetVideoStreamSource` refusent le rôle 1 : sa
+source n'existe pas encore.
 
 - `media.h` : `MediaRole : int`, `VIDEO_EXTRA`.
 - `rtpparticipant.*` : map de `VideoStream`, création et destruction d'un

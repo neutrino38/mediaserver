@@ -101,6 +101,14 @@ public:
 	int SetParticipantDisplayName(int mosaicId, int partId, const char *name, int scriptCode);
 	int DeleteParticipant(int partId);
 
+	//Flux vidéo de rôle >= 2 d'un participant RTP, chacun source du mixeur
+	//sous son propre sourceId (docs/conception/UNIFIED-PLAN/SPEC.md §4.2).
+	int CreateVideoStream(int partId,int& role,int& sourceId);
+	int DeleteVideoStream(int partId,int role);
+	int SetVideoStreamMosaic(int partId,int role,int mosaicId);
+	//0 si le flux n'existe pas. Rôle 0 : le partId.
+	int GetVideoStreamSource(int partId,int role);
+
 	int CreatePlayer(int privateId,std::wstring name);
 	int StartPlaying(int playerId,const char* filename,bool loop);
 	int StopPlaying(int playerId);
@@ -140,7 +148,7 @@ public:
 	int SetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key, MediaFrame::MediaRole role,int keyRank=0);
 	int SetLocalSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd, MediaFrame::MediaRole role);
 	int SetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd, MediaFrame::MediaRole role);
-	int SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint);	
+	int SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetRTPProperties(int id,MediaFrame::Type media,const Properties& properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetParticipantBackground(int id, const char * filename);
 	int SetParticipantOverlay(int mosaicId, int id, const char * filename);
@@ -237,6 +245,7 @@ private:
 	RTPParticipantPtr GetRTPParticipant(int partId);
 
 	int DestroyParticipant(int partId,ParticipantPtr part);
+	void DestroyVideoSource(int sourceId);
 
 
 private:
@@ -283,6 +292,10 @@ private:
 	
 	//Lists
 	Participants		participants;
+	//partId → (rôle >= 2 → sourceId). Qui retire une entrée détruit sa source.
+	typedef std::map<int,std::map<int,int>> VideoSources;
+	VideoSources		videoSources;
+	std::mutex		videoSourcesMutex;
 	Players			players;
 
 	int			watcherId;

@@ -738,10 +738,167 @@ int MultiConf::DeleteParticipant(int id)
 }
 
 
+/************************
+* CreateVideoStream
+*	Flux vidéo de rôle >= 2 : une jambe de plus dans le participant, une source
+*	de plus dans le mixeur, sans mosaïque d'entrée (reçu seulement).
+*************************/
+int MultiConf::CreateVideoStream(int partId,int& role,int& sourceId)
+{
+	Log(">CreateVideoStream [partId:%d]\n",partId);
+
+	participantsLock.IncUse();
+	RTPParticipantPtr part = GetRTPParticipant(partId);
+	participantsLock.DecUse();
+
+	if (!part)
+		return Error("-CreateVideoStream: no RTP participant %d\n",partId);
+
+	participantsLock.WaitUnusedAndLock();
+	sourceId = maxId++;
+	participantsLock.Unlock();
+
+	if (!videoMixer.CreateMixer(sourceId))
+		return Error("-CreateVideoStream: couldn't create video mixer %d\n",sourceId);
+
+	role = part->CreateVideoStream(videoMixer.GetSharedInput(sourceId),videoMixer.GetSharedOutput(sourceId));
+	if (!role)
+	{
+		videoMixer.DeleteMixer(sourceId);
+		return Error("-CreateVideoStream: couldn't create the stream [partId:%d]\n",partId);
+	}
+
+	videoMixer.InitMixer(sourceId,-1);
+
+	{
+		std::lock_guard<std::mutex> lock(videoSourcesMutex);
+		videoSources[partId][role] = sourceId;
+	}
+
+	//Un DestroyParticipant a pu extraire les sources de ce participant avant
+	//l'inscription ci-dessus : c'est alors à nous de détruire celle-ci.
+	participantsLock.IncUse();
+	Participants::iterator it = participants.find(partId);
+	bool alive = it != participants.end() && it->second == part;
+	participantsLock.DecUse();
+
+	if (!alive)
+	{
+		bool owned = false;
+		{
+			std::lock_guard<std::mutex> lock(videoSourcesMutex);
+			VideoSources::iterator p = videoSources.find(partId);
+			if (p != videoSources.end() && p->second.erase(role))
+			{
+				owned = true;
+				if (p->second.empty())
+					videoSources.erase(p);
+			}
+		}
+		if (owned)
+			DestroyVideoSource(sourceId);
+		return Error("-CreateVideoStream: participant %d deleted meanwhile\n",partId);
+	}
+
+	Log("<CreateVideoStream [partId:%d,role:%d,sourceId:%d]\n",partId,role,sourceId);
+	return 1;
+}
+
+int MultiConf::DeleteVideoStream(int partId,int role)
+{
+	Log(">DeleteVideoStream [partId:%d,role:%d]\n",partId,role);
+
+	if (role < MediaFrame::VIDEO_EXTRA)
+		return Error("-DeleteVideoStream: role %d is not deletable\n",role);
+
+	int sourceId = 0;
+	{
+		std::lock_guard<std::mutex> lock(videoSourcesMutex);
+		VideoSources::iterator p = videoSources.find(partId);
+		if (p != videoSources.end())
+		{
+			std::map<int,int>::iterator r = p->second.find(role);
+			if (r != p->second.end())
+			{
+				sourceId = r->second;
+				p->second.erase(r);
+				if (p->second.empty())
+					videoSources.erase(p);
+			}
+		}
+	}
+
+	if (!sourceId)
+		return Error("-DeleteVideoStream: no video stream [partId:%d,role:%d]\n",partId,role);
+
+	participantsLock.IncUse();
+	RTPParticipantPtr part = GetRTPParticipant(partId);
+	participantsLock.DecUse();
+
+	//Participant en cours de destruction : son End() arrête déjà le flux.
+	if (part)
+		part->DeleteVideoStream((MediaFrame::MediaRole)role);
+
+	DestroyVideoSource(sourceId);
+
+	Log("<DeleteVideoStream [partId:%d,role:%d,sourceId:%d]\n",partId,role,sourceId);
+	return 1;
+}
+
+int MultiConf::SetVideoStreamMosaic(int partId,int role,int mosaicId)
+{
+	Log("-SetVideoStreamMosaic [partId:%d,role:%d,mosaic:%d]\n",partId,role,mosaicId);
+
+	if (role == MediaFrame::VIDEO_MAIN)
+		return SetParticipantMosaic(partId,mosaicId);
+
+	int sourceId = role >= MediaFrame::VIDEO_EXTRA ? GetVideoStreamSource(partId,role) : 0;
+	if (!sourceId)
+		return Error("-SetVideoStreamMosaic: no video source [partId:%d,role:%d]\n",partId,role);
+
+	return videoMixer.SetMixerMosaic(sourceId,mosaicId);
+}
+
+int MultiConf::GetVideoStreamSource(int partId,int role)
+{
+	if (role == MediaFrame::VIDEO_MAIN)
+	{
+		participantsLock.IncUse();
+		ParticipantPtr part = GetParticipant(partId);
+		participantsLock.DecUse();
+		return part ? partId : 0;
+	}
+
+	std::lock_guard<std::mutex> lock(videoSourcesMutex);
+	VideoSources::iterator p = videoSources.find(partId);
+	if (p == videoSources.end())
+		return 0;
+	std::map<int,int>::iterator r = p->second.find(role);
+	return r != p->second.end() ? r->second : 0;
+}
+
+void MultiConf::DestroyVideoSource(int sourceId)
+{
+	//EndMixer retire la source de toutes les mosaïques.
+	videoMixer.EndMixer(sourceId);
+	videoMixer.DeleteMixer(sourceId);
+}
+
 int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 {
 	Log(">DestroyParticipant [%d]\n",partId);
 	bool confEmpty;
+
+	std::map<int,int> extraSources;
+	{
+		std::lock_guard<std::mutex> lock(videoSourcesMutex);
+		VideoSources::iterator p = videoSources.find(partId);
+		if (p != videoSources.end())
+		{
+			extraSources.swap(p->second);
+			videoSources.erase(p);
+		}
+	}
 
 	//S5 : le pont texte-WS et ses tokens meurent avec le participant — le
 	//navigateur voit son WebSocket se fermer. End() joint le thread de tirage,
@@ -777,6 +934,8 @@ int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 	//End participant video input/output
 	videoMixer.EndMixer(partId);
 	videoMixer.EndMixer(partId+100000);
+	for (std::map<int,int>::iterator it = extraSources.begin(); it != extraSources.end(); ++it)
+		videoMixer.EndMixer(it->second);
 
 	//Wait for any in-flight participant thread (e.g. RTMPParticipant::onMediaFrame) to be done
 	if ( part->use.WaitUnusedAndLock(2000) != 1)
@@ -790,6 +949,8 @@ int MultiConf::DestroyParticipant(int partId,ParticipantPtr part)
 	//QUitamos los mixers
 	videoMixer.DeleteMixer(partId);
 	videoMixer.DeleteMixer(partId+100000);
+	for (std::map<int,int>::iterator it = extraSources.begin(); it != extraSources.end(); ++it)
+		videoMixer.DeleteMixer(it->second);
 	
 	audioMixer.DeleteMixer(partId);
 	textMixer.DeleteMixer(partId);
@@ -1032,7 +1193,7 @@ int MultiConf::SetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *sui
 	return ret;
 }
 
-int MultiConf::SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint)
+int MultiConf::SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint,MediaFrame::MediaRole role)
 {
 	int ret = 0;
 
@@ -1049,7 +1210,7 @@ int MultiConf::SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *set
 	if (part)
 		//Set  codec
 
-		ret = part->SetRemoteCryptoDTLS(media,setup,hash,fingerprint);
+		ret = part->SetRemoteCryptoDTLS(media,setup,hash,fingerprint,role);
 
 	//Unlock
 	participantsLock.DecUse();
