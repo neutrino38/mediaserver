@@ -40,6 +40,15 @@ lisibles :
 | MCU | `part-<id du participant>-media` / `-video` |
 | JSR-309 | `jsr309-<adresse de l'Endpoint>-media` / `-video` |
 
+**Un participant en BUNDLE n'a qu'un réacteur actif.** Ses sessions vidéo et
+texte sont *jointes* à la session audio, la *porteuse* : elles n'ont pas de
+socket et ne sont inscrites dans aucun groupe. Le réacteur `{audio, texte}` lit
+tout le transport, déchiffre, et livre chaque paquet à sa session sous
+`bundleMutex`. Il bat aussi leur watchdog. La règle du §7 vaut donc pour
+toutes les jambes du participant : un callback appelé depuis la livraison
+bloque l'audio comme la vidéo. Une session jointe émet depuis son propre fil,
+par la socket et le contexte SRTP de la porteuse, sous `wireMutex`.
+
 Une session dont personne ne fixe le groupe tombe dans le **groupe par défaut**
 du processus, créé à la demande. C'est le repli des tests et de `Broadcaster` :
 il n'existe pas de session hors réacteur.

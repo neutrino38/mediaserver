@@ -23,7 +23,10 @@
 class RTPParticipant : public Participant, public VideoStream::Listener, public AudioStream::Listener, public std::enable_shared_from_this<RTPParticipant>
 {
 public:
-	RTPParticipant(DWORD partId,const std::wstring &uuid);
+	//bundle : toutes les jambes sur le transport de la session audio (BUNDLE,
+	//RFC 8843). Se décide à la création : les sockets s'ouvrent à Init.
+	RTPParticipant(DWORD partId,const std::wstring &uuid,bool bundle = false);
+	bool IsBundle() const { return bundle; }
 	virtual ~RTPParticipant();
 
 	virtual int SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -157,6 +160,7 @@ private:
 	VideoStreams		videos;
 	int			nextVideoRole;
 	bool			videosEnded;
+	bool			bundle;
 	AudioStream		audio;
 	TextStream		text;
 	RemoteRateEstimator estimator;

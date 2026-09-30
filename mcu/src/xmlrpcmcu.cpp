@@ -346,9 +346,9 @@ xmlrpc_value* CreateParticipant(xmlrpc_env *env, xmlrpc_value *param_array, void
 	if(env->fault_occurred)
 		return xmlerror(env,"Fault occurred");
 
-	//Le transport partagé est le lot 2 de docs/conception/UNIFIED-PLAN.
-	if (bundle)
-		return xmlerror(env,"bundle not supported");
+	//Le transport partagé n'existe que pour un participant RTP.
+	if (bundle && type != Participant::RTP)
+		return xmlerror(env,"bundle needs an RTP participant");
 	 
 	//Obtenemos la referencia
 	if(!mcu->GetConferenceRef(confId,conf))
@@ -358,7 +358,7 @@ xmlrpc_value* CreateParticipant(xmlrpc_env *env, xmlrpc_value *param_array, void
 	parser.Parse((BYTE*)name,strlen(name));
 
 	//La borramos
-	int partId = conf->CreateParticipant(mosaicId,sidebarId,parser.GetWString(),(Participant::Type)type);
+	int partId = conf->CreateParticipant(mosaicId,sidebarId,parser.GetWString(),(Participant::Type)type,bundle != 0);
 
 	//Salimos
 	if(!partId)

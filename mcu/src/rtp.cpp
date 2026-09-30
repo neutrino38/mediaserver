@@ -6,6 +6,41 @@
 #include <h264/h264depacketizer.h>
 #include <vp8/vp8depacketizer.h>
 
+bool RTPPacket::ReadMid(const BYTE* data, DWORD size, BYTE id, std::string& mid)
+{
+	if (!IsRTP(data,size))
+		return false;
+	const rtp_hdr_t* header = (const rtp_hdr_t*)data;
+	if (!header->x)
+		return false;
+	DWORD pos = sizeof(rtp_hdr_t) + header->cc*4;
+	if (pos+4 > size || get2(data,pos) != 0xBEDE)
+		return false;
+	DWORD length = get2(data,pos+2)*4;
+	pos += 4;
+	if (pos+length > size)
+		return false;
+	while (length)
+	{
+		const BYTE header = data[pos++];
+		length--;
+		//Padding
+		if (!header)
+			continue;
+		const BYTE n = (header & 0x0F) + 1;
+		if (n > length)
+			return false;
+		if ((header >> 4) == id)
+		{
+			mid.assign((const char*)data+pos,n);
+			return true;
+		}
+		pos += n;
+		length -= n;
+	}
+	return false;
+}
+
 void RTPPacket::ProcessExtensions(const RTPMap &extMap)
 {
 	//Un paquet dont l'en-tete ne tient pas dans ce qui a ete recu n'a pas

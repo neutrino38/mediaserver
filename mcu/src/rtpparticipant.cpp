@@ -19,7 +19,7 @@ static std::string PollGroupName(DWORD partId,const char* suffix)
 	return buffer;
 }
 
-RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag) :
+RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag,bool bundle) :
 	Participant(Participant::RTP,partId),
 	mediaGroup(PollGroupName(partId,"media").c_str()),
 	videoGroup(PollGroupName(partId,"video").c_str()),
@@ -27,9 +27,10 @@ RTPParticipant::RTPParticipant(DWORD partId,const std::wstring &tag) :
 	text(NULL),
 	eventSource(tag),
 	nextVideoRole(MediaFrame::VIDEO_EXTRA),
-	videosEnded(false)
+	videosEnded(false),
+	bundle(bundle)
 {
-	Log("-RTPParticipant [id:%d,tag:%ls]\n",partId,tag.c_str());
+	Log("-RTPParticipant [id:%d,tag:%ls,bundle:%d]\n",partId,tag.c_str(),bundle);
 	videos[MediaFrame::VIDEO_MAIN]		= std::make_shared<VideoStream>(this,logo);
 	videos[MediaFrame::VIDEO_SLIDES]	= std::make_shared<VideoStream>(this,logo,MediaFrame::VIDEO_SLIDES);
 	estimator.SetEventSource(&eventSource);
@@ -180,8 +181,13 @@ int RTPParticipant::End()
 {
 	int ret = 1;
 
-	ret &= audio.End();
-	ret &= text.End();
+	//En BUNDLE, la session audio porte le transport des autres : elle s'arrête
+	//après elles.
+	if (!bundle)
+	{
+		ret &= audio.End();
+		ret &= text.End();
+	}
 
 	//End all streams (H-3) : SLIDES peut avoir son rtpSession aliasé sur celui de
 	//MAIN (cf. onNewStream). On arrête TOUJOURS le flux "observateur" (SLIDES,
@@ -196,6 +202,12 @@ int RTPParticipant::End()
 	}
 	for(VideoStreams::reverse_iterator it = streams.rbegin(); it != streams.rend(); ++it)
 		ret &= it->second->End();
+
+	if (bundle)
+	{
+		ret &= text.End();
+		ret &= audio.End();
+	}
 
 
 	//aggregater results
@@ -231,7 +243,10 @@ int RTPParticipant::Init()
 	audio.SetWeakListener(std::static_pointer_cast<AudioStream::Listener>(self));
 	//text : listener volontairement NULL (cf. constructeur text(NULL)) —
 	//comportement historique inchangé, pas de weak listener.
-	text.GetOwnSession().SetPollGroup(&mediaGroup);
+	if (bundle)
+		text.GetOwnSession().JoinCarrier(&audio.GetOwnSession());
+	else
+		text.GetOwnSession().SetPollGroup(&mediaGroup);
 	ret &= text.Init(textInput,textOutput);
 	//aggregater results
 	return ret;
@@ -242,7 +257,10 @@ int RTPParticipant::StartVideoStream(VideoStream& stream,std::shared_ptr<RTPSess
 	//Set estimator for video
 	stream.SetRemoteRateEstimator(&estimator);
 	//Init each stream
-	stream.GetOwnSession().SetPollGroup(&videoGroup);
+	if (bundle)
+		stream.GetOwnSession().JoinCarrier(&audio.GetOwnSession());
+	else
+		stream.GetOwnSession().SetPollGroup(&videoGroup);
 	int ret = stream.Init(NULL,NULL);
 	//Observe sa propre session par défaut
 	stream.SetRTPSession(std::move(ownSession),0);
@@ -829,7 +847,10 @@ void RTPParticipant::onNewStream( RTPSession *session, DWORD newSsrc, bool recei
 	
 	//Seule une jambe vidéo MAIN ou SLIDES porte un contenu BFCP. L'audio, et un
 	//flux de rôle >= 2 qui a sa propre section, suivent la règle ordinaire.
+	//Une session jointe ne reçoit que ce que le démultiplexage de sa porteuse
+	//lui attribue : le contenu BFCP n'y arrive jamais par un SSRC inconnu.
 	if ((GetDocSharingMode() == Participant::BFCP_TCP || GetDocSharingMode() == Participant::BFCP_UDP)
+	    && !session->IsJoined()
 	    && session->GetMediaType() == MediaFrame::Video
 	    && session->GetMediaRole() < MediaFrame::VIDEO_EXTRA)
 	{

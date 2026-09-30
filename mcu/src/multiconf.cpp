@@ -550,7 +550,7 @@ int MultiConf::DeleteSidebar(int sidebarId)
 * CreateParticipant
 * 	A�ade un participante
 *************************/
-int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type)
+int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type,bool bundle)
 {
 	wchar_t uuid[64];
 	ParticipantPtr part;
@@ -601,7 +601,7 @@ int MultiConf::CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Pa
 	{
 		case Participant::RTP:
 			//Create RTP Participant
-			part = std::make_shared<RTPParticipant>(partId,std::wstring(uuid));
+			part = std::make_shared<RTPParticipant>(partId,std::wstring(uuid),bundle);
 			break;
 		case Participant::RTMP:
 			part = std::make_shared<RTMPParticipant>(partId);

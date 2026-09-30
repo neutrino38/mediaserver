@@ -570,9 +570,26 @@ Crée un participant et l'affecte à une mosaïque et un sidebar.
 - **Params** `(isiiii)` : `confId`, `name` (UTF-8), `type` (`Participant::Type` :
   RTP=0 / RTMP=1), `mosaicId`, `sidebarId`, `bundle`. Repli sur `(isiii)`,
   sans `bundle`.
-- `bundle` vaut 0 par défaut. La valeur 1 demandera un transport partagé
-  par toutes les jambes (BUNDLE, RFC 8843). Elle est **refusée** tant que ce
-  transport n'existe pas dans le serveur.
+- `bundle` vaut 0 par défaut. Avec 1, toutes les jambes du participant
+  partagent un seul transport (BUNDLE, RFC 8843) : celui de la jambe audio.
+  Réservé au type RTP.
+- Avec `bundle=1` :
+  - `StartReceiving` rend **le même port et la même adresse** pour toutes les
+    jambes, flux créés par `CreateVideoStream` compris ;
+  - les appels de transport (`SetRemoteCryptoDTLS`, `SetLocalCryptoSDES`,
+    `SetRemoteCryptoSDES`, `SetLocalSTUNCredentials`,
+    `SetRemoteSTUNCredentials`, profil d'adressage, adresse de
+    `StartSending`) peuvent arriver sur n'importe quelle jambe. Le premier
+    configure le transport ; les suivants sont ignorés. Le contrôleur n'a pas
+    à savoir quelle section porte le transport, même quand l'offre n'a pas de
+    section audio ;
+  - chaque jambe doit recevoir la propriété `mid` (la valeur de `a=mid`) et,
+    si l'offre le porte, l'extmap `urn:ietf:params:rtp-hdrext:sdes:mid` et
+    `remote-ssrc` (§6.6), **avant** `StartReceiving`. Le serveur répartit
+    les paquets reçus par MID, puis par SSRC, puis par payload type propre à
+    une seule jambe. Un paquet qu'aucune de ces règles n'attribue est jeté.
+- Le BUNDLE se décide à la création : un participant créé sans ne se groupe
+  plus ensuite.
 - `name` n'est pas qu'une trace : c'est l'**étiquette de départ du mixeur
   texte**, celle que le flux mixé écrit entre crochets devant chaque tour de
   parole (`[alice] bonjour`). `SetParticipantDisplayName` la remplace ensuite.

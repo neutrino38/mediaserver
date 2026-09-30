@@ -2,8 +2,8 @@
 
 > Statut : **en cours**. Branche `feat/unified-plan`. Le chantier préalable
 > (famine de `ChangeStream`, §5) et le lot 0 (extension MID) sont faits. Le
-> lot 1 et le lot 1b sont codés et testés ; leurs recettes restent à faire.
-> Les lots 2 à 5 restent à faire.
+> lot 1, le lot 1b et le lot 2 (côté conférence) sont codés et testés ; leurs
+> recettes restent à faire. Les lots 3 à 5 restent à faire.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur par XML-RPC ou par
@@ -352,7 +352,7 @@ de la section marquée.
 | `Init` | ouvre deux sockets, s'inscrit au réacteur | ne fait ni l'un ni l'autre |
 | `SendPacket(RTP)` `rtpsession.cpp:2088` | chiffre SRTP, `sendto` | chiffre avec le contexte SRTP **de la porteuse**, `porteuse.SendOnWire()` |
 | `SendPacket(RTCP)` `:2025` | idem | idem ; chaque session émet son propre paquet composé |
-| ICE, DTLS, profil d'adressage, candidats, `StartSending(ip, port)` | configurent le transport | **acceptés et ignorés**, journalisés en debug (§4.5) |
+| ICE, DTLS, SDES, profil d'adressage, `StartSending(ip, port)` | configurent le transport | **transmis à la porteuse** si elle ne les a pas encore, **ignorés** sinon ; un candidat ICE va toujours à la porteuse |
 | `StartReceiving` | rend son port | rend le port et l'adresse annoncée **de la porteuse** |
 | `ReadRTP` / `ReadRTCP` | tout | rien : la porteuse lui livre les paquets déjà déchiffrés |
 | Watchdog RTP, événement « connecté » | sur ses paquets | sur les paquets que la porteuse lui route |
@@ -642,7 +642,21 @@ distante de la jambe, sans quoi une jambe SLIDES arrêtée ne repart pas.
   document dans sa mosaïque ; un navigateur qui partage son écran (lot 1),
   l'endpoint SIP le voit sur sa jambe SLIDES.
 
-### Lot 2 — Le transport partagé
+### Lot 2 — Le transport partagé (codé côté conférence, recette à faire)
+
+Tests : `mcu/tests/test_rtp_bundle.cpp` (suites `RtpBundle` et
+`RtpBundleParticipant`), deux côtés BUNDLE en boucle locale. Ce que le lot ne
+couvre pas encore :
+
+- `Endpoint.*` (JSR-309) : le branchement passe au lot 3, avec la RPC
+  `EndpointCreate(…, bundle)` qui l'active ;
+- la DTLS-SRTP et le data channel sur la porteuse sont codés mais non testés :
+  les tests prouvent le chemin SRTP par SDES, dont les contextes sont les
+  mêmes ;
+- la règle du numéro de séquence étendu quand un SSRC change de MID (RFC 8843
+  §9.2) : le dernier MID vu l'emporte ;
+- le watchdog de la porteuse reste nourri par tout paquet reçu sur le
+  transport, vidéo comprise.
 
 - `rtpsession.*` : porteuse et jointes, `SendOnWire`, démultiplexage RTP et
   RTCP, transport-wide et REMB à la porteuse, ignorance journalisée des
@@ -759,7 +773,7 @@ contrôleur pose une image de fond sur la mosaïque avec
 | Présentation BFCP | la parole pose la source du présentateur dans la mosaïque partagée, et l'en retire (**décidé** 2026-09-29) | garder le relais de pixels vers la source 2 : deux chemins pour une même chose, et le document BFCP invisible aux navigateurs ; un alias 2 résolu par `MultiConf` : préservait un contrat dont plus aucun contrôleur ne dépend |
 | Porteuse | la session audio, toujours | la première section acceptée de l'offre : le serveur ne voit pas l'offre |
 | Déclaration | drapeau à la création | jonction jambe par jambe : coûte une fermeture de sockets pour un cas que rien ne produit |
-| Réglages de transport sur une jointe | acceptés et ignorés | refusés : forcerait le contrôleur à distinguer la section marquée, ce que RFC 8843 rend inutile |
+| Réglages de transport sur une jointe | transmis à la porteuse qui ne les a pas encore, ignorés sinon | acceptés et ignorés : une offre sans section audio ne configurerait jamais la porteuse ; refusés : forcerait le contrôleur à distinguer la section marquée, ce que RFC 8843 rend inutile |
 | MID en émission | sur chaque paquet | au début seulement : plus de code, gain de 4 octets par paquet |
 | Direction d'un flux ≥ 2 | reçu seulement par défaut ; l'émission est permise, non recettée | l'interdire : c'est le chemin même de SLIDES |
 | Famine de `ChangeStream` | chantier préalable au lot 2, **fait** : `GetPacket` attend hors verrou (**décidé** 2026-09-29) | la régler dans le lot 2 : mélangerait un correctif de verrou et une refonte de transport |

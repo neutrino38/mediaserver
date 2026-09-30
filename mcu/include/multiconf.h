@@ -89,7 +89,7 @@ public:
 	int DeleteMosaic(int mosaicId);
 	int CreateSidebar();
 	int DeleteSidebar(int sidebarId);
-	int CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type);
+	int CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type,bool bundle = false);
 	int StartRecordingParticipant(int partId,const char* filename);
 	int StopRecordingParticipant(int partId);
 	int SendFPU(int partId);

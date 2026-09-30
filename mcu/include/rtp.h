@@ -378,6 +378,10 @@ public:
     static BYTE GetType( const BYTE *data ) { return ((rtp_hdr_t *)data)->pt; }
     static DWORD GetSSRC( const BYTE *data ) { return ntohl( ((rtp_hdr_t *)data)->ssrc ); }
     static bool  IsRTP( const BYTE *data, DWORD size ) { return size >= sizeof( rtp_hdr_t ) && ((rtp_hdr_t *)data)->version == 2; }
+    // La valeur de l'extension MID d'un paquet brut, sans construire de
+    // RTPPacket : la porteuse d'un BUNDLE route avant de savoir à qui il est.
+    // Même règle que ProcessExtensions : profil one-byte seulement.
+    static bool  ReadMid( const BYTE *data, DWORD size, BYTE id, std::string &mid );
 private:
     static const DWORD SIZE = 1700;
 private:
