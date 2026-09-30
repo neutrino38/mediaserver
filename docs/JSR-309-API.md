@@ -118,6 +118,23 @@ JSR309Manager
 - Le modèle est celui des **joinables** JSR-309 : on crée des objets, puis on les
   **attache** (`Attach…`) entre eux par type de média. Un même flux peut être
   routé d'un endpoint vers un mixer, un player, un autre endpoint, etc.
+- **Le rôle d'une jambe vidéo.** Un endpoint peut porter plusieurs flux vidéo.
+  Le rôle est l'index du flux (§4) : 0 la caméra, 1 le document, 2 et au-delà
+  les flux créés par `EndpointCreateVideoStream`. Les RPC qui visent une jambe
+  acceptent un `role` facultatif, 0 par défaut. Il vient **en dernier, après
+  tous les paramètres facultatifs** de la méthode. Exemple, pour
+  `EndpointStartReceiving` : `sessionId, endpointId, media, rtpMap, offer,
+  profile, role` — `offer` (struct vide si besoin) et `profile` (chaîne vide
+  si besoin) doivent être présents. Un rôle que l'endpoint ne porte pas est
+  une erreur. Méthodes concernées : `EndpointStartReceiving`,
+  `EndpointStopReceiving`, `EndpointStartSending`, `EndpointStopSending`,
+  `EndpointSetRTPProperties`, `EndpointSetLocalCryptoSDES`,
+  `EndpointSetRemoteCryptoSDES`, `EndpointSetRemoteCryptoDTLS`,
+  `EndpointSetLocalSTUNCredentials`, `EndpointSetRemoteSTUNCredentials`,
+  `EndpointAddICECandidate`, `EndpointStartRTPTimeout`,
+  `EndpointRequestUpdate`, `GetMediaCandidates`, `EndpointAttachToEndpoint`,
+  `EndpointDettach`, `EndpointAttachToVideoMixerPort`,
+  `VideoMixerPortAttachToEndpoint`.
 
 ### Cycle de vie type d'un appel (résumé)
 
@@ -174,10 +191,17 @@ change. Elle se configure par `ConfigureMediaConnection` puis
 `SetupDataChannel` (§6.12).
 
 ### `MediaFrame::MediaRole` — rôle du flux vidéo
-| Valeur | Nom |
-|--------|-----|
-| 0 | VIDEO_MAIN |
-| 1 | VIDEO_SLIDES |
+
+Le rôle est l'index du flux vidéo dans l'endpoint. C'est un entier, pas une
+liste fermée.
+
+| Valeur | Nom | Créé par |
+|--------|-----|----------|
+| 0 | VIDEO_MAIN | `EndpointCreate` |
+| 1 | VIDEO_SLIDES | `EndpointCreate` |
+| 2, 3, … | VIDEO_EXTRA | `EndpointCreateVideoStream` |
+
+Un rôle supprimé n'est jamais réattribué pendant la vie de l'endpoint.
 
 ### `AudioCodec::Type`
 (`third_party/fontventa/libmedikit/medkit/codecs.h`)
@@ -553,19 +577,52 @@ RecorderDettach ×3 / RecorderDelete
 
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
-| `EndpointCreate` | `i sessionId, s name, b audioSupported, b videoSupported, b textSupported` | `[ int endpointId ]` |
+| `EndpointCreate` | `i sessionId, s name, b audioSupported, b videoSupported, b textSupported [, b bundle]` | `[ int endpointId ]` |
+| `EndpointCreateVideoStream` | `i sessionId, i endpointId` | `[ int role ]` |
+| `EndpointDeleteVideoStream` | `i sessionId, i endpointId, i role` | `[]` |
 | `EndpointDelete` | `i sessionId, i endpointId` | `[]` |
 | `EndpointGetStatistics` | `i sessionId, i endpointId` | `[ stats… ]` (voir §7) |
 | `EndpointAttachToPlayer` | `i sessionId, i endpointId, i playerId, i media` | `[]` |
-| `EndpointAttachToEndpoint` | `i sessionId, i endpointId, i sourceId, i media` | `[]` |
+| `EndpointAttachToEndpoint` | `i sessionId, i endpointId, i sourceId, i media [, i role]` | `[]` |
 | `EndpointAttachToAudioMixerPort` | `i sessionId, i endpointId, i mixerId, i portId` | `[]` |
-| `EndpointAttachToVideoMixerPort` | `i sessionId, i endpointId, i mixerId, i portId` | `[]` |
+| `EndpointAttachToVideoMixerPort` | `i sessionId, i endpointId, i mixerId, i portId [, i role]` | `[]` |
 | `EndpointAttachToAudioTranscoder` | `i sessionId, i endpointId, i transcoderId` | `[]` |
 | `EndpointAttachToVideoTranscoder` | `i sessionId, i endpointId, i videoTranscoderId` | `[]` |
-| `EndpointDettach` | `i sessionId, i endpointId, i media` | `[]` |
+| `EndpointDettach` | `i sessionId, i endpointId, i media [, i role]` | `[]` |
 
 `EndpointAttachToEndpoint` : `sourceId` est l'endpoint source dont on route le
-média `media` vers `endpointId`.
+média `media` vers `endpointId`. Avec `role`, c'est le flux de ce rang de la
+source qui va au flux de même rang de `endpointId`. Un B2BUA relaie donc N
+flux vidéo par N appels, un par rang, dans chaque sens.
+
+#### `bundle` — un seul transport pour toutes les jambes
+
+Avec `bundle` vrai (RFC 8843), toutes les jambes de l'endpoint partagent le
+transport de la jambe audio. Elle existe alors même si `audioSupported` est
+faux. Conséquences :
+
+- `EndpointStartReceiving` et `GetMediaCandidates` rendent **le même port et
+  la même adresse** pour toutes les jambes, flux créés par
+  `EndpointCreateVideoStream` compris ;
+- les réglages de transport (DTLS, SDES, STUN, candidats ICE, profil
+  d'adressage, adresse de `EndpointStartSending`) peuvent arriver sur
+  n'importe quelle jambe. Le premier configure le transport, les suivants
+  sont ignorés. Un candidat ICE va toujours au transport ;
+- chaque jambe reçoit par `EndpointSetRTPProperties` la propriété `mid` (la
+  valeur de `a=mid`), l'extmap `urn:ietf:params:rtp-hdrext:sdes:mid` si
+  l'offre le porte, et `remote-ssrc` si l'offre annonce un `a=ssrc`, **avant**
+  `EndpointStartReceiving`. Le serveur répartit les paquets par MID, puis par
+  SSRC, puis par payload type propre à une seule jambe ; un paquet qu'aucune
+  règle n'attribue est jeté ;
+- la jambe audio ne peut pas changer de transport
+  (`ConfigureMediaConnection`) : elle porte les autres.
+
+#### `EndpointCreateVideoStream` — un flux vidéo de plus
+
+Crée une jambe vidéo de rôle ≥ 2 (un écran partagé, une seconde caméra), et
+rend son rôle. La jambe se configure ensuite comme les autres, avec ce rôle.
+`EndpointDeleteVideoStream` la supprime ; les rôles 0 et 1 ne se suppriment
+pas. `EndpointDelete` emporte tous les flux.
 
 ### 6.6 Endpoints — sécurité (SRTP / DTLS / ICE-STUN)
 
@@ -835,7 +892,7 @@ séparés par des espaces.
 | `VideoMixerPortCreate` | `i sessionId, i mixerId, s name, i mosaicId` | `[ int portId ]` |
 | `VideoMixerPortDelete` | `i sessionId, i mixerId, i portId` | `[]` |
 | `VideoMixerPortSetCodec` | `i sessionId, i mixerId, i portId, i codec, i size, i fps, i bitrate, i intraPeriod` | `[]` |
-| `VideoMixerPortAttachToEndpoint` | `i sessionId, i mixerId, i portId, i endpointId` | `[]` |
+| `VideoMixerPortAttachToEndpoint` | `i sessionId, i mixerId, i portId, i endpointId [, i role]` | `[]` |
 | `VideoMixerPortAttachToPlayer` | `i sessionId, i mixerId, i portId, i playerId` | `[]` |
 | `VideoMixerPortDettach` | `i sessionId, i mixerId, i portId` | `[]` |
 | `VideoMixerMosaicCreate` | `i sessionId, i mixerId, i comp, i size` | `[ int mosaicId ]` |
@@ -899,7 +956,7 @@ sort tant que rien n'entre, et l'encodeur garde la cadence d'avant la pause.
 
 | Méthode | Paramètres | `returnVal` |
 |---------|-----------|-------------|
-| `GetMediaCandidates` | `i sessionId, i endpointId, i protocol, i media` | `[ string url ]` |
+| `GetMediaCandidates` | `i sessionId, i endpointId, i protocol, i media [, i role]` | `[ string url ]` |
 | `ConfigureMediaConnection` | `i sessionId, i endpointId, i media, i role, i protocol, s token, s expectedPayload` | `[]` |
 | `ConnectMediaConnection` | `i sessionId, i endpointId, i media, i role, s url` | `[]` |
 | `SetupDataChannel` | `i sessionId, i endpointId, i media, i remoteSctpPort` | `[ int localSctpPort, int maxMessageSize, int streamId ]` |

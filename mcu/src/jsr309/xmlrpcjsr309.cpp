@@ -595,6 +595,69 @@ xmlrpc_value* RecorderDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 	return xmlok(env);
 }
 
+//Rôle facultatif des RPC qui visent une jambe (docs/JSR-309-API.md) : un
+//argument de plus, en DERNIER, après la signature la plus longue du RPC. S'il
+//est là, on le retire, et le handler lit `params` exactement comme il lisait
+//`param_array`, replis de signature compris.
+class TrailingRole
+{
+public:
+	TrailingRole(xmlrpc_env* env, xmlrpc_value* params, int fullArity)
+		: params(params), role(MediaFrame::VIDEO_MAIN), owned(false)
+	{
+		if (xmlrpc_array_size(env,params) != fullArity+1)
+			return;
+
+		xmlrpc_value* last = NULL;
+		xmlrpc_array_read_item(env,params,fullArity,&last);
+		if (!env->fault_occurred)
+		{
+			xmlrpc_read_int(env,last,&role);
+			xmlrpc_DECREF(last);
+		}
+
+		xmlrpc_value* copy = env->fault_occurred ? NULL : xmlrpc_array_new(env);
+		for (int i=0; copy && i<fullArity && !env->fault_occurred; ++i)
+		{
+			xmlrpc_value* item = NULL;
+			xmlrpc_array_read_item(env,params,i,&item);
+			if (env->fault_occurred)
+				break;
+			xmlrpc_array_append_item(env,copy,item);
+			xmlrpc_DECREF(item);
+		}
+
+		if (env->fault_occurred)
+		{
+			//Un env en faute ferait avorter le parse qui suit : on le nettoie,
+			//et le tableau trop long échoue comme n'importe quelle requête
+			//mal formée.
+			if (copy)
+				xmlrpc_DECREF(copy);
+			xmlrpc_env_clean(env);
+			xmlrpc_env_init(env);
+			role = MediaFrame::VIDEO_MAIN;
+			return;
+		}
+
+		this->params = copy;
+		owned = true;
+	}
+
+	~TrailingRole()
+	{
+		if (owned)
+			xmlrpc_DECREF(params);
+	}
+
+	MediaFrame::MediaRole Role() const { return (MediaFrame::MediaRole)role; }
+
+	xmlrpc_value* params;
+private:
+	int role;
+	bool owned;
+};
+
 xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
 	UTF8Parser parser;
@@ -607,7 +670,17 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 	int audioSupported;
 	int videoSupported;
 	int textSupported;
-	xmlrpc_parse_value(env, param_array, "(isbbb)", &sessionId,&str,&audioSupported, &videoSupported, &textSupported);
+	//BUNDLE (docs/JSR-309-API.md) : facultatif, en dernier.
+	int bundle = 0;
+	xmlrpc_parse_value(env, param_array, "(isbbbb)", &sessionId,&str,&audioSupported, &videoSupported, &textSupported, &bundle);
+
+	if (env->fault_occurred)
+	{
+		xmlrpc_env_clean(env);
+		xmlrpc_env_init(env);
+		bundle = 0;
+		xmlrpc_parse_value(env, param_array, "(isbbb)", &sessionId,&str,&audioSupported, &videoSupported, &textSupported);
+	}
 
 
 	//Comprobamos si ha habido error
@@ -622,7 +695,7 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int endpointId = session->EndpointCreate(parser.GetWString(),audioSupported,videoSupported,textSupported);
+	int endpointId = session->EndpointCreate(parser.GetWString(),audioSupported,videoSupported,textSupported,bundle != 0);
 	
 	std::shared_ptr<Endpoint> ep = session->GetEndpoint(endpointId);
 
@@ -648,6 +721,51 @@ xmlrpc_value* EndpointCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *u
 
 	//Devolvemos el resultado
 	return xmlok(env,xmlrpc_build_value(env,"(i)",endpointId));
+}
+
+xmlrpc_value* EndpointCreateVideoStream(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	std::shared_ptr<MediaSession> session;
+
+	int sessionId;
+	int endpointId;
+	xmlrpc_parse_value(env, param_array, "(ii)", &sessionId,&endpointId);
+
+	if(env->fault_occurred)
+		return 0;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	int role = session->EndpointCreateVideoStream(endpointId);
+
+	if(!role)
+		return xmlerror(env,"Error creating video stream");
+
+	return xmlok(env,xmlrpc_build_value(env,"(i)",role));
+}
+
+xmlrpc_value* EndpointDeleteVideoStream(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+	std::shared_ptr<MediaSession> session;
+
+	int sessionId;
+	int endpointId;
+	int role;
+	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId,&endpointId,&role);
+
+	if(env->fault_occurred)
+		return 0;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->EndpointDeleteVideoStream(endpointId,(MediaFrame::MediaRole)role))
+		return xmlerror(env,"Error");
+
+	return xmlok(env);
 }
 
 xmlrpc_value* EndpointDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
@@ -738,6 +856,8 @@ xmlrpc_value* EndpointGetStatistics(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,5);
 	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
@@ -748,7 +868,7 @@ xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_ar
 	char *suite;
 	char *key;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiiss)", &sessionId,&endpointId,&media,&suite,&key);
+	xmlrpc_parse_value(env, args.params, "(iiiss)", &sessionId,&endpointId,&media,&suite,&key);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -759,7 +879,7 @@ xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_ar
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointSetLocalCryptoSDES(endpointId,(MediaFrame::Type)media,suite,key);
+	int res = session->EndpointSetLocalCryptoSDES(endpointId,(MediaFrame::Type)media,suite,key,args.Role());
 
 
 	//Salimos
@@ -772,6 +892,8 @@ xmlrpc_value* EndpointSetLocalCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_ar
 
 xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,5);
 	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
@@ -781,7 +903,7 @@ xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_a
 	int media;
 	char *suite;
 	char *key;
-	xmlrpc_parse_value(env, param_array, "(iiiss)", &sessionId,&endpointId,&media,&suite,&key);
+	xmlrpc_parse_value(env, args.params, "(iiiss)", &sessionId,&endpointId,&media,&suite,&key);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -792,7 +914,7 @@ xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_a
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointSetRemoteCryptoSDES(endpointId,(MediaFrame::Type)media,suite,key);
+	int res = session->EndpointSetRemoteCryptoSDES(endpointId,(MediaFrame::Type)media,suite,key,args.Role());
 
 	
 	//Salimos
@@ -805,6 +927,8 @@ xmlrpc_value* EndpointSetRemoteCryptoSDES(xmlrpc_env *env, xmlrpc_value *param_a
 
 xmlrpc_value* EndpointSetRemoteCryptoDTLS(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,6);
 	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
@@ -815,7 +939,7 @@ xmlrpc_value* EndpointSetRemoteCryptoDTLS(xmlrpc_env *env, xmlrpc_value *param_a
 	char *setup;
 	char *hash;
 	char *fingerprint;
-	xmlrpc_parse_value(env, param_array, "(iiisss)", &sessionId,&endpointId,&media,&setup,&hash,&fingerprint);
+	xmlrpc_parse_value(env, args.params, "(iiisss)", &sessionId,&endpointId,&media,&setup,&hash,&fingerprint);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -826,7 +950,7 @@ xmlrpc_value* EndpointSetRemoteCryptoDTLS(xmlrpc_env *env, xmlrpc_value *param_a
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointSetRemoteCryptoDTLS(endpointId,(MediaFrame::Type)media,setup,hash,fingerprint);
+	int res = session->EndpointSetRemoteCryptoDTLS(endpointId,(MediaFrame::Type)media,setup,hash,fingerprint,args.Role());
 
 
 	//Salimos
@@ -864,6 +988,8 @@ xmlrpc_value* EndpointGetLocalCryptoDTLSFingerprint(xmlrpc_env *env, xmlrpc_valu
 }
 xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,5);
 	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
@@ -873,7 +999,7 @@ xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *par
 	int media;
 	char *username;
 	char *pwd;
-	xmlrpc_parse_value(env, param_array, "(iiiss)", &sessionId,&endpointId,&media,&username,&pwd);
+	xmlrpc_parse_value(env, args.params, "(iiiss)", &sessionId,&endpointId,&media,&username,&pwd);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -884,7 +1010,7 @@ xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *par
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointSetLocalSTUNCredentials(endpointId,(MediaFrame::Type)media,username,pwd);
+	int res = session->EndpointSetLocalSTUNCredentials(endpointId,(MediaFrame::Type)media,username,pwd,args.Role());
 
 
 	//Salimos
@@ -897,6 +1023,8 @@ xmlrpc_value* EndpointSetLocalSTUNCredentials(xmlrpc_env *env, xmlrpc_value *par
 
 xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,5);
 	std::shared_ptr<MediaSession> session;
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 
@@ -907,7 +1035,7 @@ xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *pa
 	char *username;
 	char *pwd;
 	xmlrpc_value *rtpMap;
-	xmlrpc_parse_value(env, param_array, "(iiiss)", &sessionId,&endpointId,&media,&username,&pwd);
+	xmlrpc_parse_value(env, args.params, "(iiiss)", &sessionId,&endpointId,&media,&username,&pwd);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -918,7 +1046,7 @@ xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *pa
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointSetRemoteSTUNCredentials(endpointId,(MediaFrame::Type)media,username,pwd);
+	int res = session->EndpointSetRemoteSTUNCredentials(endpointId,(MediaFrame::Type)media,username,pwd,args.Role());
 
 
 	//Salimos
@@ -932,6 +1060,8 @@ xmlrpc_value* EndpointSetRemoteSTUNCredentials(xmlrpc_env *env, xmlrpc_value *pa
 
 xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -940,7 +1070,7 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 	int endpointId;
 	int media;
 	xmlrpc_value *map;
-	xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&map);
+	xmlrpc_parse_value(env, args.params, "(iiiS)", &sessionId,&endpointId,&media,&map);
 
 	//Aucun format n'a pris : les sorties du parse sont NON INITIALISEES, et les
 	//lire est ce qui suit immediatement. Sans cette garde on suivait des
@@ -987,7 +1117,7 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointSetRTPProperties(endpointId,(MediaFrame::Type)media,properties);
+	int res = session->EndpointSetRTPProperties(endpointId,(MediaFrame::Type)media,properties,args.Role());
 
 
 	//Salimos
@@ -1001,6 +1131,8 @@ xmlrpc_value* EndpointSetRTPProperties(xmlrpc_env *env, xmlrpc_value *param_arra
 
 xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,7);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1015,7 +1147,7 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 	//Profil d'adressage (NETWORK-CONFIGURATION.md) : DERNIER paramètre, facultatif. Absent
 	//=> profil par défaut, soit exactement le comportement d'avant.
 	const char *profile = NULL;
-	xmlrpc_parse_value(env, param_array, "(iiisiSs)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap,&profile);
+	xmlrpc_parse_value(env, args.params, "(iiisiSs)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap,&profile);
 
 	if (env->fault_occurred)
 	{
@@ -1023,7 +1155,7 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 		xmlrpc_env_clean(env);
 		xmlrpc_env_init(env);
 		profile = NULL;
-		xmlrpc_parse_value(env, param_array, "(iiisiS)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap);
+		xmlrpc_parse_value(env, args.params, "(iiisiS)", &sessionId,&endpointId,&media,&sendIp,&sendPort,&rtpMap);
 	}
 
 	//Comprobamos si ha habido error
@@ -1066,11 +1198,11 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 	//le défaut émettrait par la mauvaise interface, sans que rien ne le dise.
 	{
 		std::string error;
-		if (!session->EndpointSetAddressProfile(endpointId,(MediaFrame::Type)media,profile,error))
+		if (!session->EndpointSetAddressProfile(endpointId,(MediaFrame::Type)media,profile,error,args.Role()))
 			return xmlerror(env,(char*)error.c_str());
 	}
 
-	res = session->EndpointStartSending(endpointId,(MediaFrame::Type)media,sendIp,sendPort,map);
+	res = session->EndpointStartSending(endpointId,(MediaFrame::Type)media,sendIp,sendPort,map,args.Role());
 
 
 	//Salimos
@@ -1083,6 +1215,8 @@ xmlrpc_value* EndpointStartSending(xmlrpc_env *env, xmlrpc_value *param_array, v
 
 xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1091,7 +1225,7 @@ xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array
 	int endpointId;
 	int media;
 	char *candidate;
-	xmlrpc_parse_value(env, param_array, "(iiis)", &sessionId,&endpointId,&media,&candidate);
+	xmlrpc_parse_value(env, args.params, "(iiis)", &sessionId,&endpointId,&media,&candidate);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1102,7 +1236,7 @@ xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array
 		return xmlerror(env,"The media Session does not exist");
 
 	//Ajoute le candidat (trickle ICE Niveau 1)
-	int res = session->EndpointAddICECandidate(endpointId,(MediaFrame::Type)media,candidate);
+	int res = session->EndpointAddICECandidate(endpointId,(MediaFrame::Type)media,candidate,args.Role());
 
 
 	//Salimos
@@ -1115,6 +1249,8 @@ xmlrpc_value* EndpointAddICECandidate(xmlrpc_env *env, xmlrpc_value *param_array
 
 xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1123,7 +1259,7 @@ xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array
 	int endpointId;
 	int media;
 	int timeoutMs;
-	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endpointId,&media,&timeoutMs);
+	xmlrpc_parse_value(env, args.params, "(iiii)", &sessionId,&endpointId,&media,&timeoutMs);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1134,7 +1270,7 @@ xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array
 		return xmlerror(env,"The media Session does not exist");
 
 	//Arme/désarme le watchdog d'inactivité RTP (armé au SDP answer)
-	int res = session->EndpointStartRTPTimeout(endpointId,(MediaFrame::Type)media,(DWORD)(timeoutMs>0?timeoutMs:0));
+	int res = session->EndpointStartRTPTimeout(endpointId,(MediaFrame::Type)media,(DWORD)(timeoutMs>0?timeoutMs:0),args.Role());
 
 
 	//Salimos
@@ -1147,6 +1283,8 @@ xmlrpc_value* EndpointStartRTPTimeout(xmlrpc_env *env, xmlrpc_value *param_array
 
 xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,3);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1155,7 +1293,7 @@ xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, vo
 	int endpointId;
 	int media;
 	int res = 0;
-	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId,&endpointId,&media);
+	xmlrpc_parse_value(env, args.params, "(iii)", &sessionId,&endpointId,&media);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1166,7 +1304,7 @@ xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, vo
 		return xmlerror(env,"The media Session does not exist");
 
 	//Stop sending video
-	res = session->EndpointStopSending(endpointId,(MediaFrame::Type)media);
+	res = session->EndpointStopSending(endpointId,(MediaFrame::Type)media,args.Role());
 
 
 	//Salimos
@@ -1179,6 +1317,8 @@ xmlrpc_value* EndpointStopSending(xmlrpc_env *env, xmlrpc_value *param_array, vo
 
 xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,6);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1195,7 +1335,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	xmlrpc_value *offer = NULL;
 	//Profil d'adressage (NETWORK-CONFIGURATION.md) : DERNIER paramètre, facultatif.
 	const char *profile = NULL;
-	xmlrpc_parse_value(env, param_array, "(iiiSSs)", &sessionId,&endpointId,&media,&rtpMap,&offer,&profile);
+	xmlrpc_parse_value(env, args.params, "(iiiSSs)", &sessionId,&endpointId,&media,&rtpMap,&offer,&profile);
 
 	if (env->fault_occurred)
 	{
@@ -1203,7 +1343,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		xmlrpc_env_clean(env);
 		xmlrpc_env_init(env);
 		profile = NULL;
-		xmlrpc_parse_value(env, param_array, "(iiiSS)", &sessionId,&endpointId,&media,&rtpMap,&offer);
+		xmlrpc_parse_value(env, args.params, "(iiiSS)", &sessionId,&endpointId,&media,&rtpMap,&offer);
 	}
 
 	if (env->fault_occurred)
@@ -1213,7 +1353,7 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 		xmlrpc_env_init(env);
 		offer = NULL;
 		profile = NULL;
-		xmlrpc_parse_value(env, param_array, "(iiiS)", &sessionId,&endpointId,&media,&rtpMap);
+		xmlrpc_parse_value(env, args.params, "(iiiS)", &sessionId,&endpointId,&media,&rtpMap);
 	}
 
 	//Comprobamos si ha habido error
@@ -1293,12 +1433,12 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 	//changerait un port que le contrôleur aurait déjà mis dans son SDP.
 	{
 		std::string error;
-		if (!session->EndpointSetAddressProfile(endpointId,(MediaFrame::Type)media,profile,error))
+		if (!session->EndpointSetAddressProfile(endpointId,(MediaFrame::Type)media,profile,error,args.Role()))
 			return xmlerror(env,(char*)error.c_str());
 	}
 
 	recPort = session->EndpointStartReceiving(endpointId,(MediaFrame::Type)media,map,fmtpMap,
-	                                          offer ? &offerFmtp : NULL);
+	                                          offer ? &offerFmtp : NULL,args.Role());
 
 
 	//Salimos (StartReceiving peut rendre -1 : protocole non supporté)
@@ -1337,6 +1477,8 @@ xmlrpc_value* EndpointStartReceiving(xmlrpc_env *env, xmlrpc_value *param_array,
 
 xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,3);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1345,7 +1487,7 @@ xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, 
 	int endpointId;
 	int media;
 	int res = 0;
-	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId,&endpointId,&media);
+	xmlrpc_parse_value(env, args.params, "(iii)", &sessionId,&endpointId,&media);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1356,7 +1498,7 @@ xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return xmlerror(env,"The media Session does not exist");
 
 	//Stop sending video
-	res = session->EndpointStopReceiving(endpointId,(MediaFrame::Type)media);
+	res = session->EndpointStopReceiving(endpointId,(MediaFrame::Type)media,args.Role());
 
 
 	//Salimos
@@ -1369,6 +1511,8 @@ xmlrpc_value* EndpointStopReceiving(xmlrpc_env *env, xmlrpc_value *param_array, 
 
 xmlrpc_value* EndpointRequestUpdate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,3);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1377,7 +1521,7 @@ xmlrpc_value* EndpointRequestUpdate(xmlrpc_env *env, xmlrpc_value *param_array, 
 	int endpointId;
 	int media;
 	int res = 0;
-	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId,&endpointId,&media);
+	xmlrpc_parse_value(env, args.params, "(iii)", &sessionId,&endpointId,&media);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1388,7 +1532,7 @@ xmlrpc_value* EndpointRequestUpdate(xmlrpc_env *env, xmlrpc_value *param_array, 
 		return xmlerror(env,"The media Session does not exist");
 
 	//Stop sending text
-	res = session->EndpointRequestUpdate(endpointId,(MediaFrame::Type)media);
+	res = session->EndpointRequestUpdate(endpointId,(MediaFrame::Type)media,args.Role());
 
 
 	//Salimos
@@ -1433,6 +1577,8 @@ xmlrpc_value* EndpointAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_array,
 
 xmlrpc_value* EndpointAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1441,7 +1587,7 @@ xmlrpc_value* EndpointAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_arra
 	int endpointId;
 	int sourceId;
 	int media;
-	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endpointId,&sourceId,&media);
+	xmlrpc_parse_value(env, args.params, "(iiii)", &sessionId,&endpointId,&sourceId,&media);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1452,7 +1598,7 @@ xmlrpc_value* EndpointAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_arra
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointAttachToEndpoint(endpointId,sourceId,(MediaFrame::Type)media);
+	int res = session->EndpointAttachToEndpoint(endpointId,sourceId,(MediaFrame::Type)media,args.Role());
 
 
 	//Salimos
@@ -1497,6 +1643,8 @@ xmlrpc_value* EndpointAttachToAudioMixerPort(xmlrpc_env *env, xmlrpc_value *para
 
 xmlrpc_value* EndpointAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1505,7 +1653,7 @@ xmlrpc_value* EndpointAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *para
 	int endpointId;
 	int mixerId;
 	int portId;
-	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endpointId,&mixerId,&portId);
+	xmlrpc_parse_value(env, args.params, "(iiii)", &sessionId,&endpointId,&mixerId,&portId);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1516,7 +1664,7 @@ xmlrpc_value* EndpointAttachToVideoMixerPort(xmlrpc_env *env, xmlrpc_value *para
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointAttachToVideoMixerPort(endpointId,mixerId,portId);
+	int res = session->EndpointAttachToVideoMixerPort(endpointId,mixerId,portId,args.Role());
 
 
 	//Salimos
@@ -1608,6 +1756,8 @@ xmlrpc_value* EndpointAttachToVideoTranscoder(xmlrpc_env *env, xmlrpc_value *par
 
 xmlrpc_value* EndpointDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,3);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -1615,7 +1765,7 @@ xmlrpc_value* EndpointDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 	int sessionId;
 	int endpointId;
 	int media;
-	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId,&endpointId,&media);
+	xmlrpc_parse_value(env, args.params, "(iii)", &sessionId,&endpointId,&media);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -1626,7 +1776,7 @@ xmlrpc_value* EndpointDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->EndpointDettach(endpointId,(MediaFrame::Type)media);
+	int res = session->EndpointDettach(endpointId,(MediaFrame::Type)media,args.Role());
 
 
 	//Salimos
@@ -2102,6 +2252,8 @@ xmlrpc_value* VideoMixerPortAttachToPlayer(xmlrpc_env *env, xmlrpc_value *param_
 
 xmlrpc_value* VideoMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -2110,7 +2262,7 @@ xmlrpc_value* VideoMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *para
 	int mixerId;
 	int portId;
 	int endpointId;
-	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&mixerId,&portId,&endpointId);
+	xmlrpc_parse_value(env, args.params, "(iiii)", &sessionId,&mixerId,&portId,&endpointId);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -2121,7 +2273,7 @@ xmlrpc_value* VideoMixerPortAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *para
 		return xmlerror(env,"The media Session does not exist");
 
 	//La borramos
-	int res = session->VideoMixerPortAttachToEndpoint(mixerId,portId,endpointId);
+	int res = session->VideoMixerPortAttachToEndpoint(mixerId,portId,endpointId,args.Role());
 
 
 	//Salimos
@@ -2809,6 +2961,8 @@ xmlrpc_value* VideoTranscoderDettach(xmlrpc_env *env, xmlrpc_value *param_array,
 
 xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
 {
+	//Rôle facultatif, en dernier après la signature complète.
+	TrailingRole args(env,param_array,4);
 	JSR309Manager *jsr = (JSR309Manager*)user_data;
 	std::shared_ptr<MediaSession> session;
 
@@ -2819,7 +2973,7 @@ xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, voi
 	int endPointId;
 	char* url =  NULL ;
 	
-	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId,&endPointId,&protocol,&media);
+	xmlrpc_parse_value(env, args.params, "(iiii)", &sessionId,&endPointId,&protocol,&media);
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
@@ -2834,7 +2988,7 @@ xmlrpc_value* GetMediaCandidates(xmlrpc_env *env, xmlrpc_value *param_array, voi
 	
 	if (endpoint != NULL)
 	{
-		url = endpoint->GetMediaCandidates((MediaFrame::MediaProtocol ) protocol,( MediaFrame::Type ) media);
+		url = endpoint->GetMediaCandidates((MediaFrame::MediaProtocol ) protocol,( MediaFrame::Type ) media,args.Role());
 		
 		if (url != NULL)
 		{
@@ -3048,6 +3202,8 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"RecorderAttachToVideoMixerPort",	RecorderAttachToVideoMixerPort},
 	{"RecorderDettach",			RecorderDettach},
 	{"EndpointCreate",			EndpointCreate},
+	{"EndpointCreateVideoStream",		EndpointCreateVideoStream},
+	{"EndpointDeleteVideoStream",		EndpointDeleteVideoStream},
 	{"EndpointDelete",			EndpointDelete},
 	{"EndpointSetRemoteCryptoSDES",		EndpointSetRemoteCryptoSDES},
 	{"EndpointSetLocalCryptoSDES",		EndpointSetLocalCryptoSDES},

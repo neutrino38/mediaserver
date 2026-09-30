@@ -367,6 +367,129 @@ public class XmlRPCJSR309Client {
         return (Integer)returnVal[0];
     }
 
+    /**
+     * BUNDLE (RFC 8843) : toutes les jambes sur le transport de la jambe audio.
+     * Voir docs/JSR-309-API.md.
+     */
+    public Integer EndpointCreate(int sessId,String name,boolean audioSupported,boolean videoSupported,boolean textSupported,boolean bundle) throws XmlRpcException
+    {
+        Object[] request = new Object[]{sessId,name,audioSupported,videoSupported,textSupported,bundle};
+        HashMap response = (HashMap) client.execute("EndpointCreate", request);
+        Object[] returnVal = (Object[]) response.get("returnVal");
+        return (Integer)returnVal[0];
+    }
+
+    /** Un flux video de plus sur l'endpoint : rend son role (2 et au-dela). */
+    public Integer EndpointCreateVideoStream(int sessId,int endpointId) throws XmlRpcException
+    {
+        Object[] request = new Object[]{sessId,endpointId};
+        HashMap response = (HashMap) client.execute("EndpointCreateVideoStream", request);
+        Object[] returnVal = (Object[]) response.get("returnVal");
+        return (Integer)returnVal[0];
+    }
+
+    public boolean EndpointDeleteVideoStream(int sessId,int endpointId,int role) throws XmlRpcException
+    {
+        return Execute("EndpointDeleteVideoStream", new Object[]{sessId,endpointId,role});
+    }
+
+    //Les surcharges a `role` : le role est le DERNIER argument, apres la
+    //signature complete du RPC (docs/JSR-309-API.md).
+    public boolean EndpointSetLocalSTUNCredentials(Integer sessId,Integer endpointId,MediaType media,String username,String pwd,int role) throws XmlRpcException
+    {
+        return Execute("EndpointSetLocalSTUNCredentials", new Object[]{sessId,endpointId,media.valueOf(),username,pwd,role});
+    }
+
+    public boolean EndpointSetRemoteSTUNCredentials(Integer sessId,Integer endpointId,MediaType media,String username,String pwd,int role) throws XmlRpcException
+    {
+        return Execute("EndpointSetRemoteSTUNCredentials", new Object[]{sessId,endpointId,media.valueOf(),username,pwd,role});
+    }
+
+    public boolean EndpointSetLocalCryptoSDES(Integer sessId,Integer endpointId,MediaType media,String suite,String key,int role) throws XmlRpcException
+    {
+        return Execute("EndpointSetLocalCryptoSDES", new Object[]{sessId,endpointId,media.valueOf(),suite,key,role});
+    }
+
+    public boolean EndpointSetRemoteCryptoSDES(Integer sessId,Integer endpointId,MediaType media,String suite,String key,int role) throws XmlRpcException
+    {
+        return Execute("EndpointSetRemoteCryptoSDES", new Object[]{sessId,endpointId,media.valueOf(),suite,key,role});
+    }
+
+    public boolean EndpointSetRemoteCryptoDTLS(Integer sessId,Integer endpointId,MediaType media,String setup,String hash,String fingerprint,int role) throws XmlRpcException
+    {
+        return Execute("EndpointSetRemoteCryptoDTLS", new Object[]{sessId,endpointId,media.valueOf(),setup,hash,fingerprint,role});
+    }
+
+    public boolean EndpointSetRTPProperties(Integer sessId,Integer endpointId,MediaType media, HashMap<String,String> properties,int role) throws XmlRpcException
+    {
+        return Execute("EndpointSetRTPProperties", new Object[]{sessId,endpointId,media.valueOf(),properties,role});
+    }
+
+    public boolean EndpointStartSending(int sessId,int endpointId,Codecs.MediaType media,String sendIp,int sendPort,HashMap<Integer,Integer> rtpMap,String profile,int role) throws XmlRpcException
+    {
+        return Execute("EndpointStartSending", new Object[]{sessId,endpointId,media.valueOf(),sendIp,sendPort,rtpMap,profile==null?"":profile,role});
+    }
+
+    public Integer EndpointStartReceiving(int sessId,int endpointId,Codecs.MediaType media,HashMap<Integer,Integer> rtpMap,String profile,int role) throws XmlRpcException
+    {
+        Object[] request = new Object[]{sessId,endpointId,media.valueOf(),rtpMap,new HashMap<String,Object>(),profile==null?"":profile,role};
+        HashMap response = (HashMap) client.execute("EndpointStartReceiving", request);
+        Object[] returnVal = (Object[]) response.get("returnVal");
+        return (Integer)returnVal[0];
+    }
+
+    public boolean EndpointAddICECandidate(int sessId,int endpointId,Codecs.MediaType media,String candidate,int role) throws XmlRpcException
+    {
+        return Execute("EndpointAddICECandidate", new Object[]{sessId,endpointId,media.valueOf(),candidate,role});
+    }
+
+    public boolean EndpointStartRTPTimeout(int sessId,int endpointId,Codecs.MediaType media,int timeoutMs,int role) throws XmlRpcException
+    {
+        return Execute("EndpointStartRTPTimeout", new Object[]{sessId,endpointId,media.valueOf(),timeoutMs,role});
+    }
+
+    public boolean EndpointStopSending(int sessId,int endpointId,Codecs.MediaType media,int role) throws XmlRpcException
+    {
+        return Execute("EndpointStopSending", new Object[]{sessId,endpointId,media.valueOf(),role});
+    }
+
+    public boolean EndpointStopReceiving(int sessId,int endpointId,Codecs.MediaType media,int role) throws XmlRpcException
+    {
+        return Execute("EndpointStopReceiving", new Object[]{sessId,endpointId,media.valueOf(),role});
+    }
+
+    public boolean EndpointRequestUpdate(int sessId,int endpointId,Codecs.MediaType media,int role) throws XmlRpcException
+    {
+        return Execute("EndpointRequestUpdate", new Object[]{sessId,endpointId,media.valueOf(),role});
+    }
+
+    /** Le flux de rang `role` de la source vers le flux de meme rang. */
+    public boolean EndpointAttachToEndpoint(int sessId,int endpointId,int sourceId,Codecs.MediaType media,int role) throws XmlRpcException
+    {
+        return Execute("EndpointAttachToEndpoint", new Object[]{sessId,endpointId,sourceId,media.valueOf(),role});
+    }
+
+    public boolean EndpointAttachToVideoMixerPort(int sessId,int endpointId,int mixerId,int portId,int role) throws XmlRpcException
+    {
+        return Execute("EndpointAttachToVideoMixerPort", new Object[]{sessId,endpointId,mixerId,portId,role});
+    }
+
+    public boolean EndpointDettach(int sessId,int endpointId,Codecs.MediaType media,int role) throws XmlRpcException
+    {
+        return Execute("EndpointDettach", new Object[]{sessId,endpointId,media.valueOf(),role});
+    }
+
+    public boolean VideoMixerPortAttachToEndpoint(int sessId,int mixerId,int portId,int endpointId,int role) throws XmlRpcException
+    {
+        return Execute("VideoMixerPortAttachToEndpoint", new Object[]{sessId,mixerId,portId,endpointId,role});
+    }
+
+    private boolean Execute(String method,Object[] request) throws XmlRpcException
+    {
+        HashMap response = (HashMap) client.execute(method, request);
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
     public boolean EndpointDelete(int sessId,int endpointId) throws XmlRpcException
     {
         //Create request

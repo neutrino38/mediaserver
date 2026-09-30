@@ -2,8 +2,8 @@
 
 > Statut : **en cours**. Branche `feat/unified-plan`. Le chantier préalable
 > (famine de `ChangeStream`, §5) et le lot 0 (extension MID) sont faits. Le
-> lot 1, le lot 1b et le lot 2 (côté conférence) sont codés et testés ; leurs
-> recettes restent à faire. Les lots 3 à 5 restent à faire.
+> lot 1, le lot 1b, le lot 2 et le lot 3 sont codés et testés ; leurs recettes
+> restent à faire. Les lots 4 (elixip) et 5 (recette réelle) restent à faire.
 >
 > Le serveur média ne parle pas SIP. La signalisation et le SDP sont tenus par
 > un contrôleur externe (elixip), qui pilote le serveur par XML-RPC ou par
@@ -489,8 +489,12 @@ Le transport (§4.4) vaut tel quel : `RTPEndpoint` **est** une `RTPSession`.
   `EndpointAttachToVideoMixerPort(…, role)` et
   `VideoMixerPortAttachToEndpoint(…, role)`. Un port du mixeur par flux, ce que
   `VideoMixerResource::CreatePort` permet déjà.
-- À corriger au passage : `Endpoint.cpp:848` recrée un port sans son rôle. Un
-  port SLIDES recréé se déclare MAIN dans ses événements.
+- Le port recréé par `ConfigureMediaConnection` garde son rôle. Le défaut
+  était inatteignable : seul le texte change de transport, et le texte a le
+  rôle 0.
+- Le rôle vient en dernier, **après tous les paramètres facultatifs** du RPC :
+  une seule règle pour les dix-huit RPC, sans nouvelle variante de signature
+  par RPC.
 
 `docs/JSR-309-API.md` est à réécrire aux sections concernées.
 
@@ -569,7 +573,9 @@ section par section, dans les deux sens.
 - **`SharedDocMixer` est à la fois serveur BFCP et `VideoOutput`.** Le lot 1b
   lui retire le second rôle ; le premier ne bouge pas, et ses tests
   (`test_bfcp_server.cpp`) doivent rester verts sans modification.
-- **`Endpoint.cpp:848`** perd le rôle à la recréation d'un port.
+- **`ConfigureMediaConnection` en WebSocket sur une vidéo** : `WSEndpoint`
+  levait une exception que personne n'attrapait, et le processus mourait sur
+  un seul RPC mal formé. Le lot 3 le refuse.
 - **La socket RTCP reste ouverte en rtcp-mux** (`GetPollFds` la déclare
   toujours). Sans conséquence ; une session jointe n'ouvre rien.
 - **Un participant ouvre 8 ports à la création.** Avec `bundle=1` il en ouvre
@@ -648,7 +654,7 @@ Tests : `mcu/tests/test_rtp_bundle.cpp` (suites `RtpBundle` et
 `RtpBundleParticipant`), deux côtés BUNDLE en boucle locale. Ce que le lot ne
 couvre pas encore :
 
-- `Endpoint.*` (JSR-309) : le branchement passe au lot 3, avec la RPC
+- `Endpoint.*` (JSR-309) : branché au lot 3, avec la RPC
   `EndpointCreate(…, bundle)` qui l'active ;
 - la DTLS-SRTP et le data channel sur la porteuse sont codés mais non testés :
   les tests prouvent le chemin SRTP par SDES, dont les contextes sont les
@@ -669,11 +675,16 @@ couvre pas encore :
   la bonne session ; DTLS-SRTP par la porteuse ; watchdog d'une jointe qui se
   tait alors que l'audio passe. La suite IPv6 reste verte.
 
-### Lot 3 — JSR-309
+### Lot 3 — JSR-309 (codé, recette à faire)
 
-- `Endpoint.*`, `MediaSession.*`, `xmlrpcjsr309.cpp` : §4.6 en entier, dont
-  la correction de `Endpoint.cpp:848`.
-- `XmlRpcMcuClient` et `jsr309impl` : signatures avec rôle.
+Tests : `mcu/tests/test_jsr309_multi_video.cpp` (suite `Jsr309MultiVideo`),
+dont un B2BUA en BUNDLE face à deux navigateurs en boucle locale, et les
+handlers XML-RPC appelés directement. `jsr309impl` n'est pas modifié : il
+implémente l'API standard JSR-309, qui n'a pas de rôle vidéo à relayer ; le
+client `XmlRpcMcuClient` porte les surcharges à rôle.
+
+- `Endpoint.*`, `MediaSession.*`, `xmlrpcjsr309.cpp` : §4.6 en entier.
+- `XmlRpcMcuClient` : signatures avec rôle.
 - `docs/JSR-309-API.md`, protos MOTELI.
 - Tests gtest : deux endpoints `bundle=1` attachés flux à flux, la vidéo de
   rang 2 arrive sur le rang 2 de l'autre.
