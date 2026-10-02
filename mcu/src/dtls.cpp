@@ -1,6 +1,7 @@
 #include <srtp2/srtp.h>
 #include "dtls.h"
 #include "log.h"
+#include <sstream>
 
 #define SRTP_MASTER_KEY_LENGTH 16
 #define SRTP_MASTER_SALT_LENGTH 14
@@ -373,6 +374,39 @@ void DTLSConnection::SetRemoteFingerprint(Hash hash, const char *fingerprint)
 		sscanf(value, "%02x", (unsigned int*)&remoteFingerprint[pos++]);
 
 	free(tmp);
+}
+
+bool DTLSConnection::IsSameRemote(Setup remote, Hash hash, const char *fingerprint) const
+{
+	Setup local = dtls_setup;
+
+	switch (remote)
+	{
+		case SETUP_ACTIVE:
+			local = SETUP_PASSIVE;
+			break;
+		case SETUP_PASSIVE:
+			local = SETUP_ACTIVE;
+			break;
+		case SETUP_HOLDCONN:
+			local = SETUP_HOLDCONN;
+			break;
+		default:
+			break;
+	}
+
+	if (local != dtls_setup || hash != remoteHash)
+		return false;
+
+	unsigned char parsed[EVP_MAX_MD_SIZE] = {0};
+	int pos = 0;
+	std::string value;
+	std::istringstream in(fingerprint);
+
+	while (pos < EVP_MAX_MD_SIZE - 1 && std::getline(in, value, ':'))
+		parsed[pos++] = (unsigned char)strtoul(value.c_str(), NULL, 16);
+
+	return pos > 0 && memcmp(parsed, remoteFingerprint, pos) == 0;
 }
 
 int DTLSConnection::Read(BYTE* data,int size)

@@ -273,4 +273,25 @@ TEST(DTLSApplicationData, RienNePartAvantLaFinDuHandshake)
 	EXPECT_EQ(0, client.dtls.WriteApplicationData((const BYTE*)"trop tot", 8));
 }
 
+// Une réoffre n'est « inchangée » que si le rôle et l'empreinte le sont : tout
+// autre cas demande une nouvelle association (RFC 8842 §5).
+TEST(DTLSApplicationData, SeulsLeMemeRoleEtLaMemeEmpreinteSontInchanges)
+{
+	ASSERT_TRUE(DTLSTestCertificate::Ensure());
+
+	Peer server(false);
+	const std::string fp = DTLSTestCertificate::FingerPrint();
+	ASSERT_TRUE(server.Start(fp));
+
+	std::string other = fp;
+	other[0] = (other[0] == 'A') ? 'B' : 'A';
+
+	EXPECT_TRUE (server.dtls.IsSameRemote(DTLSConnection::SETUP_ACTIVE,  DTLSConnection::SHA256, fp.c_str()));
+	EXPECT_TRUE (server.dtls.IsSameRemote(DTLSConnection::SETUP_ACTPASS, DTLSConnection::SHA256, fp.c_str()));
+	EXPECT_FALSE(server.dtls.IsSameRemote(DTLSConnection::SETUP_PASSIVE, DTLSConnection::SHA256, fp.c_str()));
+	EXPECT_FALSE(server.dtls.IsSameRemote(DTLSConnection::SETUP_ACTIVE,  DTLSConnection::SHA1,   fp.c_str()));
+	EXPECT_FALSE(server.dtls.IsSameRemote(DTLSConnection::SETUP_ACTIVE,  DTLSConnection::SHA256, other.c_str()));
+	EXPECT_FALSE(server.dtls.IsSameRemote(DTLSConnection::SETUP_ACTIVE,  DTLSConnection::SHA256, ""));
+}
+
 } // namespace

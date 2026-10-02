@@ -803,25 +803,36 @@ int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const cha
 		return carrier->dtls.IsInited() ? 1 : carrier->SetRemoteCryptoDTLS(setup,hash,fingerprint);
 	Log("-SetRemoteCryptoDTLS [setup:%s,hash:%s,fingerpritn:%s]\n",setup,hash,fingerprint);
 
-	//Set Suite
+	DTLSConnection::Setup remoteSetup;
 	if (strcasecmp(setup,"active")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_ACTIVE);
+		remoteSetup = DTLSConnection::SETUP_ACTIVE;
 	else if (strcasecmp(setup,"passive")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_PASSIVE);
+		remoteSetup = DTLSConnection::SETUP_PASSIVE;
 	else if (strcasecmp(setup,"actpass")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_ACTPASS);
+		remoteSetup = DTLSConnection::SETUP_ACTPASS;
 	else if (strcasecmp(setup,"holdconn")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_HOLDCONN);
+		remoteSetup = DTLSConnection::SETUP_HOLDCONN;
 	else
 		return Error("Unsupported setup mode [%s]\n", setup);
 
-	//Set fingerprint
+	DTLSConnection::Hash remoteHash;
 	if (strcasecmp(hash,"SHA-1")==0)
-		dtls.SetRemoteFingerprint(DTLSConnection::SHA1,fingerprint);
+		remoteHash = DTLSConnection::SHA1;
 	else if (strcasecmp(hash,"SHA-256")==0)
-		dtls.SetRemoteFingerprint(DTLSConnection::SHA256,fingerprint);
+		remoteHash = DTLSConnection::SHA256;
 	else
 		return Error("Unsuppoted hash type [%s]. Must me SHA-1 or SHA-256.\n", hash);
+
+	//Une réoffre repasse ces attributs : inchangés, ils gardent l'association
+	//(RFC 8842 §5). Refaire Init() romprait le SCTP qu'elle porte.
+	if (dtls.IsInited() && dtls.IsSameRemote(remoteSetup,remoteHash,fingerprint))
+	{
+		Log("-SetRemoteCryptoDTLS unchanged, DTLS association kept\n");
+		return 1;
+	}
+
+	dtls.SetRemoteSetup(remoteSetup);
+	dtls.SetRemoteFingerprint(remoteHash,fingerprint);
 
 	//encript & decript
 	encript = true;

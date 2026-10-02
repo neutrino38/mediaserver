@@ -221,6 +221,25 @@ TEST_F(TextStreamDataChannel, LeTexteEmisAvantLOuvertureEstRejoue)
 	EXPECT_EQ(L"bonjour",b.Received());
 }
 
+// Une réoffre repasse l'empreinte et le setup : inchangés, ils gardent
+// l'association DTLS (RFC 8842 §5). La refaire tuait le SCTP qu'elle porte.
+TEST_F(TextStreamDataChannel, UneReoffreDTLSInchangeeGardeLeCanal)
+{
+	OpenChannel();
+
+	ASSERT_TRUE(b.stream.SetRemoteCryptoDTLS("active","sha-256",
+						 DTLSTestCertificate::FingerPrint().c_str()));
+
+	b.toPeer->WriteText(L"apres");
+	ASSERT_TRUE(WaitUntil([&]{ return a.fromPeer->Length() >= 5; },2000))
+		<< "le texte emis apres la reoffre n'est jamais arrive";
+	EXPECT_EQ(L"apres",a.Received());
+
+	a.toPeer->WriteText(L"retour");
+	ASSERT_TRUE(WaitUntil([&]{ return b.fromPeer->Length() >= 6; },2000));
+	EXPECT_EQ(L"retour",b.Received());
+}
+
 // T.140 §5.3 : la perte du canal s'annonce par un U+FFFD du côté qui survit —
 // ici la conférence, par le pipe du mixeur.
 TEST_F(TextStreamDataChannel, LaPerteDuCanalMetUnUFFFDDansLeMixeur)
