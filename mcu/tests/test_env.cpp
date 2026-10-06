@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include <cerrno>
 #include <csignal>
 #include <cstdarg>
 #include <cstdio>
@@ -28,6 +29,10 @@
 
 #include "log.h"
 #include "hwprobe.h"
+
+extern "C" {
+#include <libavutil/log.h>
+}
 
 // libmedikit route ses Log()/Debug()/Error() par des pointeurs de fonctions
 // (SetLogFunctions). SANS BRANCHEMENT ILS SONT PERDUS — erreurs comprises —, et
@@ -116,11 +121,40 @@ private:
 
 TestWatchdog g_watchdog;
 
+// Les Log()/Error()/Debug() du mcu vont dans un fichier, pas dans la sortie de
+// gtest : GTEST_MCU_LOG donne son chemin (défaut tests/test.log, « - » = stdout).
+// Un death test « threadsafe » relance le binaire : l'enfant ajoute au fichier
+// au lieu de l'écraser.
+void OpenMcuLog(int argc, char** argv)
+{
+	const char* path = getenv("GTEST_MCU_LOG");
+	if (!path)
+		path = "tests/test.log";
+	if (strcmp(path, "-") == 0)
+		return;
+
+	bool child = false;
+	for (int i = 1; i < argc; ++i)
+		if (strstr(argv[i], "--gtest_internal_run_death_test"))
+			child = true;
+
+	FILE* f = fopen(path, child ? "a" : "w");
+	if (!f)
+	{
+		fprintf(stderr, "logs du mcu : impossible d'ouvrir %s (%s), ils restent sur stdout\n",
+			path, strerror(errno));
+		return;
+	}
+	Logger::SetOutput(f);
+	if (!child)
+		printf("logs du mcu dans %s\n", path);
+}
+
 int MedkitLogCb(const char *msg, va_list ap)
 {
-	printf("[medkit] ");
-	vprintf(msg, ap);
-	fflush(stdout);
+	fprintf(Logger::Output(), "[medkit] ");
+	vfprintf(Logger::Output(), msg, ap);
+	fflush(Logger::Output());
 	return 1;
 }
 
@@ -129,10 +163,22 @@ int MedkitDebugCb(const char *msg, va_list ap)
 	if (!Logger::IsDebugEnabled())
 		return 1;
 
-	printf("[medkit][DBG] ");
-	vprintf(msg, ap);
-	fflush(stdout);
+	fprintf(Logger::Output(), "[medkit][DBG] ");
+	vfprintf(Logger::Output(), msg, ap);
+	fflush(Logger::Output());
 	return 1;
+}
+
+// ffmpeg écrit sur stderr par défaut : ses messages suivent ceux du mcu.
+void FfmpegLogCb(void* ptr, int level, const char* fmt, va_list ap)
+{
+	static int printPrefix = 1;
+	char line[1024];
+
+	if (level > AV_LOG_INFO)
+		return;
+	av_log_format_line(ptr, level, fmt, ap, line, sizeof(line), &printPrefix);
+	Log("[ffmpeg] %s", line);
 }
 
 // Environment global : SetUp() une fois avant tous les tests.
@@ -151,6 +197,7 @@ public:
 		// Les messages de libmedikit sortent avec ceux du mcu, préfixés pour qu'on
 		// sache lequel des deux parle. Les Debug() suivent le même interrupteur.
 		SetLogFunctions(MedkitDebugCb, MedkitLogCb, MedkitLogCb);
+		av_log_set_callback(FfmpegLogCb);
 
 		// Comme main.cpp : écrire dans un socket que le pair a fermé est un cas
 		// NORMAL de fin de connexion. Sans cette ligne, le SIGPIPE par défaut tue
@@ -188,6 +235,7 @@ int main(int argc, char** argv)
 		RunHwProbe(stdout);
 		return 0;
 	}
+	OpenMcuLog(argc, argv);
 	::testing::InitGoogleTest(&argc, argv);
 	return RUN_ALL_TESTS();
 }

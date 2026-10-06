@@ -24,6 +24,10 @@ Filtrer une suite ou un test précis :
 ./tests/runtests --gtest_filter='WebSocketEcho.HandshakeAndTextEcho'
 ```
 
+Les `Log()`/`Error()`/`Debug()` du mcu ne sortent pas dans le terminal : ils
+vont dans `tests/test.log`, écrasé à chaque lancement. `GTEST_MCU_LOG` change
+le chemin ; `GTEST_MCU_LOG=-` les remet sur stdout, mêlés au rapport gtest.
+
 Tracer les `Debug()` du mcu pendant les tests (silencieux par défaut) :
 
 ```sh

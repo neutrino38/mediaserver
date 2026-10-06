@@ -19,6 +19,7 @@ make tests     # compile seulement (produit tests/runtests)
 ./tests/runtests               # relancer sans recompiler
 ./tests/runtests --gtest_filter='RtmpChunk.*'   # filtrer une suite
 GTEST_MCU_DEBUG=1 ./tests/runtests              # tracer les Debug() du mcu
+GTEST_MCU_LOG=- ./tests/runtests                # logs du mcu sur stdout (défaut : tests/test.log)
 ```
 
 ### Prérequis
