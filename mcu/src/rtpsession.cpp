@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netinet/in.h>
@@ -357,9 +358,14 @@ RTPSession::RTPSession(MediaFrame::Type media,Listener *listener,MediaFrame::Med
 	useAbsTime = false;
 	useTransportCC = false;
 	transportSeqNum = 0;
+	carrier = NULL;
+	bundleDropCount = 0;
+	setZeroTime(&bundleDropLast);
 	transportFeedbackStarted = false;
 	absSendTimeExtId = 0;
 	transportCCExtId = 0;
+	midExtId = 0;
+	remoteSSRC = 0;
 	isNACKEnabled = false;
 	//Fill with 0
 	memset(sendPacket,0,MTU+SRTP_MAX_TRAILER_LEN);
@@ -537,6 +543,11 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const BYTE* key,const DWOR
 int RTPSession::SetLocalCryptoSDES(const char* suite, const char* key64)
 	//Log
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->sendSRTPSession ? 1 : carrier->SetLocalCryptoSDES(suite,key64);
 	Log("-SetLocalCryptoSDES [key:%s,suite:%s]\n",key64,suite);
 
 	//encript
@@ -655,6 +666,20 @@ int RTPSession::SetProperties(const Properties& properties)
 			transportCCExtId = (BYTE)atoi(it->second.c_str());
 			extMap[transportCCExtId] = RTPPacket::HeaderExtension::TransportWideCC;
 			useTransportCC = true;
+		} else if (it->first.compare("urn:ietf:params:rtp-hdrext:sdes:mid")==0) {
+			//Set extension
+			midExtId = (BYTE)atoi(it->second.c_str());
+			extMap[midExtId] = RTPPacket::HeaderExtension::MID;
+		} else if (it->first.compare("mid")==0) {
+			//L'element one-byte plafonne a 16 octets : au-dela, le pair ne
+			//pourrait pas relire ce qu'on ecrit.
+			mid = it->second.substr(0, RTPPacket::HeaderExtension::MaxMidLength);
+			if (mid.size() != it->second.size())
+				Error("RTP property mid [%s] truncated to %u bytes on %s stream %p\n",
+				      it->second.c_str(), RTPPacket::HeaderExtension::MaxMidLength,
+				      MediaFrame::TypeToString(media), this);
+		} else if (it->first.compare("remote-ssrc")==0) {
+			remoteSSRC = (DWORD)strtoul(it->second.c_str(), NULL, 10);
 		} else {
 			Error("Unknown RTP property [%s]\n",it->first.c_str());
 		}
@@ -676,12 +701,20 @@ int RTPSession::SetProperties(const Properties& properties)
 	if (useTransportCC)
 		Log("Activated transport-cc on %s stream %p, extmap id=%d.\n",
 		    MediaFrame::TypeToString(media), this, transportCCExtId);
+	if (midExtId && !mid.empty())
+		Log("Sending MID [%s] on %s stream %p, extmap id=%d.\n",
+		    mid.c_str(), MediaFrame::TypeToString(media), this, midExtId);
 	mutex.unlock();
 	return 1;
 }
 
 int RTPSession::SetLocalSTUNCredentials(const char* username, const char* pwd)
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->iceLocalUsername ? 1 : carrier->SetLocalSTUNCredentials(username,pwd);
 	Log("-SetLocalSTUNCredentials [frag:%s,pwd:%s]\n",username,pwd);
 	//Clean mem
 	if (iceLocalUsername)
@@ -698,6 +731,11 @@ int RTPSession::SetLocalSTUNCredentials(const char* username, const char* pwd)
 
 int RTPSession::SetRemoteSTUNCredentials(const char* username, const char* pwd)
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->iceRemoteUsername ? 1 : carrier->SetRemoteSTUNCredentials(username,pwd);
 	Log("-SetRemoteSTUNCredentials [frag:%s,pwd:%s]\n",username,pwd);
 
 	//Un mot de passe DIFFÉRENT est un redémarrage ICE (RFC 8445 §9) : la paire validée
@@ -758,27 +796,43 @@ void RTPSession::ReplayPendingDTLS()
 
 int RTPSession::SetRemoteCryptoDTLS(const char *setup,const char *hash,const char *fingerprint)
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->dtls.IsInited() ? 1 : carrier->SetRemoteCryptoDTLS(setup,hash,fingerprint);
 	Log("-SetRemoteCryptoDTLS [setup:%s,hash:%s,fingerpritn:%s]\n",setup,hash,fingerprint);
 
-	//Set Suite
+	DTLSConnection::Setup remoteSetup;
 	if (strcasecmp(setup,"active")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_ACTIVE);
+		remoteSetup = DTLSConnection::SETUP_ACTIVE;
 	else if (strcasecmp(setup,"passive")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_PASSIVE);
+		remoteSetup = DTLSConnection::SETUP_PASSIVE;
 	else if (strcasecmp(setup,"actpass")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_ACTPASS);
+		remoteSetup = DTLSConnection::SETUP_ACTPASS;
 	else if (strcasecmp(setup,"holdconn")==0)
-		dtls.SetRemoteSetup(DTLSConnection::SETUP_HOLDCONN);
+		remoteSetup = DTLSConnection::SETUP_HOLDCONN;
 	else
 		return Error("Unsupported setup mode [%s]\n", setup);
 
-	//Set fingerprint
+	DTLSConnection::Hash remoteHash;
 	if (strcasecmp(hash,"SHA-1")==0)
-		dtls.SetRemoteFingerprint(DTLSConnection::SHA1,fingerprint);
+		remoteHash = DTLSConnection::SHA1;
 	else if (strcasecmp(hash,"SHA-256")==0)
-		dtls.SetRemoteFingerprint(DTLSConnection::SHA256,fingerprint);
+		remoteHash = DTLSConnection::SHA256;
 	else
 		return Error("Unsuppoted hash type [%s]. Must me SHA-1 or SHA-256.\n", hash);
+
+	//Une réoffre repasse ces attributs : inchangés, ils gardent l'association
+	//(RFC 8842 §5). Refaire Init() romprait le SCTP qu'elle porte.
+	if (dtls.IsInited() && dtls.IsSameRemote(remoteSetup,remoteHash,fingerprint))
+	{
+		Log("-SetRemoteCryptoDTLS unchanged, DTLS association kept\n");
+		return 1;
+	}
+
+	dtls.SetRemoteSetup(remoteSetup);
+	dtls.SetRemoteFingerprint(remoteHash,fingerprint);
 
 	//encript & decript
 	encript = true;
@@ -865,6 +919,11 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DW
 
 int RTPSession::SetRemoteCryptoSDES(const char* suite, const char* key64,int keyRank)
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->recvSRTPSession ? 1 : carrier->SetRemoteCryptoSDES(suite,key64,keyRank);
 	const char * sep;
 	char key64copy[200];
 	//Log
@@ -1116,13 +1175,13 @@ int RTPSession::SetLocalPort(int recvPort)
 int RTPSession::GetLocalPort()
 {
 	// Return local
-	return simPort;
+	return carrier ? carrier->GetLocalPort() : simPort;
 }
 
 int RTPSession::GetRemotePort()
 {
 	// Return local
-	return sendAddr.Port();
+	return carrier ? carrier->GetRemotePort() : sendAddr.Port();
 }
 
 bool RTPSession::CanSendCodec(DWORD codec)
@@ -1204,6 +1263,12 @@ bool RTPSession::NatCorrectable(const IPAddress& announced)
 ***********************************/
 int RTPSession::SetRemotePort(char *ip,int sendPort)
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->HasRemote() ? 1 : carrier->SetRemotePort(ip,sendPort);
+
 	//Une adresse illisible ne doit PAS devenir une destination : inet_addr rendait
 	//INADDR_NONE aussi bien sur une erreur de format que sur l'adresse de diffusion,
 	//et ce retour n'était pas testé — la destination devenait 255.255.255.255 et le
@@ -1356,6 +1421,10 @@ void RTPSession::ArmRTPTimeout(DWORD timeoutMs)
 *************************/
 void RTPSession::SetDTLSApplicationListener(ApplicationListener* listener)
 {
+	//Le data channel d'une section jointe vit sur la DTLS de la porteuse
+	//(docs/conception/T140-DC/SPEC.md §13.1).
+	if (carrier)
+		return carrier->SetDTLSApplicationListener(listener);
 	appListener = listener;
 	//Le DTLS livre directement au consommateur : la session ne recopie rien.
 	dtls.SetApplicationListener(listener);
@@ -1367,6 +1436,8 @@ void RTPSession::SetDTLSApplicationListener(ApplicationListener* listener)
 
 int RTPSession::SendDTLSApplicationData(const BYTE* data,DWORD size)
 {
+	if (carrier)
+		return carrier->SendDTLSApplicationData(data,size);
 	//Le chiffrement pousse dans write_bio ; c'est FlushDTLS qui met sur le fil,
 	//vers la destination latchée. Sans destination connue, rien ne part — et le
 	//consommateur n'a rien à faire de cette information : le handshake n'est pas
@@ -1552,6 +1623,9 @@ void RTPSession::OnICEConnectivityConfirmed(const IPEndpoint& from)
 
 int RTPSession::AddICECandidate(const char* candidate)
 {
+	//Un candidat décrit le transport : il va toujours à la porteuse.
+	if (carrier)
+		return carrier->AddICECandidate(candidate);
 	//Trickle ICE Niveau 1 pragmatique (gap 1) : on parse la ligne SDP "candidate:"
 	//et, pour un candidat host/srflx dont la priorité dépasse la meilleure connue,
 	//on bascule la cible d'envoi RTP/RTCP. Combiné à l'apprentissage d'adresse par
@@ -1623,6 +1697,8 @@ int RTPSession::AddICECandidate(const char* candidate)
 
 int RTPSession::SendEmptyPacket()
 {
+	if (carrier)
+		return carrier->SendEmptyPacket();
 	//Check if we have sendinf ip address
 	if (!HasRemote())
 		//Exit
@@ -1668,7 +1744,7 @@ int RTPSession::SendNATPrimingPacket()
 //en chiffré (le WebRTC amorce via STUN/DTLS) ou tant que la destination est inconnue.
 void RTPSession::ArmNATPriming()
 {
-	if (encript)
+	if (encript || carrier)
 		return;
 	if (!HasRemote())
 		return;
@@ -1793,6 +1869,12 @@ int RTPSession::Rebind(const IPAddress& addr)
 ***********************************/
 bool RTPSession::SetAddressProfile(const char* profile, std::string& error)
 {
+	//BUNDLE : un réglage de transport va à la porteuse. Elle le prend s'il lui
+	//manque encore (une offre sans section audio ne le lui donne jamais) ; sinon
+	//il est ignoré, la RFC 8843 le rendant identique sur toutes les sections.
+	if (carrier)
+		return carrier->addressProfileSet ? true : carrier->SetAddressProfile(profile,error);
+
 	AddressProfiles::Id id = AddressProfiles::Default();
 
 	//Rien de demande : le profil par defaut, c'est-a-dire le comportement d'un
@@ -1855,6 +1937,8 @@ bool RTPSession::SetAddressProfile(const char* profile, std::string& error)
 ***********************************/
 IPAddress RTPSession::GetAnnouncedAddress() const
 {
+	if (carrier)
+		return carrier->GetAnnouncedAddress();
 	const AddressProfiles::Id id = addressProfileSet ? addressProfile : AddressProfiles::Default();
 	const IPAddress           addr = AddressProfiles::AnnouncedAddress(id);
 
@@ -1866,11 +1950,125 @@ IPAddress RTPSession::GetAnnouncedAddress() const
 	return IPAddress::Parse(GetAnnouncedIp());
 }
 
+/*********************************
+* JoinCarrier
+*	BUNDLE : cette session n'aura pas de transport à elle.
+*********************************/
+bool RTPSession::JoinCarrier(RTPSession* carrier)
+{
+	if (running)
+		return Error("-RTPSession: JoinCarrier apres Init, refuse [%p]\n",this);
+	if (!carrier || carrier == this || carrier->carrier)
+		return Error("-RTPSession: porteuse invalide [%p]\n",this);
+
+	this->carrier = carrier;
+	//RFC 8843 §9.3 : tout le groupe est en rtcp-mux.
+	muxRTCP = true;
+	return true;
+}
+
+void RTPSession::AddJoined(RTPSession* session)
+{
+	std::lock_guard<std::mutex> lock(bundleMutex);
+	joinedSessions.push_back(session);
+}
+
+void RTPSession::RemoveJoined(RTPSession* session)
+{
+	//La livraison se fait sous ce même verrou : au retour, le réacteur de la
+	//porteuse ne touche plus à cette session.
+	std::lock_guard<std::mutex> lock(bundleMutex);
+	joinedSessions.erase(std::remove(joinedSessions.begin(),joinedSessions.end(),session),joinedSessions.end());
+	for (std::map<DWORD,RTPSession*>::iterator it=ssrcRoutes.begin(); it!=ssrcRoutes.end(); )
+		if (it->second == session)
+			ssrcRoutes.erase(it++);
+		else
+			++it;
+}
+
+bool RTPSession::HasJoined()
+{
+	std::lock_guard<std::mutex> lock(bundleMutex);
+	return !joinedSessions.empty();
+}
+
+RTPSession* RTPSession::JoinedVideoMain()
+{
+	for (size_t i=0; i<joinedSessions.size(); ++i)
+		if (joinedSessions[i]->media == MediaFrame::Video && joinedSessions[i]->role == MediaFrame::VIDEO_MAIN)
+			return joinedSessions[i];
+	return NULL;
+}
+
+RTPSession* RTPSession::RouteRTP(const BYTE* data,int size)
+{
+	const DWORD ssrc = RTPPacket::GetSSRC(data);
+
+	//RFC 8843 §9.1 : l'id de l'extension MID est le même sur tout le groupe.
+	BYTE midId = midExtId;
+	for (size_t i=0; !midId && i<joinedSessions.size(); ++i)
+		midId = joinedSessions[i]->midExtId;
+
+	std::string value;
+	if (midId && RTPPacket::ReadMid(data,size,midId,value))
+	{
+		RTPSession* byMid = (!mid.empty() && mid == value) ? this : NULL;
+		for (size_t i=0; !byMid && i<joinedSessions.size(); ++i)
+			if (!joinedSessions[i]->mid.empty() && joinedSessions[i]->mid == value)
+				byMid = joinedSessions[i];
+		if (byMid)
+		{
+			//Appris pour les paquets qui ne portent plus le MID.
+			ssrcRoutes[ssrc] = byMid;
+			return byMid;
+		}
+	}
+
+	std::map<DWORD,RTPSession*>::iterator it = ssrcRoutes.find(ssrc);
+	if (it != ssrcRoutes.end())
+		return it->second;
+
+	if (remoteSSRC && remoteSSRC == ssrc)
+		return this;
+	for (size_t i=0; i<joinedSessions.size(); ++i)
+		if (joinedSessions[i]->remoteSSRC && joinedSessions[i]->remoteSSRC == ssrc)
+			return joinedSessions[i];
+
+	//Dernier recours : un payload type qu'une seule session porte. Jamais
+	//deviné au-delà : un SSRC inconnu sur une section vidéo remplacerait sinon
+	//la caméra par l'écran (§5 de la conception).
+	const BYTE type = RTPPacket::GetType(data);
+	RTPSession* byType = NULL;
+	int matches = 0;
+	if (rtpMapIn && rtpMapIn->GetCodecForType(type) != RTPMap::NotFound)
+	{
+		byType = this;
+		++matches;
+	}
+	for (size_t i=0; i<joinedSessions.size(); ++i)
+		if (joinedSessions[i]->rtpMapIn && joinedSessions[i]->rtpMapIn->GetCodecForType(type) != RTPMap::NotFound)
+		{
+			byType = joinedSessions[i];
+			++matches;
+		}
+
+	return matches == 1 ? byType : NULL;
+}
+
 int RTPSession::Init()
 {
 	int retries = 0;
 	simPort=0;	
 	Log(">Init RTPSession %p for media %s and role %s\n", this, MediaFrame::TypeToString(media), MediaFrame::RoleToString(role));
+
+	if (carrier)
+	{
+		//Ni socket ni réacteur : la porteuse porte le transport.
+		running = true;
+		carrier->AddJoined(this);
+		Log("<Init RTPSession %p joined to carrier %p\n",this,carrier);
+		return 1;
+	}
 
 	//Famille des sockets média. Par défaut AF_INET6 avec IPV6_V6ONLY=0 : UNE
 	//socket entend les deux familles, un pair v4 arrivant en ::ffff:a.b.c.d.
@@ -2003,6 +2201,10 @@ int RTPSession::End()
 
 	//Not running;
 	running = false;
+	//Sous wireMutex : une session jointe peut encore émettre par ces sockets
+	//depuis son propre fil, et un descripteur fermé puis réattribué enverrait
+	//son paquet ailleurs.
+	std::lock_guard<std::mutex> lock(wireMutex);
 	//If got socket
 	if (simSocket!=FD_INVALID)
 	{
@@ -2026,17 +2228,7 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 {
 	BYTE data[MTU+SRTP_MAX_TRAILER_LEN] ZEROALIGNEDTO32;
 	DWORD size = RTPPAYLOADSIZE;
-	int ret = 0;
 
-	//Check if we have sendinf ip address
-	if (!HasRemoteRtcp() && !muxRTCP)
-	{
-		//Debug
-		Debug("-Error sending rtcp packet, no remote IP yet\n");
-		//Exit
-
-		return 0;
-	}
 	//Serialize
 	int len = rtcp.Serialize(data,size);
 	//Check result
@@ -2044,27 +2236,11 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 		//Error
 		return Error("Error serializing RTCP packet\n");
 
-	//If encripted
-	if (encript)
-	{
-		//Check  session
-		if (!sendSRTPSession)
-			return Error("-no sendSRTPSession\n");
-		//Protect
-		srtp_err_status_t err = srtp_protect_rtcp(sendSRTPSession,data,&len);
-		//Check error
-		if (err!=srtp_err_status_ok)
-			//Nothing
-			return Error("Error protecting RTCP packet [%d]\n",err);
-	}
+	//Une session jointe émet par le transport de sa porteuse.
+	int ret = (carrier ? carrier : this)->ProtectAndSendRTCP(data,len);
 
-	//If muxin
-	if (muxRTCP)
-		//Send using RTP port
-		ret = sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
-	else
-		//Send using RCTP port
-		ret = sendto(simRtcpSocket,data,len,0,sendRtcpAddr,sendRtcpAddr.Len());
+	if (ret == SendNotReady || ret == SendProtectFailed)
+		return 0;
 
 	//Check error
 	if (ret<0)
@@ -2080,16 +2256,75 @@ int RTPSession::SendPacket(RTCPCompoundPacket &rtcp)
 	return 1;
 }
 
-int RTPSession::SendPacket(RTPPacket &packet)
+int RTPSession::ProtectAndSendRTCP(BYTE* data,int& len)
 {
-	return SendPacket(packet,packet.GetTimestamp());
+	std::lock_guard<std::mutex> lock(wireMutex);
+
+	//Check if we have sendinf ip address
+	if (!HasRemoteRtcp() && !muxRTCP)
+	{
+		//Debug
+		Debug("-Error sending rtcp packet, no remote IP yet\n");
+		return SendNotReady;
+	}
+
+	//If encripted
+	if (encript)
+	{
+		//Check  session
+		if (!sendSRTPSession)
+		{
+			Error("-no sendSRTPSession\n");
+			return SendProtectFailed;
+		}
+		//Protect
+		srtp_err_status_t err = srtp_protect_rtcp(sendSRTPSession,data,&len);
+		//Check error
+		if (err!=srtp_err_status_ok)
+		{
+			Error("Error protecting RTCP packet [%d]\n",err);
+			return SendProtectFailed;
+		}
+	}
+
+	//If muxin
+	if (muxRTCP)
+		//Send using RTP port
+		return sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
+	//Send using RCTP port
+	return sendto(simRtcpSocket,data,len,0,sendRtcpAddr,sendRtcpAddr.Len());
 }
 
-int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
+int RTPSession::ProtectAndSendRTP(BYTE* data,int& len)
 {
-	//If session is not running drop the packet silently
-	if (!running) return 0;
-	
+	std::lock_guard<std::mutex> lock(wireMutex);
+
+	//Check if we ar encripted
+	if (encript)
+	{
+		if (!sendSRTPSession)
+			return SendNotReady;
+		//Encript
+		srtp_err_status_t err = srtp_protect(sendSRTPSession,data,&len);
+		//Check error
+		if (err!=srtp_err_status_ok)
+		{
+			Error("Error protecting RTP packet [%d] [%p]\n",err,this);
+			return SendProtectFailed;
+		}
+	}
+
+	return sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
+}
+
+int RTPSession::SendRawRTP(const BYTE* data,int len)
+{
+	std::lock_guard<std::mutex> lock(wireMutex);
+	return sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
+}
+
+bool RTPSession::PrepareSendAddr()
+{
 	//Check if we have sendinf ip address
 	if (!HasRemote())
 	{
@@ -2108,7 +2343,7 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			//Exit
 			Debug("-No remote address for [%s]\n",MediaFrame::TypeToString(media));
 			//Exit
-			return 0;
+			return false;
 		}
 	}
 	else if ( HasRecIP() && !SameAddr(recIP,sendAddr.Address()) )
@@ -2129,6 +2364,22 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 		else
 			Log("-RTPSession NAT: WARNING Trying to send packet from different ip address than receiving one.\n");
 	}
+	return true;
+}
+
+int RTPSession::SendPacket(RTPPacket &packet)
+{
+	return SendPacket(packet,packet.GetTimestamp());
+}
+
+int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
+{
+	//If session is not running drop the packet silently
+	if (!running) return 0;
+	
+	//La cible d'envoi est celle du transport : la porteuse pour une session jointe.
+	if (!(carrier ? carrier : this)->PrepareSendAddr())
+		return 0;
 	
 	//Check if we need to send SR
 	if (isZeroTime(&lastSR) || getDifTime(&lastSR)>4000000)
@@ -2206,8 +2457,13 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	//Calculamos el inicio
 	int ini = sizeof(rtp_hdr_t);
 	
+	//Le MID s'ecrit sur chaque paquet (RFC 8843 §9.2 ne l'exige qu'au debut
+	//et a chaque changement de SSRC) : le pair demultiplexe alors sans
+	//dependre des a=ssrc de la reponse.
+	const bool sendMid = midExtId && !mid.empty();
+	WORD transportSeq = 0;
 	//If we have are using any sending extensions
-	if (useAbsTime || useTransportCC)
+	if (useAbsTime || useTransportCC || sendMid)
 	{
 		//Get header
 		rtp_hdr_ext_t* ext = (rtp_hdr_ext_t*)(sendPacket + ini);
@@ -2237,8 +2493,16 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 			//(le paquet stocke est deja chiffre, cf. ReSendPacket) : le
 			//doublon se resout a l'appariement, premiere arrivee gagnante.
 			sendPacket[ini] = transportCCExtId << 4 | 0x01;
-			set2(sendPacket,ini+1,(WORD)(++transportSeqNum));
+			//Transport-wide : un seul compteur par transport, celui de la porteuse.
+			transportSeq = (WORD)(++(carrier ? carrier : this)->transportSeqNum);
+			set2(sendPacket,ini+1,transportSeq);
 			ini+=3;
+		}
+		if (sendMid)
+		{
+			sendPacket[ini] = midExtId << 4 | (BYTE)(mid.size()-1);
+			memcpy(sendPacket+ini+1,mid.data(),mid.size());
+			ini+=1+mid.size();
 		}
 		//Pad to 32 bit boundary
 		while ((ini-extIni) & 0x03)
@@ -2257,26 +2521,21 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	//Set pateckt length
 	int len = packet.GetMediaLength()+ini;
 
-	//Check if we ar encripted
-	if (encript)
+	//Chiffrement et envoi par le transport, celui de la porteuse pour une
+	//session jointe. Le paquet est chiffré en place : la file RTX ci-dessous
+	//garde les octets tels qu'ils sont partis.
+	int ret = (carrier ? carrier : this)->ProtectAndSendRTP(sendPacket,len);
+
+	if (ret == SendNotReady)
 	{
-		if (!sendSRTPSession)
-		{
-			Debug("-RTPSession: encryption is not yet setup.\n");
-			return 0;
-		}
-		srtp_err_status_t err;
-		
-		//Encript
-		err = srtp_protect(sendSRTPSession,sendPacket,&len);
-		//Check error
-		if (err!=srtp_err_status_ok)
-		{
-			//Nothing
-			Error("Error protecting RTP packet for %s with recSSRC=%x  and for session=%p : [%d]\n",MediaFrame::TypeToString(media),packet.GetSSRC(),this, err);
-		
-			return -1;
-		}
+		Debug("-RTPSession: encryption is not yet setup.\n");
+		return 0;
+	}
+	if (ret == SendProtectFailed)
+	{
+		//Nothing
+		Error("Error protecting RTP packet for %s with recSSRC=%x  and for session=%p\n",MediaFrame::TypeToString(media),packet.GetSSRC(),this);
+		return -1;
 	}
 	
 	//Add it rtx queue
@@ -2320,9 +2579,6 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	}
 	*/	
 	
-	//Send packet
-	int ret = sendto(simSocket,sendPacket,len,0,sendAddr,sendAddr.Len());
-
     if (ret <= 0)
 	{
 		Log("Failed to send RTP packet seqnum %d, errno=%d.\n", sendSeq, errno);
@@ -2334,8 +2590,9 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 		totalSendBytes += packet.GetMediaLength();
 		if (useTransportCC)
 		{
-			std::lock_guard<std::mutex> guard(senderBweMutex);
-			sentHistory.OnPacketSent((WORD)transportSeqNum, getTime(), len);
+			RTPSession* transport = carrier ? carrier : this;
+			std::lock_guard<std::mutex> guard(transport->senderBweMutex);
+			transport->sentHistory.OnPacketSent(transportSeq, getTime(), len);
 		}
 		else
 		{
@@ -2826,6 +3083,9 @@ int RTPSession::ReadRTP()
 		return Error("Invalid RTP packet read from fd %d. Packet too small of %d bytes.\n", simSocket, size);
 
 	DWORD defaultSSRC = GetDefaultStream(true);
+	//Une porteuse déchiffre pour tout le transport : le contexte SRTP n'est lié
+	//à aucun SSRC (ssrc_any_inbound).
+	const bool bundled = HasJoined();
 	
 	//This should be improbed
 	/*if (useNACK && defaultSSRC && defaultSSRC!=RTPPacket::GetSSRC(buffer))
@@ -2848,7 +3108,7 @@ int RTPSession::ReadRTP()
 		if (!isRTX)
 		{
 			//unprotect
-			if (defaultSSRC == 0 ||  defaultSSRC == RTPPacket::GetSSRC(buffer) )
+			if (bundled || defaultSSRC == 0 ||  defaultSSRC == RTPPacket::GetSSRC(buffer) )
 				err = srtp_unprotect(recvSRTPSession,buffer,&size);
 			else
 			{
@@ -2859,7 +3119,7 @@ int RTPSession::ReadRTP()
 		else
 		{
 			//unprotect RTX
-			if (defaultSSRC == 0 || defaultSSRC == RTPPacket::GetSSRC(buffer) )
+			if (bundled || defaultSSRC == 0 || defaultSSRC == RTPPacket::GetSSRC(buffer) )
 				err = srtp_unprotect(recvSRTPSessionRTX,buffer,&size);
 			else
 			{
@@ -2873,6 +3133,40 @@ int RTPSession::ReadRTP()
 			//Error
 			return Error("Error unprotecting rtp packet [%d] for RTPSession=%p, ssrc=%x defaultSSRC=%x\n",err,this, RTPPacket::GetSSRC(buffer),defaultSSRC);
 	}
+
+	//BUNDLE : le transport s'arrête ici, la suite appartient à la section.
+	if (bundled)
+	{
+		std::lock_guard<std::mutex> lock(bundleMutex);
+		RTPSession* target = RouteRTP(buffer,size);
+		if (!target)
+		{
+			//Jamais deviné : trace cadencée, le paquet est jeté.
+			if (!bundleDropCount++ || getDifTime(&bundleDropLast) > 1000000)
+			{
+				Log("-RTPSession BUNDLE: paquet sans section jete [ssrc:%x,pt:%u,jetes:%u] [%p]\n",
+				    RTPPacket::GetSSRC(buffer),(unsigned)RTPPacket::GetType(buffer),bundleDropCount,this);
+				gettimeofday(&bundleDropLast,NULL);
+			}
+			return 0;
+		}
+		return target->ProcessIncomingRTP(buffer,size,from_addr,isRTX);
+	}
+
+	return ProcessIncomingRTP(buffer,size,from_addr,isRTX);
+}
+
+int RTPSession::ProcessIncomingRTP(BYTE* buffer,int size,const IPEndpoint& from_addr,bool isRTX)
+{
+	//Une session jointe n'a pas de socket : c'est le paquet routé qui prouve
+	//que son pair est vivant.
+	if (carrier)
+	{
+		gettimeofday(&lastRecv,NULL);
+		rtpTimedOut = false;
+	}
+
+	DWORD defaultSSRC = GetDefaultStream(true);
 
 	//P5 : premier paquet RTP/SRTP reçu ET validé (déchiffrement réussi si SRTP => le
 	//handshake DTLS est terminé ; sinon pas de crypto). On notifie le listener UNE
@@ -2994,21 +3288,21 @@ int RTPSession::ReadRTP()
 	//Get ssrc
 	DWORD ssrc = packet->GetSSRC();
 
-	//Lot 4 : le pair attend nos rapports d'arrivee sur SES paquets. L'extension
-	//n'est lue que si elle est negociee — sans cela, aucun appelant ne consomme
-	//les extensions entrantes et le paquet n'a pas a etre relu pour rien.
-	if (useTransportCC)
-	{
-		packet->ProcessExtensions(extMap);
-		if (packet->HasTransportSeqNum())
-			transportFeedback.OnPacketReceived(ssrc,packet->GetTransportSeqNum(),getTime());
-	}
+	//Toujours, et pas seulement sous transport-cc : le MID d'une jambe
+	//jointe arrive sans que transport-cc soit negocie.
+	packet->ProcessExtensions(extMap);
+	//Lot 4 : le pair attend nos rapports d'arrivee sur SES paquets. Ils sont
+	//transport-wide : la porteuse les tient pour toutes ses sections, et son
+	//réacteur est le fil qui nous appelle.
+	RTPSession* transport = carrier ? carrier : this;
+	if ((useTransportCC || transport->useTransportCC) && packet->HasTransportSeqNum())
+		transport->transportFeedback.OnPacketReceived(ssrc,packet->GetTransportSeqNum(),getTime());
 
         streamUse.IncUse();
 
         //if ( defaultSSRC == 0 && defaultStream != NULL) defaultStream->Cancel();
 
-        RTPStream* stream = getStream(ssrc);
+        std::shared_ptr<RTPStream> stream = getStream(ssrc);
 
         if (!isRTX)
         {
@@ -3082,6 +3376,8 @@ bool RTPSession::SetPollGroup(RtpSessionSet* group)
 
 void RTPSession::WakeUp()
 {
+	if (carrier)
+		return carrier->WakeUp();
 	Group()->Wake();
 }
 
@@ -3097,7 +3393,10 @@ void RTPSession::Stop()
 		//n'appellera plus aucun de nos callbacks. C'est ce qui rend sur le close()
 		//que End() fait juste apres — sinon le descripteur pourrait etre reattribue
 		//sous les pieds du poll d'un autre thread.
-		Group()->Remove(this);
+		if (carrier)
+			carrier->RemoveJoined(this);
+		else
+			Group()->Remove(this);
                 DeleteStreams();
 	}
 
@@ -3175,8 +3474,17 @@ int RTPSession::GetNextTimeoutMs(QWORD nowUs)
 
 	//Sans cette borne, le dernier rapport d'une rafale attendrait le paquet
 	//entrant suivant — et il n'y en a pas toujours un (fin de parole, freeze).
-	if (useTransportCC && transportFeedback.HasPending())
+	//Une porteuse tient aussi les rapports de ses sections.
+	if (transportFeedback.HasPending())
 		waitMs = Sooner(waitMs,TransportFeedbackPollMs);
+
+	//Les watchdogs des sessions jointes battent sur ce réacteur.
+	{
+		std::lock_guard<std::mutex> lock(bundleMutex);
+		for (size_t i=0; i<joinedSessions.size(); ++i)
+			if (joinedSessions[i]->rtpTimeoutArmed)
+				waitMs = Sooner(waitMs,PollTimeoutMs);
+	}
 
 	if (ApplicationListener* app = appListener.load())
 	{
@@ -3212,8 +3520,9 @@ void RTPSession::OnPollEvents(const pollfd* fds,int count,QWORD nowUs)
 void RTPSession::OnPeriodic(QWORD nowUs)
 {
 	//Rapporter au pair ce qui nous est arrivé, à la cadence du générateur. APRÈS
-	//les lectures : le rapport porte alors les paquets de ce tour.
-	if (useTransportCC)
+	//les lectures : le rapport porte alors les paquets de ce tour. Une porteuse
+	//rapporte aussi ceux de ses sections, même sans transport-cc sur l'audio.
+	if (useTransportCC || transportFeedback.HasPending())
 		SendTransportWideFeedback(nowUs);
 
 	//Cadence la rafale d'amorçage NAT (~20 ms) tant qu'il en reste. APRÈS les
@@ -3256,6 +3565,17 @@ void RTPSession::OnPeriodic(QWORD nowUs)
 		}
 	}
 
+	CheckRTPTimeout();
+
+	{
+		std::lock_guard<std::mutex> lock(bundleMutex);
+		for (size_t i=0; i<joinedSessions.size(); ++i)
+			joinedSessions[i]->CheckRTPTimeout();
+	}
+}
+
+void RTPSession::CheckRTPTimeout()
+{
 	//Watchdog d'inactivité (gap 5) : armé et aucun paquet depuis > rtpTimeout
 	//(mesuré depuis l'armement ou le dernier paquet) => émettre UNE seule fois
 	//onRTPTimeout (anti-rebond via rtpTimedOut).
@@ -3291,11 +3611,19 @@ RTPPacket* RTPSession::GetPacket(DWORD ssrc, DWORD timeoutMs)
 	//l'attente le voit déjà et ne dort pas.
 	const DWORD seen = streamGeneration.load();
 
-	streamUse.IncUse();
-	RTPStream* s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
-	const bool disabled = (s != NULL) && s->disabled;
-	RTPPacket* rtp = (s != NULL && !disabled) ? s->Wait(timeoutMs) : NULL;
-	streamUse.DecUse();
+	//Le verrou lecteur ne couvre que la recherche, JAMAIS l'attente : tenu
+	//pendant ConsumerPollMs, il faisait attendre d'autant le thread réacteur
+	//venu renommer ou créer un flux (SetDefaultStream, ChangeStream), et avec
+	//deux consommateurs sur la session le compteur ne retombait plus à zéro.
+	//La copie du shared_ptr garde le flux vivant si DeleteStreams passe
+	//pendant l'attente ; CancelStreams l'a déjà réveillé.
+	std::shared_ptr<RTPStream> s;
+	{
+		ScopedUse scopedStreams(streamUse);
+		s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+	}
+	const bool disabled = s && s->disabled;
+	RTPPacket* rtp = (s && !disabled) ? s->Wait(timeoutMs) : NULL;
 
 	if (rtp != NULL)
 		return rtp;
@@ -3335,7 +3663,7 @@ void RTPSession::CancelGetPacket()
 void RTPSession::CancelGetPacket(DWORD & ssrc)
 {
     streamUse.IncUse();
-    RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+    std::shared_ptr<RTPStream> s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     if (s) s->Cancel();
     streamUse.DecUse();
 
@@ -3347,12 +3675,36 @@ void RTPSession::CancelGetPacket(DWORD & ssrc)
 void RTPSession::ResetPacket(DWORD & ssrc, bool clear) 
 { 
     streamUse.IncUse();
-    RTPStream * s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
+    std::shared_ptr<RTPStream> s = (ssrc != 0) ? getStream(ssrc) : defaultStream;
     if (s) s->Reset(clear);
     streamUse.DecUse();
 }
 void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAddr)
 {
+	//BUNDLE : un paquet composé parle de plusieurs sections. Chaque session n'y
+	//prend que ce qui vise ses SSRC ; ce que personne ne réclame est perdu.
+	{
+		std::unique_lock<std::mutex> lock(bundleMutex);
+		if (!joinedSessions.empty())
+		{
+			HandleRTCP(rtcp,fromAddr,true);
+			for (size_t i=0; i<joinedSessions.size(); ++i)
+				joinedSessions[i]->HandleRTCP(rtcp,fromAddr,true);
+			lock.unlock();
+			delete(rtcp);
+			return;
+		}
+	}
+
+	HandleRTCP(rtcp,fromAddr,false);
+	delete(rtcp);
+}
+
+void RTPSession::HandleRTCP(RTCPCompoundPacket *rtcp, const char * fromAddr, bool bundled)
+{
+	//Ce qui parle du transport (REMB, transport-cc, FIR RFC 2032) revient à la
+	//porteuse, qui pilote la vidéo MAIN jointe. Appelé sous bundleMutex.
+	const bool transportLevel = !bundled || !carrier;
 	//Verrou lecteur : DeleteStreams peut courir en parallele (voir
 	//RTPSession::CreateSenderReport).
 	ScopedUse scopedStreams(streamUse);
@@ -3367,10 +3719,16 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 			case RTCPPacket::SenderReport:
 			{
 				RTCPSenderReport* sr = (RTCPSenderReport*)packet;
+				//En BUNDLE, seule la session qui reçoit cet émetteur retient son SR :
+				//c'est lui que nos rapports citeront. Les blocs de rapport, eux, se
+				//filtrent sur notre SSRC d'émission, plus bas.
+				if (!bundled || getStream(sr->GetSSRC()))
+				{
 				//Get Timestamp, the middle 32 bits out of 64 in the NTP timestamp (as explained in Section 4) received as part of the most recent RTCP sender report (SR) packet from source SSRC_n. If no SR has been received yet, the field is set to zero.
 				recSR = sr->GetTimestamp() >> 16;
 				//Uptade last received SR
 				getUpdDifTime(&lastReceivedSR);
+				}
 				//Check recievd report
 				for (int j=0;j<sr->GetCount();j++)
 				{
@@ -3431,10 +3789,15 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 			{
 				//Get feedback packet
 				RTCPRTPFeedback *fb = (RTCPRTPFeedback*) packet;
+				//NACK et TMMBN visent un de nos flux sortants ; le TMMBR se filtre
+				//champ par champ, plus bas.
+				const bool mine = !bundled || fb->GetMediaSSRC()==sendSSRC;
 				//Check feedback type
 				switch(fb->GetFeedbackType())
 				{
 					case RTCPRTPFeedback::NACK:
+						if (!mine)
+							break;
 						//Debug("-Nack received\n");
 						for (BYTE i=0;i<fb->GetFieldCount();i++)
 						{
@@ -3484,6 +3847,8 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 						}
 						break;
 					case RTCPRTPFeedback::TempMaxMediaStreamBitrateNotification:
+						if (!mine)
+							break;
 						Debug("-TempMaxMediaStreamBitrateNotification received from [%s] on %s stream\n", fromAddr, MediaFrame::TypeToString(media));
 						pendingTMBR = false;
 						if (requestFPU && defaultStream != NULL)
@@ -3504,7 +3869,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 						break;
 					case RTCPRTPFeedback::TransportWideFeedbackMessage:
 						//Rapport du pair sur NOS paquets sortants (lot 6.3)
-						ProcessTransportWideFeedback(fb);
+						if (!transportLevel)
+							break;
+						ProcessTransportWideFeedback(fb, bundled ? JoinedVideoMain() : NULL);
 						break;
 				}
 				break;
@@ -3513,6 +3880,9 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 			{
 				//Get feedback packet
 				RTCPPayloadFeedback *fb = (RTCPPayloadFeedback*) packet;
+				//Un média SSRC nul (REMB, FIR RFC 5104) parle du transport.
+				if (bundled && fb->GetMediaSSRC()!=sendSSRC && !(fb->GetMediaSSRC()==0 && transportLevel))
+					break;
 				//Check feedback type
 				switch(fb->GetFeedbackType())
 				{
@@ -3591,6 +3961,8 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 				break;
 			}
 			case RTCPPacket::FullIntraRequest:
+				if (!transportLevel)
+					break;
 				//This is message deprecated and just for H261, but just in case
 				//Check listener
 				if (auto l = LockListener())
@@ -3601,8 +3973,6 @@ void RTPSession::ProcessRTCPPacket(RTCPCompoundPacket *rtcp, const char * fromAd
 				break;
 		}
 	}
-	//Delete pacekt
-	delete(rtcp);
 }
 
 int RTPSession::SendFIR(DWORD & ssrc)
@@ -3647,7 +4017,7 @@ int RTPSession::SendReferencePictureSelectionIndication(DWORD ssrc, WORD picture
 	//RTPSession::CreateSenderReport).
 	ScopedUse scopedStreams(streamUse);
 
-	RTPStream* stream = getStream(ssrc);
+	std::shared_ptr<RTPStream> stream = getStream(ssrc);
 	if (stream == NULL)
 		stream = defaultStream;
 	if (stream == NULL)
@@ -3722,7 +4092,7 @@ int RTPSession::RequestFPU(DWORD & ssrc)
 	//RTPSession::CreateSenderReport).
 	ScopedUse scopedStreams(streamUse);
 	//Send all the packets inmediatelly to the decoderso I frame can be handled as soon as possoble
-	RTPStream* stream = getStream(ssrc);
+	std::shared_ptr<RTPStream> stream = getStream(ssrc);
 	if (stream == NULL  )
 		stream = defaultStream;
 	
@@ -4046,7 +4416,7 @@ void RTPSession::ReSendPacket(int seq)
                 {
                         Debug("-resent nacked packet ext %d seq %d rtpsess=%p.\n", ext, packet->GetSeqNum(), this);
                         //Send packet
-                        sendto(simSocket,data,len,0,sendAddr,sendAddr.Len());
+                        (carrier ? carrier : this)->SendRawRTP(data,len);
                 }
 	}
 	else
@@ -4109,10 +4479,10 @@ bool RTPSession::AddStream( bool receiving, DWORD ssrc )
     bool created = false;
     if ( streamUse.WaitUnusedAndLock(StreamLockTimeoutMs) )
     {
-	RTPStream* stream = getStream(ssrc);
+	std::shared_ptr<RTPStream> stream = getStream(ssrc);
 	if ( stream == NULL )
 	{
-		stream = new RTPStream(this,ssrc);
+		stream = std::make_shared<RTPStream>(this,ssrc);
 		
 		streams[ssrc]=stream;
 		created = true;
@@ -4165,14 +4535,13 @@ bool RTPSession::DeleteStreams()
     streamUse.WaitUnusedAndLock();
 
     for (Streams::iterator it = streams.begin(); it != streams.end(); it++)
-    {
         removed.push_back(it->first);
-        delete it->second;
-    }
 
+    //Un consommateur encore parqué dans GetPacket tient sa propre référence :
+    //le flux meurt avec elle, pas ici, et CancelStreams l'a déjà réveillé.
     streams.clear();
 
-    defaultStream = NULL;
+    defaultStream.reset();
     streamUse.Unlock();
 
     //L'estimateur se previent HORS du verrou streamUse, sinon les deux verrous
@@ -4218,7 +4587,7 @@ bool RTPSession::SetDefaultStream(bool receiving, DWORD ssrc )
 /**
  *  get the stream associated to the SSRC .
  */
-RTPSession::RTPStream* RTPSession::getStream(DWORD ssrc)
+std::shared_ptr<RTPSession::RTPStream> RTPSession::getStream(DWORD ssrc)
 {
 	//Find stream
 	Streams::iterator it = streams.find(ssrc);
@@ -4226,7 +4595,7 @@ RTPSession::RTPStream* RTPSession::getStream(DWORD ssrc)
 	//If not found
 	if (it == streams.end())
 		//Error
-		return NULL;
+		return nullptr;
 
 	//Get the stream
 	return it->second;
@@ -4243,9 +4612,9 @@ bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 	//
 	//BORNEE, parce qu'elle s'execute sur le THREAD REACTEUR : une attente sans
 	//borne y rend sourdes TOUTES les jambes du groupe, et le pair ne le voit
-	//que comme une image noire (docs/reference/threads-rtp.md). La borne couvre
-	//un cycle de lecture du consommateur (ConsumerPollMs), qui tient le verrou
-	//lecteur pendant son attente ; meme valeur que AddStream.
+	//que comme une image noire (docs/reference/threads-rtp.md). Aucun lecteur
+	//ne tient le verrou plus qu'une recherche dans la map (GetPacket attend
+	//hors verrou) : la borne est un filet ; meme valeur que AddStream.
 	if (!streamUse.WaitUnusedAndLock(StreamLockTimeoutMs))
 	{
 		//Le renommage n'a pas eu lieu : le paquet courant sera jete faute de
@@ -4260,7 +4629,7 @@ bool RTPSession::ChangeStream( DWORD oldssrc, DWORD newssrc )
 		return false;
 	}
 
-	RTPStream* stream = getStream(oldssrc);
+	std::shared_ptr<RTPStream> stream = getStream(oldssrc);
 	if (stream != NULL)
 	{
 		streams.erase(oldssrc);
@@ -4693,7 +5062,7 @@ bool RTPSession::GetStatistics( DWORD ssrc, MediaStatistics & stats)
 	else
 		stats.sendingCodec = -1;
 		
-    RTPStream * s =(ssrc > 0) ? getStream(ssrc) : NULL;
+    std::shared_ptr<RTPStream> s = (ssrc > 0) ? getStream(ssrc) : nullptr;
     if (s != NULL)
     {
         stats.numRecvPackets = s->GetNumRecvPackets();
@@ -4723,7 +5092,7 @@ bool RTPSession::GetStatistics( DWORD ssrc, MediaStatistics & stats)
 
 }
 
-void RTPSession::ProcessTransportWideFeedback(RTCPRTPFeedback* fb)
+void RTPSession::ProcessTransportWideFeedback(RTCPRTPFeedback* fb, RTPSession* notify)
 {
 	bool changed = false;
 	DWORD estimate = 0;
@@ -4742,10 +5111,12 @@ void RTPSession::ProcessTransportWideFeedback(RTCPRTPFeedback* fb)
 	//cadence se cale sur ce qu'il porte (temoin, 5 % du debit d'emission).
 	if (estimate)
 		transportFeedback.SetSendBitrate(estimate);
-	//Notification HORS du verrou : le listener peut rappeler la session
+	//Notification HORS du verrou : le listener peut rappeler la session. En
+	//BUNDLE, l'estimation du transport pilote la vidéo MAIN jointe.
+	RTPSession* target = notify ? notify : this;
 	if (changed && estimate)
-		if (auto l = LockListener())
-			l->onSenderEstimatedBitrate(this, estimate);
+		if (auto l = target->LockListener())
+			l->onSenderEstimatedBitrate(target, estimate);
 }
 
 void RTPSession::OnReportedLoss(BYTE fractionLost)

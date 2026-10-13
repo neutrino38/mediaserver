@@ -3,3 +3,4 @@
 runtests
 runtests-*
 *.o
+test.log

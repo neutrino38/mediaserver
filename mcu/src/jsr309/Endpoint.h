@@ -11,6 +11,7 @@
 #include <atomic>
 #include <memory>
 #include <map>
+#include <mutex>
 #include <string>
 #include "Joinable.h"
 #include "websockets.h"
@@ -148,12 +149,21 @@ public:
 
         typedef std::map<std::string,MediaStatistics> Statistics;
 
-	Endpoint(std::wstring name,bool audioSupported,bool videoSupported,bool textSupport);
+	//bundle : toutes les jambes sur le transport de la jambe audio (BUNDLE, RFC
+	//8843), qui existe alors même sans audio. Se décide à la création.
+	Endpoint(std::wstring name,bool audioSupported,bool videoSupported,bool textSupport,bool bundle = false);
 	~Endpoint();
 	
 	//Methods
 	int Init();
 	int End();
+
+	//Flux vidéo de rôle >= 2 (docs/conception/UNIFIED-PLAN/SPEC.md §4.6), sur
+	//un endpoint déjà initialisé. Rend son rôle, 0 en cas d'échec. Un rôle
+	//supprimé n'est jamais réattribué.
+	int CreateVideoStream();
+	int DeleteVideoStream(MediaFrame::MediaRole role);
+	bool IsBundle() const { return bundle; }
 	
 	//Endpoint  functionality
 	int StartSending(MediaFrame::Type media,char *sendIp,int sendPort,RTPMap& rtpMap, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -188,7 +198,8 @@ public:
 	std::wstring& GetName() { return name; }
 	
 	
-	char* GetMediaCandidates( MediaFrame::MediaProtocol protocol ,MediaFrame::Type media = MediaFrame::Audio ) ;
+	char* GetMediaCandidates( MediaFrame::MediaProtocol protocol ,MediaFrame::Type media = MediaFrame::Audio,
+				  MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN ) ;
 	
 	// Use other media protocol than RTP
 	
@@ -238,32 +249,29 @@ public:
 	}
 
 private:
-	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media)
+	//Un port par (média, rôle). Seule la vidéo a des rôles autres que 0. Une
+	//copie prise sous portsMutex : un port peut être remplacé (WebSocket, data
+	//channel) ou supprimé depuis un autre fil.
+	typedef std::pair<int,int> PortKey;
+	typedef std::map<PortKey,std::shared_ptr<Port>> Ports;
+
+	std::shared_ptr<Port> GetPort(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)
 	{
-		if ( media >= MediaFrame::Audio && media <= MediaFrame::Text )
-		{
-			return ports[media];
-		}
-		else
-		{
-			return NULL;
-		}
+		std::lock_guard<std::mutex> lock(portsMutex);
+		Ports::iterator it = ports.find(PortKey(media,role));
+		return it != ports.end() ? it->second : std::shared_ptr<Port>();
 	}
-	
-	inline std::shared_ptr<Port> GetPort(MediaFrame::Type media, MediaFrame::MediaRole role)
+
+	void SetPort(MediaFrame::Type media, MediaFrame::MediaRole role, std::shared_ptr<Port> port)
 	{
-		if ( role == MediaFrame::VIDEO_MAIN )
-		{
-			return GetPort(media);
-		}
-		else if ( media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
-		{
-			return ports2[MediaFrame::Video];
-		}
-		else
-		{
-			return NULL;
-		}
+		std::lock_guard<std::mutex> lock(portsMutex);
+		ports[PortKey(media,role)] = std::move(port);
+	}
+
+	Ports GetPorts()
+	{
+		std::lock_guard<std::mutex> lock(portsMutex);
+		return ports;
 	}
 
 	RTPEndpoint* GetRTPEndpoint(MediaFrame::Type media, MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -273,6 +281,9 @@ private:
 	//reacteur s'il ne tournait pas. Sans effet sur un port qui n'est pas une
 	//session RTP (WSEndpoint).
 	void JoinPollGroup(const std::shared_ptr<Port>& port, MediaFrame::Type media);
+	//Avant l'Init d'un port : le réacteur de sa classe de média, ou la porteuse
+	//audio en BUNDLE.
+	void PreparePort(const std::shared_ptr<Port>& port, MediaFrame::Type media);
 
 	std::wstring name;
 
@@ -292,11 +303,18 @@ private:
 	//End(). Deux et non un (§3.6) : la video coute des dizaines de ms par image,
 	//l'audio veut la main toutes les 20 ms.
 	RtpSessionSet mediaGroup;	//audio + texte
-	RtpSessionSet videoGroup;	//video MAIN + SLIDES
+	RtpSessionSet videoGroup;	//tous les flux vidéo
+	//L'estimateur de chaque flux de rôle >= 2, même contrat d'ordre. Jamais
+	//retiré avant la fin de l'Endpoint : un port supprimé peut survivre dans un
+	//Joinable qui le tient encore, et sa session se retire de l'estimateur en
+	//mourant.
+	std::map<int,std::unique_ptr<RemoteRateEstimator>> extraEstimators;
 
 	//RTP sessions
-	std::shared_ptr<Port> ports[4];
-	std::shared_ptr<Port> ports2[4];
+	std::mutex portsMutex;
+	Ports ports;
+	int nextVideoRole;
+	bool bundle;
 
         Statistics stats;
 };

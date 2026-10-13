@@ -79,7 +79,7 @@ public:
 
 	/** Conference events*/
 	virtual void onParticipantRequestFPU(MultiConf *conf,int partId);
-	virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status);
+	virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status,int sourceId);
 	//P7/S1-S2
 	virtual void onParticipantMediaTimeout(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role);
 	virtual void onParticipantMediaConnected(MultiConf *conf,int partId,MediaFrame::Type media,MediaFrame::MediaRole role);
@@ -118,7 +118,7 @@ private:
 class PlayerRequestDocSharingEvent: public XmlEvent
 {
 public:
-	PlayerRequestDocSharingEvent(int confId,std::wstring &tag, int partId, std::wstring &status)
+	PlayerRequestDocSharingEvent(int confId,std::wstring &tag, int partId, std::wstring &status,int sourceId)
 	{
 		//ACTIVE,WAITING_ACCEPT,NONE,FAILED
 		//Get status
@@ -140,17 +140,19 @@ public:
 		//Store other values
 		this->confId = confId;
 		this->partId = partId;
+		this->sourceId = sourceId;
 	}
 
 	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env)
 	{
-		return xmlrpc_build_value(env,"(iisis)",(int)MCU::ParticipantRequestDocSharing,confId,tag,partId,status);
+		return xmlrpc_build_value(env,"(iisisi)",(int)MCU::ParticipantRequestDocSharing,confId,tag,partId,status,sourceId);
 	}
 private:
 	int confId;
 	BYTE tag[1024];
 	BYTE status[64];
 	int partId;
+	int sourceId;
 };
 
 class PlayerRequestFPUEvent: public XmlEvent

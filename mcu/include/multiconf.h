@@ -34,7 +34,6 @@ class MultiConf :
 {
 public:
 	static const int AppMixerId = 1;
-	static const int SharedDocMixerId = 2;
 	static const int RecorderId = 10;
 	
 public:
@@ -66,7 +65,8 @@ public:
 		//Virtual desctructor
 		virtual ~Listener(){};
 		virtual void onParticipantRequestFPU(MultiConf *conf,int partId) = 0;
-		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status) = 0;
+		//sourceId : la source de SLIDES du participant, 0 s'il n'en a pas.
+		virtual void onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status,int sourceId) = 0;
 
 		//P7/S1-S2 : le flux RTP d'un media d'un participant s'est tu, ou son
 		//premier paquet vient d'arriver. Non pures (cf. Participant::Listener).
@@ -89,7 +89,7 @@ public:
 	int DeleteMosaic(int mosaicId);
 	int CreateSidebar();
 	int DeleteSidebar(int sidebarId);
-	int CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type);
+	int CreateParticipant(int mosaicId,int sidebarId,std::wstring name,Participant::Type type,bool bundle = false);
 	int StartRecordingParticipant(int partId,const char* filename);
 	int StopRecordingParticipant(int partId);
 	int SendFPU(int partId);
@@ -100,6 +100,14 @@ public:
 	int SetParticipantSidebar(int partId,int sidebarId);
 	int SetParticipantDisplayName(int mosaicId, int partId, const char *name, int scriptCode);
 	int DeleteParticipant(int partId);
+
+	//Flux vidéo de rôle >= 2 d'un participant RTP, chacun source du mixeur
+	//sous son propre sourceId (docs/conception/UNIFIED-PLAN/SPEC.md §4.2).
+	int CreateVideoStream(int partId,int& role,int& sourceId);
+	int DeleteVideoStream(int partId,int role);
+	int SetVideoStreamMosaic(int partId,int role,int mosaicId);
+	//0 si le flux n'existe pas. Rôle 0 : le partId.
+	int GetVideoStreamSource(int partId,int role);
 
 	int CreatePlayer(int privateId,std::wstring name);
 	int StartPlaying(int playerId,const char* filename,bool loop);
@@ -140,7 +148,7 @@ public:
 	int SetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key, MediaFrame::MediaRole role,int keyRank=0);
 	int SetLocalSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd, MediaFrame::MediaRole role);
 	int SetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd, MediaFrame::MediaRole role);
-	int SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint);	
+	int SetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetRTPProperties(int id,MediaFrame::Type media,const Properties& properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetParticipantBackground(int id, const char * filename);
 	int SetParticipantOverlay(int mosaicId, int id, const char * filename);
@@ -150,6 +158,11 @@ public:
 	int RefuseDocSharingRequest(int confId,int partId);
 	int StopDocSharing(int confId,int partId);
 	int SetDocSharingMosaic(int mosaicId, int partId=0);
+	//La parole BFCP (SharedDocMixer) : la source de SLIDES du présentateur
+	//entre dans la mosaïque partagée, ou en sort, et SLIDES émet ou s'arrête
+	//vers tous les participants BFCP.
+	void StartPresentation(int partId);
+	void StopPresentation(int partId);
 	
 	int SetVideoCodec(int partId,int codec,int mode,int fps,int bitrate,int intraPeriod,const Properties &properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetAudioCodec(int partId,int codec,const Properties& properties);
@@ -237,6 +250,12 @@ private:
 	RTPParticipantPtr GetRTPParticipant(int partId);
 
 	int DestroyParticipant(int partId,ParticipantPtr part);
+	void DestroyVideoSource(int sourceId);
+	bool RegisterVideoSource(int partId,int role,int sourceId,const RTPParticipantPtr& part);
+	int CreateSlidesSource(int partId,const RTPParticipantPtr& part);
+	void ApplyDocSharing(int partId,const RTPParticipantPtr& part,int mosaicId,bool presenting);
+	void ApplyDocSharingToAll(int mosaicId,bool presenting);
+	int GetPresenter();
 
 
 private:
@@ -283,6 +302,11 @@ private:
 	
 	//Lists
 	Participants		participants;
+	//partId → (rôle >= 2 → sourceId). Qui retire une entrée détruit sa source.
+	typedef std::map<int,std::map<int,int>> VideoSources;
+	VideoSources		videoSources;
+	int			presenterId;
+	std::mutex		videoSourcesMutex;
 	Players			players;
 
 	int			watcherId;

@@ -105,6 +105,7 @@ public:
 	int  Init();
 	void SetRemoteSetup(Setup setup);
 	void SetRemoteFingerprint(Hash hash, const char *fingerprint);
+	bool IsSameRemote(Setup remote, Hash hash, const char *fingerprint) const;
 	void End();
 	void Reset();
 

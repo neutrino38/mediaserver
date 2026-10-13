@@ -80,8 +80,11 @@ public:
             SSRCAudioLevel = 1,
             TimeOffset = 2,
             AbsoluteSendTime = 3,
-            TransportWideCC = 4
+            TransportWideCC = 4,
+            MID = 5
         };
+        //RFC 8285 §4.2 : un element one-byte porte 16 octets au plus
+        static const DWORD MaxMidLength = 16;
     public:
         HeaderExtension()
         {
@@ -94,6 +97,8 @@ public:
             hasTimeOffset = 0;
             hasAudioLevel = 0;
             hasTransportSeqNum = 0;
+            hasMid = 0;
+            mid[0] = 0;
         }
     protected:
         QWORD absSentTime;
@@ -105,6 +110,8 @@ public:
         bool hasTimeOffset;
         bool hasAudioLevel;
         bool hasTransportSeqNum;
+        bool hasMid;
+        char mid[MaxMidLength + 1];
     };
 
     RTPPacket( MediaFrame::Type media, DWORD codec )
@@ -275,6 +282,8 @@ public:
     bool  HasTransportSeqNum() const { return extension.hasTransportSeqNum; }
     WORD  GetTransportSeqNum() const { return extension.transportSeqNum; }
     bool  HasTimeOffeset() const { return extension.hasTimeOffset; }
+    bool  HasMid() const { return extension.hasMid; }
+    const char* GetMid() const { return extension.mid; }
 
     bool SetPayload( BYTE *data, DWORD size )
     {
@@ -369,6 +378,10 @@ public:
     static BYTE GetType( const BYTE *data ) { return ((rtp_hdr_t *)data)->pt; }
     static DWORD GetSSRC( const BYTE *data ) { return ntohl( ((rtp_hdr_t *)data)->ssrc ); }
     static bool  IsRTP( const BYTE *data, DWORD size ) { return size >= sizeof( rtp_hdr_t ) && ((rtp_hdr_t *)data)->version == 2; }
+    // La valeur de l'extension MID d'un paquet brut, sans construire de
+    // RTPPacket : la porteuse d'un BUNDLE route avant de savoir à qui il est.
+    // Même règle que ProcessExtensions : profil one-byte seulement.
+    static bool  ReadMid( const BYTE *data, DWORD size, BYTE id, std::string &mid );
 private:
     static const DWORD SIZE = 1700;
 private:

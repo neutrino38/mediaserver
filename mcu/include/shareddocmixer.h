@@ -1,8 +1,9 @@
 /*
  * File:   shareddocmixer.h
  *
- * Le partage de document d'une conférence : la parole BFCP d'un côté, le flux
- * vidéo SLIDES de l'autre.
+ * Le partage de document d'une conférence : la parole BFCP. Les pixels suivent
+ * le chemin de n'importe quel flux vidéo ; la parole ne décide que de la
+ * source présentée (docs/conception/UNIFIED-PLAN/SPEC.md §4.3).
  *
  * BFCP vient de la pile interne (`mcu/src/bfcp`). Conception et arbitrages :
  * docs/conception/BFCP-INTERNE/SPEC.md, état : docs/reference/bfcp.md.
@@ -29,7 +30,6 @@
 class MultiConf;
 
 class SharedDocMixer  :
- public VideoOutput,
  public BFCPFloorControlServer::Listener
 {
 public:
@@ -39,7 +39,7 @@ public:
 public:
 	SharedDocMixer();
 	~SharedDocMixer();
-	int Init(VideoOutput *output, const PictPtr& logo,MultiConf *conf);
+	int Init(MultiConf *conf);
 	int ShareSecondaryStream(ParticipantPtr part);
 
 	int initDocSharing( ParticipantPtr part,char *sendIp,int sendPort);
@@ -48,8 +48,6 @@ public:
 
 	int StopSharing();
 	int StopSharing(ParticipantPtr part);
-	virtual int NextFrame(PictPtr pic);
-	virtual int SetVideoSize(int width,int height) ;
 
 	int addParticipant(int confId, ParticipantPtr part,Participant::DocSharingMode docSharingMode, MediaFrame::MediaProtocol proto = MediaFrame::TCP);
 	int removeParticipant(ParticipantPtr part);
@@ -78,9 +76,7 @@ private:
 	void TearDownSharing();
 
 private:
-	PictPtr			logo;
 	std::weak_ptr<Participant> part;
-	VideoOutput*	output;
 	MultiConf* 		conf;
 	int				confId;
 	int				sharedMosaic;

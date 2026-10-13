@@ -648,6 +648,39 @@ TEST(RtpIceAuthentication, AnswersAnIncomingCheckWithMessageIntegrity)
 		<< "une Binding Response sans MESSAGE-INTEGRITY est jetee par le pair";
 }
 
+// Les traces du mcu vont dans Logger::Output(), pas dans stdout : on les
+// détourne le temps du test pour les lire.
+class McuLogCapture
+{
+public:
+	McuLogCapture() : prev(Logger::Output()), tmp(tmpfile())
+	{
+		Logger::SetOutput(tmp);
+	}
+	~McuLogCapture()
+	{
+		Logger::SetOutput(prev);
+		if (tmp)
+			fclose(tmp);
+	}
+	std::string Traces()
+	{
+		std::string out;
+		if (!tmp)
+			return out;
+		fflush(tmp);
+		rewind(tmp);
+		char buf[4096];
+		size_t n;
+		while ((n = fread(buf, 1, sizeof(buf), tmp)) > 0)
+			out.append(buf, n);
+		return out;
+	}
+private:
+	FILE* prev;
+	FILE* tmp;
+};
+
 // Le serveur ne peut pas fabriquer le mot de passe manquant, mais il sait qu'il
 // manque : il doit NOMMER l'appel oublié. C'est cette trace qui manquait.
 TEST(RtpIceAuthentication, ShoutsWhenTheControllerForgotOurLocalIcePassword)
@@ -658,11 +691,10 @@ TEST(RtpIceAuthentication, ShoutsWhenTheControllerForgotOurLocalIcePassword)
 
 	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
 
-	::testing::internal::CaptureStdout();
+	McuLogCapture capture;
 	ASSERT_TRUE(probe.SendStunBindingTo(sess.session.GetLocalPort()));
 	probe.Drain(300);            // laisse le thread Run traiter le check
-	fflush(stdout);              // la trace est ecrite par un AUTRE thread
-	const std::string traces = ::testing::internal::GetCapturedStdout();
+	const std::string traces = capture.Traces();
 
 	EXPECT_NE(std::string::npos, traces.find("SetLocalSTUNCredentials"))
 		<< "le serveur doit nommer l'appel manquant, pas se taire. Trace :\n" << traces;
@@ -677,14 +709,13 @@ TEST(RtpIceAuthentication, SaysItOnceAndNotOncePerCheck)
 
 	sess.session.SetRemoteSTUNCredentials("remoteufrag", "remotepwd");
 
-	::testing::internal::CaptureStdout();
+	McuLogCapture capture;
 	for (int i = 0; i < 5; i++)
 	{
 		ASSERT_TRUE(probe.SendStunBindingTo(sess.session.GetLocalPort()));
 		probe.Drain(100);
 	}
-	fflush(stdout);
-	const std::string traces = ::testing::internal::GetCapturedStdout();
+	const std::string traces = capture.Traces();
 
 	int occurrences = 0;
 	for (size_t at = traces.find("SetLocalSTUNCredentials");

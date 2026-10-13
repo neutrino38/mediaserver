@@ -26,6 +26,16 @@ public:
 		return getInstance().debug = debug;
 	}
 
+	static FILE* Output()
+	{
+		return getInstance().out;
+	}
+
+	static void SetOutput(FILE* out)
+	{
+		getInstance().out = out ? out : stdout;
+	}
+
 	inline int Log(const char *msg, ...)
 	{
 		return 1;
@@ -37,10 +47,12 @@ public:
 	}
 protected:
 	bool debug;
+	FILE* out;
 private:
     Logger()
 	{
 		debug = false;
+		out = stdout;
 	}
     // Dont forget to declare these two. You want to make sure they
     // are unaccessable otherwise you may accidently get copies of
@@ -70,11 +82,11 @@ inline int Log(const char *msg, ...)
 	char buf[80];
 	va_list ap;
 
-	printf("[0x%lx][%s][LOG]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
+	fprintf(Logger::Output(), "[0x%lx][%s][LOG]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
 	va_start(ap, msg);
-	vprintf(msg, ap);
+	vfprintf(Logger::Output(), msg, ap);
 	va_end(ap);
-	fflush(stdout);
+	fflush(Logger::Output());
 	return 1;
 }
 
@@ -84,11 +96,11 @@ inline int Log2(const char* prefix, const char *msg, ...)
 	va_list ap;
 	
 	gettimeofday(&tv,NULL);
-	printf("[0x%lx][%.10ld.%.3ld][LOG]%s ", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000, prefix);
+	fprintf(Logger::Output(), "[0x%lx][%.10ld.%.3ld][LOG]%s ", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000, prefix);
 	va_start(ap, msg);
-	vprintf(msg, ap);
+	vfprintf(Logger::Output(), msg, ap);
 	va_end(ap);
-	fflush(stdout);
+	fflush(Logger::Output());
 	return 1;
 }
 
@@ -100,9 +112,9 @@ inline void Debug(const char *msg, ...)
 		va_list ap;
 
 		gettimeofday( &tv, NULL );
-		printf( "[0x%lx][%.10ld.%.3ld][DBG]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000 );
+		fprintf(Logger::Output(), "[0x%lx][%.10ld.%.3ld][DBG]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000 );
 		va_start( ap, msg );
-		vprintf( msg, ap );
+		vfprintf(Logger::Output(), msg, ap);
 		va_end( ap );
 	}
 	
@@ -114,9 +126,9 @@ inline int Error(const char *msg, ...)
 	va_list ap;
 
 	gettimeofday(&tv,NULL);
-	printf("[0x%lx][%.10ld.%.3ld][ERR]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+	fprintf(Logger::Output(), "[0x%lx][%.10ld.%.3ld][ERR]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
 	va_start(ap, msg);
-	vprintf(msg, ap);
+	vfprintf(Logger::Output(), msg, ap);
 	va_end(ap);
 	return 0;
 }

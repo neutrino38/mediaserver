@@ -330,11 +330,25 @@ xmlrpc_value* CreateParticipant(xmlrpc_env *env, xmlrpc_value *param_array, void
 	int sidebarId;
 	char *name;
 	int type;
-	xmlrpc_parse_value(env, param_array, "(isiii)", &confId,&name,&type,&mosaicId,&sidebarId);
+	int bundle = 0;
+	xmlrpc_parse_value(env, param_array, "(isiiii)", &confId,&name,&type,&mosaicId,&sidebarId,&bundle);
+
+	if (env->fault_occurred)
+	{
+	    // Try without bundle argument
+	    xmlrpc_env_clean(env);
+	    xmlrpc_env_init(env);
+	    bundle = 0;
+	    xmlrpc_parse_value(env, param_array, "(isiii)", &confId,&name,&type,&mosaicId,&sidebarId);
+	}
 
 	//Comprobamos si ha habido error
 	if(env->fault_occurred)
 		return xmlerror(env,"Fault occurred");
+
+	//Le transport partagé n'existe que pour un participant RTP.
+	if (bundle && type != Participant::RTP)
+		return xmlerror(env,"bundle needs an RTP participant");
 	 
 	//Obtenemos la referencia
 	if(!mcu->GetConferenceRef(confId,conf))
@@ -344,7 +358,7 @@ xmlrpc_value* CreateParticipant(xmlrpc_env *env, xmlrpc_value *param_array, void
 	parser.Parse((BYTE*)name,strlen(name));
 
 	//La borramos
-	int partId = conf->CreateParticipant(mosaicId,sidebarId,parser.GetWString(),(Participant::Type)type);
+	int partId = conf->CreateParticipant(mosaicId,sidebarId,parser.GetWString(),(Participant::Type)type,bundle != 0);
 
 	//Salimos
 	if(!partId)
@@ -873,6 +887,97 @@ xmlrpc_value* SetParticipantMosaic(xmlrpc_env *env, xmlrpc_value *param_array, v
 
 	//Devolvemos el resultado
 	return xmlok(env);
+}
+
+xmlrpc_value* CreateVideoStream(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	xmlrpc_parse_value(env, param_array, "(ii)", &confId,&partId);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	int role = 0;
+	int sourceId = 0;
+	if (!conf->CreateVideoStream(partId,role,sourceId))
+		return xmlerror(env,"Error creating video stream");
+
+	return xmlok(env,xmlrpc_build_value(env,"(ii)",role,sourceId));
+}
+
+xmlrpc_value* DeleteVideoStream(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	int role;
+	xmlrpc_parse_value(env, param_array, "(iii)", &confId,&partId,&role);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	if (!conf->DeleteVideoStream(partId,role))
+		return xmlerror(env,"Error");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SetVideoStreamMosaic(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	int role;
+	int mosaicId;
+	xmlrpc_parse_value(env, param_array, "(iiii)", &confId,&partId,&role,&mosaicId);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	if (!conf->SetVideoStreamMosaic(partId,role,mosaicId))
+		return xmlerror(env,"Error");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* GetVideoStreamSource(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	MCU *mcu = (MCU *)user_data;
+	std::shared_ptr<MultiConf> conf;
+
+	int confId;
+	int partId;
+	int role;
+	xmlrpc_parse_value(env, param_array, "(iii)", &confId,&partId,&role);
+
+	if(env->fault_occurred)
+		return xmlerror(env,"Fault occurred");
+
+	if(!mcu->GetConferenceRef(confId,conf))
+		return xmlerror(env,"Conference does not exist");
+
+	int sourceId = conf->GetVideoStreamSource(partId,role);
+	if (!sourceId)
+		return xmlerror(env,"Video stream does not exist");
+
+	return xmlok(env,xmlrpc_build_value(env,"(i)",sourceId));
 }
 
 xmlrpc_value* SetParticipantSidebar(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
@@ -1871,7 +1976,7 @@ xmlrpc_value* SetRemoteCryptoDTLS(xmlrpc_env *env, xmlrpc_value *param_array, vo
 		return xmlerror(env,"Conference does not exist");
 
 	//La borramos
-	int res = conf->SetRemoteCryptoDTLS(partId,(MediaFrame::Type)media,setup,hash,fingerprint);
+	int res = conf->SetRemoteCryptoDTLS(partId,(MediaFrame::Type)media,setup,hash,fingerprint,(MediaFrame::MediaRole)role);
 
 	//Salimos
 	if(!res)
@@ -2706,6 +2811,10 @@ XmlHandlerCmd mcuCmdList[] =
 	{"AddParticipantInputToken",AddParticipantInputToken},
 	{"AddParticipantOutputToken",AddParticipantOutputToken},
 	{"SetParticipantMosaic",SetParticipantMosaic},
+	{"CreateVideoStream",CreateVideoStream},
+	{"DeleteVideoStream",DeleteVideoStream},
+	{"SetVideoStreamMosaic",SetVideoStreamMosaic},
+	{"GetVideoStreamSource",GetVideoStreamSource},
 	{"SetParticipantSidebar",SetParticipantSidebar},
 	{"SetParticipantBackground",SetParticipantOrMosaicImage},
 	{"SetParticipantOrMosaicImage",SetParticipantOrMosaicImage},

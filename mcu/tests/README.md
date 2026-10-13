@@ -24,6 +24,10 @@ Filtrer une suite ou un test précis :
 ./tests/runtests --gtest_filter='WebSocketEcho.HandshakeAndTextEcho'
 ```
 
+Les `Log()`/`Error()`/`Debug()` du mcu ne sortent pas dans le terminal : ils
+vont dans `tests/test.log`, écrasé à chaque lancement. `GTEST_MCU_LOG` change
+le chemin ; `GTEST_MCU_LOG=-` les remet sur stdout, mêlés au rapport gtest.
+
 Tracer les `Debug()` du mcu pendant les tests (silencieux par défaut) :
 
 ```sh
@@ -55,6 +59,7 @@ GTEST_MCU_DEBUG=1 ./tests/runtests
 | `test_mosaic_composition.cpp` | `MosaicGeometry`, `MosaicComposition` | — (géométrie des 12 dispositions + composition avfilter vérifiée pixel à pixel) |
 | `test_codec_type.cpp` | `CodecType` | — (le membre `type` d'un codec doit être lisible via un pointeur de base) |
 | `test_rtp_latching.cpp` | `RtpLatching` | — (latching RTP symétrique : où le média atterrit réellement, via un socket sonde en loopback) |
+| `test_rtp_stream_lock.cpp` | `RTPStreamLock` | — (le réacteur n'attend jamais un consommateur parqué : un renommage de SSRC aboutit en quelques ms, avec un puis deux consommateurs sur la même session) |
 | `test_rtp_renegotiation.cpp` | `RtpRenegotiation` | — (le trou de l'offre/réponse : un payload type renuméroté par un re-INVITE est rattrapé, un codec retiré ne l'est pas) |
 | `test_rtcp_hardening.cpp` | `Rtcp*` (11 suites) | — (suite ADVERSE RTCP : longueurs et compteurs menteurs, page de garde) |
 | `test_rtp_header_hardening.cpp` | `RtpHeader` | — (suite ADVERSE de l'en-tête RTP : CSRC et extension qui ne tiennent pas dans le datagramme) |

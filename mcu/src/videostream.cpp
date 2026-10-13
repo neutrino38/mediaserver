@@ -268,7 +268,7 @@ int VideoStream::StartSending()
 {
 	RTPMap dummy;
 
-	return StartSending(nullptr, 0, dummy);
+	return StartSending(nullptr, rtp.GetRemotePort(), dummy);
 }
 
 /***************************************
@@ -830,6 +830,16 @@ int VideoStream::RecVideo()
 
 		//Increase total lost count
 		lostCount += lost;
+
+		//Un flux qui démarre sans image clé décodable n'en reçoit qu'à la
+		//demande : un partage d'écran Chrome n'en émet pas d'autre.
+		if (lastSeq==RTPPacket::MaxExtSeqNum)
+		{
+			Log("-Requesting FPU on stream start ssrc= %08x\n",recSSRC);
+			session->RequestFPU(recSSRC);
+			getUpdDifTime(&lastFPURequest);
+			waitIntra = true;
+		}
 
 		//Update last sequence number
 		lastSeq = seq;

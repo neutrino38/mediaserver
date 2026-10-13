@@ -8,8 +8,8 @@
 #ifndef VERSION_H
 #define	VERSION_H
 
-#define MCUVERSION	"1.16.0"
-#define MCUDATE		"$Date: 2026-09-16 22:00:00 +0200$"
+#define MCUVERSION	"1.17.0"
+#define MCUDATE		"$Date: 2026-10-02 11:59:45 +0200$"
 
 #endif	/* VERSION_H */
 

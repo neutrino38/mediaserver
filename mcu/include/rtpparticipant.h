@@ -9,6 +9,7 @@
 #define	RTPPARTICIPANT_H
 #include <memory>
 #include <map>
+#include <mutex>
 #include <string>
 #include "config.h"
 #include "participant.h"
@@ -19,12 +20,13 @@
 #include "rtpsessionset.h"
 #include "eventstreaminghandler.h"
 
-#define MAX_VIDEO_STREAM 2
-
 class RTPParticipant : public Participant, public VideoStream::Listener, public AudioStream::Listener, public std::enable_shared_from_this<RTPParticipant>
 {
 public:
-	RTPParticipant(DWORD partId,const std::wstring &uuid);
+	//bundle : toutes les jambes sur le transport de la session audio (BUNDLE,
+	//RFC 8843). Se décide à la création : les sockets s'ouvrent à Init.
+	RTPParticipant(DWORD partId,const std::wstring &uuid,bool bundle = false);
+	bool IsBundle() const { return bundle; }
 	virtual ~RTPParticipant();
 
 	virtual int SetVideoCodec(VideoCodec::Type codec,int mode,int fps,int bitrate,int intraPeriod,const Properties& properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
@@ -47,11 +49,11 @@ public:
 	
 	virtual MediaStatistics GetStatistics(MediaFrame::Type type,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 
-	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{  video[role]->SetVideoInput(input); return 1;	}
-	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) {  video[role]->SetVideoOutput(output); return 1;	}
-	virtual int SetVideoInput(std::shared_ptr<VideoInput> input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN)	{  video[role]->SetVideoInput(std::move(input)); return 1;	}
-	virtual int SetVideoOutput(std::shared_ptr<VideoOutput> output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) {  video[role]->SetVideoOutput(std::move(output)); return 1;	}
-	virtual VideoOutput* GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return video[role]->GetVideoOutput();	}
+	virtual int SetVideoInput(VideoInput* input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	virtual int SetVideoOutput(VideoOutput* output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	virtual int SetVideoInput(std::shared_ptr<VideoInput> input,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	virtual int SetVideoOutput(std::shared_ptr<VideoOutput> output,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	virtual VideoOutput* GetVideoOutput(MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	virtual int SetAudioInput(std::shared_ptr<AudioInput> input)	{ audioInput	= std::move(input);	return 0; }
 	virtual int SetAudioOutput(std::shared_ptr<AudioOutput> output)	{ audioOutput	= std::move(output);	return 0; }
 	virtual int SetTextInput(std::shared_ptr<TextInput> input)	{ textInput	= std::move(input);	return 0; }
@@ -61,6 +63,13 @@ public:
 
 	virtual int Init();
 	virtual int End();
+
+	//Flux vidéo de rôle >= 2 (docs/conception/UNIFIED-PLAN/SPEC.md §4.2), créé
+	//sur un participant déjà initialisé. Rend son rôle, 0 en cas d'échec. Un
+	//rôle supprimé n'est jamais réattribué.
+	int CreateVideoStream(std::shared_ptr<VideoInput> input,std::shared_ptr<VideoOutput> output);
+	int DeleteVideoStream(MediaFrame::MediaRole role);
+	bool HasVideoStream(MediaFrame::MediaRole role);
 
 	//Profil d'adressage demandé par le contrôleur pour CETTE jambe (voir
 	//NETWORK-CONFIGURATION.md) : il décide de l'adresse liée — donc de l'interface — et de
@@ -97,7 +106,7 @@ public:
 	int SetRemoteSTUNCredentials(MediaFrame::Type media,const char* username, const char* pwd,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int SetRTPProperties(MediaFrame::Type media,const Properties& properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	
-	int SetMediaListener(MediaFrame::Listener *listener,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN) { return video[role]->SetMediaListener(listener); }
+	int SetMediaListener(MediaFrame::Listener *listener,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 
 	//P7/S1 : (re)arme ou desarme le chien de garde d'inactivite RTP d'un media.
 	//timeoutMs > 0 arme (chrono a partir de maintenant), 0 desarme. Jamais appele
@@ -141,8 +150,17 @@ private:
 	//Deux groupes et non un (§3.6) : la vidéo coûte des dizaines de ms par
 	//image, l'audio veut la main toutes les 20 ms.
 	RtpSessionSet		mediaGroup;	//audio + texte
-	RtpSessionSet		videoGroup;	//vidéo MAIN + SLIDES
-	VideoStream* 	video[MAX_VIDEO_STREAM];
+	RtpSessionSet		videoGroup;	//tous les flux vidéo
+	//Par rôle. Un callback du réacteur et un DeleteVideoStream peuvent se
+	//croiser : on ne lit un flux que par une copie prise sous videosMutex.
+	std::shared_ptr<VideoStream> GetVideo(MediaFrame::MediaRole role);
+	int StartVideoStream(VideoStream& stream,std::shared_ptr<RTPSession> ownSession);
+	typedef std::map<int,std::shared_ptr<VideoStream>> VideoStreams;
+	std::mutex		videosMutex;
+	VideoStreams		videos;
+	int			nextVideoRole;
+	bool			videosEnded;
+	bool			bundle;
 	AudioStream		audio;
 	TextStream		text;
 	RemoteRateEstimator estimator;

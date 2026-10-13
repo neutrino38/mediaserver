@@ -13,8 +13,6 @@
 
 SharedDocMixer::SharedDocMixer()
 {
-	output  		= NULL;
-	logo			= nullptr;
 	conf			= NULL;
 
 	sharedMosaic	= -1;
@@ -25,19 +23,14 @@ SharedDocMixer::~SharedDocMixer()
 {
 	StopBfcpServer();
 
-	output  		= NULL;
-	logo			= nullptr;
 	conf			= NULL;
 
 	sharedMosaic	= -1;
 	confId			= 0;
 }
 
-int SharedDocMixer::Init(VideoOutput* output, const PictPtr& logo, MultiConf* conf)
+int SharedDocMixer::Init(MultiConf* conf)
 {
-	//Set output
-	this->output 	= output;
-	this->logo 		= logo;
 	this->conf		= conf;
 
 	part.reset();
@@ -74,15 +67,15 @@ int SharedDocMixer::ShareSecondaryStream(ParticipantPtr part)
 		//le demontage local.
 		TearDownSharing();
 
-	if ( part && part != currentPart)
-	{
-	    part->SetVideoOutput(this,MediaFrame::VIDEO_SLIDES);
-		conf->onRequestDocSharing(part->GetPartId(),L"ACTIVE");
-	}
-
 	{
 		std::lock_guard<std::mutex> lock(mutex);
 		this->part = part;
+	}
+
+	if ( part && part != currentPart)
+	{
+		conf->StartPresentation(part->GetPartId());
+		conf->onRequestDocSharing(part->GetPartId(),L"ACTIVE");
 	}
 	return 1;
 }
@@ -177,15 +170,8 @@ void SharedDocMixer::TearDownSharing()
 
 	if (p)
 	{
+		conf->StopPresentation(p->GetPartId());
 		conf->onRequestDocSharing(p->GetPartId(),L"NONE");
-		p->SetVideoOutput(NULL,MediaFrame::VIDEO_SLIDES);
-		conf->SetDocSharingMosaic(-1);
-	}
-
-	if (logo && output != NULL)
-	{
-		output->SetVideoSize(logo->GetWidth(),logo->GetHeight());
-		output->NextFrame(logo);
 	}
 }
 
@@ -214,23 +200,6 @@ int SharedDocMixer::StopSharing(ParticipantPtr part)
 		return StopSharing();
 
 	return 1;
-}
-
-int SharedDocMixer::NextFrame(PictPtr pic)
-{
-	ParticipantPtr currentPart = this->part.lock();
-	if ( currentPart && output != NULL)
-		return output->NextFrame(pic);
-
-	return 0;
-}
-
-int SharedDocMixer::SetVideoSize(int width,int height)
-{
-	if ( output != NULL)
-		return output->SetVideoSize(width,height);
-
-	return 0;
 }
 
 int SharedDocMixer::addParticipant(int confId, ParticipantPtr part,Participant::DocSharingMode docSharingMode,MediaFrame::MediaProtocol proto)
@@ -507,8 +476,6 @@ int SharedDocMixer::End()
 	StopSharing();
 	StopBfcpServer();
 
-	output 		= NULL;
-	logo		= nullptr;
 	conf    	= NULL;
 
 	confId			= 0;

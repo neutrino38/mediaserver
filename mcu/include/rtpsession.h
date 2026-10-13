@@ -10,6 +10,7 @@
 #include <memory>
 #include <map>
 #include <string>
+#include <vector>
 #include <poll.h>
 #include <srtp2/srtp.h>
 #include "config.h"
@@ -114,6 +115,12 @@ public:
 	//(RTPParticipant). Une fois appelé, prend le pas sur le pointeur brut du
 	//constructeur.
 	void SetWeakListener(std::weak_ptr<Listener> l) { weakListener = std::move(l); hasWeakListener = true; }
+	//BUNDLE (docs/conception/UNIFIED-PLAN/SPEC.md §4.4) : une session JOINTE n'a
+	//pas de transport à elle. Elle n'ouvre aucune socket, n'est pas battue par
+	//un réacteur, émet par sa porteuse et reçoit ce que la porteuse lui route.
+	//À poser AVANT Init. La porteuse doit survivre à ses sessions jointes.
+	bool JoinCarrier(RTPSession* carrier);
+	bool IsJoined() const { return carrier != NULL; }
 	int Init();
 	//Adresse à lier par les sockets média, AVANT Init : c'est elle qui décide de
 	//l'interface empruntée, donc du profil d'adressage effectif de cette jambe
@@ -244,8 +251,9 @@ public:
 	//Borne des prises de verrou ÉCRIVAIN sur la map des flux (AddStream,
 	//ChangeStream) : elles s'exécutent sur le thread réacteur, qui ne doit
 	//jamais attendre sans borne — il bat toutes les jambes de son groupe.
-	//Supérieure à ConsumerPollMs, le temps pendant lequel un consommateur tient
-	//légitimement le verrou lecteur.
+	//Aucun lecteur ne tient ce verrou plus que le temps d'une recherche dans
+	//la map : GetPacket attend son paquet HORS du verrou, sur une référence
+	//partagée du flux. La borne est un filet, pas une attente prévue.
 	static const DWORD StreamLockTimeoutMs = 500;
 
 	//Bornes de l'estimateur d'ÉMISSION d'une session vidéo (arbitrage
@@ -279,6 +287,11 @@ public:
 
 
 	DWORD 	GetSendSSRC()			const { return sendSSRC;	}
+	//Propriétés `mid` et `remote-ssrc` : la section SDP de cette jambe et le
+	//SSRC que le pair y annonce. Sans BUNDLE elles ne servent qu'à l'écriture
+	//du MID sortant ; le démultiplexage d'une porteuse les lit (lot 2).
+	const std::string& GetMid()		const { return mid;		}
+	DWORD	GetRemoteSSRC()			const { return remoteSSRC;	}
 	const RTPMap* GetRtpMapIn()			const  { return rtpMapIn;	}
 	timeval GetLastSR()				const  { return lastSR;	}
 	timeval GetLastReceivedSR()		const  { return lastReceivedSR;	}
@@ -350,7 +363,7 @@ public:
 	//Le canal applicatif est-il ouvert ? Une jambe sans RTP n'a pas de profil
 	//SRTP, donc onDTLSSetup ne lui dit jamais rien : c'est ainsi qu'un porteur de
 	//data channel sait qu'il peut commencer à écrire.
-	bool IsDTLSHandshakeCompleted() const { return dtls.IsHandshakeCompleted(); }
+	bool IsDTLSHandshakeCompleted() const { return carrier ? carrier->IsDTLSHandshakeCompleted() : dtls.IsHandshakeCompleted(); }
 
 	int SetLocalSTUNCredentials(const char* username, const char* pwd);
 	int SetRemoteSTUNCredentials(const char* username, const char* pwd);
@@ -410,6 +423,34 @@ private:
 	//RTPMap::NotFound. Sert à la garde du rattrapage et à sa trace.
 	BYTE CurrentTypeForCodec(BYTE codec) const;
 	void ProcessRTCPPacket(RTCPCompoundPacket *packet, const char * fromAddr);
+	//`bundled` : le paquet composé est aussi proposé aux autres sessions du
+	//transport, chacune ne prend que ce qui vise ses SSRC. Ne détruit rien.
+	void HandleRTCP(RTCPCompoundPacket *packet, const char * fromAddr, bool bundled);
+
+	//--- BUNDLE : la porteuse et ses sessions jointes ---
+	void AddJoined(RTPSession* session);
+	void RemoveJoined(RTPSession* session);
+	bool HasJoined();
+	//Session à qui revient ce paquet déjà déchiffré, dans l'ordre de la RFC
+	//8843 §9.2 : MID, puis SSRC déclaré ou appris, puis payload type propre à
+	//une seule session. NULL = jeté. Appelée sous bundleMutex.
+	RTPSession* RouteRTP(const BYTE* data,int size);
+	//La moitié session de la réception : tout ce qui suit le transport
+	//(déchiffrement compris) dans ReadRTP.
+	int  ProcessIncomingRTP(BYTE* buffer,int size,const IPEndpoint& from,bool isRTX);
+	//La moitié transport de l'émission, sous wireMutex. Rend le retour de
+	//sendto, ou SendNotReady / SendProtectFailed.
+	static const int SendNotReady		= -1000;
+	static const int SendProtectFailed	= -1001;
+	int  ProtectAndSendRTP(BYTE* data,int& len);
+	int  ProtectAndSendRTCP(BYTE* data,int& len);
+	int  SendRawRTP(const BYTE* data,int len);
+	//Pose la cible d'envoi d'après la source observée (NAT) ; false = aucune.
+	bool PrepareSendAddr();
+	void CheckRTPTimeout();
+	//La session vidéo MAIN jointe à cette porteuse, sinon NULL : c'est elle
+	//que pilote l'estimation du transport. Appelée sous bundleMutex.
+	RTPSession* JoinedVideoMain();
 	void ReSendPacket(int seq);
 
 	int SetRemoteCryptoSDES(const char* suite, const BYTE* key, const DWORD len, int keyRank=0);
@@ -537,11 +578,13 @@ protected:
         /**
 	 *  Find the stream associated to the SSRC .
 	 */
-	RTPStream* getStream(DWORD ssrc);
+	std::shared_ptr<RTPStream> getStream(DWORD ssrc);
 
 private:
 	typedef std::map<DWORD,RTPTimedPacket*> RTPOrderedPackets;
-	typedef std::map<DWORD, RTPStream*> Streams;
+	//La map possède les flux ; un consommateur parqué dans GetPacket en tient
+	//une copie, ce qui laisse DeleteStreams vider la map sans l'attendre.
+	typedef std::map<DWORD, std::shared_ptr<RTPStream>> Streams;
 protected:
 	RemoteRateEstimator*	remoteRateEstimator;
 private:
@@ -562,7 +605,20 @@ private:
 	}
 
 	Streams streams;
-	RTPStream * defaultStream;
+	std::shared_ptr<RTPStream> defaultStream;
+
+	//BUNDLE. `carrier` : la porteuse d'une session jointe. `joinedSessions` et
+	//`ssrcRoutes` : ceux d'une porteuse, lus par son réacteur à chaque paquet.
+	//bundleMutex n'est jamais tenu pendant une attente d'un consommateur
+	//(docs/reference/threads-rtp.md §7). wireMutex sérialise le contexte SRTP
+	//d'émission et la socket, que plusieurs fils d'émission partagent.
+	RTPSession*			carrier;
+	std::vector<RTPSession*>	joinedSessions;
+	std::map<DWORD,RTPSession*>	ssrcRoutes;
+	std::mutex			bundleMutex;
+	std::mutex			wireMutex;
+	DWORD				bundleDropCount;
+	timeval				bundleDropLast;
 	
 	bool muxRTCP;
 	//Sockets
@@ -816,16 +872,19 @@ private:
 	//Extension transport-wide-cc : compteur ecrit sur nos paquets sortants
 	//(sender_bwe_plan.md 6.1) ; le pair le renvoie dans ses rapports fmt 15.
 	bool			useTransportCC;
-	DWORD			transportSeqNum;
+	std::atomic<DWORD>	transportSeqNum;
 	//`extMap` va de l'id du fil vers le type d'extension, comme `rtpMapIn` va du
 	//payload type vers le codec : c'est le sens dont la LECTURE a besoin
 	//(RTPPacket::ProcessExtensions). L'ECRITURE a besoin de l'inverse, d'ou ces
 	//deux ids gardes a part plutot qu'une seconde table a tenir coherente.
 	BYTE			absSendTimeExtId;
 	BYTE			transportCCExtId;
+	BYTE			midExtId;
+	std::string		mid;
+	DWORD			remoteSSRC;
 	//Estimateur émetteur (lot 6.3) : historique alimenté par le thread
 	//d'émission, consommé par le thread RTCP — le mutex couvre les deux.
-	void ProcessTransportWideFeedback(RTCPRTPFeedback* fb);
+	void ProcessTransportWideFeedback(RTCPRTPFeedback* fb, RTPSession* notify = NULL);
 	void OnReportedLoss(BYTE fractionLost);
 	SentPacketHistory	sentHistory;
 	SenderBWE		senderBWE;

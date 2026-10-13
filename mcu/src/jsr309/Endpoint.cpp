@@ -29,30 +29,33 @@ static std::string PollGroupName(const void* owner,const char* suffix)
 	return buffer;
 }
 
-Endpoint::Endpoint(std::wstring name,bool audioSupported,bool videoSupported,bool textSupported)
+Endpoint::Endpoint(std::wstring name,bool audioSupported,bool videoSupported,bool textSupported,bool bundle)
 	: eventSource(name)
 	, mediaGroup(PollGroupName(this,"media").c_str())
 	, videoGroup(PollGroupName(this,"video").c_str())
+	, nextVideoRole(MediaFrame::VIDEO_EXTRA)
+	, bundle(bundle)
 {
 	//Store name
 	this->name = name;
 	//Nullify
 
-	//If audio
-	if (audioSupported)
+	//If audio. En BUNDLE, la jambe audio porte le transport de toutes les
+	//autres : elle existe même quand l'appel n'a pas d'audio.
+	if (audioSupported || bundle)
 		//Create endpoint
-		ports[MediaFrame::Audio] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Audio));
+		SetPort(MediaFrame::Audio, MediaFrame::VIDEO_MAIN, std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Audio)));
 	//If video
 	if (videoSupported)
 	{
 		//Create endpoint
-		ports[MediaFrame::Video] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Video));
-		ports2[MediaFrame::Video] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Video, MediaFrame::VIDEO_SLIDES));
+		SetPort(MediaFrame::Video, MediaFrame::VIDEO_MAIN, std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Video)));
+		SetPort(MediaFrame::Video, MediaFrame::VIDEO_SLIDES, std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Video, MediaFrame::VIDEO_SLIDES)));
 	}
 	//If video
 	if (textSupported)
 	{
-		ports[MediaFrame::Text] = std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Text));
+		SetPort(MediaFrame::Text, MediaFrame::VIDEO_MAIN, std::shared_ptr<Port>(new RTPEndpoint(MediaFrame::Text)));
 	}
 	estimator.SetEventSource(&eventSource);
 	estimator2.SetEventSource(&eventSource);
@@ -82,32 +85,35 @@ void Endpoint::JoinPollGroup(const std::shared_ptr<Port>& port, MediaFrame::Type
 	rtp->SetPollGroup(&group);
 }
 
+void Endpoint::PreparePort(const std::shared_ptr<Port>& port, MediaFrame::Type media)
+{
+	RTPEndpoint* rtp = port ? dynamic_cast<RTPEndpoint*>(port.get()) : NULL;
+	RTPEndpoint* carrier = bundle ? GetRTPEndpoint(MediaFrame::Audio) : NULL;
+
+	if (rtp && carrier && rtp != carrier)
+		rtp->JoinCarrier(carrier);
+	else
+		JoinPollGroup(port,media);
+}
+
 //Methods
 int Endpoint::Init()
 {
-	for (int i=0; i<3; i++)
+	//Dans l'ordre de la map : l'audio d'abord, la porteuse d'un BUNDLE.
+	Ports all = GetPorts();
+	for (Ports::iterator it=all.begin(); it!=all.end(); ++it)
 	{
-	    if (ports[i]) 
-	    {
-			JoinPollGroup(ports[i],(MediaFrame::Type)i);
-			ports[i]->Init();
-			if ( i == MediaFrame::Video && ports[i]->GetTransport() == MediaFrame::RTP ) 
-			{
-				std::shared_ptr<RTPEndpoint> rtp = std::dynamic_pointer_cast<RTPEndpoint>(ports[i]);
-				rtp->SetRemoteRateEstimator(&estimator);
-			}
-	    }
-	    
-	    if (ports2[i])
-	    {
-			JoinPollGroup(ports2[i],(MediaFrame::Type)i);
-			ports2[i]->Init();
-			if ( i == MediaFrame::Video && ports2[i]->GetTransport() == MediaFrame::RTP) 
-			{
-				std::shared_ptr<RTPEndpoint> rtp = std::dynamic_pointer_cast<RTPEndpoint>(ports2[i]);
-				rtp->SetRemoteRateEstimator(&estimator2);
-			}
-	    }
+		const MediaFrame::Type media = (MediaFrame::Type)it->first.first;
+		const MediaFrame::MediaRole role = (MediaFrame::MediaRole)it->first.second;
+		std::shared_ptr<Port> port = it->second;
+
+		PreparePort(port,media);
+		port->Init();
+		if ( media == MediaFrame::Video && port->GetTransport() == MediaFrame::RTP )
+		{
+			std::shared_ptr<RTPEndpoint> rtp = std::dynamic_pointer_cast<RTPEndpoint>(port);
+			rtp->SetRemoteRateEstimator(role == MediaFrame::VIDEO_MAIN ? &estimator : &estimator2);
+		}
 	}
 	return 0;
 }
@@ -116,21 +122,64 @@ int Endpoint::End()
 {
 	Log(">End endpoint\n");
 
-	for (int i=0; i<3; i++)
-	{
-	    if (ports[i]) 
-	    {
-		ports[i]->End();
-	    }
-	    
-	    if (ports2[i])
-	    {
-		ports2[i]->End();
-	    }
-	}
+	Ports all = GetPorts();
+	//En BUNDLE, la porteuse (l'audio, en tête de map) s'arrête après les
+	//sessions jointes.
+	if (bundle)
+		for (Ports::reverse_iterator it=all.rbegin(); it!=all.rend(); ++it)
+			it->second->End();
+	else
+		for (Ports::iterator it=all.begin(); it!=all.end(); ++it)
+			it->second->End();
 
 	Log("<End endpoint\n");
 	return 0;
+}
+
+int Endpoint::CreateVideoStream()
+{
+	int role;
+	RemoteRateEstimator* streamEstimator;
+	{
+		std::lock_guard<std::mutex> lock(portsMutex);
+		role = nextVideoRole++;
+		std::unique_ptr<RemoteRateEstimator>& e = extraEstimators[role];
+		e.reset(new RemoteRateEstimator());
+		e->SetEventSource(&eventSource);
+		streamEstimator = e.get();
+	}
+
+	std::shared_ptr<Port> port(new RTPEndpoint(MediaFrame::Video,(MediaFrame::MediaRole)role));
+	PreparePort(port,MediaFrame::Video);
+	//RTPEndpoint::Init rend 0 en cas de succès : comme Endpoint::Init, on ne
+	//le lit pas.
+	port->Init();
+	std::dynamic_pointer_cast<RTPEndpoint>(port)->SetRemoteRateEstimator(streamEstimator);
+
+	SetPort(MediaFrame::Video,(MediaFrame::MediaRole)role,port);
+	Log("-Endpoint::CreateVideoStream [%ls,role:%d]\n",name.c_str(),role);
+	return role;
+}
+
+int Endpoint::DeleteVideoStream(MediaFrame::MediaRole role)
+{
+	if (role < MediaFrame::VIDEO_EXTRA)
+		return Error("-Endpoint::DeleteVideoStream: role %d is not deletable\n",(int)role);
+
+	std::shared_ptr<Port> port;
+	{
+		std::lock_guard<std::mutex> lock(portsMutex);
+		Ports::iterator it = ports.find(PortKey(MediaFrame::Video,role));
+		if (it == ports.end())
+			return Error("-Endpoint::DeleteVideoStream: no video stream of role %d\n",(int)role);
+		port = it->second;
+		ports.erase(it);
+	}
+
+	Log("-Endpoint::DeleteVideoStream [%ls,role:%d]\n",name.c_str(),(int)role);
+	port->Detach();
+	port->End();
+	return 1;
 }
 
 //La question est « ce port a-t-il un transport de forme RTP ? », et non « ce port
@@ -531,21 +580,10 @@ int Endpoint::SetupDataChannel(MediaFrame::Type media,WORD remoteSCTPPort,
 int Endpoint::onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole role,
 	                           MediaFrame::MediaProtocol transp, WebSocket * ws )
 {
-    std::shared_ptr<Port> p;
-    
-	
-    if ( role == MediaFrame::VIDEO_MAIN )
-    {
-        p = ports[media];
-    }
-    else if (media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
-    {
-        p = ports2[media];
-    }
-    else
-    {
+    std::shared_ptr<Port> p = GetPort(media, role);
+
+    if (!p)
         return Error("Invalid media %d / role %d parameters\n", media, role );
-    }
     
     if ( p && p->GetTransport() != MediaFrame::WS )
     {
@@ -556,14 +594,7 @@ int Endpoint::onNewMediaConnection(MediaFrame::Type media, MediaFrame::MediaRole
 		p->End();
 		
 		std::shared_ptr<Port> wsp = std::shared_ptr<Port>(new WSEndpoint(media));
-		if ( role == MediaFrame::VIDEO_MAIN )
-		{
-			ports[media] = wsp;
-		}
-		else if (media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
-		{
-			ports2[media] = wsp;
-		}
+		SetPort(media, role, wsp);
 
 		ws->Accept( std::weak_ptr<WSEndpoint>(std::dynamic_pointer_cast<WSEndpoint>(wsp)) );
 		return 1;
@@ -830,6 +861,10 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 			switch(proto)
 			{
 				case MediaFrame::WS:
+					//WSEndpoint lève une exception que personne n'attrape pour
+					//tout autre média : refuser ici, pas tuer le processus.
+					if (media != MediaFrame::Text)
+						return Error("WebSocket only carries text.\n");
 					Log("Recreating WSEndpoint for media %s\n", MediaFrame::TypeToString(media) );
 					p2 = std::shared_ptr<Port>(new WSEndpoint(media));
 				    break;
@@ -845,7 +880,9 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 
 				case MediaFrame::RTP:
 					Log("Recreating RTPEndpoint for media %s\n", MediaFrame::TypeToString(media) );
-					p2 = std::shared_ptr<Port>(new RTPEndpoint(media));
+					//Avec son rôle : sans lui, un port SLIDES recréé se déclarait MAIN
+					//dans ses événements.
+					p2 = std::shared_ptr<Port>(new RTPEndpoint(media, role));
 					break;
 				
 				default:
@@ -853,23 +890,14 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 			}
 			
 			//Le groupe se pose AVANT tout Init du nouveau port, comme dans
-			//Endpoint::Init : SetPollGroup est refuse ensuite.
-			JoinPollGroup(p2,media);
+			//Endpoint::Init : SetPollGroup est refuse ensuite. En BUNDLE, le
+			//port se joint a la porteuse, qui ne peut pas etre remplacee.
+			if ( bundle && media == MediaFrame::Audio )
+				return Error("The audio leg carries the BUNDLE transport, it cannot be replaced.\n");
+			PreparePort(p2,media);
 
-			if ( role == MediaFrame::VIDEO_MAIN )
-			{
-				p2->SwitchJoin(p);
-				ports[media] = p2;
-			}
-			else if ( media == MediaFrame::Video && role != MediaFrame::VIDEO_MAIN)
-			{
-				p2->SwitchJoin(p);
-				ports2[MediaFrame::Video] = p2;
-			}
-			else
-			{
-				return Error("Invalid media=%d, role=%d .\n", media, role);
-			}
+			p2->SwitchJoin(p);
+			SetPort(media, role, p2);
 			
 			return 1;
 	    }
@@ -950,7 +978,7 @@ bool Endpoint::SetAddressProfile(MediaFrame::Type media, const char* profile, st
 	return rtp->SetAddressProfile(profile,error);
 }
 
-char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFrame::Type media ) 
+char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFrame::Type media, MediaFrame::MediaRole role ) 
 {
 	//Aucun tampon de taille fixe ici. `host` peut venir de --websocket-host, une
 	//chaîne libre jamais validée : toute borne choisie d'avance serait un pari.
@@ -969,7 +997,7 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 	{
 		int port = 0;
 		char* wshost = NULL;
-		std::shared_ptr<Port> p =  GetPort(media);
+		std::shared_ptr<Port> p =  GetPort(media, role);
 		
 		if ( p == NULL)
 		{
@@ -1025,7 +1053,7 @@ char* Endpoint::GetMediaCandidates( MediaFrame::MediaProtocol protocol , MediaFr
 		//d'autre, celle du profil sinon (NATée s'il y a lieu). Une seule source
 		//pour les deux API de contrôle, comme depuis --public-ip.
 		std::string profileHost;
-		if (RTPEndpoint* rtp = GetRTPEndpoint(media))
+		if (RTPEndpoint* rtp = GetRTPEndpoint(media, role))
 		{
 			const IPAddress addr = rtp->GetAnnouncedAddress();
 			if (addr.IsSet() && !wshost)

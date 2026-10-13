@@ -52,6 +52,27 @@ rappeler le serveur depuis une notification sans s'interbloquer.
 `onFloorReleased` et `onUserConnected`, et les traduit en événements pour le
 contrôleur (`WAITING_ACCEPT`, `ACTIVE`, `NONE`).
 
+### Ce que la parole décide
+
+La parole ne transporte aucun pixel. Le document suit le chemin de n'importe
+quel flux vidéo (`docs/conception/UNIFIED-PLAN/SPEC.md` §4.3) :
+
+- `SetAppCodec(BFCP)` donne au participant une source du mixeur pour son rôle
+  1 (SLIDES). Le document décodé nourrit sa sortie en permanence ; son entrée
+  est la mosaïque partagée.
+- Parole accordée : `MultiConf::StartPresentation` place la source du
+  présentateur dans la mosaïque partagée, et la jambe SLIDES de chaque
+  participant BFCP se met à émettre.
+- Parole rendue ou révoquée : `MultiConf::StopPresentation` retire la source,
+  et les jambes SLIDES s'arrêtent. Le slot reste vide.
+- La mosaïque partagée (`SetDocSharingMosaic`) reste retenue d'un partage à
+  l'autre. Un nouveau partage s'y affiche sans aucun appel du contrôleur.
+
+Piège : `StartPresentation` et `StopPresentation` tournent sur le fil du
+réacteur BFCP quand la parole change par le réseau. Ils arrêtent et relancent
+les fils d'émission SLIDES, et un arrêt joint son fil : le réacteur attend
+pendant ce temps. Ne rien y ajouter de plus lent.
+
 ## Les transports
 
 Les deux sont des `PollHandler` battus par le réacteur partagé

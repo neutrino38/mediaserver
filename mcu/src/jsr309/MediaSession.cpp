@@ -782,10 +782,10 @@ std::shared_ptr<JSR309EventContext> MediaSession::GetEventContext(int EventConte
 
 }
 
-int MediaSession::EndpointCreate(std::wstring name,bool audioSupported,bool videoSupported,bool textSupport)
+int MediaSession::EndpointCreate(std::wstring name,bool audioSupported,bool videoSupported,bool textSupport,bool bundle)
 {
 	//Create endpoint
-	std::shared_ptr<Endpoint> endpoint = std::make_shared<Endpoint>(name,audioSupported,videoSupported,textSupport);
+	std::shared_ptr<Endpoint> endpoint = std::make_shared<Endpoint>(name,audioSupported,videoSupported,textSupport,bundle);
 
 	//Init it
 	endpoint->Init();
@@ -826,6 +826,40 @@ int MediaSession::EndpointCreate(std::wstring name,bool audioSupported,bool vide
 	return endpointId;
 
 }
+int MediaSession::EndpointCreateVideoStream(int endpointId)
+{
+	std::shared_ptr<Endpoint> endpoint = GetEndpoint(endpointId);
+	if (!endpoint)
+		return Error("Endpoint not found\n");
+
+	//Hors du verrou : la création ouvre une session RTP.
+	const int role = endpoint->CreateVideoStream();
+	if (!role)
+		return 0;
+
+	//Ses événements (connecté, silence) partent comme ceux des autres jambes.
+	{
+		std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+		const int eventContextId = maxEventContextId++;
+		eventContexts[eventContextId] = std::make_shared<JSR309EventContext>(endpointId,MediaFrame::Video,(MediaFrame::MediaRole)role);
+		endpoint->SetEventContextId(MediaFrame::Video,(MediaFrame::MediaRole)role,eventContextId);
+	}
+	if (eventMngr)
+		endpoint->SetEventHandler(MediaFrame::Video,(MediaFrame::MediaRole)role,sessionId,eventMngr);
+
+	Log("-EndpointCreateVideoStream [%ls,role:%d]\n",endpoint->GetName().c_str(),role);
+	return role;
+}
+
+int MediaSession::EndpointDeleteVideoStream(int endpointId,MediaFrame::MediaRole role)
+{
+	std::shared_ptr<Endpoint> endpoint = GetEndpoint(endpointId);
+	if (!endpoint)
+		return Error("Endpoint not found\n");
+
+	return endpoint->DeleteVideoStream(role);
+}
+
 int MediaSession::EndpointDelete(int endpointId)
 {
 	//End + destruction hors verrou : End() joint les threads RTP, qui peuvent
@@ -858,7 +892,7 @@ int MediaSession::EndpointDelete(int endpointId)
 	return 1;
 }
 
-int MediaSession::EndpointSetLocalCryptoSDES(int endpointId,MediaFrame::Type media,const char *suite,const char* key)
+int MediaSession::EndpointSetLocalCryptoSDES(int endpointId,MediaFrame::Type media,const char *suite,const char* key,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -873,10 +907,10 @@ int MediaSession::EndpointSetLocalCryptoSDES(int endpointId,MediaFrame::Type med
         Endpoint* endpoint = it->second.get();
 
 	//Call it
-	return endpoint->SetLocalCryptoSDES(media,suite,key);
+	return endpoint->SetLocalCryptoSDES(media,suite,key,role);
 }
 
-int MediaSession::EndpointSetRemoteCryptoSDES(int endpointId,MediaFrame::Type media,const char *suite,const char* key)
+int MediaSession::EndpointSetRemoteCryptoSDES(int endpointId,MediaFrame::Type media,const char *suite,const char* key,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -891,10 +925,10 @@ int MediaSession::EndpointSetRemoteCryptoSDES(int endpointId,MediaFrame::Type me
         Endpoint* endpoint = it->second.get();
 
 	//Call it
-	return endpoint->SetRemoteCryptoSDES(media,suite,key);
+	return endpoint->SetRemoteCryptoSDES(media,suite,key,role);
 }
 
-int MediaSession::EndpointSetRemoteCryptoDTLS(int endpointId,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint)
+int MediaSession::EndpointSetRemoteCryptoDTLS(int endpointId,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -910,11 +944,11 @@ int MediaSession::EndpointSetRemoteCryptoDTLS(int endpointId,MediaFrame::Type me
 
 	//Call it
 	Log("-EndpointSetRemoteCryptoDTLS: endpoint %ls and media %s.\n", endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
-	return endpoint->SetRemoteCryptoDTLS(media,setup,hash,fingerprint);
+	return endpoint->SetRemoteCryptoDTLS(media,setup,hash,fingerprint,role);
 }
 
 
-int MediaSession::EndpointSetLocalSTUNCredentials(int endpointId,MediaFrame::Type media,const char *username,const char* pwd)
+int MediaSession::EndpointSetLocalSTUNCredentials(int endpointId,MediaFrame::Type media,const char *username,const char* pwd,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -931,10 +965,10 @@ int MediaSession::EndpointSetLocalSTUNCredentials(int endpointId,MediaFrame::Typ
 	Log("-EndpointSetLocalSTUNCredentials: endpoint %ls and media %s.\n", endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
 	//Call it
-	return endpoint->SetLocalSTUNCredentials(media,username,pwd);
+	return endpoint->SetLocalSTUNCredentials(media,username,pwd,role);
 }
 
-int MediaSession::EndpointSetRemoteSTUNCredentials(int endpointId,MediaFrame::Type media,const char *username,const char* pwd)
+int MediaSession::EndpointSetRemoteSTUNCredentials(int endpointId,MediaFrame::Type media,const char *username,const char* pwd,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -949,10 +983,10 @@ int MediaSession::EndpointSetRemoteSTUNCredentials(int endpointId,MediaFrame::Ty
         Endpoint* endpoint = it->second.get();
 	Log("-EndpointSetRemoteSTUNCredentials: endpoint %ls and media %s.\n", endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 	//Call it
-	return endpoint->SetRemoteSTUNCredentials(media,username,pwd);
+	return endpoint->SetRemoteSTUNCredentials(media,username,pwd,role);
 }
 
-int MediaSession::EndpointSetRTPProperties(int endpointId,MediaFrame::Type media,const Properties& properties)
+int MediaSession::EndpointSetRTPProperties(int endpointId,MediaFrame::Type media,const Properties& properties,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -966,11 +1000,11 @@ int MediaSession::EndpointSetRTPProperties(int endpointId,MediaFrame::Type media
         //Get it
         Endpoint* endpoint = it->second.get();
 	//Call it
-	return endpoint->SetRTPProperties(media,properties);
+	return endpoint->SetRTPProperties(media,properties,role);
 }
 
 //Endpoint Video functionality
-int MediaSession::EndpointStartSending(int endpointId,MediaFrame::Type media,char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap)
+int MediaSession::EndpointStartSending(int endpointId,MediaFrame::Type media,char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -988,10 +1022,10 @@ int MediaSession::EndpointStartSending(int endpointId,MediaFrame::Type media,cha
 	Log("-EndpointStartSending [%ls,media:%s]\n",endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
 	//Execute
-	return endpoint->StartSending(media,sendVideoIp, sendVideoPort, rtpMap);
+	return endpoint->StartSending(media,sendVideoIp, sendVideoPort, rtpMap, role);
 }
 
-int MediaSession::EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate)
+int MediaSession::EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1006,10 +1040,10 @@ int MediaSession::EndpointAddICECandidate(int endpointId,MediaFrame::Type media,
         Endpoint* endpoint = it->second.get();
 
 	//Délègue au endpoint (trickle ICE Niveau 1)
-	return endpoint->AddICECandidate(media,candidate);
+	return endpoint->AddICECandidate(media,candidate,role);
 }
 
-int MediaSession::EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs)
+int MediaSession::EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1024,10 +1058,10 @@ int MediaSession::EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,
         Endpoint* endpoint = it->second.get();
 
 	//Délègue au endpoint (watchdog d'inactivité RTP - gap 5)
-	return endpoint->ArmRTPTimeout(media,timeoutMs);
+	return endpoint->ArmRTPTimeout(media,timeoutMs,role);
 }
 
-int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
+int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1045,10 +1079,10 @@ int MediaSession::EndpointStopSending(int endpointId,MediaFrame::Type media)
 	Log("-EndpointStopSending [%ls,media:%s]\n",endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
 	//Execute
-	return endpoint->StopSending(media);
+	return endpoint->StopSending(media,role);
 }
 
-bool MediaSession::EndpointSetAddressProfile(int endpointId,MediaFrame::Type media,const char* profile,std::string& error)
+bool MediaSession::EndpointSetAddressProfile(int endpointId,MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role)
 {
 	//Rien demandé : profil par défaut, rien à verrouiller.
 	if (!profile || !*profile)
@@ -1064,11 +1098,11 @@ bool MediaSession::EndpointSetAddressProfile(int endpointId,MediaFrame::Type med
 		return false;
 	}
 
-	return it->second->SetAddressProfile(media,profile,error);
+	return it->second->SetAddressProfile(media,profile,error,role);
 }
 
 int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut,
-                                         const std::map<int,std::string>* offerFmtp)
+                                         const std::map<int,std::string>* offerFmtp,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1086,16 +1120,16 @@ int MediaSession::EndpointStartReceiving(int endpointId,MediaFrame::Type media,R
 	Log("-EndpointStartReceiving [%ls,media:%s]\n",endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
 	//Execute (P8a : le fmtp de l'offre descend jusqu'au négociateur)
-	int port = endpoint->StartReceiving(media,rtpMap,MediaFrame::VIDEO_MAIN,offerFmtp);
+	int port = endpoint->StartReceiving(media,rtpMap,role,offerFmtp);
 
 	//Récupère le fmtp négocié (phase 4) pour le retour enrichi XML-RPC (§5.2).
 	//Sous le même verrou : négociation et lecture du résultat sont atomiques.
 	if (port > 0)
-		endpoint->GetNegotiatedFmtp(media, MediaFrame::VIDEO_MAIN, fmtpOut);
+		endpoint->GetNegotiatedFmtp(media, role, fmtpOut);
 
 	return port;
 }
-int MediaSession::EndpointStopReceiving(int endpointId,MediaFrame::Type media)
+int MediaSession::EndpointStopReceiving(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1113,10 +1147,10 @@ int MediaSession::EndpointStopReceiving(int endpointId,MediaFrame::Type media)
 	Log("-EndpointStopReceiving [%ls,media:%s]\n",endpoint->GetName().c_str(), MediaFrame::TypeToString(media));
 
 	//Execute
-	return endpoint->StopReceiving(media);
+	return endpoint->StopReceiving(media,role);
 }
 
-int MediaSession::EndpointRequestUpdate(int endpointId,MediaFrame::Type media)
+int MediaSession::EndpointRequestUpdate(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1134,7 +1168,7 @@ int MediaSession::EndpointRequestUpdate(int endpointId,MediaFrame::Type media)
 	Log("-EndpointRequestUpdate [%ls]\n",endpoint->GetName().c_str());
 
 	//Execute
-	return endpoint->RequestUpdate(media);
+	return endpoint->RequestUpdate(media,role);
 }
 int MediaSession::EndpointAttachToPlayer(int endpointId,int playerId,MediaFrame::Type media)
 {
@@ -1200,7 +1234,7 @@ int MediaSession::EndpointAttachToAudioMixerPort(int endpointId,int mixerId,int 
 	return endpoint->Attach(MediaFrame::Audio,MediaFrame::VIDEO_MAIN,audioMixer->GetJoinable(portId));
 }
 
-int MediaSession::EndpointAttachToVideoMixerPort(int endpointId,int mixerId,int portId)
+int MediaSession::EndpointAttachToVideoMixerPort(int endpointId,int mixerId,int portId,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1229,7 +1263,7 @@ int MediaSession::EndpointAttachToVideoMixerPort(int endpointId,int mixerId,int 
         std::shared_ptr<VideoMixerResource> videoMixer = itMixer->second;
 
 	//And attach
-	return endpoint->Attach(MediaFrame::Video,MediaFrame::VIDEO_MAIN,videoMixer->GetJoinable(portId));
+	return endpoint->Attach(MediaFrame::Video,role,videoMixer->GetJoinable(portId));
 }
 
 int MediaSession::EndpointAttachToVideoTranscoder(int endpointId,int videoTranscoderId)
@@ -1264,7 +1298,7 @@ int MediaSession::EndpointAttachToVideoTranscoder(int endpointId,int videoTransc
 	return endpoint->Attach(MediaFrame::Video,MediaFrame::VIDEO_MAIN,videoTranscoder);
 }
 
-int MediaSession::EndpointAttachToEndpoint(int endpointId,int sourceId,MediaFrame::Type media)
+int MediaSession::EndpointAttachToEndpoint(int endpointId,int sourceId,MediaFrame::Type media,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1292,13 +1326,13 @@ int MediaSession::EndpointAttachToEndpoint(int endpointId,int sourceId,MediaFram
         Endpoint* source = it->second.get();
 
 	Log("-EndpointAttachToEndpoint: activating TS transparency.\n");
-	endpoint->SetRTPTsTransparency(media, true, MediaFrame::VIDEO_MAIN);
-	source->SetRTPTsTransparency(media, true, MediaFrame::VIDEO_MAIN);
+	endpoint->SetRTPTsTransparency(media, true, role);
+	source->SetRTPTsTransparency(media, true, role);
 	//Attach
-	return endpoint->Attach(media,MediaFrame::VIDEO_MAIN,source->GetJoinable(media));
+	return endpoint->Attach(media,role,source->GetJoinable(media,role));
 }
 
-int MediaSession::EndpointDettach(int endpointId,MediaFrame::Type media)
+int MediaSession::EndpointDettach(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role)
 {
         std::lock_guard<std::mutex> lock(mutex);
 
@@ -1317,7 +1351,7 @@ int MediaSession::EndpointDettach(int endpointId,MediaFrame::Type media)
 	Log("-EndpointDettach [%ls]\n",endpoint->GetName().c_str());
 
 	//Attach
-	return endpoint->Detach(media);
+	return endpoint->Detach(media,role);
 }
 
 void MediaSession::onEndOfFile(Player *player,void* playerId)
@@ -1623,7 +1657,7 @@ int MediaSession::VideoMixerPortDelete(int mixerId,int portId)
 }
 
 
-int MediaSession::VideoMixerPortAttachToEndpoint(int mixerId,int portId,int endpointId)
+int MediaSession::VideoMixerPortAttachToEndpoint(int mixerId,int portId,int endpointId,MediaFrame::MediaRole role)
 {
 	std::lock_guard<std::mutex> lock(mutex);
 
@@ -1652,7 +1686,7 @@ int MediaSession::VideoMixerPortAttachToEndpoint(int mixerId,int portId,int endp
 	Log("-VideoMixerPortAttachToEndpoint [%ls]\n",endpoint->GetName().c_str());
 
 	//Attach
-	return videoMixer->Attach(portId,endpoint->GetJoinable(MediaFrame::Video));
+	return videoMixer->Attach(portId,endpoint->GetJoinable(MediaFrame::Video,role));
 }
 
 int MediaSession::VideoMixerPortAttachToPlayer(int mixerId,int portId,int playerId)

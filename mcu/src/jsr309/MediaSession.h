@@ -117,37 +117,42 @@ public:
 	
 
 	//Endpoint management
-	int EndpointCreate(std::wstring name,bool audioSupported,bool videoSupported,bool textSupported);
+	int EndpointCreate(std::wstring name,bool audioSupported,bool videoSupported,bool textSupported,bool bundle = false);
+	//Flux vidéo de rôle >= 2 (docs/conception/UNIFIED-PLAN/SPEC.md §4.6). Rend
+	//le rôle, 0 en cas d'échec.
+	int EndpointCreateVideoStream(int endpointId);
+	int EndpointDeleteVideoStream(int endpointId,MediaFrame::MediaRole role);
 	int EndpointDelete(int endpointId);
-	int EndpointSetLocalCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key);
-	int EndpointSetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key);
-	int EndpointSetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint);
-	int EndpointSetLocalSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd);
-	int EndpointSetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd);
-	int EndpointSetRTPProperties(int id,MediaFrame::Type media,const Properties& properties);
+	int EndpointSetLocalCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointSetRemoteCryptoSDES(int id,MediaFrame::Type media,const char *suite,const char* key,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointSetRemoteCryptoDTLS(int id,MediaFrame::Type media,const char *setup,const char *hash,const char *fingerprint,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointSetLocalSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointSetRemoteSTUNCredentials(int id,MediaFrame::Type media,const char *username,const char* pwd,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointSetRTPProperties(int id,MediaFrame::Type media,const Properties& properties,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//Endpoint Video functionality
-	int EndpointStartSending(int endpointId,MediaFrame::Type media,char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap);
+	int EndpointStartSending(int endpointId,MediaFrame::Type media,char *sendVideoIp,int sendVideoPort,RTPMap& rtpMap,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//Trickle ICE Niveau 1 (gap 1) : ajoute un candidat distant à un flux d'endpoint.
-	int EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate);
+	int EndpointAddICECandidate(int endpointId,MediaFrame::Type media,const char* candidate,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//Watchdog d'inactivité RTP (gap 5) : arme/désarme le flux d'un endpoint.
-	int EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs);
-	int EndpointStopSending(int endpointId,MediaFrame::Type media);
+	int EndpointStartRTPTimeout(int endpointId,MediaFrame::Type media,DWORD timeoutMs,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointStopSending(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//P8a : `offerFmtp` (optionnel) = le fmtp de l'offre par payload type, relayé au
 	//négociateur ; NULL = pas d'entrée distante (contrôleur pré-P8a).
 	//Profil d'adressage demandé par le contrôleur pour une jambe (voir
 	//NETWORK-CONFIGURATION.md). À poser AVANT EndpointStartReceiving/StartSending.
-	bool EndpointSetAddressProfile(int endpointId,MediaFrame::Type media,const char* profile,std::string& error);
+	bool EndpointSetAddressProfile(int endpointId,MediaFrame::Type media,const char* profile,std::string& error,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int EndpointStartReceiving(int endpointId,MediaFrame::Type media,RTPMap& rtpMap,std::map<int,std::string>& fmtpOut,
-	                           const std::map<int,std::string>* offerFmtp = NULL);
-	int EndpointStopReceiving(int endpointId,MediaFrame::Type media);
+	                           const std::map<int,std::string>* offerFmtp = NULL,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointStopReceiving(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 
-	int EndpointRequestUpdate(int endpointId,MediaFrame::Type media);
+	int EndpointRequestUpdate(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	//Attach intput to
 	int EndpointAttachToPlayer(int endpointId,int playerId,MediaFrame::Type media);
-	int EndpointAttachToEndpoint(int endpointId,int sourceId,MediaFrame::Type media);
+	//Le flux de rang `role` de la source vers le flux de même rang.
+	int EndpointAttachToEndpoint(int endpointId,int sourceId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int EndpointAttachToAudioMixerPort(int endpointId,int mixerId,int portId);
-	int EndpointDettach(int endpointId,MediaFrame::Type media);
-	int EndpointAttachToVideoMixerPort(int endpointId,int mixerId,int portId);
+	int EndpointDettach(int endpointId,MediaFrame::Type media,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
+	int EndpointAttachToVideoMixerPort(int endpointId,int mixerId,int portId,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int EndpointAttachToVideoTranscoder(int endpointId,int transcoderId);
 
 	//AudioMixer management
@@ -178,7 +183,7 @@ public:
 	int VideoMixerPortCreate(int mixerId,std::wstring tag,int mosiacId);
 	int VideoMixerPortSetCodec(int mixerId,int portId,VideoCodec::Type codec,int size,int fps,int bitrate,int intraPeriod);
 	int VideoMixerPortDelete(int mixerId,int porId);
-	int VideoMixerPortAttachToEndpoint(int mixerId,int portId,int endpointId);
+	int VideoMixerPortAttachToEndpoint(int mixerId,int portId,int endpointId,MediaFrame::MediaRole role = MediaFrame::VIDEO_MAIN);
 	int VideoMixerPortAttachToPlayer(int mixerId,int portId,int playerId);
 	int VideoMixerPortDettach(int mixerId,int portId);
 	//Video mixer mosaic management

@@ -543,7 +543,7 @@ void MCU::onParticipantMediaConnected(MultiConf *conf,int partId,MediaFrame::Typ
 	}
 }
 
-void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status)
+void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring status,int sourceId)
 {
 	//Bloqueamos
 	std::lock_guard<std::mutex> lock(mutex);
@@ -560,7 +560,7 @@ void MCU::onParticipantRequestDocSharing(MultiConf *conf,int partId,std::wstring
 	if (eventMngr && it->second.queueId>0)
 	{
 		//Send new event (la file prend possession... sauf si elle n'existe plus)
-		XmlEvent *event = new ::PlayerRequestDocSharingEvent(it->first,conf->GetTag(),partId,status);
+		XmlEvent *event = new ::PlayerRequestDocSharingEvent(it->first,conf->GetTag(),partId,status,sourceId);
 		if (!eventMngr->AddEvent(it->second.queueId,event))
 			delete event;
 	}

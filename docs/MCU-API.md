@@ -112,6 +112,7 @@ identifiants entiers :
 MCU
  └─ Conference (confId)              ← CreateConference
      ├─ Participant (partId)         ← CreateParticipant   (type RTP ou RTMP)
+     │   └─ flux vidéo (role, sourceId) ← CreateVideoStream (rôle ≥ 2, RTP)
      ├─ Mosaic (mosaicId)            ← CreateMosaic        (composition vidéo)
      ├─ Sidebar (sidebarId)          ← CreateSidebar       (sous-mélange dédié)
      ├─ Player (playerId)            ← CreatePlayer        (lecture de fichier)
@@ -127,11 +128,19 @@ MCU
 - Les identifiants sont des **entiers** attribués par le serveur à la création
   et valables pour la durée de vie de la conférence.
 - Beaucoup de commandes média/sécurité acceptent un paramètre `role`
-  (`MediaFrame::MediaRole`, §4) qui distingue le flux vidéo **principal** du
-  flux **présentation/slides**. Ce paramètre a été ajouté après coup : les
-  handlers tentent d'abord la signature **avec** `role`, puis retombent sur
-  l'ancienne signature **sans** `role` (valeur par défaut `VIDEO_MAIN` = 0). Les
-  deux formes sont donc acceptées.
+  (`MediaFrame::MediaRole`, §4). Pour la vidéo, c'est l'**index du flux** dans
+  le participant : 0 est la caméra, 1 le document BFCP, 2 et au-delà les flux
+  créés par `CreateVideoStream` (§6.5). Un rôle que le participant ne porte
+  pas est une erreur. Ce paramètre a été ajouté après coup : les handlers
+  tentent d'abord la signature **avec** `role`, puis retombent sur l'ancienne
+  signature **sans** `role` (valeur par défaut `VIDEO_MAIN` = 0). Les deux
+  formes sont donc acceptées.
+- Le mixeur vidéo ne connaît que des **identifiants de source**. Le flux 0
+  d'un participant a pour source son `partId`. Un flux de rôle ≥ 2 a son
+  propre `sourceId`, rendu par `CreateVideoStream`. Partout où une méthode de
+  mosaïque (§6.3) ou `SetParticipantDisplayName` prend un `partId`, elle
+  accepte aussi un `sourceId`. Pour un `sourceId`, `SetParticipantDisplayName`
+  ne change que le bandeau vidéo : un flux vidéo n'a pas d'étiquette texte.
 - De même, `StartReceiving` accepte un paramètre `proto`
   (`MediaFrame::MediaProtocol`, §4) ajouté après coup (défaut `TCP` = 3).
 
@@ -179,10 +188,17 @@ Valeurs entières à passer telles quelles dans les paramètres `i`.
 | 4 | UDP |
 
 ### `MediaFrame::MediaRole` — rôle du flux vidéo
-| Valeur | Nom |
-|--------|-----|
-| 0 | VIDEO_MAIN (défaut) |
-| 1 | VIDEO_SLIDES |
+
+Le rôle est l'index du flux vidéo dans le participant. C'est un entier, pas
+une liste fermée.
+
+| Valeur | Nom | Sens | Créé par |
+|--------|-----|------|----------|
+| 0 | VIDEO_MAIN (défaut) | la caméra | `CreateParticipant` |
+| 1 | VIDEO_SLIDES | le document partagé en BFCP | `CreateParticipant` |
+| 2, 3, … | VIDEO_EXTRA | un flux vidéo de plus : un écran partagé, une seconde caméra | `CreateVideoStream` |
+
+Un rôle ≥ 2 supprimé n'est jamais réattribué pendant la vie du participant.
 
 ### `Participant::Type` — type de transport participant
 (`mcu/include/participant.h`)
@@ -373,7 +389,7 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
 | Type | Nom | Tuple |
 |------|-----|-------|
 | 1 | ParticipantRequestFPU | `(int type, int confId, string tag, int partId)` |
-| 2 | ParticipantRequestDocSharing | `(int type, int confId, string tag, int partId, string status)` |
+| 2 | ParticipantRequestDocSharing | `(int type, int confId, string tag, int partId, string status, int sourceId)` |
 | 3 | ParticipantMediaTimeout | `(int type, int confId, string tag, int partId, int media, int role)` |
 | 4 | ParticipantMediaConnected | `(int type, int confId, string tag, int partId, int media, int role)` |
 
@@ -387,7 +403,11 @@ Source unique : `mcu/include/mcu.h` (`MCU::Events`).
 - **ParticipantRequestDocSharing** (2) : un participant demande à (dé)partager
   un document (BFCP). `status` ∈ `{ACTIVE, WAITING_ACCEPT, NONE, FAILED}`. À
   traiter avec `AcceptDocSharingRequest` / `RefuseDocSharingRequest` /
-  `StopDocSharing` (§6.10). Émis par `onParticipantRequestDocSharing`.
+  `StopDocSharing` (§6.12). Émis par `onParticipantRequestDocSharing`.
+  `sourceId` est la source du document de ce participant (0 s'il n'en a
+  pas). Pour montrer le document dans une autre mosaïque que la mosaïque
+  partagée, le contrôleur y place ce `sourceId` sur `ACTIVE`, et l'en retire
+  sur `NONE`.
 
 - **ParticipantMediaTimeout** (3) : le flux RTP d'un média de ce participant s'est
   **tu**. Émis **une seule fois** par transition actif → inactif, sur le média et le
@@ -500,20 +520,23 @@ Détruit une mosaïque.
 - **Retour** : `(i)` = `mosaicId`.
 
 #### `AddMosaicParticipant`
-Ajoute un participant à la mosaïque (son flux devient éligible à l'affichage).
-- **Params** `(iii)` : `confId`, `mosaicId`, `partId`.
+Ajoute une source à la mosaïque (son flux devient éligible à l'affichage).
+- **Params** `(iii)` : `confId`, `mosaicId`, `partId` ou `sourceId` (§3).
 - **Retour** : vide.
+- En mode VAD, un flux de rôle ≥ 2 n'est jamais élu locuteur : sa VAD vaut 0.
+  Pour qu'un écran partagé reste visible, fixer son slot avec
+  `SetMosaicSlot(confId, mosaicId, num, sourceId)`.
 
 #### `RemoveMosaicParticipant`
-Retire un participant de la mosaïque.
-- **Params** `(iii)` : `confId`, `mosaicId`, `partId`.
+Retire une source de la mosaïque.
+- **Params** `(iii)` : `confId`, `mosaicId`, `partId` ou `sourceId`.
 - **Retour** : vide.
 
 #### `GetMosaicPositions`
 Renvoie l'occupation des positions de la mosaïque.
 - **Params** `(ii)` : `confId`, `mosaicId`.
-- **Retour** : tableau de `i` = liste des participants (ou valeurs de slot) par
-  position, dans l'ordre.
+- **Retour** : tableau de `i` = liste des sources (`partId`, `sourceId`) ou
+  valeurs de slot par position, dans l'ordre.
 
 ---
 
@@ -544,8 +567,29 @@ groupe de participants).
 
 #### `CreateParticipant`
 Crée un participant et l'affecte à une mosaïque et un sidebar.
-- **Params** `(isiii)` : `confId`, `name` (UTF-8), `type` (`Participant::Type` :
-  RTP=0 / RTMP=1), `mosaicId`, `sidebarId`.
+- **Params** `(isiiii)` : `confId`, `name` (UTF-8), `type` (`Participant::Type` :
+  RTP=0 / RTMP=1), `mosaicId`, `sidebarId`, `bundle`. Repli sur `(isiii)`,
+  sans `bundle`.
+- `bundle` vaut 0 par défaut. Avec 1, toutes les jambes du participant
+  partagent un seul transport (BUNDLE, RFC 8843) : celui de la jambe audio.
+  Réservé au type RTP.
+- Avec `bundle=1` :
+  - `StartReceiving` rend **le même port et la même adresse** pour toutes les
+    jambes, flux créés par `CreateVideoStream` compris ;
+  - les appels de transport (`SetRemoteCryptoDTLS`, `SetLocalCryptoSDES`,
+    `SetRemoteCryptoSDES`, `SetLocalSTUNCredentials`,
+    `SetRemoteSTUNCredentials`, profil d'adressage, adresse de
+    `StartSending`) peuvent arriver sur n'importe quelle jambe. Le premier
+    configure le transport ; les suivants sont ignorés. Le contrôleur n'a pas
+    à savoir quelle section porte le transport, même quand l'offre n'a pas de
+    section audio ;
+  - chaque jambe doit recevoir la propriété `mid` (la valeur de `a=mid`) et,
+    si l'offre le porte, l'extmap `urn:ietf:params:rtp-hdrext:sdes:mid` et
+    `remote-ssrc` (§6.6), **avant** `StartReceiving`. Le serveur répartit
+    les paquets reçus par MID, puis par SSRC, puis par payload type propre à
+    une seule jambe. Un paquet qu'aucune de ces règles n'attribue est jeté.
+- Le BUNDLE se décide à la création : un participant créé sans ne se groupe
+  plus ensuite.
 - `name` n'est pas qu'une trace : c'est l'**étiquette de départ du mixeur
   texte**, celle que le flux mixé écrit entre crochets devant chaque tour de
   parole (`[alice] bonjour`). `SetParticipantDisplayName` la remplace ensuite.
@@ -559,6 +603,52 @@ Crée un participant et l'affecte à une mosaïque et un sidebar.
 Change la mosaïque *de sortie* (celle que reçoit) du participant.
 - **Params** `(iii)` : `confId`, `partId`, `mosaicId`.
 - **Retour** : vide.
+- C'est `SetVideoStreamMosaic` avec `role` = 0.
+
+#### `CreateVideoStream`
+Ajoute un flux vidéo à un participant RTP. Le flux a sa propre jambe RTP
+(son port, son ICE, son DTLS) et sa propre source dans le mixeur.
+- **Params** `(ii)` : `confId`, `partId`.
+- **Retour** : `(ii)` = `role` (≥ 2), `sourceId`.
+- Le flux n'a pas de mosaïque de sortie : il est **reçu seulement**. Le
+  contrôleur répond `recvonly` sur la section SDP, et n'appelle pas
+  `StartSending`.
+- La jambe se pilote ensuite comme les autres, avec ce `role` :
+  `SetVideoCodec`, `SetRTPProperties`, `StartReceiving`, chiffrement, STUN,
+  `StartRTPTimeout`.
+- Pour afficher le flux : `AddMosaicParticipant(confId, mosaicId, sourceId)`.
+
+Exemple, un navigateur qui partage son écran à côté de sa caméra :
+
+```
+CreateVideoStream(confId, partId)                  → (2, 731)
+SetRTPProperties(confId, partId, Video, props, 2)
+StartReceiving(confId, partId, Video, rtpMap, 2, …) → port de la section
+AddMosaicParticipant(confId, mosaicId, 731)
+SetMosaicSlot(confId, mosaicId, 0, 731)            (mosaïque en VAD)
+```
+
+#### `DeleteVideoStream`
+Supprime un flux créé par `CreateVideoStream`. Sa source quitte toutes les
+mosaïques, et son slot se libère.
+- **Params** `(iii)` : `confId`, `partId`, `role` (≥ 2).
+- **Retour** : vide. Erreur sur les rôles 0 et 1, et sur un rôle inconnu.
+- `DeleteParticipant` supprime tous les flux du participant.
+
+#### `SetVideoStreamMosaic`
+Change la mosaïque de sortie d'un flux vidéo : ce que sa jambe émet.
+- **Params** `(iiii)` : `confId`, `partId`, `role`, `mosaicId` (`-1` = aucune).
+- **Retour** : vide.
+- Rôle 0 : même effet que `SetParticipantMosaic`. Rôle 1 : la mosaïque est
+  remplacée par la mosaïque partagée au prochain changement de parole ;
+  utiliser `SetDocSharingMosaic`.
+
+#### `GetVideoStreamSource`
+Rend l'identifiant de source d'un flux vidéo.
+- **Params** `(iii)` : `confId`, `partId`, `role`.
+- **Retour** : `(i)` = `sourceId`. Rôle 0 : le `partId`. Rôle 1 : la source
+  du document, qui existe dès `SetAppCodec(BFCP)`. Erreur si le flux n'existe
+  pas.
 
 #### `SetParticipantSidebar`
 Change le sidebar de sortie du participant.
@@ -730,6 +820,25 @@ mapping) et pour le RTCP non muxé sur son propre paquet.
   n'a pas d'ICE du tout : les checks entrants y sont jetés faute de mot de passe
   distant, personne ne posera jamais la cible, et le rattrapage est la seule chose
   qui reste.
+
+##### `mid` et `remote-ssrc` — l'identité de la section SDP
+Trois propriétés décrivent la section `m=` que porte la jambe, pour l'extension
+d'en-tête MID (RFC 8843 §15, RFC 8285 profil one-byte) :
+
+| propriété | valeur | effet |
+|---|---|---|
+| `urn:ietf:params:rtp-hdrext:sdes:mid` | l'`extmap` id négocié | lecture du MID reçu ; écriture du MID émis si `mid` est posé |
+| `mid` | la valeur de `a=mid` de la section, 16 octets au plus | écrite sur chaque paquet émis |
+| `remote-ssrc` | le SSRC annoncé par `a=ssrc` de l'offre, s'il y en a un | mémorisé pour le démultiplexage BUNDLE |
+
+- Le MID est écrit sur **chaque** paquet, et non seulement au début et à chaque
+  changement de SSRC : le pair démultiplexe alors sans dépendre des `a=ssrc`
+  de la réponse.
+- Une valeur `mid` de plus de 16 octets est tronquée, avec une trace d'erreur :
+  l'élément one-byte ne porte pas davantage.
+- Les extensions d'en-tête d'un paquet reçu sont lues qu'un transport-cc soit
+  négocié ou non ; seul le profil one-byte (`0xBEDE`) est lu, le profil two-byte
+  est ignoré sans erreur.
 
 #### `GetSupportedCodecs`
 Liste les codecs supportés pour un type de média.
@@ -1153,9 +1262,17 @@ Arrête le partage de document en cours.
 - **Retour** : vide.
 
 #### `SetDocSharingMosaic`
-Définit la mosaïque utilisée pour l'affichage du document partagé.
-- **Params** `(ii)` : `confId`, `mosaicId` (défaut 0).
+Définit la mosaïque partagée : celle que les participants BFCP reçoivent sur
+leur jambe SLIDES.
+- **Params** `(ii)` : `confId`, `mosaicId` (`-1` = aucune).
 - **Retour** : vide.
+- La mosaïque reste retenue d'un partage à l'autre. Il suffit de l'appeler
+  une fois.
+- Le serveur gère seul le reste de la présentation. Quand la parole est
+  accordée, il place la source du présentateur dans cette mosaïque, et la
+  jambe SLIDES de chaque participant BFCP émet. Quand la parole est rendue,
+  il retire la source, et les jambes SLIDES s'arrêtent. Le slot reste vide :
+  pour y voir une image, poser une incrustation avec `SetMosaicOverlayImage`.
 
 ---
 
