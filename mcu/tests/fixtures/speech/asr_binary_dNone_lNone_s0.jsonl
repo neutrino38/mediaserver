@@ -1,0 +1,24 @@
+{"t": 0.3757, "kind": "open"}
+{"t": 0.4073, "kind": "rx", "msg": {"type": "session.created", "session": {"request_id": "ws-00000000-0000-0000-0000-000000000000", "model": "voxtral-mini-transcribe-realtime-2602", "audio_format": {"encoding": "pcm_s16le", "sample_rate": 16000}, "target_streaming_delay_ms": null, "diarize": false, "verbatim": false, "context_bias": [], "language": null, "speaker_references": null, "turn_detection": null}}}
+{"t": 2.5314, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "Bon"}}
+{"t": 2.5497, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "jour"}}
+{"t": 2.5674, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": ","}}
+{"t": 2.6629, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " je"}}
+{"t": 2.9409, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " suis"}}
+{"t": 2.9656, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " en"}}
+{"t": 3.4021, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " retard"}}
+{"t": 3.4207, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " de"}}
+{"t": 3.495, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " quelques"}}
+{"t": 4.0796, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " minutes"}}
+{"t": 4.0803, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "."}}
+{"t": 4.9262, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " Comm"}}
+{"t": 4.9455, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "ence"}}
+{"t": 4.9617, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "z"}}
+{"t": 4.9807, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " la"}}
+{"t": 5.3997, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " réunion"}}
+{"t": 5.4246, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " sans"}}
+{"t": 6.2151, "kind": "tx.audio_done", "secs": 5.34, "bytes": 156194}
+{"t": 6.2164, "kind": "tx", "msg": {"type": "input_audio_buffer.commit"}}
+{"t": 6.2904, "kind": "rx", "msg": {"type": "error", "error": {"message": "1 validation error for tagged-union[RealtimeTranscriptionSessionUpdateMessage,RealtimeTranscriptionInputAudioAppend,RealtimeTranscriptionInputAudioFlush,RealtimeTranscriptionInputAudioEnd]\n  Input tag 'input_audio_buffer.commit' found using 'type' does not match any of the expected tags: 'session.update', 'input_audio.append', 'input_audio.flush', 'input_audio.end' [type=union_tag_invalid, input_value={'type': 'input_audio_buffer.commit'}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.11/v/union_tag_invalid", "code": 3051}}}
+{"t": 8.3631, "kind": "closed", "code": 1011, "reason": "Upstream connection error"}
+{"t": 8.364, "kind": "tx.fail", "err": "received 1011 (internal error) Upstream connection error; then sent 1011 (internal error) Upstream connection error"}

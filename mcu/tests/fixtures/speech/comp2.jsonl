@@ -1,0 +1,5 @@
+{"t": 0.7974, "kind": "case", "text": "Bonjour je sui en retar de quelque", "secs": 0.797, "tokens": [246, 46], "parsed": {"corrections": [{"from": "sui", "to": "suis"}, {"from": "retar", "to": "retard"}, {"from": "quelque", "to": "quelques"}], "completion": "."}, "raw": null}
+{"t": 1.6573, "kind": "case", "text": "Pouvez vous me rapeler demain matin a", "secs": 0.859, "tokens": [247, 8], "parsed": {"completion": "8h"}, "raw": null}
+{"t": 2.3878, "kind": "case", "text": "Jai bien recu votre mesage merci ", "secs": 0.73, "tokens": [247, 36], "parsed": {"corrections": [{"from": "Jai", "to": "J'ai"}, {"from": "mesage", "to": "message"}], "completion": ""}, "raw": null}
+{"t": 2.9456, "kind": "case", "text": "Je serai la dans dix min", "secs": 0.557, "tokens": [243, 14], "parsed": {"corrections": [], "completion": "dans"}, "raw": null}
+{"t": 3.5138, "kind": "case", "text": "Est ce que vous pouvez m'envoyer le ", "secs": 0.568, "tokens": [247, 10], "parsed": {"completion": "fichier"}, "raw": null}

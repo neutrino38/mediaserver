@@ -1,7 +1,7 @@
 # Serveur de traitement de la voix (`speech-server`)
 
-> Statut : **conception, rien n'est codé**. Le lot 0 (§13) vérifie les faits
-> marqués « à vérifier » et décide du go.
+> Statut : lot 0 fait (§4.2), lot 1 fait (§13.3). Les lots 2 à 5 restent à
+> coder.
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
 > mediaserver client (lot 6) suit en 1.19.0.
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
@@ -48,7 +48,7 @@ participant et annonces.
 | Transport | WebSocket, `ws://` et `wss://` | WebRTC, RTP |
 | Audio | PCM S16LE mono 16 kHz, dans les deux sens | codecs (Opus, G.711) |
 | Jeton | créé par l'application, filtré par IP | compte utilisateur, OAuth |
-| Réseau | IPv4 et IPv6, double pile | proxy HTTP sortant |
+| Réseau | streaming en IPv4 et IPv6 (double pile), contrôle en IPv4 (§6.1) | proxy HTTP sortant, IPv6 sur le port de contrôle |
 
 Le serveur ne résout pas la détection de langue par lui-même : il transmet
 ce que Mistral sait faire, et rien de plus (§7.2).
@@ -60,7 +60,7 @@ ce que Mistral sait faire, et rien de plus (§7.2).
 | Réacteur WebSocket mono-thread, serveur **et** client, `ws://` et `wss://` | `mcu/src/websocketserver.cpp`, `WebSocketServer::Connect` | tel quel |
 | Refus avant le 101 avec un code HTTP | `WebSocket::Reject(code, reason)` | tel quel |
 | Envoi depuis un autre thread | `WebSocketConnection::SendMessage`, thread-safe, réveille le réacteur | tel quel |
-| Serveur HTTP Abyss, socket d'écoute double pile créée par nous | `mcu/src/xmlrpcserver.cpp` | tel quel |
+| Serveur HTTP Abyss | `mcu/src/xmlrpcserver.cpp` | avec un second constructeur, **IPv4 seul** pour ce serveur (§6.1) |
 | Gestionnaire HTTP sur Abyss, deux rendus JSON et texte | `mcu/src/statushandler.cpp` | modèle à suivre |
 | Adresses, littéraux, résolution A + AAAA | `mcu/include/ipaddress.h` | tel quel, **un ajout** : test d'appartenance à un préfixe (`a.b.c.d/24`, `2001:db8::/32`), absent |
 | Threads de travail | `mcu/include/worker.h` | tel quel |
@@ -106,8 +106,7 @@ Faits utiles, et ce qu'ils imposent :
 ### 4.2 Ce que la sonde du lot 0 a établi (2026-10-13, clé de test, dev71)
 
 Les sept points « à vérifier » sont remplacés par les faits observés. Les
-enregistrements bruts sont dans le dossier de travail du lot 0, à copier
-dans `mcu/tests/fixtures/speech/` au lot 1.
+enregistrements bruts, anonymisés, sont dans `mcu/tests/fixtures/speech/`.
 
 **ASR, Voxtral Realtime** (`wss://api.mistral.ai/v1/audio/transcriptions/realtime?model=voxtral-mini-transcribe-realtime-2602`)
 
@@ -210,12 +209,25 @@ Règles :
 ### 6.1 Filtrage par IP
 
 Toute requête d'une adresse hors liste reçoit **403**, sans lire le corps.
-La liste porte des adresses ou des préfixes CIDR, v4 et v6
-(`control.allow`, §8.2). Une adresse v4
-reçue sur la socket double pile (`::ffff:a.b.c.d`) est comparée **après
-dé-mappage**, comme le fait déjà `IPAddress::FromSockaddr`. Liste vide :
-le serveur refuse de démarrer, parce qu'un port de contrôle ouvert à tous
-crée des jetons pour tous.
+Le filtre vaut pour tous les chemins du port, `/status/general` compris.
+La liste porte des adresses ou des préfixes CIDR (`control.allow`, §8.2).
+Liste vide : le serveur refuse de démarrer, parce qu'un port de contrôle
+ouvert à tous crée des jetons pour tous.
+
+**Le port de contrôle n'écoute qu'en IPv4.** Abyss (xmlrpc-c 1.51) range
+l'adresse du pair dans un `struct sockaddr` de 16 octets. Une adresse IPv6
+y est tronquée : sur une socket double pile, un client `127.0.0.1` arrive
+avec une adresse vide (mesuré le 2026-10-14). Et `ChannelUnixCreateFd`
+refuse une socket IPv6. Le filtre ne peut donc être juste qu'en IPv4.
+Conséquences :
+
+- `control.listen` est une adresse IPv4 ; une entrée IPv6 dans
+  `control.allow` est une erreur de configuration, car elle ne
+  correspondrait jamais ;
+- le port de streaming, lui, reste double pile (§8.3).
+
+Le support d'IPv6 sur le port de contrôle est un besoin noté pour une
+version ultérieure (§16).
 
 ### 6.2 `POST /control/token`
 
@@ -284,11 +296,21 @@ GET /streaming/<function>/<token>?lang=fr&voice=claire&delay=1000
 | Code avant le 101 | Cause |
 |---|---|
 | 101 | flux ouvert |
-| 400 | paramètre inconnu, langue ou voix non servie, `delay` hors bornes |
+| 404 | chemin qui n'a pas la forme `/streaming/<fonction>/<jeton>`, ou fonction inconnue |
+| 400 | paramètre inconnu ou répété, langue ou voix non servie, `delay` hors bornes |
 | 403 | jeton inconnu, expiré, déjà consommé, ou d'une autre fonction |
 | 429 | `limits.maxSessions` atteint pour cette fonction |
-| 503 | clé Mistral absente, ou Mistral injoignable à l'ouverture |
+| 503 | fonction pas encore servie, `tts` sans voix configurée, ou Mistral injoignable à l'ouverture |
 | 500 | erreur interne |
+
+Les contrôles se font dans cet ordre : 404, 400, 503, 429, puis 403. Le
+jeton est consommé en dernier. Ainsi, un client refusé pour une autre
+raison garde son jeton et peut réessayer. Exemple : un 429 ne brûle pas le
+jeton.
+
+Paramètres : `lang` vaut pour les trois fonctions (`fr` par défaut),
+`voice` pour `tts` seulement, `delay` pour `asr` seulement. Un paramètre
+d'une autre fonction est un paramètre inconnu : 400.
 
 Le jeton est dans le chemin parce qu'un navigateur ne peut pas poser
 d'en-tête sur un WebSocket. Conséquence : **le serveur ne journalise jamais
@@ -538,16 +560,17 @@ doit pas passer en silence) :
 ```json
 {
   "control": {
+    "listen": "0.0.0.0",
     "port": 9200,
-    "allow": ["10.0.0.0/8", "2001:db8::/32"]
+    "allow": ["10.0.0.0/8", "192.0.2.7"]
   },
   "streaming": {
+    "listen": "::",
     "port": 9201,
     "secure": false,
     "cert": "/etc/mediaserver/mcu.crt",
     "key": "/etc/mediaserver/mcu.key"
   },
-  "listen": "::",
   "mistral": {
     "url": "https://api.mistral.ai",
     "workers": 4
@@ -568,29 +591,32 @@ doit pas passer en silence) :
 
 | Clé | Rôle | Renvoi |
 |---|---|---|
-| `control.allow` | obligatoire, non vide : IP ou préfixes CIDR autorisés sur le contrôle ; le mediaserver y figure | §6.1, §12 |
+| `control.listen` | adresse IPv4 d'écoute du port de contrôle | §6.1 |
+| `control.allow` | obligatoire, non vide : IPv4 ou préfixes CIDR IPv4 autorisés sur le contrôle ; le mediaserver y figure | §6.1, §12 |
 | `streaming.secure`, `cert`, `key` | `wss://` ; les défauts (`mcu.crt`, `mcu.key`) ne servent qu'au développement : un navigateur veut un certificat d'une autorité connue | §7.1, §9 |
-| `listen` | adresse d'écoute des deux ports, littéral v4 ou v6 | §8.3 |
+| `streaming.listen` | adresse d'écoute du port de streaming, littéral v4 ou v6 ; `::` sert les deux familles | §8.3 |
 | `mistral.url` | base des appels, pour un relais ou le faux Mistral des tests | §14 |
 | `voices` | obligatoire pour `tts` : sans voix, les flux `tts` reçoivent 503 | §7.3 |
 
 **Démarrage.** Fichier absent, JSON invalide, clé inconnue, `control.allow`
-vide : le serveur écrit la cause dans le log et refuse de démarrer.
+vide ou porteur d'une entrée IPv6, `control.listen` en IPv6, deux ports
+égaux : le serveur écrit la cause dans le log et refuse de démarrer.
 
 **Rechargement.** `SIGHUP` relit le fichier. Ce qui se recharge sans couper
 un flux : `control.allow`, `limits`, `voices`, `tts`, `asr`, `comp`. Ce qui
-demande un redémarrage : `control.port`, `streaming.*`, `listen`,
-`mistral.*`. Un fichier invalide au rechargement est **ignoré en
+demande un redémarrage : `control.listen`, `control.port`, `streaming.*`,
+`mistral.*`. Le log signale un tel changement, qui attend le redémarrage. Un fichier invalide au rechargement est **ignoré en
 entier**, avec la cause dans le log, et la configuration en cours reste. Le
 serveur ne relit jamais la clé Mistral sur `SIGHUP`.
 
 ### 8.3 IPv6
 
-Les deux sockets d'écoute sont `AF_INET6` sans `IPV6_V6ONLY`, comme celle
-d'Abyss dans `xmlrpcserver.cpp`, donc elles servent v4 et v6. `listen`
-accepte un littéral v4 ou v6. Les connexions sortantes vers Mistral passent
-par `IPAddress::Resolve` (A + AAAA) et libcurl, qui essaie les deux
-familles. Les tests du §14 écoutent et se connectent en v6.
+Le port de streaming écoute par défaut sur `::`, sans `IPV6_V6ONLY` : il
+sert v4 et v6. `streaming.listen` accepte un littéral v4 ou v6. Le port de
+contrôle est IPv4 seul (§6.1). Les connexions sortantes vers Mistral
+passent par `IPAddress::Resolve` (A + AAAA) et libcurl, qui essaie les
+deux familles. Les tests du §14 se connectent au port de streaming en v4
+et en v6.
 
 ## 9. Sécurité
 
@@ -642,8 +668,9 @@ familles. Les tests du §14 écoutent et se connectent en v6.
 
 - Cible `speech-server` dans `mcu/Makefile`, à côté de `mcu`. Elle lie les
   objets réutilisés (`websocketserver`, `websocketconnection`,
-  `websockettransport`, `httpparser`, `xmlrpcserver`, `ipaddress`, `log`,
-  `worker`), plus libcurl, libavutil et libswresample. Elle **ne lie pas**
+  `websockettransport`, `httpparser`, `http`, `xmlrpcserver`, `ipaddress`,
+  `addressprofiles`), Abyss, OpenSSL et libavutil (le base64 du WebSocket).
+  Les lots 2 à 4 ajoutent libcurl et libswresample. Elle **ne lie pas**
   libmedikit, ffmpeg entier, ni les mixeurs.
 - `install.ksh prereq` ajoute `libcurl-devel` et `json-devel` (Debian :
   `libcurl4-openssl-dev`, `nlohmann-json3-dev`).
@@ -810,17 +837,17 @@ lien du binaire de test avec `-lcurl`.
 
 ### 13.2 Lot 0 : la sonde
 
-État au 2026-10-13 : **sonde faite** (§4.2), fixtures brutes dans le dossier
-de travail. Restent le §13.2.1 et les trois faits sur les données à obtenir
+État : **sonde faite** (§4.2), enregistrements dans
+`mcu/tests/fixtures/speech/`. Restent le §13.2.1 et les trois faits sur les données à obtenir
 de Mistral (compte et contrat).
 
 #### 13.2.1 Les voix françaises, clonées par IVèS
 
-Tranché le 2026-10-13 : Mistral ne fournit aucune voix française, donc IVèS
-crée les siennes par clonage, une femme et un homme, depuis des personnes
-d'IVèS qui ont donné leur accord.
+Tranché : Mistral ne fournit aucune voix française, donc IVèS crée la
+sienne par clonage. La version 1.18.0 a **une seule voix française** :
+celle du responsable du chantier, qui a choisi de cloner sa propre voix.
 
-1. **Consentement écrit** de chaque personne, conservé par IVèS, qui dit :
+1. **Consentement écrit** de la personne, conservé par IVèS, qui dit :
    l'usage (voix de synthèse du service), la durée, et le droit de retrait.
    La politique d'usage Mistral interdit le clonage sans ce consentement.
 2. **Échantillon** : 10 à 20 s de parole française lue calmement, WAV mono,
@@ -828,13 +855,12 @@ d'IVèS qui ont donné leur accord.
 3. **Création** : `POST /v1/audio/voices` avec `name`, `sample_audio`
    (base64), `sample_filename`, `languages: ["fr"]`, `gender`. La voix reste
    privée au compte. Noter son `id` et son `slug`.
-4. **Écoute** de la phrase de test (§4.2) par les deux voix, par au moins
-   deux personnes : accent, rythme, intelligibilité. Une voix qui ne
-   convient pas est supprimée (`DELETE`) et refaite avec un autre
-   échantillon.
-5. **Configuration** : les deux voix entrent dans `voices` (§8.2) avec un
-   alias neutre (`fr-femme`, `fr-homme`), jamais le nom de la personne.
-6. **Retrait** : si une personne retire son accord, la voix est supprimée
+4. **Écoute** de la phrase de test (§4.2) par au moins deux personnes :
+   accent, rythme, intelligibilité. Une voix qui ne convient pas est
+   supprimée (`DELETE`) et refaite avec un autre échantillon.
+5. **Configuration** : la voix entre dans `voices` (§8.2) avec un alias
+   neutre (`fr-homme`), jamais le nom de la personne.
+6. **Retrait** : si la personne retire son accord, la voix est supprimée
    chez Mistral et retirée de `voices` ; les clients qui la demandent
    reçoivent 400 et prennent la voix par défaut de la langue.
 
@@ -873,34 +899,49 @@ usage santé ou accessibilité.
 
 ### 13.3 Lot 1 : le squelette
 
-Tout ce qui ne dépend pas de Mistral. Classes, dans l'ordre d'écriture, un
-commit intermédiaire par ligne :
+État : **fait**. Tout ce qui ne dépend pas de Mistral.
 
 | Classe | Fichier | Rôle | Test |
 |---|---|---|---|
-| `SpeechConfig` | `speech/speechconfig.{h,cpp}` | lit le JSON du §8.2 ; clé inconnue = erreur ; rend un objet immuable ; `Reload()` rend un nouvel objet ou l'erreur | `test_speech_config.cpp` : défauts, clé inconnue, `control.allow` vide, voix |
-| `IPAddress::InPrefix` | `ipaddress.{h,cpp}` | appartenance à `a.b.c.d/n` ou `x::/n`, v4 mappée dé-mappée | ajout dans `test_ipaddress.cpp` |
+| `SpeechConfig`, `SpeechConfigHolder` | `speech/speechconfig.{h,cpp}` | lit le JSON du §8.2 ; clé inconnue = erreur ; objet immuable ; le porteur le remplace d'un bloc au `SIGHUP` | `test_speech_config.cpp` |
+| `IPAddress::InPrefix` | `ipaddress.{h,cpp}` | appartenance à `a.b.c.d/n` ou `x::/n`, v4 mappée dé-mappée | `test_ipaddress.cpp` |
 | `AllowList` | `speech/allowlist.{h,cpp}` | liste de préfixes, `Allows(IPAddress)` | `test_speech_allowlist.cpp` |
-| `TokenStore` | `speech/tokenstore.{h,cpp}` | création (`RAND_bytes`), consommation atomique, expiration, compteurs ; verrou interne | `test_speech_tokens.cpp` : usage unique, expiration, fonction, `account` |
-| `UsageCounters` | `speech/usage.{h,cpp}` | compteurs globaux et par `account`, atomiques | avec `TokenStore` |
-| `XmlRpcServer(IPEndpoint)` | `xmlrpcserver.{h,cpp}` | second constructeur : adresse d'écoute donnée, au lieu des profils d'adressage du mediaserver. Le constructeur existant ne change pas. | `test_speech_control.cpp` |
-| `ControlHandler` | `speech/controlhandler.{h,cpp}` | `Handler` Abyss : filtre IP par `SessionGetChannelInfo`, `POST /control/token`, `GET /control/voices` | `test_speech_control.cpp` : §14.1, en v4 et v6 |
-| `SpeechStatusHandler` | `speech/speechstatus.{h,cpp}` | même motif que `StatusHandler` : une collecte, deux rendus | même fichier de test |
-| `StreamingHandler` | `speech/streaminghandler.{h,cpp}` | `WebSocketServer::Handler` : parse le chemin, consomme le jeton, répond 400/403/429/503 par `Reject`, sinon `Accept` vers une session de la fonction | `test_speech_streaming.cpp` : tous les codes du §7.1 |
-| `SpeechSession` | `speech/speechsession.{h,cpp}` | base des trois sessions : `ready`, `error`, bornes `idleSecs`/`maxSessionSecs`, fermeture avec code | même fichier : bornes |
-| `speechmain.cpp` | `speech/speechmain.cpp` | options, clé, `SIGHUP` → `Reload`, `SIGTERM` → fermeture 1001, `--check` | lancement dans un test : démarre, répond, s'arrête |
+| `TokenStore` | `speech/tokenstore.{h,cpp}` | création (`RAND_bytes`), consommation sous verrou, expiration, compteurs | `test_speech_tokens.cpp` |
+| `UsageCounters` | `speech/usage.{h,cpp}` | compteurs globaux et par `account` ; un compte apparaît dès son premier jeton | `test_speech_tokens.cpp` |
+| `XmlRpcServer(IPEndpoint)` | `xmlrpcserver.{h,cpp}` | second constructeur : adresse d'écoute donnée, sans profil d'adressage, **sans `/stop`**, sans fichier `http.log` | `test_speech_control.cpp` |
+| `ControlHandler` | `speech/controlhandler.{h,cpp}` | monté sur `/` : filtre IP sur tous les chemins par `SessionGetChannelInfo` (exact en IPv4 seulement, §6.1), puis `POST /control/token`, `GET /control/voices`, `GET /status/general` | `test_speech_control.cpp` |
+| `SpeechStatus` | `speech/speechstatus.{h,cpp}` | une collecte, deux rendus, comme `StatusHandler` | `test_speech_control.cpp` |
+| `StreamingHandler` | `speech/streaminghandler.{h,cpp}` | `WebSocketServer::Handler` : contrôles du §7.1 dans l'ordre, puis `Accept` vers la session que rend la fabrique de la fonction ; possède les sessions ; un thread vérifie leurs bornes | `test_speech_streaming.cpp` |
+| `SpeechSession` | `speech/speechsession.{h,cpp}` | base des trois sessions : `ready`, `error`, bornes `idleSecs`/`maxSessionSecs`, message borné à 64 Kio (au-delà : 1009), fermeture avec code | `test_speech_streaming.cpp` |
+| `speechmain.cpp` | `speech/speechmain.cpp` | options, clé, `--check`, signaux par `sigwait` dans un thread dédié | `test_speech_server.cpp` lance le vrai binaire |
+
+Ajouts au code partagé, nécessaires au lot :
+
+- `WebSocket::Close(code, reason)` : la pile n'émettait aucune trame Close.
+  Elle coupait le TCP, et le client ne recevait aucun code. La trame part
+  après la sortie en attente, et plus rien ne la suit.
+- `WebSocket::GetRemoteEndpoint()` : l'adresse du client, pour le journal
+  (§10).
+- `WebSocketServer::Init(IPEndpoint)` : l'adresse d'écoute
+  `streaming.listen`.
+- `XmlRpcServer` initialise les globales d'Abyss une seule fois par
+  processus : un second `MIMETypeInit()` fait un `abort()`, donc un second
+  serveur tuait le processus.
 
 Points d'attention :
 
 - Le réacteur WebSocket est mono-thread. `StreamingHandler` ne fait **rien**
   de bloquant : consommer un jeton est un accès à une map sous verrou court.
-- `SIGHUP` : le signal pose un drapeau ; c'est le thread principal qui
-  recharge, jamais le gestionnaire de signal. Le nouvel objet de
-  configuration remplace l'ancien par `shared_ptr` atomique ; les sessions
-  ouvertes gardent le leur.
-- Un `ListenOn(IPEndpoint)` pour `WebSocketServer` si `Init(port)` ne prend
-  pas d'adresse : à vérifier au début du lot, même traitement que pour
-  `XmlRpcServer`.
+- Aucune fonction n'a encore de fabrique dans `speechmain.cpp` : le binaire
+  du lot 1 répond 503 à toute ouverture de flux. Chaque lot 2 à 4 branche
+  la sienne par `StreamingHandler::SetFactory`.
+- Les signaux sont bloqués avant la création du premier thread, puis
+  attendus par `sigwait` dans un thread dédié. Le rechargement et l'arrêt
+  sont donc du code ordinaire, jamais un gestionnaire de signal. Les
+  sessions ouvertes gardent leur configuration.
+- `/status/general` ne porte encore que la présence de la clé dans
+  `backend`. Les lots 2 à 4 y ajoutent le dernier succès et le dernier échec
+  de leur service Mistral.
 
 Commit livrable : « speech-server : squelette, jetons et configuration ».
 
@@ -993,7 +1034,8 @@ fichier de rejeu.
   `account` présent : repris dans la réponse 201 et dans `usage.byAccount`.
 - `limits.maxSessions` atteint : 429 ; `limits.idleSecs` : fermeture 1000 après le
   délai.
-- Écoute et connexion en IPv6 sur les deux ports.
+- Connexion en IPv4 et en IPv6 sur le port de streaming ; le port de
+  contrôle refuse une configuration IPv6 (§6.1).
 - La clé absente empêche le démarrage ; la liste d'IP vide, une clé JSON
   inconnue, un fichier absent aussi.
 - `SIGHUP` avec une voix ajoutée : la voix sert au flux suivant, un flux
@@ -1055,4 +1097,11 @@ les compteurs (§6.2) ; lots 0 à 5 en 1.18.0, lot 6 en 1.19.0.
 Tranché le 2026-10-13, voix française : Mistral ne fournit que des voix
 anglaises (§4.2) ; IVèS **clone ses propres voix françaises** (§13.2.1).
 
-Aucune question n'est ouverte.
+Tranché le 2026-10-14, port de contrôle : **IPv4 seul**, avec Abyss
+(§6.1). Le besoin d'IPv6 sur ce port est noté pour une version
+ultérieure. Deux voies pour le couvrir : un petit serveur HTTP qui fait
+lui-même son `accept()` et filtre avant de lire, ou la bibliothèque
+libmicrohttpd (dépôt CRB), dont le rappel d'acceptation reçoit l'adresse
+complète.
+
+Aucune question n'est ouverte pour la 1.18.0.

@@ -1,0 +1,6 @@
+{"t": 10.3313, "kind": "wav.status", "path": "/v1/audio/speech", "code": 200, "ctype": "application/json", "secs": 10.331}
+{"t": 10.3381, "kind": "wav.header", "channels": 1, "rate": 24000, "bits": 16, "fmt": 1, "bytes": 234284}
+{"t": 10.6722, "kind": "stream.status", "path": "/v1/audio/speech", "code": 200, "ctype": "text/event-stream; charset=utf-8", "te": "chunked"}
+{"t": 11.3609, "kind": "stream.done", "first_chunk_secs": 0.469, "total_secs": 1.022, "chunks": 42, "bytes": 666452}
+{"t": 11.3653, "kind": "stream.head", "head": "event: speech.audio.delta\ndata: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AACguQAAPrkAAHy5AACGuQAAnbkAAJK5AAB7uQAAmLkAAGe5AAAaOAAAR7gAAIO5AACEuQAAj7kAAOo4AACLtwAA27cAANm3AAB5uQAAFrkAAM+4AAAFOAAAEjkAA"}
+{"t": 11.3729, "kind": "stream.sse", "events": 8, "audio_bytes": 499200, "first_events": [{"type": "speech.audio.delta", "keys": ["type", "audio_data"]}, {"type": "speech.audio.delta", "keys": ["type", "audio_data"]}, {"type": "speech.audio.delta", "keys": ["type", "audio_data"]}]}

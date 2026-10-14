@@ -303,8 +303,11 @@ function detect_distro
 #
 # webrtc-audio-processing n'y figure plus non plus : la VAD passe par le
 # sous-module libvad (fvad), bati in-tree. C'en etait le seul consommateur.
-RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool"
-DEB_PREREQ="libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
+#
+# json-devel (EPEL) / nlohmann-json3-dev: header-only JSON reader of
+# speech-server, whose tests belong to the mcu suite.
+RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool json-devel"
+DEB_PREREQ="nlohmann-json3-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
 
 function check_prereq
 {

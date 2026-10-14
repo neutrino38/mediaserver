@@ -1,0 +1,23 @@
+{"t": 0.3398, "kind": "open"}
+{"t": 0.3784, "kind": "rx", "msg": {"type": "session.created", "session": {"request_id": "ws-00000000-0000-0000-0000-000000000000", "model": "voxtral-mini-transcribe-realtime-2602", "audio_format": {"encoding": "pcm_s16le", "sample_rate": 16000}, "target_streaming_delay_ms": null, "diarize": false, "verbatim": false, "context_bias": [], "language": null, "speaker_references": null, "turn_detection": null}}}
+{"t": 1.9338, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "Bon"}}
+{"t": 1.9443, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "jour"}}
+{"t": 1.9528, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": ","}}
+{"t": 2.4254, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " je"}}
+{"t": 2.8858, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " suis"}}
+{"t": 2.8947, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " en"}}
+{"t": 3.3602, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " retard"}}
+{"t": 3.372, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " de"}}
+{"t": 3.4111, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " quelques"}}
+{"t": 3.8832, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " minutes"}}
+{"t": 3.8923, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "."}}
+{"t": 4.8346, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " Comm"}}
+{"t": 4.8438, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "ence"}}
+{"t": 4.8534, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "z"}}
+{"t": 4.8626, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " la"}}
+{"t": 6.1301, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " réunion"}}
+{"t": 6.1308, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " sans"}}
+{"t": 6.1794, "kind": "tx.audio_done", "secs": 5.34, "bytes": 156194}
+{"t": 6.1801, "kind": "silence.start", "secs": 100.0}
+{"t": 65.4095, "kind": "rx", "msg": {"type": "error", "error": {"message": "Timeout waiting for response from streaming transcription.", "code": 3804}}}
+{"t": 68.0137, "kind": "closed", "code": 1013, "reason": "Upstream session closed before audio was transcribed"}
