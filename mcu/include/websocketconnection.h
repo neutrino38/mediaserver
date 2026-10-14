@@ -388,7 +388,8 @@ public:
 	//et un echec avant le 101 doit deja pouvoir se dire.
 	int InitClient(int fd, std::unique_ptr<WebSocketTransport> transport,
 		       const std::string& host, const std::string& path,
-		       std::weak_ptr<WebSocket::Listener> wsl);
+		       std::weak_ptr<WebSocket::Listener> wsl,
+		       const std::map<std::string,std::string>& headers = {});
 
 	Role GetRole() const		{ return role;		}
 	bool IsClient() const		{ return role==Client;	}
@@ -460,6 +461,7 @@ private:
 	ClientState clientState;
 	std::string clientHost;
 	std::string clientPath;
+	std::map<std::string,std::string> clientHeaders;
 	std::string secWebSocketKey;
 	//En-tetes de la reponse, clefs en MINUSCULES : la casse d'un en-tete HTTP
 	//est libre, et le pair n'est plus notre serveur. Ils ne peuvent pas se poser

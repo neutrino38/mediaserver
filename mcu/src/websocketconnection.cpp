@@ -119,12 +119,14 @@ int WebSocketConnection::Init(int fd, std::unique_ptr<WebSocketTransport> transp
 
 int WebSocketConnection::InitClient(int fd, std::unique_ptr<WebSocketTransport> transport,
 				    const std::string& host, const std::string& path,
-				    std::weak_ptr<WebSocket::Listener> wsl)
+				    std::weak_ptr<WebSocket::Listener> wsl,
+				    const std::map<std::string,std::string>& headers)
 {
 	//Poser le listener AVANT d'initialiser : un echec de connexion doit se dire
 	//meme s'il survient avant le 101 (§4.6).
 	this->wsl	  = wsl;
 	this->clientHost  = host;
+	this->clientHeaders = headers;
 	//Une requete HTTP porte toujours un chemin absolu
 	this->clientPath  = path.empty() ? "/" : path;
 	//Le socket est en cours de connexion : on attend POLLOUT
@@ -883,6 +885,8 @@ bool WebSocketConnection::SendUpgradeRequest()
 	request.AddHeader("Connection"			, "Upgrade");
 	request.AddHeader("Sec-WebSocket-Key"		, secWebSocketKey);
 	request.AddHeader("Sec-WebSocket-Version"	, "13");
+	for (const auto& header : clientHeaders)
+		request.AddHeader(header.first, header.second);
 
 	const std::string out = request.Serialize();
 

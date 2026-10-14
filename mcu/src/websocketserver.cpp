@@ -408,6 +408,12 @@ bool WebSocketServer::ParseWsUrl(const std::string& url, Target& target)
  **************************/
 bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener)
 {
+	return Connect(url,listener,{});
+}
+
+bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener,
+			      const std::map<std::string,std::string>& headers)
+{
 	//Sans réacteur, personne ne piloterait la connexion : l'échouer tout de
 	//suite vaut mieux que de la laisser dormir dans la file.
 	if (!inited)
@@ -484,6 +490,7 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 	request.fd	  = fd;
 	request.host	  = hostHeader;
 	request.path	  = path;
+	request.headers	  = headers;
 	request.transport = std::move(transport);
 	request.listener  = listener;
 
@@ -668,7 +675,7 @@ void WebSocketServer::CreateClientConnection(PendingConnect& request)
 	//Le listener est posé ICI : en mode client personne n'appelle Accept(), et
 	//un échec avant le 101 doit déjà pouvoir se dire.
 	conn->InitClient(request.fd, std::move(request.transport),
-			 request.host, request.path, request.listener);
+			 request.host, request.path, request.listener, request.headers);
 
 	//Store it
 	connections[id] = conn;
