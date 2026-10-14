@@ -55,7 +55,7 @@ public:
 
 	SpeechFunction GetFunction() const	{ return params.function; }
 
-	// Watchdog thread: closes the session once idle or too old.
+	// Watchdog thread: closes the session once idle or too old, else ticks it.
 	void CheckLimits(uint64_t nowMs);
 
 	// Sends `reason` as a fatal error first, when set, then the Close frame.
@@ -72,12 +72,18 @@ public:
 	virtual void onClose(WebSocket* ws) override;
 
 protected:
+	// Reactor thread, once the 101 is sent. Sends `ready` by default; a
+	// session that needs its backend first sends it itself, later.
+	virtual void OnOpen()				{ SendReady(); }
 	virtual void FillReady(nlohmann::json& ready)	{}
+	// Watchdog thread, about every 250 ms, until the session closes.
+	virtual void OnTick(uint64_t nowMs)		{}
 	// A text frame, already parsed, with a string `type`.
 	virtual void OnText(const nlohmann::json& message);
 	virtual void OnBinary(const BYTE* data, DWORD size);
 	virtual void OnClosed()				{}
 
+	void SendReady();
 	void Send(const nlohmann::json& message);
 	void SendError(const std::string& reason, bool fatal);
 

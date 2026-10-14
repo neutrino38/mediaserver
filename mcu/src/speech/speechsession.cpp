@@ -42,6 +42,8 @@ void SpeechSession::CheckLimits(uint64_t nowMs)
 		Close(CloseNormal, "idle");
 	else if (Elapsed(nowMs, openedAtMs) >= (uint64_t)params.config->maxSessionSecs*1000)
 		Close(CloseNormal, "max duration");
+	else if (!closing)
+		OnTick(nowMs);
 }
 
 void SpeechSession::Close(WORD code, const char* reason)
@@ -73,6 +75,11 @@ void SpeechSession::onOpen(WebSocket* ws)
 	    SpeechFunctionName(params.function), params.account.c_str(),
 	    params.tokenPrefix.c_str(), params.remote.ToString().c_str());
 
+	OnOpen();
+}
+
+void SpeechSession::SendReady()
+{
 	json ready = {{"type", "ready"}, {"function", SpeechFunctionName(params.function)}, {"rate", 16000}};
 	FillReady(ready);
 	Send(ready);

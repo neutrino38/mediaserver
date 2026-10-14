@@ -47,6 +47,7 @@ TEST(SpeechConfig, AMinimalFileTakesEveryDefault)
 	EXPECT_TRUE(config->voices.empty());
 	EXPECT_EQ(1500, config->ttsPhraseSilenceMs);
 	EXPECT_EQ(30, config->asrPauseCloseSecs);
+	EXPECT_EQ("voxtral-mini-transcribe-realtime-2602", config->asrModel);
 	EXPECT_EQ("ministral-8b-latest", config->compModel);
 	EXPECT_EQ(400, config->compDebounceMs);
 }
@@ -61,7 +62,7 @@ TEST(SpeechConfig, TheSpecExampleIsAccepted)
 		"limits": { "maxSessions": { "asr": 5, "tts": 6, "comp": 7 }, "idleSecs": 10, "maxSessionSecs": 100 },
 		"voices": [ { "alias": "fr-homme", "lang": "fr", "voiceId": "abc" } ],
 		"tts": { "phraseSilenceMs": 1000 },
-		"asr": { "vad": true, "silenceMs": 900, "pauseCloseSecs": 20 },
+		"asr": { "model": "voxtral-next", "vad": true, "silenceMs": 900, "pauseCloseSecs": 20 },
 		"comp": { "model": "ministral-3b-latest", "debounceMs": 300 }
 	})", error);
 	ASSERT_TRUE(config) << error;
@@ -76,6 +77,7 @@ TEST(SpeechConfig, TheSpecExampleIsAccepted)
 	EXPECT_EQ("fr-homme", config->DefaultVoice("fr")->alias);
 	EXPECT_EQ(nullptr, config->DefaultVoice("en"));
 	EXPECT_TRUE(config->asrVad);
+	EXPECT_EQ("voxtral-next", config->asrModel);
 	EXPECT_EQ("ministral-3b-latest", config->compModel);
 }
 

@@ -1,7 +1,7 @@
 # Serveur de traitement de la voix (`speech-server`)
 
-> Statut : lot 0 fait (§4.2), lot 1 fait (§13.3). Les lots 2 à 5 restent à
-> coder.
+> Statut : lot 0 fait (§4.2), lots 1 et 2 faits (§13.3, §13.4). Les lots 3
+> à 5 restent à coder.
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
 > mediaserver client (lot 6) suit en 1.19.0.
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
@@ -121,6 +121,8 @@ enregistrements bruts, anonymisés, sont dans `mcu/tests/fixtures/speech/`.
 | Fin | `input_audio.flush` rend un `transcription.done` avec tout le texte restant ; `input_audio.end` rend un `transcription.done` vide ; puis Mistral ferme la connexion |
 | Silence | sans audio pendant ~59 s : `error` 3804 « Timeout waiting for response », puis fermeture **1013** à ~62 s. Une pause longue doit donc fermer et rouvrir (`asr.pauseCloseSecs` = 30 s est en dessous) |
 | Facturation | `usage.prompt_audio_seconds` par session (4 pour 4,9 s d'audio : à la seconde entière) ; 0,006 $ la minute (fiche modèle) |
+| Texte final | après `input_audio.flush`, les derniers deltas arrivent, puis `transcription.done` porte **tout** le texte du segment, deltas compris. Le serveur ne relaie que la partie que les deltas n'ont pas portée |
+| Stabilité | le 2026-10-14 vers 9 h 30 (UTC), 6 sessions sur 8, envoyées au rythme réel, ont été fermées par Mistral : `error` 3800 (`vllm QueueOverflowError`), puis fermeture 1013 « Upstream session closed before audio was transcribed ». Le même jour vers 9 h 20, une session complète a réussi. La cause est chez Mistral : le rythme d'envoi n'y change rien d'après la sonde. À suivre avant la mise en service |
 
 **TTS, Voxtral TTS** (`POST https://api.mistral.ai/v1/audio/speech`, modèle `voxtral-mini-tts-2603`)
 
@@ -300,13 +302,20 @@ GET /streaming/<function>/<token>?lang=fr&voice=claire&delay=1000
 | 400 | paramètre inconnu ou répété, langue ou voix non servie, `delay` hors bornes |
 | 403 | jeton inconnu, expiré, déjà consommé, ou d'une autre fonction |
 | 429 | `limits.maxSessions` atteint pour cette fonction |
-| 503 | fonction pas encore servie, `tts` sans voix configurée, ou Mistral injoignable à l'ouverture |
+| 503 | fonction pas encore servie, ou `tts` sans voix configurée |
 | 500 | erreur interne |
 
 Les contrôles se font dans cet ordre : 404, 400, 503, 429, puis 403. Le
 jeton est consommé en dernier. Ainsi, un client refusé pour une autre
 raison garde son jeton et peut réessayer. Exemple : un 429 ne brûle pas le
 jeton.
+
+Mistral injoignable ne donne **pas** de 503. Le savoir avant le 101
+demanderait d'attendre Mistral dans le réacteur, qui sert toutes les
+connexions. Le flux s'ouvre donc, et le serveur ne l'annonce prêt
+(`ready`) qu'une fois Mistral prêt. S'il ne l'est pas, le client reçoit
+`error` fatal, puis la fermeture 1013. Exemple pour `asr` : le 101 part
+tout de suite ; `ready` part après le `session.updated` de Mistral.
 
 Paramètres : `lang` vaut pour les trois fonctions (`fr` par défaut),
 `voice` pour `tts` seulement, `delay` pour `asr` seulement. Un paramètre
@@ -404,9 +413,17 @@ la phrase suivante part.
 
 ### 7.4 `asr` : de la voix vers le texte
 
-Le client envoie des trames binaires de 20 à 500 ms. Le serveur les relaie
-telles quelles vers Mistral (même format, aucun tampon au-delà de la file de
-sortie du WebSocket).
+Le client attend `ready` puis envoie des trames binaires de 20 à 500 ms, au
+rythme réel. Le serveur les relaie telles quelles vers Mistral (même
+format). `ready` part quand Mistral a accepté le `delay` : avant, rien ne
+dit que Mistral répond. Sans `session.updated` 10 s après la demande,
+le client reçoit `error` fatal « backend timeout », puis 1013.
+
+Le serveur ne tamponne l'audio que pendant une ouverture de session
+Mistral : l'audio reçu avant `ready`, ou à la reprise après une pause
+longue. Le tampon tient 5 s. Il part en trames de 100 ms dès que Mistral
+est prêt. Au-delà de 5 s, l'audio est jeté et le client reçoit une
+`error` non fatale.
 
 Le serveur rend le texte en T.140 :
 
@@ -443,7 +460,13 @@ reprend sur la voix. Le client est averti par `{"type":"paused"}` et
 `{"type":"resumed"}`. Hors version 1 si le lot 0 ne mesure pas un besoin.
 
 `{"type":"done"}` : le serveur envoie `input_audio.flush` puis
-`input_audio.end`, relaie le texte restant, et ferme avec 1000.
+`input_audio.end`, relaie le texte restant, et ferme avec 1000 quand
+Mistral a fermé, ou au plus tard 5 s après.
+
+Fermetures : Mistral qui ferme ou tombe en cours de flux donne `error`
+fatal « backend closed », puis 1013. Une erreur Mistral pendant une pause
+(le délai de silence, 3804) est attendue : elle ne compte pas comme un
+échec dans `/status/general`.
 
 ### 7.5 `comp` : corriger et compléter
 
@@ -584,7 +607,7 @@ doit pas passer en silence) :
     { "alias": "claire", "lang": "fr", "voiceId": "<voice_id Mistral>" }
   ],
   "tts":  { "phraseSilenceMs": 1500 },
-  "asr":  { "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
+  "asr":  { "model": "voxtral-mini-transcribe-realtime-2602", "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
   "comp": { "model": "ministral-8b-latest", "debounceMs": 400 }
 }
 ```
@@ -597,6 +620,7 @@ doit pas passer en silence) :
 | `streaming.listen` | adresse d'écoute du port de streaming, littéral v4 ou v6 ; `::` sert les deux familles | §8.3 |
 | `mistral.url` | base des appels, pour un relais ou le faux Mistral des tests | §14 |
 | `voices` | obligatoire pour `tts` : sans voix, les flux `tts` reçoivent 503 | §7.3 |
+| `asr.model`, `comp.model` | modèle Mistral de la fonction ; une session garde celui de son ouverture | §4.1 |
 
 **Démarrage.** Fichier absent, JSON invalide, clé inconnue, `control.allow`
 vide ou porteur d'une entrée IPv6, `control.listen` en IPv6, deux ports
@@ -947,17 +971,27 @@ Commit livrable : « speech-server : squelette, jetons et configuration ».
 
 ### 13.4 Lot 2 : `asr`
 
-| Étape | Contenu | Test |
-|---|---|---|
-| 1 | `FakeMistralRealtime` dans `tests/` : un `WebSocketServer` qui rejoue la fixture du lot 0 à la réception d'audio | le faux rejoue à l'identique |
-| 2 | `MistralRealtimeClient` (`speech/mistralrealtime.{h,cpp}`) : `WebSocket::Listener` de la connexion sortante (`WebSocketServer::Connect`, `wss://`, en-tête `Authorization`), décode les événements JSON, expose `onText`, `onDone`, `onError` | contre le faux : deltas dans l'ordre |
-| 3 | `AsrSession` : relais binaire client → Mistral, texte Mistral → client, `pause`/`resume`, `done`, fermeture 1013 si Mistral tombe | §14.2 |
-| 4 | Fermeture de la session Mistral après `pauseCloseSecs`, réouverture à `resume` | §14.2 |
-| 5 | Compteurs : secondes d'audio relayées, par `account` | `/status/general` les montre |
+État : **fait**. Essayé contre le vrai Mistral le 2026-10-14 : texte exact,
+fermeture 1000 après `done`, compteurs justes (voir aussi « Stabilité »
+au §4.2).
 
-Point d'attention : `WebSocketServer::Connect` prend un `weak_ptr` de
-listener ; la session Mistral meurt avec `AsrSession`, et un callback qui
-arrive après ne trouve plus personne, sans crash. Un test le force.
+| Classe | Fichier | Rôle | Test |
+|---|---|---|---|
+| `TaskPool` | `speech/taskpool.{h,cpp}` | `mistral.workers` threads, file de tâches. L'ouverture vers Mistral y tourne, parce que `WebSocketServer::Connect` résout le nom d'hôte. Le lot 3 y fera tourner libcurl | `test_speech_asr.cpp` |
+| `BackendHealth` | `speech/backendhealth.{h,cpp}` | dernier succès, dernier échec et son motif, par service ; publiés dans `backend` de `/status/general` | `test_speech_asr.cpp` |
+| `SpeechBackend` | `speech/speechbackend.h` | ce qu'une session reçoit pour joindre Mistral et compter : réacteur, réserve de threads, clé, compteurs, santé | — |
+| `MistralRealtimeClient` | `speech/mistralrealtime.{h,cpp}` | `WebSocket::Listener` de la connexion sortante, en-tête `Authorization`, `session.update`, événements décodés. Chaque événement nomme son client : une session rouverte ignore les événements tardifs de la précédente | `test_speech_asr.cpp` |
+| `AsrSession` | `speech/asrsession.{h,cpp}` | relais, `pause`/`resume`, fermeture de Mistral après `pauseCloseSecs` et réouverture, `done`, délais d'ouverture et de fin | `test_speech_asr.cpp` |
+| `FakeMistralRealtime` | `tests/fake_mistral_realtime.h` | faux Voxtral Realtime : rejoue les deltas de `asr_binary_d240_lNone_s0.jsonl`, un par trame audio reçue | — |
+
+Ajout au code partagé : `WebSocketServer::Connect(url, listener, headers)`
+pose des en-têtes sur la requête d'ouverture. Ils ne sont jamais
+journalisés. La vérification TLS sortante est celle du mediaserver : le
+magasin du système, le nom d'hôte contrôlé.
+
+Point d'attention : `WebSocketServer::Init()` rend la main avant que son
+thread appelle `listen()`. Un test qui se connecte tout de suite au faux
+Mistral échoue parfois ; il attend donc que le port réponde.
 
 Commit livrable : « speech-server : reconnaissance vocale par Voxtral Realtime ».
 
@@ -966,7 +1000,7 @@ Commit livrable : « speech-server : reconnaissance vocale par Voxtral Realtime 
 | Étape | Contenu | Test |
 |---|---|---|
 | 1 | `PhraseSplitter` (`speech/phrasesplitter.{h,cpp}`) : classe pure, T.140 → phrases ; **la même** que celle prévue par la SPEC TTS §7.1, écrite ici une fois | §14.3 premier point |
-| 2 | `HttpWorkerPool` (`speech/httpworkers.{h,cpp}`) : `mistral.workers` threads `Worker`, file de requêtes libcurl (`easy`, bloquant, un par thread), callback d'écriture qui pousse les morceaux au demandeur | une requête lente ne bloque pas les autres |
+| 2 | Requêtes libcurl (`easy`, bloquant) postées dans le `TaskPool` du lot 2 ; callback d'écriture qui pousse les morceaux au demandeur | une requête lente ne bloque pas les autres |
 | 3 | `FakeMistralHttp` dans `tests/` : petit serveur HTTP qui rejoue la fixture TTS (et chat au lot 4) | le faux rejoue |
 | 4 | `PcmConverter` (`speech/pcmconverter.{h,cpp}`) : float32 → S16LE, rééchantillonnage libswresample vers 16 kHz | sinus de 440 Hz, à 24 kHz en entrée, retrouvé à 16 kHz |
 | 5 | `TtsSession` : `text`/`flush`/`stop`, file de phrases, un `say` puis PCM puis `done` par phrase, 403 Mistral non fatal | §14.3 |

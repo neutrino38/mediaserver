@@ -4,6 +4,7 @@
 #include <ctime>
 #include <map>
 #include <string>
+#include "speech/backendhealth.h"
 #include "speech/streaminghandler.h"
 #include "speech/tokenstore.h"
 #include "speech/usage.h"
@@ -22,13 +23,14 @@ public:
 		time_t		startedAt;
 		long		uptimeSecs;
 		bool		apiKeyPresent;
+		BackendHealth::Service		backend[SpeechFunctionCount];
 		StreamingHandler::Counters	sessions;
 		TokenStore::Counters		tokens;
 		UsageCounters::Usage		usage;
 		std::map<std::string,UsageCounters::Usage> usageByAccount;
 	};
 
-	SpeechStatus(time_t startedAt, bool apiKeyPresent, StreamingHandler& streaming, TokenStore& tokens, UsageCounters& usage);
+	SpeechStatus(time_t startedAt, bool apiKeyPresent, BackendHealth& health, StreamingHandler& streaming, TokenStore& tokens, UsageCounters& usage);
 
 	// `now` is injected so that the uptime stays testable.
 	void Collect(Info& info, time_t now);
@@ -39,6 +41,7 @@ public:
 private:
 	time_t			startedAt;
 	bool			apiKeyPresent;
+	BackendHealth&		health;
 	StreamingHandler&	streaming;
 	TokenStore&		tokens;
 	UsageCounters&		usage;

@@ -112,7 +112,7 @@ TARGETS=mcu rtmptest
 # speech-server (docs/conception/SPEECH-SERVER/SPEC.md): never in OBJS, so that
 # the mcu links neither the JSON reader nor, later, libcurl. The server reuses
 # the WebSocket reactor and Abyss, nothing from the conference engine.
-SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o
+SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o
 SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o
 OBJSSPEECH=$(SPEECHOBJS) $(SPEECHREUSEDOBJS) speechmain.o
 BUILDOBJSSPEECH=$(addprefix $(BUILD)/,$(OBJSSPEECH))
@@ -396,6 +396,7 @@ TESTBIN = tests/runtests$(if $(filter-out debug,$(TAG)),-$(TAG),)
 $(TESTBIN): $(OBJS) $(SPEECHOBJS) $(TESTSRCS) $(MEDKITLIB) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) -DTEST_PCAP_FILE='"$(TEST_PCAP)"' \
 		-DSPEECH_SERVER_BIN='"$(abspath $(BIN)/speech-server)"' \
+		-DSPEECH_FIXTURES_DIR='"$(abspath tests/fixtures/speech)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
 		-o $(TESTBIN) $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
 

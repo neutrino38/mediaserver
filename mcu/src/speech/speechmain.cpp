@@ -19,10 +19,13 @@
 #include "version.h"
 #include "websocketserver.h"
 #include "xmlrpcserver.h"
+#include "speech/asrsession.h"
+#include "speech/backendhealth.h"
 #include "speech/controlhandler.h"
 #include "speech/speechconfig.h"
 #include "speech/speechstatus.h"
 #include "speech/streaminghandler.h"
+#include "speech/taskpool.h"
 #include "speech/tokenstore.h"
 #include "speech/usage.h"
 
@@ -152,13 +155,19 @@ int main(int argc, char** argv)
 	SpeechConfigHolder config(loaded);
 	TokenStore tokens;
 	UsageCounters usage;
+	BackendHealth health;
+	WebSocketServer wsServer;
+	TaskPool tasks(loaded->mistralWorkers);
+	const SpeechBackend backend = {&wsServer, &tasks, apiKey, &usage, &health};
 
 	StreamingHandler streaming(config, tokens);
-	WebSocketServer wsServer;
+	streaming.SetFactory(SpeechFunction::Asr, [&backend](const SpeechSession::Params& params) {
+		return std::make_shared<AsrSession>(params, backend);
+	});
 	wsServer.SetSecure(loaded->streamingSecure, loaded->streamingCert.c_str(), loaded->streamingKey.c_str());
 	wsServer.AddHandler("/streaming/", &streaming);
 
-	SpeechStatus status(startedAt, true, streaming, tokens, usage);
+	SpeechStatus status(startedAt, true, health, streaming, tokens, usage);
 	ControlHandler control(config, tokens, usage, status);
 	XmlRpcServer controlServer(loaded->controlListen.To(loaded->controlPort));
 	controlServer.AddHandler("/", &control);
@@ -209,6 +218,7 @@ int main(int argc, char** argv)
 	}
 	signalThread.join();
 
+	tasks.Stop();
 	streaming.Stop();
 	wsServer.End();
 

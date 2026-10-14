@@ -119,8 +119,7 @@ TEST_F(SpeechServerBinary, StartsAnswersAndStopsOnSigterm)
 	EXPECT_EQ("present", json::parse(status.body)["backend"]["apiKey"]);
 
 	speechtest::WsClient client;
-	EXPECT_EQ(503, client.Open("::1", streamingPort, "/streaming/asr/" + std::string(43, 'A')))
-		<< "no function is served yet";
+	EXPECT_EQ(403, client.Open("::1", streamingPort, "/streaming/asr/" + std::string(43, 'A')));
 
 	EXPECT_EQ(0, Stop());
 }

@@ -15,13 +15,15 @@ class UsageCounters
 public:
 	struct Usage
 	{
-		uint64_t	asrAudioSecs = 0;
+		uint64_t	asrAudioMs = 0;
 		uint64_t	ttsChars = 0;
 		uint64_t	compTokens = 0;
 	};
 
 	// An account appears in the breakdown from its first token on.
 	void Register(const std::string& account);
+
+	void AddAsrAudio(const std::string& account, uint64_t ms);
 
 	Usage Total() const;
 	std::map<std::string,Usage> ByAccount() const;

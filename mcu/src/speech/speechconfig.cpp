@@ -193,7 +193,8 @@ void ParseInto(const json& root, SpeechConfig& config)
 	if (root.contains("asr"))
 	{
 		const json& asr = Object(root["asr"], "asr");
-		CheckKeys(asr, "asr", {"vad", "silenceMs", "pauseCloseSecs"});
+		CheckKeys(asr, "asr", {"model", "vad", "silenceMs", "pauseCloseSecs"});
+		ReadString(asr, "asr", "model", config.asrModel);
 		ReadBool(asr, "asr", "vad", config.asrVad);
 		ReadInt(asr, "asr", "silenceMs", config.asrSilenceMs, 0, 60000);
 		// Mistral closes a silent session after about 60 s (SPEC §4.2).

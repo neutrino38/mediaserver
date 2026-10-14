@@ -6,13 +6,19 @@ void UsageCounters::Register(const std::string& account)
 	accounts[account];
 }
 
+void UsageCounters::AddAsrAudio(const std::string& account, uint64_t ms)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	accounts[account].asrAudioMs += ms;
+}
+
 UsageCounters::Usage UsageCounters::Total() const
 {
 	std::lock_guard<std::mutex> lock(mutex);
 	Usage total;
 	for (const auto& entry : accounts)
 	{
-		total.asrAudioSecs += entry.second.asrAudioSecs;
+		total.asrAudioMs += entry.second.asrAudioMs;
 		total.ttsChars += entry.second.ttsChars;
 		total.compTokens += entry.second.compTokens;
 	}

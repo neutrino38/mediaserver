@@ -15,9 +15,10 @@ std::string SpeechIsoUtc(time_t when)
 	return buf;
 }
 
-SpeechStatus::SpeechStatus(time_t startedAt, bool apiKeyPresent, StreamingHandler& streaming, TokenStore& tokens, UsageCounters& usage) :
+SpeechStatus::SpeechStatus(time_t startedAt, bool apiKeyPresent, BackendHealth& health, StreamingHandler& streaming, TokenStore& tokens, UsageCounters& usage) :
 	startedAt(startedAt),
 	apiKeyPresent(apiKeyPresent),
+	health(health),
 	streaming(streaming),
 	tokens(tokens),
 	usage(usage)
@@ -31,6 +32,8 @@ void SpeechStatus::Collect(Info& info, time_t now)
 	info.startedAt = startedAt;
 	info.uptimeSecs = now - startedAt;
 	info.apiKeyPresent = apiKeyPresent;
+	for (int i = 0; i < SpeechFunctionCount; ++i)
+		info.backend[i] = health.Get((SpeechFunction)i);
 	info.sessions = streaming.GetCounters();
 	info.tokens = tokens.GetCounters(now);
 	info.usage = usage.Total();
@@ -40,9 +43,14 @@ void SpeechStatus::Collect(Info& info, time_t now)
 namespace
 {
 
+json Instant(time_t when)
+{
+	return when ? json(SpeechIsoUtc(when)) : json(nullptr);
+}
+
 json UsageJSON(const UsageCounters::Usage& usage)
 {
-	return json{{"asrAudioSecs", usage.asrAudioSecs}, {"ttsChars", usage.ttsChars}, {"compTokens", usage.compTokens}};
+	return json{{"asrAudioSecs", usage.asrAudioMs/1000.0}, {"ttsChars", usage.ttsChars}, {"compTokens", usage.compTokens}};
 }
 
 }
@@ -55,6 +63,13 @@ std::string SpeechStatus::RenderJSON(const Info& info)
 			{"open", info.sessions.open[i]},
 			{"max", info.sessions.max[i]},
 			{"refused", info.sessions.refused[i]}};
+
+	json backend = {{"apiKey", info.apiKeyPresent ? "present" : "absent"}};
+	for (int i = 0; i < SpeechFunctionCount; ++i)
+		backend[SpeechFunctionName((SpeechFunction)i)] = {
+			{"lastSuccess", Instant(info.backend[i].lastSuccess)},
+			{"lastFailure", Instant(info.backend[i].lastFailure)},
+			{"lastError", info.backend[i].lastError}};
 
 	json byAccount = json::object();
 	for (const auto& entry : info.usageByAccount)
@@ -70,7 +85,7 @@ std::string SpeechStatus::RenderJSON(const Info& info)
 			{"pid", info.pid},
 			{"startedAt", SpeechIsoUtc(info.startedAt)},
 			{"uptimeSecs", info.uptimeSecs}}},
-		{"backend", {{"apiKey", info.apiKeyPresent ? "present" : "absent"}}},
+		{"backend", backend},
 		{"sessions", sessions},
 		{"tokens", {
 			{"live", info.tokens.live},
@@ -94,6 +109,16 @@ std::string SpeechStatus::RenderText(const Info& info)
 	snprintf(buf, sizeof(buf), "  Mistral key    %s\n", info.apiKeyPresent ? "present" : "absent");
 	out += buf;
 
+	for (int i = 0; i < SpeechFunctionCount; ++i)
+	{
+		const BackendHealth::Service& service = info.backend[i];
+		snprintf(buf, sizeof(buf), "  Mistral %-6s success %s, failure %s%s%s\n", SpeechFunctionName((SpeechFunction)i),
+			service.lastSuccess ? SpeechIsoUtc(service.lastSuccess).c_str() : "never",
+			service.lastFailure ? SpeechIsoUtc(service.lastFailure).c_str() : "never",
+			service.lastError.empty() ? "" : " - ", service.lastError.c_str());
+		out += buf;
+	}
+
 	out += "\nSessions         open / max / refused\n";
 	for (int i = 0; i < SpeechFunctionCount; ++i)
 	{
@@ -108,14 +133,14 @@ std::string SpeechStatus::RenderText(const Info& info)
 	out += buf;
 
 	out += "\nUsage            asr audio s / tts chars / comp tokens\n";
-	snprintf(buf, sizeof(buf), "  %-14s %llu / %llu / %llu\n", "(total)",
-		(unsigned long long)info.usage.asrAudioSecs, (unsigned long long)info.usage.ttsChars,
+	snprintf(buf, sizeof(buf), "  %-14s %.1f / %llu / %llu\n", "(total)",
+		info.usage.asrAudioMs/1000.0, (unsigned long long)info.usage.ttsChars,
 		(unsigned long long)info.usage.compTokens);
 	out += buf;
 	for (const auto& entry : info.usageByAccount)
 	{
-		snprintf(buf, sizeof(buf), "  %-14s %llu / %llu / %llu\n", entry.first.c_str(),
-			(unsigned long long)entry.second.asrAudioSecs, (unsigned long long)entry.second.ttsChars,
+		snprintf(buf, sizeof(buf), "  %-14s %.1f / %llu / %llu\n", entry.first.c_str(),
+			entry.second.asrAudioMs/1000.0, (unsigned long long)entry.second.ttsChars,
 			(unsigned long long)entry.second.compTokens);
 		out += buf;
 	}

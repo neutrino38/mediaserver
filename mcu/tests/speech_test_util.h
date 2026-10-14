@@ -142,6 +142,12 @@ public:
 		return head.size() > 12 ? atoi(head.c_str() + 9) : 0;
 	}
 
+	void SetReadTimeout(int secs)
+	{
+		timeval tv{secs, 0};
+		setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	}
+
 	void SendText(const std::string& text)	{ Send(WebSocketFrameHeader::TextFrame, text); }
 	void SendBinary(const std::string& data)	{ Send(WebSocketFrameHeader::BinaryFrame, data); }
 

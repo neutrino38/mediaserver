@@ -30,7 +30,7 @@ protected:
 
 		config = std::make_unique<SpeechConfigHolder>(parsed);
 		streaming = std::make_unique<StreamingHandler>(*config, tokens);
-		status = std::make_unique<SpeechStatus>(time(NULL), true, *streaming, tokens, usage);
+		status = std::make_unique<SpeechStatus>(time(NULL), true, health, *streaming, tokens, usage);
 		control = std::make_unique<ControlHandler>(*config, tokens, usage, *status);
 
 		port = speechtest::FreePort(AF_INET);
@@ -57,6 +57,7 @@ protected:
 
 	TokenStore tokens;
 	UsageCounters usage;
+	BackendHealth health;
 	std::unique_ptr<SpeechConfigHolder> config;
 	std::unique_ptr<StreamingHandler> streaming;
 	std::unique_ptr<SpeechStatus> status;
