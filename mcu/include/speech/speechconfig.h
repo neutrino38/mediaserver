@@ -35,7 +35,7 @@ struct SpeechConfig
 	std::string	streamingKey = "/etc/mediaserver/mcu.key";
 
 	std::string	mistralUrl = "https://api.mistral.ai";
-	int		mistralWorkers = 4;
+	int		mistralWorkers = 10;
 
 	int		maxSessions[SpeechFunctionCount] = { 20, 20, 20 };
 	int		idleSecs = 60;
@@ -43,6 +43,7 @@ struct SpeechConfig
 
 	std::vector<Voice> voices;
 
+	std::string	ttsModel = "voxtral-mini-tts-2603";
 	int		ttsPhraseSilenceMs = 1500;
 	std::string	asrModel = "voxtral-mini-transcribe-realtime-2602";
 	bool		asrVad = false;

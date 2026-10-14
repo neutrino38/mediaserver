@@ -27,6 +27,7 @@
 #include "speech/streaminghandler.h"
 #include "speech/taskpool.h"
 #include "speech/tokenstore.h"
+#include "speech/ttssession.h"
 #include "speech/usage.h"
 
 namespace
@@ -163,6 +164,9 @@ int main(int argc, char** argv)
 	StreamingHandler streaming(config, tokens);
 	streaming.SetFactory(SpeechFunction::Asr, [&backend](const SpeechSession::Params& params) {
 		return std::make_shared<AsrSession>(params, backend);
+	});
+	streaming.SetFactory(SpeechFunction::Tts, [&backend](const SpeechSession::Params& params) {
+		return std::make_shared<TtsSession>(params, backend);
 	});
 	wsServer.SetSecure(loaded->streamingSecure, loaded->streamingCert.c_str(), loaded->streamingKey.c_str());
 	wsServer.AddHandler("/streaming/", &streaming);

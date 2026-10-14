@@ -44,6 +44,7 @@ void AsrSession::OpenMistral()
 	std::weak_ptr<SpeechSession> self = shared_from_this();
 	const std::string url = MistralRealtimeClient::Url(params.config->mistralUrl, params.config->asrModel);
 	const SpeechBackend& backend = this->backend;
+	Log("-AsrSession: opening Mistral session [url:%s,token:%s]\n", url.c_str(), params.tokenPrefix.c_str());
 
 	// Connect resolves the host: never on the reactor.
 	backend.tasks->Post([client, self, url, &backend]() {

@@ -12,6 +12,12 @@ void UsageCounters::AddAsrAudio(const std::string& account, uint64_t ms)
 	accounts[account].asrAudioMs += ms;
 }
 
+void UsageCounters::AddTtsChars(const std::string& account, uint64_t chars)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	accounts[account].ttsChars += chars;
+}
+
 UsageCounters::Usage UsageCounters::Total() const
 {
 	std::lock_guard<std::mutex> lock(mutex);

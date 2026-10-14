@@ -39,13 +39,14 @@ TEST(SpeechConfig, AMinimalFileTakesEveryDefault)
 	EXPECT_EQ(9201, config->streamingPort);
 	EXPECT_FALSE(config->streamingSecure);
 	EXPECT_EQ("https://api.mistral.ai", config->mistralUrl);
-	EXPECT_EQ(4, config->mistralWorkers);
+	EXPECT_EQ(10, config->mistralWorkers);
 	for (int i = 0; i < SpeechFunctionCount; ++i)
 		EXPECT_EQ(20, config->maxSessions[i]);
 	EXPECT_EQ(60, config->idleSecs);
 	EXPECT_EQ(3600, config->maxSessionSecs);
 	EXPECT_TRUE(config->voices.empty());
 	EXPECT_EQ(1500, config->ttsPhraseSilenceMs);
+	EXPECT_EQ("voxtral-mini-tts-2603", config->ttsModel);
 	EXPECT_EQ(30, config->asrPauseCloseSecs);
 	EXPECT_EQ("voxtral-mini-transcribe-realtime-2602", config->asrModel);
 	EXPECT_EQ("ministral-8b-latest", config->compModel);

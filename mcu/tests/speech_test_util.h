@@ -151,7 +151,27 @@ public:
 	void SendText(const std::string& text)	{ Send(WebSocketFrameHeader::TextFrame, text); }
 	void SendBinary(const std::string& data)	{ Send(WebSocketFrameHeader::BinaryFrame, data); }
 
+	// One whole message: continuation frames are joined to their first frame.
 	Frame Read()
+	{
+		Frame message;
+		bool fin = false;
+		while (!fin)
+		{
+			Frame frame = ReadFrame(fin);
+			if (frame.opcode == -1)
+				return frame;
+			if (frame.opcode == WebSocketFrameHeader::ContinuationFrame)
+			{
+				message.payload += frame.payload;
+				continue;
+			}
+			message = frame;
+		}
+		return message;
+	}
+
+	Frame ReadFrame(bool& fin)
 	{
 		Frame frame;
 		BYTE head[2];
@@ -178,6 +198,7 @@ public:
 		if (length && !ReadN((BYTE*)&frame.payload[0], length))
 			return frame;
 		frame.opcode = head[0] & 0x0F;
+		fin = head[0] & 0x80;
 		return frame;
 	}
 

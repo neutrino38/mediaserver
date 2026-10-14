@@ -110,9 +110,9 @@ OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ) $(BFCPSTACKOBJ)
 TARGETS=mcu rtmptest
 
 # speech-server (docs/conception/SPEECH-SERVER/SPEC.md): never in OBJS, so that
-# the mcu links neither the JSON reader nor, later, libcurl. The server reuses
+# the mcu links neither the JSON reader nor libcurl. The server reuses
 # the WebSocket reactor and Abyss, nothing from the conference engine.
-SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o
+SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o phrasesplitter.o pcmconverter.o mistralspeech.o ttssession.o
 SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o
 OBJSSPEECH=$(SPEECHOBJS) $(SPEECHREUSEDOBJS) speechmain.o
 BUILDOBJSSPEECH=$(addprefix $(BUILD)/,$(OBJSSPEECH))
@@ -351,7 +351,7 @@ $(BIN)/mcu: $(OBJSMCU) $(MEDKITLIB) | $(BUILD) $(BIN)
 speech-server: $(BIN)/speech-server
 
 $(BIN)/speech-server: $(OBJSSPEECH) | $(BUILD) $(BIN)
-	$(CXX) -o $@ $(BUILDOBJSSPEECH) -lavutil $(LDXMLFLAGS)
+	$(CXX) -o $@ $(BUILDOBJSSPEECH) -lswresample -lavutil -lcurl $(LDXMLFLAGS)
 
 rtmptest: $(OBJSRTMPTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS)
@@ -398,7 +398,7 @@ $(TESTBIN): $(OBJS) $(SPEECHOBJS) $(TESTSRCS) $(MEDKITLIB) | $(BUILD)
 		-DSPEECH_SERVER_BIN='"$(abspath $(BIN)/speech-server)"' \
 		-DSPEECH_FIXTURES_DIR='"$(abspath tests/fixtures/speech)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
-		-o $(TESTBIN) $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
+		-o $(TESTBIN) $(LDFLAGS) -lcurl $(VADLD) $(GTEST_LIBS)
 
 tests: $(TESTBIN)
 

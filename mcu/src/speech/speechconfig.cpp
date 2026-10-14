@@ -186,7 +186,8 @@ void ParseInto(const json& root, SpeechConfig& config)
 	if (root.contains("tts"))
 	{
 		const json& tts = Object(root["tts"], "tts");
-		CheckKeys(tts, "tts", {"phraseSilenceMs"});
+		CheckKeys(tts, "tts", {"model", "phraseSilenceMs"});
+		ReadString(tts, "tts", "model", config.ttsModel);
 		ReadInt(tts, "tts", "phraseSilenceMs", config.ttsPhraseSilenceMs, 0, 60000);
 	}
 

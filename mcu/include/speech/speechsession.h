@@ -85,6 +85,7 @@ protected:
 
 	void SendReady();
 	void Send(const nlohmann::json& message);
+	void SendAudio(const std::string& pcm);
 	void SendError(const std::string& reason, bool fatal);
 
 	const Params params;

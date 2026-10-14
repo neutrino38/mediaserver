@@ -1,7 +1,7 @@
 # Serveur de traitement de la voix (`speech-server`)
 
-> Statut : lot 0 fait (§4.2), lots 1 et 2 faits (§13.3, §13.4). Les lots 3
-> à 5 restent à coder.
+> Statut : lot 0 fait (§4.2), lots 1 à 3 faits (§13.3 à §13.5). Les lots 4
+> et 5 restent à coder.
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
 > mediaserver client (lot 6) suit en 1.19.0.
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
@@ -376,16 +376,19 @@ Le client envoie son texte **au fil de la frappe**, avec la sémantique
 T.140 :
 
 ```json
-{ "type": "text", "text": "Bonjour, je sui\b\bs en retard." }
+{ "type": "text", "text": "Bonjour, je sus\bis en retard." }
 ```
 
 - U+0008 efface le caractère précédent **non encore prononcé** ; U+2028 ou
   `\n` termine la phrase.
 - Le serveur accumule, puis envoie une phrase à Mistral sur une ponctuation
-  finale (`.`, `?`, `!`, `…`), un séparateur de ligne, ou un silence de frappe
-  (`tts.phraseSilenceMs`, 1 500 ms par défaut). Un texte déjà envoyé ne se
-  corrige plus. Le découpeur est la **même classe pure** que celle du
-  [TTS](../TTS/SPEC.md) §7.1, testée seule.
+  finale (`.`, `?`, `!`, `…`) **suivie d'un blanc**, un séparateur de ligne,
+  ou un silence de frappe (`tts.phraseSilenceMs`, 1 500 ms par défaut). Une
+  ponctuation seule ne coupe pas : « 3.5 » et « ives.fr » restent entiers.
+  Une phrase sans fin qui dépasse 1 500 octets est coupée à son dernier
+  blanc, parce que Mistral conseille moins de 300 mots par requête. Un
+  texte déjà envoyé ne se corrige plus. Le découpeur est la **même classe
+  pure** que celle du [TTS](../TTS/SPEC.md) §7.1, testée seule.
 - `{"type":"flush"}` force l'envoi de ce qui est accumulé.
 - `{"type":"stop"}` vide la file et abandonne la phrase en cours ; le serveur
   répond `{"type":"stopped","ids":[…]}`.
@@ -400,16 +403,28 @@ Le serveur répond, dans l'ordre des phrases :
 
 Les trames binaires entre un `say` et son `done` appartiennent à une seule
 phrase. Le serveur envoie plus vite que le temps réel ; le client tamponne.
+Une seule phrase est en cours de synthèse à la fois, pour garder l'ordre.
+Après `stopped`, plus aucune trame binaire n'arrive, même si Mistral
+continue d'envoyer la phrase abandonnée.
+
+`ready` porte la voix retenue et la langue :
+`{"type":"ready","function":"tts","rate":16000,"voice":"fr-homme","lang":"fr"}`.
 
 Voix : `voice` est un **alias** défini dans la configuration du serveur
 (`voices`, §8.2), jamais un `voice_id` Mistral en clair chez
 le client. Sans `voice`, la première voix de la langue. Une voix inconnue :
 400.
 
-Conversion : float32 → S16LE, et rééchantillonnage vers 16 kHz si la
-fréquence Mistral diffère (libswresample). Un 403 de modération Mistral sur
-une phrase donne `{"type":"error","id":7,"reason":"rejected"}`, non fatal :
-la phrase suivante part.
+Conversion : float32 24 kHz → S16LE 16 kHz (libswresample). Un 403 de
+modération Mistral sur une phrase donne
+`{"type":"error","id":7,"reason":"rejected","fatal":false}` : la phrase
+suivante part. Tout autre échec de Mistral (pas de réponse, code autre que
+200 et 403) donne `error` fatal « backend unavailable », puis 1013. Le corps
+d'une réponse d'erreur n'est ni lu ni journalisé : il pourrait citer le
+texte de l'utilisateur.
+
+Compteur : les caractères envoyés à Mistral (`usage.ttsChars`), comptés en
+caractères et non en octets, au moment de la requête.
 
 ### 7.4 `asr` : de la voix vers le texte
 
@@ -596,7 +611,7 @@ doit pas passer en silence) :
   },
   "mistral": {
     "url": "https://api.mistral.ai",
-    "workers": 4
+    "workers": 10
   },
   "limits": {
     "maxSessions": { "asr": 20, "tts": 20, "comp": 20 },
@@ -606,7 +621,7 @@ doit pas passer en silence) :
   "voices": [
     { "alias": "claire", "lang": "fr", "voiceId": "<voice_id Mistral>" }
   ],
-  "tts":  { "phraseSilenceMs": 1500 },
+  "tts":  { "model": "voxtral-mini-tts-2603", "phraseSilenceMs": 1500 },
   "asr":  { "model": "voxtral-mini-transcribe-realtime-2602", "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
   "comp": { "model": "ministral-8b-latest", "debounceMs": 400 }
 }
@@ -619,8 +634,9 @@ doit pas passer en silence) :
 | `streaming.secure`, `cert`, `key` | `wss://` ; les défauts (`mcu.crt`, `mcu.key`) ne servent qu'au développement : un navigateur veut un certificat d'une autorité connue | §7.1, §9 |
 | `streaming.listen` | adresse d'écoute du port de streaming, littéral v4 ou v6 ; `::` sert les deux familles | §8.3 |
 | `mistral.url` | base des appels, pour un relais ou le faux Mistral des tests | §14 |
+| `mistral.workers` | threads qui attendent Mistral : ouvertures `asr`, requêtes `tts` et `comp`. Une phrase `tts` en cours occupe un thread : au-delà de `workers` flux qui parlent en même temps, les phrases attendent leur tour | §13.4 |
 | `voices` | obligatoire pour `tts` : sans voix, les flux `tts` reçoivent 503 | §7.3 |
-| `asr.model`, `comp.model` | modèle Mistral de la fonction ; une session garde celui de son ouverture | §4.1 |
+| `asr.model`, `tts.model`, `comp.model` | modèle Mistral de la fonction ; une session garde celui de son ouverture | §4.1 |
 
 **Démarrage.** Fichier absent, JSON invalide, clé inconnue, `control.allow`
 vide ou porteur d'une entrée IPv6, `control.listen` en IPv6, deux ports
@@ -997,19 +1013,22 @@ Commit livrable : « speech-server : reconnaissance vocale par Voxtral Realtime 
 
 ### 13.5 Lot 3 : `tts`
 
-| Étape | Contenu | Test |
-|---|---|---|
-| 1 | `PhraseSplitter` (`speech/phrasesplitter.{h,cpp}`) : classe pure, T.140 → phrases ; **la même** que celle prévue par la SPEC TTS §7.1, écrite ici une fois | §14.3 premier point |
-| 2 | Requêtes libcurl (`easy`, bloquant) postées dans le `TaskPool` du lot 2 ; callback d'écriture qui pousse les morceaux au demandeur | une requête lente ne bloque pas les autres |
-| 3 | `FakeMistralHttp` dans `tests/` : petit serveur HTTP qui rejoue la fixture TTS (et chat au lot 4) | le faux rejoue |
-| 4 | `PcmConverter` (`speech/pcmconverter.{h,cpp}`) : float32 → S16LE, rééchantillonnage libswresample vers 16 kHz | sinus de 440 Hz, à 24 kHz en entrée, retrouvé à 16 kHz |
-| 5 | `TtsSession` : `text`/`flush`/`stop`, file de phrases, un `say` puis PCM puis `done` par phrase, 403 Mistral non fatal | §14.3 |
-| 6 | Voix : résolution alias → `voiceId` par la configuration, 400 avant le 101 | §14.3 dernier point |
+État : **fait**. Essayé contre le vrai Mistral le 2026-10-14 : deux
+phrases, retour arrière appliqué, premier son à 0,72 s. L'audio produit,
+repassé dans la transcription par lot de Mistral, rend la phrase exacte.
 
-Point d'attention : le callback d'écriture libcurl tourne **dans le thread
-de travail** ; il appelle `SendMessage` (thread-safe) et rien d'autre. Un
-`stop` pendant une requête fait abandonner la requête par le callback
-(retour 0 à libcurl), et la phrase est comptée dans `stopped`.
+| Classe | Fichier | Rôle | Test |
+|---|---|---|---|
+| `PhraseSplitter` | `speech/phrasesplitter.{h,cpp}` | classe pure, T.140 → phrases ; **la même** que celle prévue par la SPEC TTS §7.1 | `test_speech_splitter.cpp` |
+| `PcmConverter` | `speech/pcmconverter.{h,cpp}` | float32 → S16LE 16 kHz, libswresample ; une entrée coupée au milieu d'un échantillon est acceptée | `test_speech_splitter.cpp` : sinus de 440 Hz |
+| `SseParser`, `MistralSpeech` | `speech/mistralspeech.{h,cpp}` | requête libcurl bloquante, dans le `TaskPool` ; lecture SSE au fil de l'eau ; base64 → float32 | `test_speech_tts.cpp` : l'enregistrement du lot 0, coupé en morceaux de 7 777 octets |
+| `TtsSession` | `speech/ttssession.{h,cpp}` | `text`/`flush`/`stop`, file de phrases, `say` puis PCM puis `done`, 403 non fatal | `test_speech_tts.cpp` |
+| `FakeMistralHttp` | `tests/fake_mistral_http.h` | faux Voxtral TTS sur Abyss ; le texte choisit la réponse (403, 500, lente, enregistrement) | — |
+
+Point d'attention : l'audio d'une phrase part **sous le verrou de la
+session**, après un contrôle du jeton d'annulation. C'est ce qui garantit
+qu'aucune trame ne suit `stopped`. Le callback libcurl ne fait rien
+d'autre ; un `stop` lui fait rendre 0, et libcurl abandonne la requête.
 
 Commit livrable : « speech-server : synthèse vocale par Voxtral TTS ».
 

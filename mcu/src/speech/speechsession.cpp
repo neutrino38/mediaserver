@@ -64,6 +64,12 @@ void SpeechSession::Send(const json& message)
 		socket->SendMessage(message.dump());
 }
 
+void SpeechSession::SendAudio(const std::string& pcm)
+{
+	if (std::shared_ptr<WebSocket> socket = ws.lock())
+		socket->SendMessage((const BYTE*)pcm.data(), pcm.size());
+}
+
 void SpeechSession::SendError(const std::string& reason, bool fatal)
 {
 	Send(json{{"type", "error"}, {"reason", reason}, {"fatal", fatal}});
