@@ -21,6 +21,7 @@
 #include "xmlrpcserver.h"
 #include "speech/asrsession.h"
 #include "speech/backendhealth.h"
+#include "speech/compsession.h"
 #include "speech/controlhandler.h"
 #include "speech/speechconfig.h"
 #include "speech/speechstatus.h"
@@ -167,6 +168,9 @@ int main(int argc, char** argv)
 	});
 	streaming.SetFactory(SpeechFunction::Tts, [&backend](const SpeechSession::Params& params) {
 		return std::make_shared<TtsSession>(params, backend);
+	});
+	streaming.SetFactory(SpeechFunction::Comp, [&backend](const SpeechSession::Params& params) {
+		return std::make_shared<CompSession>(params, backend);
 	});
 	wsServer.SetSecure(loaded->streamingSecure, loaded->streamingCert.c_str(), loaded->streamingKey.c_str());
 	wsServer.AddHandler("/streaming/", &streaming);

@@ -1,7 +1,7 @@
 # Serveur de traitement de la voix (`speech-server`)
 
-> Statut : lot 0 fait (§4.2), lots 1 à 3 faits (§13.3 à §13.5). Les lots 4
-> et 5 restent à coder.
+> Statut : lot 0 fait (§4.2), lots 1 à 4 faits (§13.3 à §13.6). Le lot 5
+> (livraison) reste à faire.
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
 > mediaserver client (lot 6) suit en 1.19.0.
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
@@ -27,15 +27,16 @@ Un binaire à part, `speech-server`, rend trois services en flux :
 |---|---|---|
 | `asr` | voix (PCM) | texte temps réel |
 | `tts` | texte temps réel | voix (PCM) |
-| `comp` | texte temps réel | corrections et mot suivant probable |
+| `comp` | un morceau de texte | le même, corrigé (orthographe et grammaire) |
 
 Le calcul est fait par **Mistral AI**, en ligne. Le serveur ne porte aucun
 modèle. Il tient les connexions des clients, vérifie les jetons, adapte les
 formats, borne la charge, et compte ce qui est consommé.
 
 Usage visé : un utilisateur sourd ou malentendant, dans un navigateur, lit la
-voix de son interlocuteur (`asr`), parle par le texte (`tts`), et tape plus
-vite avec moins de fautes (`comp`). Le mediaserver est un second client, pour
+voix de son interlocuteur (`asr`), parle par le texte (`tts`), et fait
+corriger son texte avant qu'il soit dit (`comp`), pour que la synthèse parte
+d'une bonne base. Le mediaserver est un second client, pour
 les usages déjà décrits dans [TTS](../TTS/SPEC.md) : lecture du T.140 d'un
 participant et annonces.
 
@@ -81,7 +82,7 @@ mediaserver lit ses options sur la ligne de commande, depuis
 |---|---|---|---|
 | `asr` | Voxtral Realtime | WebSocket `wss://api.mistral.ai/v1/audio/transcriptions/realtime?model=…` | `voxtral-mini-transcribe-realtime-2602` |
 | `tts` | Voxtral TTS, mode streaming | HTTPS, réponse en flux | `voxtral-mini-tts-2603` |
-| `comp` | Chat completions, mode streaming | HTTPS, `POST /v1/chat/completions`, SSE | un petit modèle (`ministral-8b-latest` par défaut, option) |
+| `comp` | Chat completions, sans flux | HTTPS, `POST /v1/chat/completions` | `mistral-small-latest` par défaut (option `comp.model`) |
 
 Faits utiles, et ce qu'ils imposent :
 
@@ -143,7 +144,8 @@ enregistrements bruts, anonymisés, sont dans `mcu/tests/fixtures/speech/`.
 | Latence | `ministral-8b` : 0,4 à 0,9 s par requête ; `ministral-3b` : 0,3 s ; premier token en flux : 0,31 s |
 | Coût | ~250 tokens de prompt + 15 à 50 de réponse par requête |
 | Positions | un modèle **ne sait pas compter les caractères** : les indices `start`/`end` demandés au premier essai étaient tous faux. Le prompt demande donc `{"from": "<mot tapé>", "to": "<mot corrigé>"}`, et c'est le serveur qui retrouve la position dans son tampon. Le §7.5 est corrigé en ce sens |
-| Qualité | corrections justes avec `ministral-8b` et `ministral-14b` (`sui → suis`, `retar → retard`, `Jai → J'ai`, `la → là`) ; la complétion du mot suivant est **vide ou faible** avec tous les modèles essayés. Le lot 4 sépare les deux demandes, ou renonce à la complétion |
+| Qualité | corrections justes avec `ministral-8b` et `ministral-14b` (`sui → suis`, `retar → retard`, `Jai → J'ai`, `la → là`) ; la complétion du mot suivant est **vide ou faible** avec tous les modèles essayés. Mesuré le 2026-10-14 avec un prompt dédié à la seule complétion : 4 bonnes sur 7 avec `ministral-8b`, inutilisable avec `ministral-3b`. La complétion est reportée (§16) |
+| Modèle de correction | mesuré le 2026-10-14 sur six cas, avec le prompt du lot 4 : `mistral-small` corrige tout sauf un trait d'union (0,5 à 1,8 s) ; `ministral-8b` rate la grammaire (« je voudrait », « dix minute ») ; `ministral-14b` rend deux sorties fausses et une réponse en 19,6 s. Sur les dix cas de référence (§14.4) : `mistral-small` 10/10, `ministral-8b` 5/10. Défaut : `mistral-small-latest`. Environ 350 tokens par vérification ; prix à confirmer dans la console |
 
 **Données** (lu le 2026-10-13 dans le Data Processing Addendum et les Commercial Terms)
 
@@ -379,16 +381,17 @@ T.140 :
 { "type": "text", "text": "Bonjour, je sus\bis en retard." }
 ```
 
-- U+0008 efface le caractère précédent **non encore prononcé** ; U+2028 ou
-  `\n` termine la phrase.
+- U+0008 efface le caractère précédent **non encore envoyé à la synthèse** ;
+  U+2028 ou `\n` termine la phrase. Un retour arrière qui remonte plus loin
+  est ignoré : voir « Les corrections » plus bas.
 - Le serveur accumule, puis envoie une phrase à Mistral sur une ponctuation
   finale (`.`, `?`, `!`, `…`) **suivie d'un blanc**, un séparateur de ligne,
   ou un silence de frappe (`tts.phraseSilenceMs`, 1 500 ms par défaut). Une
   ponctuation seule ne coupe pas : « 3.5 » et « ives.fr » restent entiers.
   Une phrase sans fin qui dépasse 1 500 octets est coupée à son dernier
-  blanc, parce que Mistral conseille moins de 300 mots par requête. Un
-  texte déjà envoyé ne se corrige plus. Le découpeur est la **même classe
-  pure** que celle du [TTS](../TTS/SPEC.md) §7.1, testée seule.
+  blanc, parce que Mistral conseille moins de 300 mots par requête. Le
+  découpeur est la **même classe pure** que celle du [TTS](../TTS/SPEC.md)
+  §7.1, testée seule.
 - `{"type":"flush"}` force l'envoi de ce qui est accumulé.
 - `{"type":"stop"}` vide la file et abandonne la phrase en cours ; le serveur
   répond `{"type":"stopped","ids":[…]}`.
@@ -406,6 +409,15 @@ phrase. Le serveur envoie plus vite que le temps réel ; le client tamponne.
 Une seule phrase est en cours de synthèse à la fois, pour garder l'ordre.
 Après `stopped`, plus aucune trame binaire n'arrive, même si Mistral
 continue d'envoyer la phrase abandonnée.
+
+**Les corrections.** Le serveur reste bête : il dit ce qu'on lui envoie, et
+ne revient jamais sur une phrase envoyée. Corriger du texte déjà dit est
+l'affaire du client. Le mediaserver, qui reçoit la bulle T.140 de
+l'utilisateur, voit le retour arrière qui remonte dans du texte déjà dit ;
+il envoie alors lui-même l'annonce et le texte retapé, par exemple
+« Correction : deux pizzas pour ce soir. ». Il peut d'abord envoyer
+`stop`, pour que les phrases encore en file ne soient pas dites (lot 6,
+§13.8).
 
 `ready` porte la voix retenue et la langue :
 `{"type":"ready","function":"tts","rate":16000,"voice":"fr-homme","lang":"fr"}`.
@@ -483,39 +495,82 @@ fatal « backend closed », puis 1013. Une erreur Mistral pendant une pause
 (le délai de silence, 3804) est attendue : elle ne compte pas comme un
 échec dans `/status/general`.
 
-### 7.5 `comp` : corriger et compléter
+### 7.5 `comp` : corriger le texte avant qu'il soit dit
 
-Le client envoie son texte au fil de la frappe, mêmes trames et même
-sémantique T.140 que `tts` (§7.3). Le serveur tient le **tampon** du texte
-courant (le texte vrai, retours arrière appliqués), borné aux 500 derniers
-caractères.
+`comp` sert la synthèse : le texte part au mediaserver en T.140, et c'est ce
+texte qui est dit. Il doit donc être juste **avant** de partir. Le client
+découpe et décide ; le serveur corrige, sans rien garder entre deux
+demandes.
 
-Après `comp.debounceMs` (400 ms) sans trame, le serveur envoie **une**
-requête au modèle, avec le tampon et un numéro de séquence. Une seule
-requête en vol par session ; une frappe pendant la requête rend sa réponse
-caduque, et le serveur n'en transmet rien.
-
-Le prompt demande au modèle une réponse JSON **par mots**, jamais par
-positions : un modèle ne sait pas compter les caractères (§4.2). Le serveur
-la **relit** avant de la transmettre (un JSON mal formé est jeté, compté
-dans `/status/general`, jamais transmis), retrouve chaque mot `from` dans
-son tampon (mot entier, dernière occurrence hors du mot en cours), et jette
-une correction dont le mot n'est pas trouvé. Deux messages vers le client :
-
-```json
-{ "type": "correction", "seq": 12, "start": 8, "end": 11, "text": "suis" }
-{ "type": "completion", "seq": 12, "text": " en" }
+```
+navigateur ── WS comp ──────────► speech-server   (corrige)
+    │  ◄── texte corrigé + changements ──┘
+    │
+    └── appel (T.140, texte validé) ──► mediaserver ── WS tts ──► speech-server ──► voix
 ```
 
-- `correction` : remplace les caractères `[start, end)` du tampon tel qu'il
-  était au numéro `seq`. Une seule correction par mot terminé, jamais sur le
-  mot en cours de frappe.
-- `completion` : le mot suivant le plus probable, **à part**, que le client
-  affiche en grisé et accepte ou non. Le serveur ne l'insère jamais dans le
-  tampon lui-même.
+**La demande.** Le client envoie un morceau de texte : en général les
+derniers mots terminés, pas encore partis. Il joint en lecture seule la fin
+du texte qui le précède, parce que la grammaire en dépend (« je voudrait »
+ne se corrige qu'en voyant « je ») :
 
-Le modèle, le prompt et la langue sont de la configuration du serveur.
-Le prompt est versionné dans le dépôt, avec ses cas de test (§14.4).
+```json
+{ "type": "check", "id": 7, "context": "Bonjour je voudrais", "text": " une piza svp" }
+```
+
+`id` est choisi par le client, et repris dans la réponse. `text` et
+`context` font au plus 500 caractères chacun. Seuls les mots de `text` sont
+corrigés.
+
+**La réponse.**
+
+```json
+{ "type": "checked", "id": 7, "text": " une pizza svp",
+  "changes": [ { "start": 5, "end": 9, "from": "piza", "to": "pizza" } ] }
+```
+
+`text` est le morceau corrigé. `changes` dit où, dans le morceau **envoyé** :
+`[start, end)` en unités UTF-16, celles des chaînes JavaScript. Sans
+changement, `changes` est vide et `text` est identique à la demande.
+
+**Le serveur ne réécrit pas, il corrige des mots.** Le modèle rend des
+paires « mot tapé → mot corrigé », jamais un texte réécrit, jamais des
+positions : un modèle ne sait pas compter les caractères (§4.2), et un
+modèle à qui l'on demande un texte corrigé finit par reformuler. Le serveur
+relit la réponse avant d'en tirer quoi que ce soit :
+
+- un JSON mal formé est jeté, compté dans `/status/general`
+  (`backend.comp.discarded`), et la demande reçoit une `error` non fatale ;
+- chaque `from` est cherché dans `text`, en mots entiers, de gauche à
+  droite après la correction précédente ; introuvable, la paire est jetée ;
+- une paire qui change plus de 2 lettres, ou plus d'un tiers du mot, est
+  jetée : c'est une réécriture, pas une correction. Exemple : « Jai » →
+  « J'ai » passe (aucune lettre changée) ; « Pouvez » → « Pouvez-vous » est
+  jeté (quatre lettres ajoutées).
+
+**Une demande en cours à la fois.** Une demande qui arrive pendant une autre
+attend ; une troisième remplace celle qui attend, et la remplacée reçoit
+`{"type":"error","id":…,"reason":"superseded","fatal":false}`. Un échec de
+Mistral sur une demande donne une `error` non fatale avec son `id` : chaque
+demande est indépendante, et le client peut envoyer son texte tel quel.
+
+`lang` (§7.1) entre dans le prompt. Le modèle et le prompt sont de la
+configuration du serveur ; le prompt est versionné dans le dépôt avec ses
+cas de référence (§14.4).
+
+**Ce que fait le client** (recommandé, hors serveur) :
+
+1. envoyer `check` dès 3 mots terminés, une ponctuation, ou 0,8 s sans
+   frappe, au premier des trois ; jamais le mot en cours ;
+2. sans changement, envoyer le morceau en T.140 tout de suite ;
+3. avec des changements, les proposer, et n'envoyer qu'à la validation
+   (Entrée, ou un clic) : une correction imposée en silence trahirait
+   l'utilisateur ;
+4. pour corriger du texte déjà parti, l'effacer en T.140 et renvoyer la
+   version corrigée : le mediaserver annonce la correction (§7.3) ;
+5. Entrée ferme la bulle par U+2028.
+
+La complétion du mot suivant est reportée (§16).
 
 ## 8. Le secret et la configuration
 
@@ -623,7 +678,7 @@ doit pas passer en silence) :
   ],
   "tts":  { "model": "voxtral-mini-tts-2603", "phraseSilenceMs": 1500 },
   "asr":  { "model": "voxtral-mini-transcribe-realtime-2602", "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
-  "comp": { "model": "ministral-8b-latest", "debounceMs": 400 }
+  "comp": { "model": "mistral-small-latest" }
 }
 ```
 
@@ -1034,14 +1089,18 @@ Commit livrable : « speech-server : synthèse vocale par Voxtral TTS ».
 
 ### 13.6 Lot 4 : `comp`
 
+État : **fait**. Essayé contre le vrai Mistral le 2026-10-14 : 10 cas de
+référence sur 10 avec `mistral-small-latest`.
+
 | Étape | Contenu | Test |
 |---|---|---|
-| 1 | `TextBuffer` : tampon T.140 vrai (retours arrière appliqués), borné à 500 caractères, numéro de séquence | effacements, borne |
-| 2 | Le prompt, dans `mcu/src/speech/comp_prompt.txt`, embarqué à la compilation, versionné avec ses dix cas de référence dans `tests/fixtures/speech/comp/` | §14.4 dernier point, hors `make check` |
-| 3 | `CompSession` : débounce `comp.debounceMs`, une requête en vol, réponse caduque jetée, relecture JSON stricte | §14.4 |
-| 4 | Compteurs : tokens facturés (lus dans la réponse chat), par `account` | `/status/general` |
+| 1 | `MistralHttp` (`speech/mistralhttp.{h,cpp}`) : le POST libcurl commun à la synthèse et au chat | les tests `tts` restent verts |
+| 2 | Le prompt, `mcu/src/speech/comp_prompt.txt`, embarqué à la compilation ; dix cas de référence dans `tests/fixtures/speech/comp/cases.json` | `test_speech_comp_reference.cpp`, hors `make check` : `make -C mcu check-speech-comp` |
+| 3 | `CompCheck` : relecture de la réponse du modèle, recherche des mots, positions UTF-16 ; une paire n'est gardée que si elle change au plus 2 lettres, ou un tiers du mot (« Pouvez » → « Pouvez-vous » est une réécriture, rejetée) ; classe pure | `test_speech_comp.cpp` |
+| 4 | `CompSession` : `check`/`checked`, une demande en cours, une en attente | `test_speech_comp.cpp` |
+| 5 | Compteurs : tokens facturés, par `account` ; réponses jetées | `/status/general` |
 
-Commit livrable : « speech-server : correction et complétion de texte ».
+Commit livrable : « speech-server : correction de texte avant la synthèse ».
 
 ### 13.7 Lot 5 : livraison
 
@@ -1069,6 +1128,11 @@ TTS : libcurl dans le mediaserver, `SpeechTokenClient` (jeton par
 `WebSocketServer::Connect`, `Synthesizer` conférence et JSR-309, événements,
 `/status/general` bloc `tts`, protos MOTELI, clients Java,
 `docs/JSR-309-API.md`.
+
+Le mediaserver suit la bulle T.140 de chaque participant. Un retour arrière
+qui remonte dans du texte déjà envoyé à la synthèse est une correction : il
+envoie `stop`, puis l'annonce de la langue (« Correction : » en français)
+suivie du texte retapé. L'annonce est une option du mediaserver.
 
 ## 14. Tests
 
@@ -1114,12 +1178,16 @@ fichier de rejeu.
 
 ### 14.4 `comp`
 
-- Une frappe pendant une requête rend la réponse caduque : rien n'est
-  transmis.
-- Une réponse JSON mal formée est jetée et comptée.
+- Une faute dans `text` revient corrigée, avec sa position exacte, en
+  UTF-16, accents compris.
+- Un mot de `context` n'est jamais corrigé.
+- Une réponse JSON mal formée, une paire introuvable ou une réécriture sont
+  jetées ; la première est comptée.
+- Une troisième demande remplace celle qui attend, qui reçoit `superseded`.
 - Le prompt, rejoué sur dix phrases de référence en français, rend les
   corrections attendues (test hors `make check`, contre le vrai Mistral,
-  lancé à la main avant chaque changement de prompt ou de modèle).
+  lancé à la main avant chaque changement de prompt ou de modèle :
+  `make -C mcu check-speech-comp`).
 
 ## 15. Recette
 
@@ -1130,6 +1198,14 @@ fichier de rejeu.
   une page `https://`, et en IPv6.
 - Un appel de conférence avec un participant qui tape du T.140, lu par le
   mediaserver via `speech-server`.
+- Le parcours du §7.5 de bout en bout : frappe, correction proposée et
+  validée, T.140, voix ; puis une correction de texte déjà dit, annoncée
+  par le mediaserver.
+- **L'écoute des blocs** : le même texte dit en blocs de trois mots, puis en
+  phrase entière. Chaque bloc est une requête Mistral, donc une
+  énonciation à part : la voix peut sonner hachée. L'écoute fixe la règle
+  des trois mots et `tts.phraseSilenceMs` (sans doute vers 500 ms, le
+  texte arrivant par blocs et non plus lettre à lettre).
 - Coupure de Mistral (route bloquée) pendant les trois flux : les clients
   reçoivent 1013, `/status/general` le montre, les flux rouvrent après le
   retour.
@@ -1156,5 +1232,14 @@ ultérieure. Deux voies pour le couvrir : un petit serveur HTTP qui fait
 lui-même son `accept()` et filtre avant de lire, ou la bibliothèque
 libmicrohttpd (dépôt CRB), dont le rappel d'acceptation reçoit l'adresse
 complète.
+
+Tranché le 2026-10-14, `comp` : la correction sert la synthèse (§7.5). Le
+client découpe, demande, valide, puis envoie en T.140 ; le serveur corrige
+sans état. Le client décide aussi de ce qu'il renvoie : un retour arrière
+peut remonter dans du texte déjà dit. `speech-server` reste bête et ne
+revient pas sur une phrase envoyée ; c'est le mediaserver qui annonce la
+correction (§7.3, lot 6). La complétion du mot suivant est reportée après la
+1.18.0 ; si elle revient, ce sera par une requête séparée, avec
+`ministral-8b`.
 
 Aucune question n'est ouverte pour la 1.18.0.

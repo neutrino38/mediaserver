@@ -49,8 +49,7 @@ TEST(SpeechConfig, AMinimalFileTakesEveryDefault)
 	EXPECT_EQ("voxtral-mini-tts-2603", config->ttsModel);
 	EXPECT_EQ(30, config->asrPauseCloseSecs);
 	EXPECT_EQ("voxtral-mini-transcribe-realtime-2602", config->asrModel);
-	EXPECT_EQ("ministral-8b-latest", config->compModel);
-	EXPECT_EQ(400, config->compDebounceMs);
+	EXPECT_EQ("mistral-small-latest", config->compModel);
 }
 
 TEST(SpeechConfig, TheSpecExampleIsAccepted)
@@ -64,7 +63,7 @@ TEST(SpeechConfig, TheSpecExampleIsAccepted)
 		"voices": [ { "alias": "fr-homme", "lang": "fr", "voiceId": "abc" } ],
 		"tts": { "phraseSilenceMs": 1000 },
 		"asr": { "model": "voxtral-next", "vad": true, "silenceMs": 900, "pauseCloseSecs": 20 },
-		"comp": { "model": "ministral-3b-latest", "debounceMs": 300 }
+		"comp": { "model": "ministral-3b-latest" }
 	})", error);
 	ASSERT_TRUE(config) << error;
 

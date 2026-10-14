@@ -69,7 +69,8 @@ std::string SpeechStatus::RenderJSON(const Info& info)
 		backend[SpeechFunctionName((SpeechFunction)i)] = {
 			{"lastSuccess", Instant(info.backend[i].lastSuccess)},
 			{"lastFailure", Instant(info.backend[i].lastFailure)},
-			{"lastError", info.backend[i].lastError}};
+			{"lastError", info.backend[i].lastError},
+			{"discarded", info.backend[i].discarded}};
 
 	json byAccount = json::object();
 	for (const auto& entry : info.usageByAccount)

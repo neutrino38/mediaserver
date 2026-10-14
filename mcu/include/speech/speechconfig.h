@@ -49,8 +49,7 @@ struct SpeechConfig
 	bool		asrVad = false;
 	int		asrSilenceMs = 1500;
 	int		asrPauseCloseSecs = 30;
-	std::string	compModel = "ministral-8b-latest";
-	int		compDebounceMs = 400;
+	std::string	compModel = "mistral-small-latest";
 
 	static std::shared_ptr<const SpeechConfig> Parse(const std::string& text, std::string& error);
 	static std::shared_ptr<const SpeechConfig> Load(const std::string& path, std::string& error);

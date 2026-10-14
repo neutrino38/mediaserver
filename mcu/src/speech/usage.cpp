@@ -18,6 +18,12 @@ void UsageCounters::AddTtsChars(const std::string& account, uint64_t chars)
 	accounts[account].ttsChars += chars;
 }
 
+void UsageCounters::AddCompTokens(const std::string& account, uint64_t tokens)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	accounts[account].compTokens += tokens;
+}
+
 UsageCounters::Usage UsageCounters::Total() const
 {
 	std::lock_guard<std::mutex> lock(mutex);

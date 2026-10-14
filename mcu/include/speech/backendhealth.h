@@ -18,10 +18,12 @@ public:
 		time_t		lastSuccess = 0;	// 0: never
 		time_t		lastFailure = 0;
 		std::string	lastError;
+		uint64_t	discarded = 0;	// unreadable answers thrown away
 	};
 
 	void Success(SpeechFunction function, time_t now);
 	void Failure(SpeechFunction function, time_t now, const std::string& error);
+	void Discarded(SpeechFunction function);
 
 	Service Get(SpeechFunction function) const;
 

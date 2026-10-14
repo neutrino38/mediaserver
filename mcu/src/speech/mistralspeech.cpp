@@ -1,7 +1,7 @@
 #include "speech/mistralspeech.h"
 
-#include <mutex>
-#include <curl/curl.h>
+#include "speech/mistralhttp.h"
+
 #include <nlohmann/json.hpp>
 extern "C" {
 #include <libavutil/base64.h>
@@ -48,53 +48,12 @@ void SseParser::Line(const std::string& line)
 		data += data.empty() ? value : "\n" + value;
 }
 
-namespace
-{
-
-struct Transfer
-{
-	std::function<bool(const std::string&)>	onAudio;
-	SseParser*				parser;
-	bool					cancelled = false;
-	CURL*					curl;
-};
-
-size_t OnBody(char* data, size_t size, size_t count, void* user)
-{
-	Transfer* transfer = (Transfer*)user;
-	const size_t bytes = size * count;
-
-	// An error body may quote the user's text: it is neither parsed nor kept.
-	long status = 0;
-	curl_easy_getinfo(transfer->curl, CURLINFO_RESPONSE_CODE, &status);
-	if (status != 200)
-		return bytes;
-
-	transfer->parser->Feed(data, bytes);
-	return transfer->cancelled ? 0 : bytes;
-}
-
-}
-
 MistralSpeech::Result MistralSpeech::Synthesize(const Request& request, std::function<bool(const std::string&)> onAudio)
 {
-	static std::once_flag init;
-	std::call_once(init, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
-
-	Result result;
-	CURL* curl = curl_easy_init();
-	if (!curl)
-	{
-		result.error = "curl_easy_init failed";
-		return result;
-	}
-
-	Transfer transfer;
-	transfer.onAudio = onAudio;
-	transfer.curl = curl;
+	bool cancelled = false;
 	bool streamError = false;
 	SseParser parser([&](const std::string& event, const std::string& data) {
-		if (transfer.cancelled)
+		if (cancelled)
 			return;
 		const json payload = json::parse(data, nullptr, false);
 		if (payload.is_discarded() || !payload.is_object())
@@ -108,57 +67,31 @@ MistralSpeech::Result MistralSpeech::Synthesize(const Request& request, std::fun
 			if (decoded < 0)
 				return;
 			audio.resize(decoded);
-			if (!transfer.onAudio(audio))
-				transfer.cancelled = true;
+			if (!onAudio(audio))
+				cancelled = true;
 		}
 		else if (type == "error")
 			streamError = true;
 	});
-	transfer.parser = &parser;
 
-	std::string base = request.baseUrl;
-	while (!base.empty() && base.back() == '/')
-		base.pop_back();
-	const std::string url = base + "/v1/audio/speech";
 	const std::string body = json{
 		{"model", request.model},
 		{"input", request.text},
 		{"voice", request.voice},
 		{"response_format", "pcm"},
 		{"stream", true}}.dump();
-	const std::string authorization = "Authorization: Bearer " + request.apiKey;
 
-	curl_slist* headers = nullptr;
-	headers = curl_slist_append(headers, authorization.c_str());
-	headers = curl_slist_append(headers, "Content-Type: application/json");
-	headers = curl_slist_append(headers, "Accept: text/event-stream");
+	const MistralHttp::Result http = MistralHttp::Post(request.baseUrl, "/v1/audio/speech", request.apiKey,
+		body, "text/event-stream", [&](const char* data, size_t size) {
+			parser.Feed(data, size);
+			return !cancelled;
+		});
 
-	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-	curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)body.size());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, OnBody);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &transfer);
-	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-	// A stream that stalls for 15 s is dead.
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-	curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 15L);
-
-	const CURLcode code = curl_easy_perform(curl);
-	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpStatus);
-	curl_slist_free_all(headers);
-	curl_easy_cleanup(curl);
-
-	result.cancelled = transfer.cancelled;
-	if (result.cancelled)
-		return result;
-	if (code != CURLE_OK)
-		result.error = curl_easy_strerror(code);
-	else if (result.httpStatus != 200)
-		result.error = "HTTP " + std::to_string(result.httpStatus);
-	else if (streamError)
+	Result result;
+	result.httpStatus = http.httpStatus;
+	result.cancelled = http.cancelled;
+	result.error = http.error;
+	if (!result.cancelled && result.error.empty() && streamError)
 		result.error = "error event in the stream";
 	return result;
 }

@@ -205,9 +205,8 @@ void ParseInto(const json& root, SpeechConfig& config)
 	if (root.contains("comp"))
 	{
 		const json& comp = Object(root["comp"], "comp");
-		CheckKeys(comp, "comp", {"model", "debounceMs"});
+		CheckKeys(comp, "comp", {"model"});
 		ReadString(comp, "comp", "model", config.compModel);
-		ReadInt(comp, "comp", "debounceMs", config.compDebounceMs, 0, 10000);
 	}
 }
 

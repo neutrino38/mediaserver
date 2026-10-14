@@ -5,12 +5,16 @@
  * chooses the behaviour: "REJECT" gives 403, "FAIL" gives 500, "SLOW" sends
  * ten deltas 300 ms apart, "FIXTURE" replays the lot 0 recording byte for
  * byte; anything else is three deltas of a 440 Hz sine, 0.2 s each.
+ *
+ * POST /v1/chat/completions answers what `chat` returns for the user message;
+ * a user message holding "SLOW" waits 400 ms, "FAIL" gives 500.
  */
 #ifndef FAKE_MISTRAL_HTTP_H
 #define FAKE_MISTRAL_HTTP_H
 
 #include <cmath>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -77,6 +81,9 @@ public:
 			std::lock_guard<std::mutex> lock(mutex);
 			requests.push_back(received);
 		}
+		if (std::string(req->uri).find("/v1/chat/completions") == 0)
+			return Chat(ses, received.body);
+
 		const std::string input = received.body.value("input", "");
 
 		if (input.find("REJECT") != std::string::npos)
@@ -119,6 +126,25 @@ public:
 		ResponseWriteEnd(ses);
 		return 1;
 	}
+
+	int Chat(TSession* ses, const nlohmann::json& body)
+	{
+		const std::string user = body["messages"][1]["content"];
+		if (user.find("FAIL") != std::string::npos)
+			return XmlRpcServer::SendError(ses, 500);
+		if (user.find("SLOW") != std::string::npos)
+			std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+		const std::string content = chat ? chat(user) : R"({"corrections":[]})";
+		const std::string answer = nlohmann::json{
+			{"choices", {{{"message", {{"role", "assistant"}, {"content", content}}}}}},
+			{"usage", {{"prompt_tokens", 300}, {"completion_tokens", 20}, {"total_tokens", 320}}}}.dump();
+		ResponseContentType(ses, (char*)"application/json");
+		return XmlRpcServer::SendResponse(ses, 200, answer.c_str(), answer.size());
+	}
+
+	// The model's answer for a user message; set before the server starts.
+	std::function<std::string(const std::string& user)> chat;
 
 	std::vector<Received> Requests()
 	{

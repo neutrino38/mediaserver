@@ -112,7 +112,7 @@ TARGETS=mcu rtmptest
 # speech-server (docs/conception/SPEECH-SERVER/SPEC.md): never in OBJS, so that
 # the mcu links neither the JSON reader nor libcurl. The server reuses
 # the WebSocket reactor and Abyss, nothing from the conference engine.
-SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o phrasesplitter.o pcmconverter.o mistralspeech.o ttssession.o
+SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o phrasesplitter.o pcmconverter.o mistralhttp.o mistralspeech.o ttssession.o compcheck.o mistralchat.o compsession.o
 SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o
 OBJSSPEECH=$(SPEECHOBJS) $(SPEECHREUSEDOBJS) speechmain.o
 BUILDOBJSSPEECH=$(addprefix $(BUILD)/,$(OBJSSPEECH))
@@ -350,6 +350,12 @@ $(BIN)/mcu: $(OBJSMCU) $(MEDKITLIB) | $(BUILD) $(BIN)
 .PHONY: speech-server
 speech-server: $(BIN)/speech-server
 
+# The comp prompt is a versioned text file, compiled in as a raw string.
+$(BUILD)/comp_prompt.inc: src/speech/comp_prompt.txt | $(BUILD)
+	{ printf 'R"PROMPT('; cat $<; printf ')PROMPT"\n'; } > $@
+compsession.o: $(BUILD)/comp_prompt.inc
+compsession.o: CXXFLAGS += -I$(BUILD)
+
 $(BIN)/speech-server: $(OBJSSPEECH) | $(BUILD) $(BIN)
 	$(CXX) -o $@ $(BUILDOBJSSPEECH) -lswresample -lavutil -lcurl $(LDXMLFLAGS)
 
@@ -430,7 +436,11 @@ check-senderbwe: $(TESTBIN)
 check-transcoder: $(TESTBIN)
 	./$(TESTBIN) --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
 
-.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe check-transcoder
+# Le prompt de comp contre le vrai Mistral (reseau et cle requis, hors check).
+check-speech-comp: $(TESTBIN)
+	./$(TESTBIN) --gtest_filter='DISABLED_SpeechCompReference*' --gtest_also_run_disabled_tests
+
+.PHONY: tests check check-ipv6 check-speech-comp check-ratecontrol check-senderbwe check-transcoder
 
 ############################################
 # Dependances generees automatiquement (headers -> objets)

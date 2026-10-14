@@ -25,6 +25,7 @@ public:
 
 	void AddAsrAudio(const std::string& account, uint64_t ms);
 	void AddTtsChars(const std::string& account, uint64_t chars);
+	void AddCompTokens(const std::string& account, uint64_t tokens);
 
 	Usage Total() const;
 	std::map<std::string,Usage> ByAccount() const;

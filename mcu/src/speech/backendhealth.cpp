@@ -13,6 +13,12 @@ void BackendHealth::Failure(SpeechFunction function, time_t now, const std::stri
 	services[(int)function].lastError = error;
 }
 
+void BackendHealth::Discarded(SpeechFunction function)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	++services[(int)function].discarded;
+}
+
 BackendHealth::Service BackendHealth::Get(SpeechFunction function) const
 {
 	std::lock_guard<std::mutex> lock(mutex);
