@@ -1,7 +1,7 @@
 # Serveur de traitement de la voix (`speech-server`)
 
-> Statut : lot 0 fait (§4.2), lots 1 à 4 faits (§13.3 à §13.6). Le lot 5
-> (livraison) reste à faire.
+> Statut : lots 0 à 5 faits (§4.2, §13.3 à §13.7) ; l'installation Debian
+> et Ubuntu reste à vérifier.
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
 > mediaserver client (lot 6) suit en 1.19.0.
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
@@ -602,6 +602,14 @@ Options :
 
 Tranché : **A comme socle, B en variante d'exploitation**. Le code du serveur
 est le même dans les deux cas ; c'est l'unité qui choisit, par un drop-in.
+
+Constaté le 2026-10-14 sur dev71 : **dans un conteneur LXC Proxmox, ni A ni
+B ne marchent.** L'hôte ajoute à tous les services un drop-in
+`zzz-lxc-service.conf` qui vide `LoadCredential=`, et `$CREDENTIALS_DIRECTORY`
+n'est jamais posé. La variante d'exploitation LXC est un drop-in qui passe
+`--api-key-file`, avec le fichier de clé en `0600` au compte `speech`. Elle
+est moins protégée : le compte du service peut relire la clé sur le disque.
+Procédure : `docs/utilisation/speech-server.md` §3.
 Pose de la clé, une commande dans chaque cas :
 
 ```sh
@@ -831,10 +839,8 @@ Ce qui ne se devine pas :
   `.deb`.
 - `ProtectSystem=strict` rend tout le système en lecture seule pour le
   service. Le fichier de log est ouvert **par systemd**, avant le changement
-  d'utilisateur, donc `append:` doit fonctionner sans exception. À vérifier
-  au lot 5 sur les deux distributions ; sinon `LogsDirectory=speech-server`
-  et le fichier dans `/var/log/speech-server/`. Le serveur n'écrit rien
-  d'autre sur disque.
+  d'utilisateur, donc `append:` fonctionne sans exception : vérifié sur
+  AlmaLinux 9 le 2026-10-14. Le serveur n'écrit rien d'autre sur disque.
 - `ExecReload` porte le `SIGHUP` du §8.2 : `systemctl reload speech-server`
   recharge la configuration sans couper les flux.
 - `LimitCORE=0` : pour un diagnostic, un drop-in le relève le temps de
@@ -854,9 +860,10 @@ Ce qui ne se devine pas :
 | Compte | `speech`, créé en `%pre` | créé en `preinst` |
 | Scriptlets | `%systemd_post` / `%systemd_preun` / `%systemd_postun_with_restart speech-server.service` | `deb-systemd-helper`, ou `systemctl` dans `postinst` comme fait le paquet actuel |
 
-Le sous-paquet dépend du paquet `mediaserver` pour `/etc/mediaserver/`, pas
-pour le binaire : on peut l'installer sans le mediaserver sur une machine
-dédiée. Le service n'est **pas activé** à l'installation : sans clé il ne
+Le sous-paquet ne dépend pas du paquet du mediaserver : il possède lui
+aussi le répertoire `/etc/mediaserver/`, ce que RPM et dpkg admettent. On
+l'installe donc seul sur une machine dédiée. Le paquet du mediaserver, lui,
+ne possède plus tout `/opt/ives/bin` mais son seul binaire. Le service n'est **pas activé** à l'installation : sans clé il ne
 démarre pas, et l'activer avant la pose de la clé produirait un échec au
 premier démarrage.
 
@@ -1104,19 +1111,23 @@ Commit livrable : « speech-server : correction de texte avant la synthèse ».
 
 ### 13.7 Lot 5 : livraison
 
-1. `mcumediaserver.spec` : sous-paquet `mediaserver-speech`, `%pre` qui crée
-   `speech`, fichiers du §11.3, scriptlets, **sans** `systemctl enable`.
-2. `install.ksh deb` : même contenu, `preinst`, `conffiles`.
+État : **fait sur AlmaLinux 9** ; Debian et Ubuntu restent à vérifier.
+
+1. `mcumediaserver.spec` : sous-paquet `mediaserver-speech`, autonome
+   (§11.3), `%pre` qui crée `speech`, scriptlets systemd, **sans** activation.
+2. `install.ksh deb` : un second paquet `mediaserver-speech`, même contenu,
+   `preinst`, `conffiles`. Écrit, pas encore construit ni installé.
 3. `speech-server.service` (§11.2) et `speech-config.json` d'exemple à la
-   racine, à côté de `mediaserver.service`.
-4. Vérifier sur AlmaLinux 9 **et** Debian 12, machines neuves : installation,
-   pose de la clé, démarrage sous `speech`, `reload` qui ajoute une voix,
-   `ProtectSystem=strict` avec le fichier de log (§11.2, point à vérifier).
-5. `docs/utilisation/speech-server.md` : installation, clé (les deux
-   variantes), configuration commentée, jetons côté application, les trois
-   faits sur les données, la licence non commerciale des poids TTS.
-6. `README.md` : la cible `speech-server` et ses deux dépendances.
-7. Version 1.18.0 : `install.ksh`, `version.h`, le spec.
+   racine. `install.ksh localcompile` bâtit aussi `speech-server`.
+4. Vérifié le 2026-10-14 sur dev71 (AlmaLinux 9, conteneur LXC), avec le
+   seul sous-paquet installé : compte `speech` créé, service non activé,
+   refus de démarrer sans clé, démarrage sous `speech`, `tts` et `comp`
+   réels, `reload` qui ajoute une voix sans redémarrer, arrêt propre,
+   journal écrit malgré `ProtectSystem=strict`, désinstallation propre. La
+   clé y passe par la variante LXC (§8.1).
+5. `docs/utilisation/speech-server.md`.
+6. `README.md` : la cible `speech-server`, ses dépendances, les deux paquets.
+7. Version 1.18.0 : `install.ksh`, `version.h`, le changelog du spec.
 
 Commit livrable : « speech-server : paquets, unité systemd et documentation ».
 

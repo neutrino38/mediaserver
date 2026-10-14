@@ -1,0 +1,29 @@
+{
+  "control": {
+    "listen": "0.0.0.0",
+    "port": 9200,
+    "allow": ["127.0.0.1"]
+  },
+  "streaming": {
+    "listen": "::",
+    "port": 9201,
+    "secure": false,
+    "cert": "/etc/mediaserver/mcu.crt",
+    "key": "/etc/mediaserver/mcu.key"
+  },
+  "mistral": {
+    "url": "https://api.mistral.ai",
+    "workers": 10
+  },
+  "limits": {
+    "maxSessions": { "asr": 20, "tts": 20, "comp": 20 },
+    "idleSecs": 60,
+    "maxSessionSecs": 3600
+  },
+  "voices": [
+    { "alias": "fr-homme", "lang": "fr", "voiceId": "en_paul_neutral" }
+  ],
+  "tts":  { "model": "voxtral-mini-tts-2603", "phraseSilenceMs": 1500 },
+  "asr":  { "model": "voxtral-mini-transcribe-realtime-2602", "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
+  "comp": { "model": "mistral-small-latest" }
+}

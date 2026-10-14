@@ -78,9 +78,30 @@ This one-shot command:
 3. initialises the git submodules if needed (`libmedikit` = codecs,
    `libvad` = voice activity detection) and
    builds their archives in-tree;
-4. builds the `mcu` binary.
+4. builds the `mcu` binary and the `speech-server` binary.
 
-The resulting binary is `bin/debug/mcu`.
+The resulting binaries are `bin/debug/mcu` and `bin/debug/speech-server`.
+
+### speech-server
+
+`speech-server` is a separate binary: speech recognition, speech synthesis
+and text correction, computed online by Mistral AI. It needs two more
+development packages, installed by `./install.ksh prereq`: libcurl and the
+nlohmann JSON headers (`json-devel` from EPEL, `nlohmann-json3-dev` on
+Debian). To rebuild it alone:
+
+```sh
+make -C mcu speech-server
+```
+
+Its tests belong to the mcu suite (`make -C mcu check`). The correction
+prompt is also checked against the real Mistral, by hand, with a key:
+
+```sh
+MISTRAL_API_KEY_FILE=~/.config/mistral/api.key make -C mcu check-speech-comp
+```
+
+Installation and operation: `docs/utilisation/speech-server.md`.
 
 ### Incremental rebuild
 
@@ -117,6 +138,7 @@ objects — so the tree is left in a pristine state.
 ```sh
 ./install.ksh localcompile      # the package ships bin/debug/mcu
 ./install.ksh deb               # -> mcumediaserver_<version>_<arch>.deb
+                                #    and mediaserver-speech_<version>_<arch>.deb
 ```
 
 It installs the same files as the RPM, with two Debian conventions: the
@@ -131,11 +153,15 @@ The package is unsigned, and no APT repository publishes it: install it with
 
 ## Building the RPM package
 
-To produce the RPM package (this is what the release build runs):
+To produce the RPM packages (this is what the release build runs):
 
 ```sh
 ./install.ksh rpm nosign
 ```
+
+It produces two packages: `mcumediaserver` and `mediaserver-speech`. The
+second one does not depend on the first: it installs alone on a dedicated
+machine.
 
 ## Running
 
