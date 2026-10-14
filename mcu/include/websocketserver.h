@@ -36,6 +36,8 @@ public:
 	~WebSocketServer();
 
 	int Init(int port);
+	//Listens on the given address; `::` also hears IPv4.
+	int Init(const IPEndpoint& listenOn);
 	void AddHandler(const std::string base,Handler* hnd);
 	int End();
 

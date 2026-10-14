@@ -401,7 +401,9 @@ public:
 	virtual void SendMessage(const std::string& message);
 	virtual void SendMessage(const BYTE* data, const DWORD size);
 	virtual void Close();
+	virtual void Close(const WORD code, const char* reason);
 	virtual std::weak_ptr<WebSocket> GetWeakPtr();
+	virtual IPEndpoint GetRemoteEndpoint() const	{ return remote; }
 
 	//HTTPParser listener
 	virtual int on_url (HTTPParser*, const char *at, DWORD length);
@@ -478,7 +480,11 @@ private:
 	//Fermeture demandée depuis un autre thread (Close) ou le pair (trame Close).
 	std::atomic<bool>	closeRequested;
 	//Fermeture différée : fermer une fois toute la sortie écoulée (Reject).
-	bool			closeAfterFlush;
+	std::atomic<bool>	closeAfterFlush;
+	//A Close frame is queued: no frame may follow it. Guarded by framesMutex.
+	bool			closeFrameQueued = false;
+	//Set by Init, immutable afterwards.
+	IPEndpoint		remote;
 
 	bool inited;
 

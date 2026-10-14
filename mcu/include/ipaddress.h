@@ -259,6 +259,11 @@ public:
 	 */
 	bool IsPrivateV4() const;
 
+	// Membership of `network/length` (`10.0.0.0/8`, `2001:db8::/32`), both
+	// sides unmapped. False when the families differ or `length` exceeds the
+	// family width.
+	bool InPrefix(const IPAddress& network, int length) const;
+
 	/**
 	 * IsUniqueLocalV6 — `fc00::/7` (RFC 4193) : adresse d'usage local, unique
 	 * par construction, jamais annoncée à l'Internet public.
