@@ -1,6 +1,7 @@
 # ADR 003 — La synthèse vocale tourne dans un serveur WebSocket séparé
 
-Statut : proposé.
+Statut : remplacé en partie par l'[ADR 005](adr-005-speech-server-mistral-en-ligne.md)
+(le moteur Piper est abandonné ; la séparation en deux binaires reste).
 Conception associée : [TTS](../conception/TTS/SPEC.md).
 
 ## Contexte

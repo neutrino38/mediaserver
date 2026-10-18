@@ -5,9 +5,10 @@
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
 > mediaserver client (lot 6) suit en 1.19.0.
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
-> Mistral AI ; aucun moteur local** (tranché le 2026-10-13). L'ADR 005 qui le
-> consigne est à écrire ; elle garde de l'ADR 003 la séparation en deux
-> binaires et en remplace le moteur.
+> Mistral AI ; aucun moteur local** (tranché le 2026-10-13), consignée par
+> l'[ADR 005](../../architecture/adr-005-speech-server-mistral-en-ligne.md) ;
+> elle garde de l'ADR 003 la séparation en deux binaires et en remplace le
+> moteur.
 > Prérequis vérifié : le client WebSocket (`WebSocketServer::Connect`,
 > branche `feat/wss-client`) est fusionné dans `release/1.18.0`.
 >
@@ -801,11 +802,17 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json
+ExecReload=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json --check
 ExecReload=/bin/kill -HUP $MAINPID
+# 78 (EX_CONFIG) : fichier ou clé invalide, un redémarrage n'y peut rien.
+RestartPreventExitStatus=78
 
-# La clé Mistral : copiée par systemd dans $CREDENTIALS_DIRECTORY, lisible
-# par ce service seul. Variante chiffrée par drop-in (SPEC §8.1).
-LoadCredential=mistral-api-key:/etc/mediaserver/speech-api.key
+# La clé Mistral : copiée en root, avant chaque démarrage, dans un répertoire
+# en mémoire lisible par ce service seul (§8.1, ADR 005). Pas de
+# LoadCredential= : l'hôte LXC le vide. Variante chiffrée par drop-in.
+RuntimeDirectory=speech-server
+RuntimeDirectoryMode=0700
+ExecStartPre=+/bin/sh -c 'if [ -e /etc/mediaserver/speech-api.key ]; then exec /bin/install -m 0400 -o speech -g speech /etc/mediaserver/speech-api.key /run/speech-server/api.key; fi'
 
 # Rien ici ne demande root : les ports sont au-dessus de 1024.
 User=speech
@@ -842,8 +849,9 @@ Ce qui ne se devine pas :
   service. Le fichier de log est ouvert **par systemd**, avant le changement
   d'utilisateur, donc `append:` fonctionne sans exception : vérifié sur
   AlmaLinux 9 le 2026-10-14. Le serveur n'écrit rien d'autre sur disque.
-- `ExecReload` porte le `SIGHUP` du §8.2 : `systemctl reload speech-server`
-  recharge la configuration sans couper les flux.
+- `ExecReload` vérifie d'abord le fichier (`--check`), puis porte le
+  `SIGHUP` du §8.2 : `systemctl reload speech-server` recharge la
+  configuration sans couper les flux, et échoue sur un fichier invalide.
 - `LimitCORE=0` : pour un diagnostic, un drop-in le relève le temps de
   reproduire, puis on le retire.
 - `RestrictAddressFamilies` autorise `AF_UNIX` parce que libcurl et la
@@ -901,8 +909,8 @@ La [SPEC TTS](../TTS/SPEC.md) §4 décrit un protocole proche mais pas
 identique (`hello`, `voices`) : elle sera **réécrite** pour désigner ce
 document comme seul protocole, et son §5 (serveur Piper) disparaît.
 L'[ADR 003](../../architecture/adr-003-tts-serveur-websocket.md) reste vrai
-sur la séparation en deux binaires ; son moteur change (ADR 005 à écrire,
-voir l'en-tête).
+sur la séparation en deux binaires ; son moteur change
+([ADR 005](../../architecture/adr-005-speech-server-mistral-en-ligne.md)).
 
 ## 13. Plan d'implémentation
 
