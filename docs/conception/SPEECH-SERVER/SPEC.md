@@ -603,13 +603,23 @@ Options :
 Tranché : **A comme socle, B en variante d'exploitation**. Le code du serveur
 est le même dans les deux cas ; c'est l'unité qui choisit, par un drop-in.
 
-Constaté le 2026-10-14 sur dev71 : **dans un conteneur LXC Proxmox, ni A ni
-B ne marchent.** L'hôte ajoute à tous les services un drop-in
-`zzz-lxc-service.conf` qui vide `LoadCredential=`, et `$CREDENTIALS_DIRECTORY`
-n'est jamais posé. La variante d'exploitation LXC est un drop-in qui passe
-`--api-key-file`, avec le fichier de clé en `0600` au compte `speech`. Elle
-est moins protégée : le compte du service peut relire la clé sur le disque.
+Constaté sur dev71, conteneur LXC Proxmox : **ni A ni B ne marchent.**
+
+- A : l'hôte ajoute à tous les services un drop-in `zzz-lxc-service.conf`
+  qui vide `LoadCredential=`. Remise après lui, la directive pose bien
+  `$CREDENTIALS_DIRECTORY`, mais le répertoire reste vide : le montage
+  `ramfs` est refusé (`EACCES`), et le `tmpfs` de repli, monté dans un
+  espace de montage à part puis déplacé, n'atteint pas le service.
+- B : `systemd-creds` ne crée pas sa clé d'hôte (« Failed to setup
+  credentials host key »), donc rien ne se chiffre.
+
+La variante LXC, vérifiée le 2026-10-18 : un `ExecStartPre=+` copie, en
+root, le fichier de A dans un `RuntimeDirectory` (`tmpfs`, `0700`, au compte
+`speech`), et le serveur la lit par `--api-key-file`. La protection est
+celle de A : l'original reste root, la copie disparaît à l'arrêt. Une clé
+chiffrée sur disque demande une VM avec TPM virtuel, ou l'option C.
 Procédure : `docs/utilisation/speech-server.md` §3.
+
 Pose de la clé, une commande dans chaque cas :
 
 ```sh

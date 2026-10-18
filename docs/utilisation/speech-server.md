@@ -86,22 +86,31 @@ réinstallation de la machine, rechiffrer la clé.
 **Dans un conteneur LXC** (Proxmox), systemd ne transmet aucune clé :
 l'hôte ajoute à tous les services un réglage `LoadCredential=` vide. Le
 service refuse alors de démarrer, avec « no Mistral key » dans son journal.
-Dans ce cas, la clé est lue directement dans un fichier qui appartient au
-compte `speech` :
+Dans ce cas, la clé reste en root sur le disque, posée comme dans la
+variante simple. Avant chaque démarrage, systemd la copie, en root, dans un
+répertoire en mémoire réservé au service. Le service lit cette copie ; la
+copie disparaît à l'arrêt :
 
 ```sh
-install -m 0600 -o speech -g speech /dev/stdin /etc/mediaserver/speech-api.key <<< "$KEY"
+install -m 0600 -o root -g root /dev/stdin /etc/mediaserver/speech-api.key <<< "$KEY"
 mkdir -p /etc/systemd/system/speech-server.service.d
 cat > /etc/systemd/system/speech-server.service.d/lxc-key.conf <<'EOF'
 [Service]
+LoadCredential=
+RuntimeDirectory=speech-server
+RuntimeDirectoryMode=0700
+ExecStartPre=+/bin/install -m 0400 -o speech -g speech /etc/mediaserver/speech-api.key /run/speech-server/api.key
 ExecStart=
-ExecStart=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json --api-key-file /etc/mediaserver/speech-api.key
+ExecStart=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json --api-key-file /run/speech-server/api.key
 EOF
 systemctl daemon-reload
 ```
 
-Cette variante est moins protégée : le compte du service peut relire la clé
-sur le disque. Ne l'utiliser que là où la variante simple ne marche pas.
+Le `+` fait tourner la seule copie en root ; le service reste sous le compte
+`speech`, et ne peut pas lire le fichier d'origine. La protection est la
+même qu'avec la variante simple. La variante chiffrée, elle, ne marche pas
+en LXC : `systemd-creds` n'y crée pas sa clé d'hôte. Pour chiffrer la clé
+sur disque, utiliser une VM avec un TPM virtuel.
 
 **Changer de clé sans coupure longue** : créer une seconde clé dans la
 console Mistral, remplacer le fichier, redémarrer le service, puis révoquer
