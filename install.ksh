@@ -303,8 +303,18 @@ function detect_distro
 #
 # webrtc-audio-processing n'y figure plus non plus : la VAD passe par le
 # sous-module libvad (fvad), bati in-tree. C'en etait le seul consommateur.
+#
+# Le paquet C++ de xmlrpc-c porte son soname dans son nom, qui varie selon la
+# distribution (libxmlrpc-c++8-dev sur Ubuntu 24.04 / Mint 22 / Debian 12) :
+# on prend le plus recent que connait apt plutot que de l'ecrire en dur.
+function deb_xmlrpcpp_dev
+{
+	PKG=$(apt-cache pkgnames libxmlrpc-c++ 2>/dev/null | grep -E '^libxmlrpc-c\+\+[0-9]+-dev$' | sort -V | tail -1)
+	echo "${PKG:-libxmlrpc-c++8-dev}"
+}
+
 RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool"
-DEB_PREREQ="libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
+DEB_PREREQ="libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev $(command -v apt-cache > /dev/null && deb_xmlrpcpp_dev) libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
 
 function check_prereq
 {
