@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.17.0"
+VERSION="1.18.0"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
@@ -239,6 +239,111 @@ EOF
 
 	rm -rf "$PWD/debbuild"
 	echo "Paquet produit : ${PROJET}_${VERSION}_${ARCH}.deb"
+
+	create_deb_speech "$ARCH"
+}
+
+# speech-server: its own package, installable without the mediaserver on a
+# dedicated machine. Not enabled at install: without its key it cannot start.
+function create_deb_speech
+{
+	ARCH=$1
+	SPEECHPKG=mediaserver-speech
+
+	if [ ! -x bin/debug/speech-server ]
+	then
+		echo "bin/debug/speech-server absent : lancer d'abord ./install.ksh localcompile"
+		exit 20
+	fi
+
+	PKGROOT=$PWD/debbuild/${SPEECHPKG}_${VERSION}_${ARCH}
+	echo "Construction du paquet ${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	rm -rf "$PKGROOT"
+	mkdir -p "$PKGROOT/DEBIAN"
+
+	install -D -m 755 bin/debug/speech-server  "$PKGROOT/opt/ives/bin/speech-server"
+	install -D -m 644 speech-server.service    "$PKGROOT/lib/systemd/system/speech-server.service"
+	install -D -m 640 speech-config.json       "$PKGROOT/etc/mediaserver/speech-config.json"
+	install -D -m 644 LICENSE.md               "$PKGROOT/usr/share/doc/$SPEECHPKG/LICENSE.md"
+
+	DEPENDS=$(deb_runtime_depends bin/debug/speech-server)
+	INSTALLEDSIZE=$(du -ks "$PKGROOT" | cut -f1)
+
+	cat > "$PKGROOT/DEBIAN/control" <<EOF
+Package: $SPEECHPKG
+Version: $VERSION
+Section: comm
+Priority: optional
+Architecture: $ARCH
+Maintainer: IVeS <support@ives.fr>
+Homepage: http://www.ives.fr
+Installed-Size: $INSTALLEDSIZE
+Depends: adduser, $DEPENDS
+Description: IVeS speech-server (ASR, TTS et correction de texte par Mistral AI)
+ Trois services en flux WebSocket, calcules par Mistral AI : reconnaissance
+ vocale, synthese vocale et correction de texte.
+EOF
+
+	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
+/etc/mediaserver/speech-config.json
+EOF
+
+	cat > "$PKGROOT/DEBIAN/preinst" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "install" ] || [ "$1" = "upgrade" ]
+then
+    getent group speech > /dev/null || addgroup --system speech
+    getent passwd speech > /dev/null || adduser --system --ingroup speech --no-create-home --home / --shell /usr/sbin/nologin speech
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]
+then
+    chgrp speech /etc/mediaserver/speech-config.json
+    systemctl daemon-reload || true
+    # Restarted on upgrade only if it was running; never enabled here.
+    systemctl try-restart speech-server.service || true
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ]
+then
+    systemctl stop speech-server.service || true
+    systemctl disable speech-server.service || true
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]
+then
+    systemctl daemon-reload || true
+fi
+EOF
+
+	chmod 755 "$PKGROOT/DEBIAN/preinst" "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/prerm" "$PKGROOT/DEBIAN/postrm"
+
+	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	if [ $? != 0 ]
+	then
+		echo "*** error during build ***"
+		exit 20
+	fi
+
+	rm -rf "$PWD/debbuild"
+	echo "Paquet produit : ${SPEECHPKG}_${VERSION}_${ARCH}.deb"
 }
 
 function clean
@@ -303,8 +408,12 @@ function detect_distro
 #
 # webrtc-audio-processing n'y figure plus non plus : la VAD passe par le
 # sous-module libvad (fvad), bati in-tree. C'en etait le seul consommateur.
-RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool"
-DEB_PREREQ="libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
+#
+# json-devel (EPEL) / nlohmann-json3-dev: header-only JSON reader of
+# speech-server, whose tests belong to the mcu suite. libcurl: its HTTPS
+# client towards Mistral.
+RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool json-devel libcurl-devel"
+DEB_PREREQ="nlohmann-json3-dev libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
 
 function check_prereq
 {
@@ -407,7 +516,7 @@ function local_compile
 
 	mkdir -p bin/debug
 	cd mcu
-	make mcu
+	make mcu speech-server
 }
 
 function compile_rabbitmq

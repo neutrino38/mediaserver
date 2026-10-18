@@ -1,0 +1,752 @@
+[
+ {
+  "name": "Paul - Sad",
+  "slug": "en_paul_sad",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "heavy",
+   "hushed",
+   "sad"
+  ],
+  "color": "#2A2A40",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "530e2e20-58e2-45d8-b0a5-4594f4915944",
+  "created_at": "2026-03-24T15:31:20.417434Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Neutral",
+  "slug": "en_paul_neutral",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "relaxed",
+   "balanced",
+   "neutral"
+  ],
+  "color": "#77778B",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "c69964a6-ab8b-4f8a-9465-ec0925096ec8",
+  "created_at": "2026-03-24T15:31:20.081769Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Happy",
+  "slug": "en_paul_happy",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "sunny",
+   "easygoing",
+   "happy"
+  ],
+  "color": "#318E68",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "1024d823-a11e-43ee-bf3d-d440dccc0577",
+  "created_at": "2026-03-24T15:31:19.428871Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Frustrated",
+  "slug": "en_paul_frustrated",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "edgy",
+   "snappy",
+   "frustrated"
+  ],
+  "color": "#E10500",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "1f017bcb-02e5-460d-989b-db065c0c6122",
+  "created_at": "2026-03-24T15:31:19.097475Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Excited",
+  "slug": "en_paul_excited",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "bouncy",
+   "spirited",
+   "excited"
+  ],
+  "color": "#CB6E03",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "5940190b-f58a-4c3e-8264-a40d63fd6883",
+  "created_at": "2026-03-24T15:31:18.821278Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Confident",
+  "slug": "en_paul_confident",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "bold",
+   "punchy",
+   "confident"
+  ],
+  "color": "#0082E6",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "98559b22-62b5-4a64-a7cd-fc78ca41faa8",
+  "created_at": "2026-03-24T15:31:18.310689Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Cheerful",
+  "slug": "en_paul_cheerful",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "upbeat",
+   "breezy",
+   "cheerful"
+  ],
+  "color": "#318E68",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "01d985cd-5e0c-4457-bfd8-80ba31a5bc03",
+  "created_at": "2026-03-24T15:31:18.044851Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Angry",
+  "slug": "en_paul_angry",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "raw",
+   "gruff",
+   "angry"
+  ],
+  "color": "#E10500",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "cb891218-482c-4392-9878-91e8d999d57a",
+  "created_at": "2026-03-24T15:31:17.311579Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Oliver - Neutral",
+  "slug": "gb_oliver_neutral",
+  "languages": [
+   "en_gb"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "calm",
+   "even",
+   "neutral"
+  ],
+  "color": "#77778B",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "e3596645-b1af-469e-b857-f18ddedc7652",
+  "created_at": "2026-03-18T10:10:49.960780Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Jane - Sarcasm",
+  "slug": "gb_jane_sarcasm",
+  "languages": [
+   "en_gb"
+  ],
+  "gender": "female",
+  "age": 30,
+  "tags": [
+   "dry",
+   "wry",
+   "sarcastic"
+  ],
+  "color": "#C347C8",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "a3e41ea8-020b-44c0-8d8b-f6cc03524e31",
+  "created_at": "2026-03-18T10:10:26.679367Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Sad",
+  "slug": "en_paul_sad",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "heavy",
+   "hushed",
+   "sad"
+  ],
+  "color": "#2A2A40",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "530e2e20-58e2-45d8-b0a5-4594f4915944",
+  "created_at": "2026-03-24T15:31:20.417434Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Neutral",
+  "slug": "en_paul_neutral",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "relaxed",
+   "balanced",
+   "neutral"
+  ],
+  "color": "#77778B",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "c69964a6-ab8b-4f8a-9465-ec0925096ec8",
+  "created_at": "2026-03-24T15:31:20.081769Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Happy",
+  "slug": "en_paul_happy",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "sunny",
+   "easygoing",
+   "happy"
+  ],
+  "color": "#318E68",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "1024d823-a11e-43ee-bf3d-d440dccc0577",
+  "created_at": "2026-03-24T15:31:19.428871Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Frustrated",
+  "slug": "en_paul_frustrated",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "edgy",
+   "snappy",
+   "frustrated"
+  ],
+  "color": "#E10500",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "1f017bcb-02e5-460d-989b-db065c0c6122",
+  "created_at": "2026-03-24T15:31:19.097475Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Excited",
+  "slug": "en_paul_excited",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "bouncy",
+   "spirited",
+   "excited"
+  ],
+  "color": "#CB6E03",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "5940190b-f58a-4c3e-8264-a40d63fd6883",
+  "created_at": "2026-03-24T15:31:18.821278Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Confident",
+  "slug": "en_paul_confident",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "bold",
+   "punchy",
+   "confident"
+  ],
+  "color": "#0082E6",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "98559b22-62b5-4a64-a7cd-fc78ca41faa8",
+  "created_at": "2026-03-24T15:31:18.310689Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Cheerful",
+  "slug": "en_paul_cheerful",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "upbeat",
+   "breezy",
+   "cheerful"
+  ],
+  "color": "#318E68",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "01d985cd-5e0c-4457-bfd8-80ba31a5bc03",
+  "created_at": "2026-03-24T15:31:18.044851Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Angry",
+  "slug": "en_paul_angry",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "raw",
+   "gruff",
+   "angry"
+  ],
+  "color": "#E10500",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "cb891218-482c-4392-9878-91e8d999d57a",
+  "created_at": "2026-03-24T15:31:17.311579Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Oliver - Neutral",
+  "slug": "gb_oliver_neutral",
+  "languages": [
+   "en_gb"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "calm",
+   "even",
+   "neutral"
+  ],
+  "color": "#77778B",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "e3596645-b1af-469e-b857-f18ddedc7652",
+  "created_at": "2026-03-18T10:10:49.960780Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Jane - Sarcasm",
+  "slug": "gb_jane_sarcasm",
+  "languages": [
+   "en_gb"
+  ],
+  "gender": "female",
+  "age": 30,
+  "tags": [
+   "dry",
+   "wry",
+   "sarcastic"
+  ],
+  "color": "#C347C8",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "a3e41ea8-020b-44c0-8d8b-f6cc03524e31",
+  "created_at": "2026-03-18T10:10:26.679367Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Sad",
+  "slug": "en_paul_sad",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "heavy",
+   "hushed",
+   "sad"
+  ],
+  "color": "#2A2A40",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "530e2e20-58e2-45d8-b0a5-4594f4915944",
+  "created_at": "2026-03-24T15:31:20.417434Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Neutral",
+  "slug": "en_paul_neutral",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "relaxed",
+   "balanced",
+   "neutral"
+  ],
+  "color": "#77778B",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "c69964a6-ab8b-4f8a-9465-ec0925096ec8",
+  "created_at": "2026-03-24T15:31:20.081769Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Happy",
+  "slug": "en_paul_happy",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "sunny",
+   "easygoing",
+   "happy"
+  ],
+  "color": "#318E68",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "1024d823-a11e-43ee-bf3d-d440dccc0577",
+  "created_at": "2026-03-24T15:31:19.428871Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Frustrated",
+  "slug": "en_paul_frustrated",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "edgy",
+   "snappy",
+   "frustrated"
+  ],
+  "color": "#E10500",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "1f017bcb-02e5-460d-989b-db065c0c6122",
+  "created_at": "2026-03-24T15:31:19.097475Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Excited",
+  "slug": "en_paul_excited",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "bouncy",
+   "spirited",
+   "excited"
+  ],
+  "color": "#CB6E03",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "5940190b-f58a-4c3e-8264-a40d63fd6883",
+  "created_at": "2026-03-24T15:31:18.821278Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Confident",
+  "slug": "en_paul_confident",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "bold",
+   "punchy",
+   "confident"
+  ],
+  "color": "#0082E6",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "98559b22-62b5-4a64-a7cd-fc78ca41faa8",
+  "created_at": "2026-03-24T15:31:18.310689Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Cheerful",
+  "slug": "en_paul_cheerful",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "upbeat",
+   "breezy",
+   "cheerful"
+  ],
+  "color": "#318E68",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "01d985cd-5e0c-4457-bfd8-80ba31a5bc03",
+  "created_at": "2026-03-24T15:31:18.044851Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Paul - Angry",
+  "slug": "en_paul_angry",
+  "languages": [
+   "en_us"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "raw",
+   "gruff",
+   "angry"
+  ],
+  "color": "#E10500",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "cb891218-482c-4392-9878-91e8d999d57a",
+  "created_at": "2026-03-24T15:31:17.311579Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Oliver - Neutral",
+  "slug": "gb_oliver_neutral",
+  "languages": [
+   "en_gb"
+  ],
+  "gender": "male",
+  "age": 30,
+  "tags": [
+   "calm",
+   "even",
+   "neutral"
+  ],
+  "color": "#77778B",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "e3596645-b1af-469e-b857-f18ddedc7652",
+  "created_at": "2026-03-18T10:10:49.960780Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ },
+ {
+  "name": "Jane - Sarcasm",
+  "slug": "gb_jane_sarcasm",
+  "languages": [
+   "en_gb"
+  ],
+  "gender": "female",
+  "age": 30,
+  "tags": [
+   "dry",
+   "wry",
+   "sarcastic"
+  ],
+  "color": "#C347C8",
+  "description": null,
+  "appearance": null,
+  "retention_notice": 30,
+  "id": "a3e41ea8-020b-44c0-8d8b-f6cc03524e31",
+  "created_at": "2026-03-18T10:10:26.679367Z",
+  "user_id": null,
+  "sharing_scope": "global",
+  "trimmed_seconds": null,
+  "kind": "ivc",
+  "type": "preset"
+ }
+]

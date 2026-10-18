@@ -430,6 +430,33 @@ bool IPAddress::IsPrivateV4() const
 	return false;
 }
 
+bool IPAddress::InPrefix(const IPAddress& network, int length) const
+{
+	const IPAddress a = Unmapped();
+	const IPAddress n = network.Unmapped();
+
+	if (!a.IsSet() || a.family != n.family)
+		return false;
+
+	const BYTE* x = a.family == AF_INET ? (const BYTE*)&a.addr.v4 : Bytes(a.addr.v6);
+	const BYTE* y = n.family == AF_INET ? (const BYTE*)&n.addr.v4 : Bytes(n.addr.v6);
+	const int bits = a.family == AF_INET ? 32 : 128;
+
+	if (length < 0 || length > bits)
+		return false;
+
+	const int full = length / 8;
+	if (memcmp(x, y, full) != 0)
+		return false;
+
+	const int rest = length % 8;
+	if (!rest)
+		return true;
+
+	const BYTE mask = (BYTE)(0xFF << (8 - rest));
+	return (x[full] & mask) == (y[full] & mask);
+}
+
 bool IPAddress::IsUniqueLocalV6() const
 {
 	//fc00::/7 (RFC 4193). Une ULA n'est jamais mappée : pas de Unmapped() ici.

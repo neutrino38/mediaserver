@@ -16,11 +16,24 @@ BuildRequires: ffmpeg-devel
 BuildRequires: gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
 BuildRequires: libsrtp-devel
 BuildRequires: openssl-devel >= 3.0, xmlrpc-c-devel, usrsctp-devel
+BuildRequires: libcurl-devel, json-devel
 BuildRequires: systemd-rpm-macros
 %{?systemd_requires}
 
 %description
 Mediaserver controlled by sailfin applications
+
+# speech-server: its own package, so that it installs without the mediaserver
+# on a dedicated machine. It owns /etc/mediaserver too, which RPM allows.
+%package -n mediaserver-speech
+Summary:   [IVeS] speech-server : ASR, TTS et correction de texte par Mistral AI
+Requires:  ffmpeg-libs, libcurl, openssl-libs >= 3.0, xmlrpc-c
+%{?systemd_requires}
+
+%description -n mediaserver-speech
+speech-server rend trois services en flux WebSocket, calcules par Mistral AI :
+reconnaissance vocale (asr), synthese vocale (tts) et correction de texte (comp).
+Le service n'est pas active a l'installation : poser d'abord la cle Mistral.
 %clean
 echo "############################# Clean"
 echo Clean du repertoire $RPM_BUILD_ROOT
@@ -53,6 +66,13 @@ cd %_topdir
 cd ..
 cp bin/debug/mcu $RPM_BUILD_ROOT/opt/ives/bin/mediaserver
 chmod 750 $RPM_BUILD_ROOT/opt/ives/bin/mediaserver
+# speech-server runs as the speech user: it must be able to execute it.
+cp bin/debug/speech-server $RPM_BUILD_ROOT/opt/ives/bin/speech-server
+chmod 755 $RPM_BUILD_ROOT/opt/ives/bin/speech-server
+cp speech-server.service $RPM_BUILD_ROOT%{_unitdir}/speech-server.service
+cp speech-config.json $RPM_BUILD_ROOT/etc/mediaserver/speech-config.json
+mkdir -p $RPM_BUILD_ROOT%{_defaultlicensedir}/mediaserver-speech-%{version}
+cp LICENSE.md $RPM_BUILD_ROOT%{_defaultlicensedir}/mediaserver-speech-%{version}/
 # Unite systemd (remplace l'ancien script SysV /etc/init.d/mediaserver).
 cp mediaserver.service $RPM_BUILD_ROOT%{_unitdir}/mediaserver.service
 cp mediaserver.sysconfig $RPM_BUILD_ROOT/etc/sysconfig/mediaserver
@@ -67,7 +87,8 @@ cp LICENSE.md LICENSE.libfvad $RPM_BUILD_ROOT%{_defaultlicensedir}/%{name}-%{ver
 
 %files
 %defattr(-,root,root,-)
-/opt/ives/bin
+%dir /opt/ives/bin
+/opt/ives/bin/mediaserver
 %{_unitdir}/mediaserver.service
 %config(noreplace) /etc/sysconfig/mediaserver
 /etc/mediaserver/type-asian.xml
@@ -107,7 +128,35 @@ echo "Now (re)starting mediaserver"
 # Redemarre le service apres une mise a jour (pas a la desinstallation).
 %systemd_postun_with_restart mediaserver.service
 
+%pre -n mediaserver-speech
+getent group speech > /dev/null || groupadd -r speech
+getent passwd speech > /dev/null || useradd -r -g speech -d / -s /sbin/nologin -c "IVeS speech-server" speech
+exit 0
+
+%post -n mediaserver-speech
+# No enable: without its key the service does not start.
+%systemd_post speech-server.service
+
+%preun -n mediaserver-speech
+%systemd_preun speech-server.service
+
+%postun -n mediaserver-speech
+%systemd_postun_with_restart speech-server.service
+
+%files -n mediaserver-speech
+%defattr(-,root,root,-)
+%dir /opt/ives/bin
+/opt/ives/bin/speech-server
+%{_unitdir}/speech-server.service
+%dir /etc/mediaserver
+%attr(0640,root,speech) %config(noreplace) /etc/mediaserver/speech-config.json
+%license %{_defaultlicensedir}/mediaserver-speech-%{version}/LICENSE.md
+
 %changelog
+* Wed Oct 14 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- version 1.18.0
+- nouveau sous-paquet mediaserver-speech : speech-server (asr, tts, comp par Mistral AI),
+  unite systemd speech-server.service sous le compte speech, non activee a l'installation
 * Tue Aug 4 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - rénovation complète de la fonction MCU maintenant basée sur les graphes FFMPEG
 - support théorique de l'accélération matérielle VAAPI

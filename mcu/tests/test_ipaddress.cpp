@@ -895,3 +895,62 @@ TEST(IPAddressResolve, DeuxResolutionsSuccessivesDonnentLeMemeResultat)
 	for (; a != first.end(); ++a, ++b)
 		EXPECT_TRUE(*a == *b) << "l'adresse annoncée doit être stable : " << a->ToString();
 }
+
+// ---------------------------------------------------------------------------
+// InPrefix — allow list of the speech-server control port
+// ---------------------------------------------------------------------------
+
+TEST(IPAddressInPrefix, MatchesAnIPv4Prefix)
+{
+	const IPAddress net = IPAddress::Parse("10.1.0.0");
+
+	EXPECT_TRUE(IPAddress::Parse("10.1.2.3").InPrefix(net, 16));
+	EXPECT_FALSE(IPAddress::Parse("10.2.0.1").InPrefix(net, 16));
+	EXPECT_TRUE(IPAddress::Parse("10.1.0.0").InPrefix(net, 32));
+	EXPECT_FALSE(IPAddress::Parse("10.1.0.1").InPrefix(net, 32));
+}
+
+TEST(IPAddressInPrefix, CutsAtTheBitNotTheByte)
+{
+	const IPAddress net = IPAddress::Parse("172.16.0.0");
+
+	EXPECT_TRUE(IPAddress::Parse("172.31.255.255").InPrefix(net, 12));
+	EXPECT_FALSE(IPAddress::Parse("172.32.0.0").InPrefix(net, 12));
+}
+
+TEST(IPAddressInPrefix, MatchesAnIPv6Prefix)
+{
+	const IPAddress net = IPAddress::Parse("2001:db8::");
+
+	EXPECT_TRUE(IPAddress::Parse("2001:db8:ffff::1").InPrefix(net, 32));
+	EXPECT_FALSE(IPAddress::Parse("2001:db9::1").InPrefix(net, 32));
+}
+
+TEST(IPAddressInPrefix, ZeroLengthTakesTheWholeFamilyAndOnlyIt)
+{
+	EXPECT_TRUE(IPAddress::Parse("192.0.2.1").InPrefix(IPAddress::Parse("0.0.0.0"), 0));
+	EXPECT_FALSE(IPAddress::Parse("2001:db8::1").InPrefix(IPAddress::Parse("0.0.0.0"), 0));
+}
+
+TEST(IPAddressInPrefix, AMappedIPv4IsComparedUnmapped)
+{
+	in6_addr raw = {};
+	raw.s6_addr[10] = 0xFF;
+	raw.s6_addr[11] = 0xFF;
+	raw.s6_addr[12] = 10;
+	raw.s6_addr[15] = 7;
+	sockaddr_in6 sa = {};
+	sa.sin6_family = AF_INET6;
+	sa.sin6_addr = raw;
+
+	const IPAddress mapped = IPAddress::FromSockaddr((const sockaddr*)&sa);
+
+	EXPECT_TRUE(mapped.InPrefix(IPAddress::Parse("10.0.0.0"), 8));
+}
+
+TEST(IPAddressInPrefix, RejectsALengthOutsideTheFamily)
+{
+	EXPECT_FALSE(IPAddress::Parse("10.0.0.1").InPrefix(IPAddress::Parse("10.0.0.0"), 33));
+	EXPECT_FALSE(IPAddress::Parse("10.0.0.1").InPrefix(IPAddress::Parse("10.0.0.0"), -1));
+	EXPECT_FALSE(IPAddress().InPrefix(IPAddress::Parse("10.0.0.0"), 8));
+}

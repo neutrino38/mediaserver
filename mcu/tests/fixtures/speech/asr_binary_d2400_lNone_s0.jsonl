@@ -1,0 +1,34 @@
+{"t": 0.361, "kind": "open"}
+{"t": 0.3949, "kind": "rx", "msg": {"type": "session.created", "session": {"request_id": "ws-00000000-0000-0000-0000-000000000000", "model": "voxtral-mini-transcribe-realtime-2602", "audio_format": {"encoding": "pcm_s16le", "sample_rate": 16000}, "target_streaming_delay_ms": null, "diarize": false, "verbatim": false, "context_bias": [], "language": null, "speaker_references": null, "turn_detection": null}}}
+{"t": 0.8638, "kind": "tx", "msg": {"type": "session.update", "session": {"target_streaming_delay_ms": 2400}}}
+{"t": 0.932, "kind": "rx", "msg": {"type": "session.updated", "session": {"request_id": "ws-00000000-0000-0000-0000-000000000000", "model": "voxtral-mini-transcribe-realtime-2602", "audio_format": {"encoding": "pcm_s16le", "sample_rate": 16000}, "target_streaming_delay_ms": 2400, "diarize": false, "verbatim": false, "context_bias": [], "language": null, "speaker_references": null, "turn_detection": null}}}
+{"t": 4.3892, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "Bon"}}
+{"t": 4.4061, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "jour"}}
+{"t": 4.415, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": ","}}
+{"t": 4.9093, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " je"}}
+{"t": 4.9256, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " suis"}}
+{"t": 5.3672, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " en"}}
+{"t": 5.8172, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " retard"}}
+{"t": 5.826, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " de"}}
+{"t": 5.881, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " quelques"}}
+{"t": 6.6984, "kind": "tx.audio_done", "secs": 5.33, "bytes": 156194}
+{"t": 6.6995, "kind": "tx", "msg": {"type": "input_audio.flush"}}
+{"t": 6.8151, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " minutes"}}
+{"t": 6.8319, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "."}}
+{"t": 6.9363, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " Comm"}}
+{"t": 6.9452, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "ence"}}
+{"t": 6.9545, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "z"}}
+{"t": 6.9634, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " la"}}
+{"t": 6.9924, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " réunion"}}
+{"t": 7.0343, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " sans"}}
+{"t": 7.0499, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " moi"}}
+{"t": 7.0583, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": ","}}
+{"t": 7.0671, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " s"}}
+{"t": 7.0764, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "'il"}}
+{"t": 7.0851, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " vous"}}
+{"t": 7.1377, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": " plaît"}}
+{"t": 7.1466, "kind": "rx", "msg": {"type": "transcription.text.delta", "text": "."}}
+{"t": 7.237, "kind": "rx", "msg": {"model": "voxtral-mini-transcribe-realtime-2602", "text": "Bonjour, je suis en retard de quelques minutes. Commencez la réunion sans moi, s'il vous plaît.", "language": null, "segments": [], "usage": {"prompt_audio_seconds": 4, "prompt_tokens": 47, "total_tokens": 118, "completion_tokens": 71}, "type": "transcription.done"}}
+{"t": 8.2025, "kind": "tx", "msg": {"type": "input_audio.end"}}
+{"t": 8.4284, "kind": "rx", "msg": {"model": "voxtral-mini-transcribe-realtime-2602", "text": "", "language": null, "segments": [], "usage": {"prompt_audio_seconds": 4, "prompt_tokens": 47, "total_tokens": 57, "completion_tokens": 10}, "type": "transcription.done"}}
+{"t": 10.5113, "kind": "closed", "code": 1006, "reason": ""}

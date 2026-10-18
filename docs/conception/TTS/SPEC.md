@@ -150,9 +150,12 @@ Règles :
 Le texte T.140 arrive caractère par caractère. Le découpeur accumule les
 caractères d'un participant et envoie une phrase au synthétiseur :
 
-- sur une ponctuation de fin : `.`, `?`, `!`, `…` ;
+- sur une ponctuation de fin (`.`, `?`, `!`, `…`) suivie d'un blanc : une
+  ponctuation seule ne coupe pas, pour que « 3.5 » ou « ives.fr » restent
+  entiers ;
 - sur un saut de ligne (U+2028 ou `\n`) ;
 - après un silence de frappe (1,5 s par défaut, à mesurer en recette).
+- au dernier blanc avant 1 500 octets, pour une phrase sans fin.
 
 Il applique le retour arrière (U+0008) **avant** d'envoyer : un caractère
 effacé n'est jamais lu. Une phrase déjà envoyée ne peut plus être corrigée.
