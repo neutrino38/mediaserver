@@ -422,6 +422,32 @@ function deb_xmlrpcpp_dev
 	echo "${PKG:-libxmlrpc-c++8-dev}"
 }
 
+# ffmpeg >= 8 (libavutil >= 60) : Ubuntu 26.04 le livre (8.0), Mint 22 /
+# Ubuntu 24.04 non (6.1). Sur celles-ci, un ffmpeg recent bati a part dans
+# /opt/ffmpeg9 (contournement local, en attendant la prochaine Mint) est place
+# EN TETE du PKG_CONFIG_PATH, herite par les deux Makefiles (sous-module et
+# mcu) ; sans ce repertoire, rien ne change.
+FFMPEG_PCDIR=/opt/ffmpeg9/lib/pkgconfig
+FFMPEG_MIN_AVUTIL=60
+if [ -d "$FFMPEG_PCDIR" ]
+then
+	export PKG_CONFIG_PATH="$FFMPEG_PCDIR${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
+
+# Garde-fou : refuser un ffmpeg trop ancien, plutot que d'echouer cinquante
+# lignes plus loin sur une API absente (avcodec_get_supported_config...).
+function check_ffmpeg
+{
+	AVUTIL=$(pkg-config --modversion libavutil 2>/dev/null)
+	if [ -z "$AVUTIL" ] || [ "${AVUTIL%%.*}" -lt $FFMPEG_MIN_AVUTIL ]
+	then
+		echo "pkg-config resout libavutil ${AVUTIL:-(introuvable)} : ffmpeg >= 8 (libavutil >= $FFMPEG_MIN_AVUTIL) requis."
+		echo "Installer un ffmpeg plus recent, ou renseigner PKG_CONFIG_PATH."
+		exit 20
+	fi
+	echo "ffmpeg : libavutil $AVUTIL ($(pkg-config --variable=prefix libavutil))"
+}
+
 RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool json-devel libcurl-devel"
 DEB_PREREQ="nlohmann-json3-dev libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev $(command -v apt-cache > /dev/null && deb_xmlrpcpp_dev) libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
 
@@ -454,6 +480,8 @@ function check_prereq
 		echo "Les installer : ./install.ksh prereq"
 		exit 20
 	fi
+
+	check_ffmpeg
 }
 
 function compile_mp4v2

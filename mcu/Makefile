@@ -356,8 +356,16 @@ $(BUILD)/comp_prompt.inc: src/speech/comp_prompt.txt | $(BUILD)
 compsession.o: $(BUILD)/comp_prompt.inc
 compsession.o: CXXFLAGS += -I$(BUILD)
 
+# libswresample/libavutil par pkg-config, comme pour le mcu : un -lavutil nu
+# prend le ffmpeg du prefixe systeme (6.1 sur Debian/Ubuntu) alors que les objets
+# sont compiles avec les en-tetes de ffmpeg 9 — deux ABI dans un binaire.
+SPEECHAVLIBS := $(shell pkg-config --libs libswresample libavutil 2>/dev/null)
+ifeq ($(strip $(SPEECHAVLIBS)),)
+SPEECHAVLIBS := -lswresample -lavutil
+endif
+
 $(BIN)/speech-server: $(OBJSSPEECH) | $(BUILD) $(BIN)
-	$(CXX) -o $@ $(BUILDOBJSSPEECH) -lswresample -lavutil -lcurl $(LDXMLFLAGS)
+	$(CXX) -o $@ $(BUILDOBJSSPEECH) $(SPEECHAVLIBS) -lcurl $(LDXMLFLAGS)
 
 rtmptest: $(OBJSRTMPTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS)
