@@ -144,6 +144,24 @@ int CountThreads()
 	return count;
 }
 
+// Référence prise une fois le nombre de threads stabilisé : ceux des tests
+// précédents (pools ffmpeg/x264) finissent de mourir tout seuls, et un départ
+// pendant la mesure ferait échouer la comparaison sans rapport avec le code
+// testé (cf. test_transcoder_recette.cpp).
+int SettledThreadCount()
+{
+	int last = CountThreads();
+	for (int i = 0; i < 20; i++)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(25));
+		const int now = CountThreads();
+		if (now == last)
+			return now;
+		last = now;
+	}
+	return last;
+}
+
 // Nourrit `frames` images à la cadence `fps` (horodatage RTP), en respectant
 // aussi cette cadence en temps réel : la borne de sortie du transcodeur est une
 // vraie horloge. Rend le nombre d'images livrées.
@@ -265,7 +283,7 @@ TEST(VideoEncoderInline, IlNeResteQueLeThreadDuLisseur)
 	VideoTranscoder transcoder(name);
 	ASSERT_EQ(1, transcoder.Init(/*adaptative=*/false, /*allowBridging=*/false));
 
-	const int before = CountThreads();
+	const int before = SettledThreadCount();
 	ASSERT_GT(before, 0);
 
 	Properties props;

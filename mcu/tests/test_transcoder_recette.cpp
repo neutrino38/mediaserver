@@ -104,6 +104,25 @@ int CountThreads()
 	return count;
 }
 
+// Les threads des tests précédents (pools ffmpeg/x264 du transcodage vidéo)
+// finissent de mourir tout seuls : une référence prise pendant qu'ils partent
+// fait échouer « aucun thread créé » sans que le transcodeur y soit pour rien
+// (5 au départ, 4 à l'arrivée). On attend que le processus retombe à son niveau,
+// comme test_consumer_threads.cpp.
+int SettledThreadCount()
+{
+	int last = CountThreads();
+	for (int i = 0; i < 20; i++)
+	{
+		std::this_thread::sleep_for(Ms(25));
+		const int now = CountThreads();
+		if (now == last)
+			return now;
+		last = now;
+	}
+	return last;
+}
+
 // Silence PCMU : 0xFF est le zéro de la loi µ. 160 octets = 20 ms à 8 kHz.
 template <typename Sink>
 void SendPcmu(WORD seq, Sink sink)
@@ -230,7 +249,7 @@ TEST(TranscoderRecette, AudioRattachementApresDettachRepart)
 	CountingSink sink;
 	transcoder.AddListener(&sink);
 
-	const int threads = CountThreads();
+	const int threads = SettledThreadCount();
 	ASSERT_GT(threads, 0);
 
 	auto first = std::make_shared<RTPMultiplexer>();
@@ -364,7 +383,7 @@ TEST(TranscoderRecette, VideoRattachementApresDettachRepart)
 	FeedVideo(vp8, *first, 5, 10, timestamp);
 	ASSERT_TRUE(WaitForOutput(sink, 1, 2000)) << "le premier attachement doit produire";
 
-	const int threads = CountThreads();
+	const int threads = SettledThreadCount();
 	ASSERT_GT(threads, 0);
 
 	transcoder.Dettach();
@@ -425,7 +444,7 @@ TEST(TranscoderRecette, VideoRenegociationDeCodecAChaud)
 	std::set<DWORD> before = sink.Ssrcs();
 	ASSERT_FALSE(before.empty());
 
-	const int threads = CountThreads();
+	const int threads = SettledThreadCount();
 	Properties again;
 	ASSERT_EQ(1, transcoder.SetCodec(VideoCodec::VP8, CIF, 10, 256, 10, again));
 	EXPECT_EQ(threads, CountThreads())
@@ -487,7 +506,7 @@ TEST(TranscoderRecette, VideoBornesNegocieesAChaudRouvrentLEncodeur)
 	std::map<int,Properties> negotiated;
 	negotiated[(int)VideoCodec::H264].SetProperty("h264.profile-level-id", "42e01e");
 
-	const int threads = CountThreads();
+	const int threads = SettledThreadCount();
 	transcoder.SetNegotiatedCodecProperties(negotiated);
 	EXPECT_EQ(threads, CountThreads())
 		<< "pousser des bornes negociees ne doit ni lancer ni joindre de thread";
