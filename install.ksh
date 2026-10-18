@@ -412,8 +412,18 @@ function detect_distro
 # json-devel (EPEL) / nlohmann-json3-dev: header-only JSON reader of
 # speech-server, whose tests belong to the mcu suite. libcurl: its HTTPS
 # client towards Mistral.
+#
+# Le paquet C++ de xmlrpc-c porte son soname dans son nom, qui varie selon la
+# distribution (libxmlrpc-c++8-dev sur Ubuntu 24.04 / Mint 22 / Debian 12) :
+# on prend le plus recent que connait apt plutot que de l'ecrire en dur.
+function deb_xmlrpcpp_dev
+{
+	PKG=$(apt-cache pkgnames libxmlrpc-c++ 2>/dev/null | grep -E '^libxmlrpc-c\+\+[0-9]+-dev$' | sort -V | tail -1)
+	echo "${PKG:-libxmlrpc-c++8-dev}"
+}
+
 RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool json-devel libcurl-devel"
-DEB_PREREQ="nlohmann-json3-dev libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
+DEB_PREREQ="nlohmann-json3-dev libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev $(command -v apt-cache > /dev/null && deb_xmlrpcpp_dev) libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
 
 function check_prereq
 {
@@ -589,6 +599,14 @@ function compile_libmedkit
 	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
 	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
 	make -C "$MEDKITDIR" all ASTERISK=no
+	if [ $? != 0 ]
+	then
+		# Sans cet arret, localcompile enchainait sur libvad et le mcu : l'erreur
+		# du sous-module se perdait dans la sortie et le script finissait sur un
+		# message sans rapport.
+		echo "Echec de la compilation de libmedkit"
+		exit 20
+	fi
 	cd $MEDIASERVERPATH
 }
 
@@ -624,6 +642,11 @@ function compile_libvad
 			CFLAGS="-g -O2 -fPIC -I./sources -I./sources/signal_processing" \
 			LIB_SRC='$(FVAD_SRC)' \
 			ST_LIB=libfvad.a
+		if [ $? != 0 ]
+		then
+			echo "Echec de la compilation de libvad"
+			exit 20
+		fi
 	fi
 	cd $MEDIASERVERPATH
 }
