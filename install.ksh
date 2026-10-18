@@ -490,6 +490,14 @@ function compile_libmedkit
 	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
 	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
 	make -C "$MEDKITDIR" all ASTERISK=no
+	if [ $? != 0 ]
+	then
+		# Sans cet arret, localcompile enchainait sur libvad et le mcu : l'erreur
+		# du sous-module se perdait dans la sortie et le script finissait sur un
+		# message sans rapport.
+		echo "Echec de la compilation de libmedkit"
+		exit 20
+	fi
 	cd $MEDIASERVERPATH
 }
 
@@ -525,6 +533,11 @@ function compile_libvad
 			CFLAGS="-g -O2 -fPIC -I./sources -I./sources/signal_processing" \
 			LIB_SRC='$(FVAD_SRC)' \
 			ST_LIB=libfvad.a
+		if [ $? != 0 ]
+		then
+			echo "Echec de la compilation de libvad"
+			exit 20
+		fi
 	fi
 	cd $MEDIASERVERPATH
 }
