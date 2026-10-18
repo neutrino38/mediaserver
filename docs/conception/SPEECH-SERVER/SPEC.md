@@ -11,6 +11,10 @@
 > Prérequis vérifié : le client WebSocket (`WebSocketServer::Connect`,
 > branche `feat/wss-client`) est fusionné dans `release/1.18.0`.
 >
+> Doc exploitant (installation, configuration, API) :
+> [`docs/SPEECH-SERVER.md`](../../SPEECH-SERVER.md). Ce document-ci porte la
+> conception.
+>
 > Vocabulaire. **ASR** (*automatic speech recognition*) : transformer la voix
 > en texte. **TTS** (*text-to-speech*) : transformer le texte en voix.
 > **COMP** : corriger et compléter un texte en cours de frappe. **T.140** :
@@ -618,21 +622,8 @@ root, le fichier de A dans un `RuntimeDirectory` (`tmpfs`, `0700`, au compte
 `speech`), et le serveur la lit par `--api-key-file`. La protection est
 celle de A : l'original reste root, la copie disparaît à l'arrêt. Une clé
 chiffrée sur disque demande une VM avec TPM virtuel, ou l'option C.
-Procédure : `docs/utilisation/speech-server.md` §3.
-
-Pose de la clé, une commande dans chaque cas :
-
-```sh
-# A : en clair, root seul
-install -m 0600 -o root -g root /dev/stdin /etc/mediaserver/speech-api.key <<< "$KEY"
-
-# B : chiffré, lié à la machine (TPM s'il existe, sinon clé d'hôte)
-systemd-creds encrypt --name=mistral-api-key - /etc/mediaserver/speech-api.cred <<< "$KEY"
-# drop-in /etc/systemd/system/speech-server.service.d/key.conf :
-#   [Service]
-#   LoadCredential=
-#   LoadCredentialEncrypted=mistral-api-key:/etc/mediaserver/speech-api.cred
-```
+Les commandes de pose de la clé, pour les trois variantes (A, B, LXC),
+sont dans la doc exploitant : [SPEECH-SERVER.md](../../SPEECH-SERVER.md) §3.
 
 Règles :
 
@@ -1135,7 +1126,7 @@ Commit livrable : « speech-server : correction de texte avant la synthèse ».
    réels, `reload` qui ajoute une voix sans redémarrer, arrêt propre,
    journal écrit malgré `ProtectSystem=strict`, désinstallation propre. La
    clé y passe par la variante LXC (§8.1).
-5. `docs/utilisation/speech-server.md`.
+5. La doc exploitant, aujourd'hui [`docs/SPEECH-SERVER.md`](../../SPEECH-SERVER.md).
 6. `README.md` : la cible `speech-server`, ses dépendances, les deux paquets.
 7. Version 1.18.0 : `install.ksh`, `version.h`, le changelog du spec.
 

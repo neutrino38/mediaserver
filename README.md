@@ -101,7 +101,8 @@ prompt is also checked against the real Mistral, by hand, with a key:
 MISTRAL_API_KEY_FILE=~/.config/mistral/api.key make -C mcu check-speech-comp
 ```
 
-Installation and operation: `docs/utilisation/speech-server.md`.
+Installation, configuration and API: `docs/SPEECH-SERVER.md`. Design:
+`docs/conception/SPEECH-SERVER/SPEC.md`.
 
 ### Incremental rebuild
 

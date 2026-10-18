@@ -10,7 +10,7 @@ ExecStart=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.js
 ExecReload=/bin/kill -HUP $MAINPID
 
 # The Mistral key: systemd copies it into $CREDENTIALS_DIRECTORY, readable by
-# this service only. The encrypted variant is a drop-in (see the user guide).
+# this service only. The encrypted variant is a drop-in (see docs/SPEECH-SERVER.md §3).
 LoadCredential=mistral-api-key:/etc/mediaserver/speech-api.key
 
 # Nothing here needs root: both ports are above 1024.
