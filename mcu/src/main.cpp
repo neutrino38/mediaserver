@@ -94,9 +94,8 @@ static int MedkitDebugCb(const char *msg, va_list ap)
 {
 	if (Logger::IsDebugEnabled())
 	{
-		struct timeval tv;
-		gettimeofday(&tv, NULL);
-		printf("[0x%lx][%.10ld.%.3ld][DBG]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+		char buf[80];
+		printf("[0x%lx][%s][DBG]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
 		vprintf(msg, ap);
 	}
 	return 1;
@@ -104,9 +103,8 @@ static int MedkitDebugCb(const char *msg, va_list ap)
 
 static int MedkitErrorCb(const char *msg, va_list ap)
 {
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	printf("[0x%lx][%.10ld.%.3ld][ERR]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+	char buf[80];
+	printf("[0x%lx][%s][ERR]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
 	vprintf(msg, ap);
 	return 0;
 }
