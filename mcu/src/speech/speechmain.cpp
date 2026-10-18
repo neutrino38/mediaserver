@@ -36,6 +36,14 @@ namespace
 
 const char* DefaultConfigPath = "/etc/mediaserver/speech-config.json";
 
+// Where the unit copies the key when systemd gives no credential (LXC
+// container: the host empties LoadCredential=).
+const char* RuntimeKeyPath = "/run/speech-server/api.key";
+
+// Exit status of a setup error (sysexits EX_CONFIG): the unit lists it in
+// RestartPreventExitStatus=, retrying cannot fix the file or the key.
+const int ExitConfig = 78;
+
 // The key file must be readable by its owner only (SPEC §8.1).
 bool ReadApiKey(const std::string& path, std::string& key, std::string& error)
 {
@@ -69,7 +77,7 @@ void Usage(const char* name)
 {
 	printf("Usage: %s [--config <path>] [--api-key-file <path>] [--check]\n", name);
 	printf("  --config <path>        default %s\n", DefaultConfigPath);
-	printf("  --api-key-file <path>  default $CREDENTIALS_DIRECTORY/mistral-api-key\n");
+	printf("  --api-key-file <path>  default $CREDENTIALS_DIRECTORY/mistral-api-key, else %s\n", RuntimeKeyPath);
 	printf("  --check                validate the configuration and the key, then exit\n");
 }
 
@@ -105,31 +113,36 @@ int main(int argc, char** argv)
 
 	if (keyPath.empty())
 	{
+		struct stat st;
 		const char* credentials = getenv("CREDENTIALS_DIRECTORY");
 		if (credentials)
 			keyPath = std::string(credentials) + "/mistral-api-key";
+		else if (stat(RuntimeKeyPath, &st) == 0)
+			keyPath = RuntimeKeyPath;
 	}
 
-	Log("-speech-server %s starting [config:%s]\n", MCUVERSION, configPath.c_str());
+	// --check also runs before each reload (ExecReload=): no "starting" line then.
+	if (!check)
+		Log("-speech-server %s starting [config:%s]\n", MCUVERSION, configPath.c_str());
 
 	std::string error;
 	std::shared_ptr<const SpeechConfig> loaded = SpeechConfig::Load(configPath, error);
 	if (!loaded)
 	{
 		Error("-speech-server: %s\n", error.c_str());
-		return 1;
+		return ExitConfig;
 	}
 
 	std::string apiKey;
 	if (keyPath.empty())
 	{
-		Error("-speech-server: no Mistral key: run under systemd LoadCredential, or pass --api-key-file\n");
-		return 1;
+		Error("-speech-server: no Mistral key: install it in /etc/mediaserver/speech-api.key, or pass --api-key-file\n");
+		return ExitConfig;
 	}
 	if (!ReadApiKey(keyPath, apiKey, error))
 	{
 		Error("-speech-server: %s\n", error.c_str());
-		return 1;
+		return ExitConfig;
 	}
 
 	if (check)

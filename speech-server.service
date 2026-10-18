@@ -7,11 +7,21 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json
+# A reload checks the file first: "systemctl reload" fails on an invalid one,
+# and the running configuration stays.
+ExecReload=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json --check
 ExecReload=/bin/kill -HUP $MAINPID
+# 78 (EX_CONFIG): bad file or key, a restart cannot fix it.
+RestartPreventExitStatus=78
 
-# The Mistral key: systemd copies it into $CREDENTIALS_DIRECTORY, readable by
-# this service only. The encrypted variant is a drop-in (see docs/SPEECH-SERVER.md §3).
-LoadCredential=mistral-api-key:/etc/mediaserver/speech-api.key
+# The Mistral key: copied as root, before each start, into a memory directory
+# readable by this service only; the copy goes away at stop. Not
+# LoadCredential=: an LXC host empties it for every service. The encrypted
+# variant is a drop-in (LoadCredentialEncrypted=, see docs/SPEECH-SERVER.md §3),
+# and the server prefers $CREDENTIALS_DIRECTORY over the copy.
+RuntimeDirectory=speech-server
+RuntimeDirectoryMode=0700
+ExecStartPre=+/bin/sh -c 'if [ -e /etc/mediaserver/speech-api.key ]; then exec /bin/install -m 0400 -o speech -g speech /etc/mediaserver/speech-api.key /run/speech-server/api.key; fi'
 
 # Nothing here needs root: both ports are above 1024.
 User=speech

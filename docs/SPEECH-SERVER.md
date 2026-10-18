@@ -67,7 +67,7 @@ Systèmes pris en charge : AlmaLinux 9 (paquet RPM), Debian et Ubuntu
 AlmaLinux 9 :
 
 ```sh
-dnf install ./mediaserver-speech-1.18.0-1.ives.el9.x86_64.rpm
+dnf install ./mediaserver-speech-1.18.0-2.ives.el9.x86_64.rpm
 ```
 
 Debian ou Ubuntu :
@@ -85,9 +85,17 @@ Le paquet installe :
 | unité `speech-server.service` | le service systemd |
 | compte système `speech` | le compte sous lequel le service tourne |
 | `/var/log/speech-server.log` | le journal (créé au premier démarrage) |
+| `/etc/logrotate.d/speech-server` | la rotation du journal, conservée lors des mises à jour |
 
 Le paquet ne livre **aucun fichier de clé**, et le service **n'est pas
-activé** : sans clé Mistral, il refuse de démarrer.
+activé** : sans clé Mistral, il refuse de démarrer. À l'installation, le
+paquet signale ce qui reste à faire :
+
+- `No Mistral key yet` : la clé n'est pas posée, il affiche la commande (§3) ;
+- `WARNING: … must belong to root, mode 0600` : la clé est posée, mais
+  d'autres que root peuvent la lire ;
+- `Installation on LXC detected` : simple information, rien à faire de plus
+  (§3.3).
 
 Fabriquer le paquet depuis les sources (machine de build) :
 
@@ -98,10 +106,12 @@ Fabriquer le paquet depuis les sources (machine de build) :
 ## 3. Poser la clé Mistral
 
 La clé n'apparaît jamais dans la configuration, sur la ligne de commande ni
-dans l'environnement. systemd la transmet au service au démarrage, et le
-service la garde en mémoire sans l'écrire nulle part.
+dans l'environnement. Avant chaque démarrage, l'unité la copie, en root,
+dans `/run/speech-server/api.key` : un répertoire en mémoire réservé au
+compte `speech`, qui disparaît à l'arrêt. Le service la garde en mémoire
+sans l'écrire nulle part.
 
-Choisir **une** des trois variantes ci-dessous. Dans les exemples, `$KEY`
+Choisir **une** des deux variantes ci-dessous. Dans les exemples, `$KEY`
 contient la clé ; la saisir plutôt par `read -rs KEY` que dans l'historique
 du shell.
 
@@ -111,9 +121,12 @@ du shell.
 install -m 0600 -o root -g root /dev/stdin /etc/mediaserver/speech-api.key <<< "$KEY"
 ```
 
-C'est la variante attendue par l'unité livrée : rien d'autre à faire.
+C'est la variante attendue par l'unité livrée : rien d'autre à faire, sur
+une machine physique, une VM ou un conteneur LXC.
 
 ### 3.2 Variante chiffrée : la clé liée à la machine
+
+> **Pas en conteneur LXC** : `systemd-creds` ne peut rien y chiffrer. Voir §3.3.
 
 La clé est chiffrée par `systemd-creds`, avec le TPM s'il existe, sinon avec
 la clé d'hôte de systemd. Une copie du fichier hors de la machine
@@ -125,11 +138,15 @@ systemd-creds encrypt --name=mistral-api-key - /etc/mediaserver/speech-api.cred 
 mkdir -p /etc/systemd/system/speech-server.service.d
 cat > /etc/systemd/system/speech-server.service.d/key.conf <<'EOF'
 [Service]
-LoadCredential=
 LoadCredentialEncrypted=mistral-api-key:/etc/mediaserver/speech-api.cred
 EOF
 systemctl daemon-reload
 ```
+
+Le service préfère alors la clé déchiffrée par systemd
+(`$CREDENTIALS_DIRECTORY`) à la copie de §3.1. Ne pas laisser de clé en
+clair dans `/etc/mediaserver/speech-api.key` : elle serait encore copiée,
+et la protection serait perdue.
 
 Deux règles :
 
@@ -137,34 +154,26 @@ Deux règles :
   avec le fichier chiffré ;
 - après une réinstallation de la machine, rechiffrer la clé.
 
-### 3.3 Variante conteneur LXC (Proxmox)
+### 3.3 Conteneur LXC (Proxmox)
 
-Dans un conteneur LXC, systemd ne transmet aucune clé (l'hôte vide
-`LoadCredential=` pour tous les services) et `systemd-creds` ne peut rien
-chiffrer. Symptôme : le service refuse de démarrer avec « no Mistral key »
-dans son journal.
+La variante 3.1 fonctionne telle quelle. L'unité n'utilise pas
+`LoadCredential=` justement parce que, dans un conteneur LXC, l'hôte le
+vide pour tous les services
+(`/run/systemd/system/service.d/zzz-lxc-service.conf`). Le paquet signale
+le conteneur à l'installation (« Installation on LXC detected ») sans rien
+écrire.
 
-La clé reste en root sur le disque. Avant chaque démarrage, systemd la
-copie, en root, dans un répertoire en mémoire réservé au service ; la copie
-disparaît à l'arrêt :
+La variante 3.2 n'est pas disponible : pour une clé chiffrée sur disque,
+utiliser une VM avec TPM virtuel plutôt qu'un conteneur.
+
+Un drop-in `lxc-key.conf` posé à la main avec une version précédente de
+cette documentation n'est plus utile. Il fonctionne toujours, mais peut
+être retiré :
 
 ```sh
-install -m 0600 -o root -g root /dev/stdin /etc/mediaserver/speech-api.key <<< "$KEY"
-mkdir -p /etc/systemd/system/speech-server.service.d
-cat > /etc/systemd/system/speech-server.service.d/lxc-key.conf <<'EOF'
-[Service]
-LoadCredential=
-RuntimeDirectory=speech-server
-RuntimeDirectoryMode=0700
-ExecStartPre=+/bin/install -m 0400 -o speech -g speech /etc/mediaserver/speech-api.key /run/speech-server/api.key
-ExecStart=
-ExecStart=/opt/ives/bin/speech-server --config /etc/mediaserver/speech-config.json --api-key-file /run/speech-server/api.key
-EOF
+rm /etc/systemd/system/speech-server.service.d/lxc-key.conf
 systemctl daemon-reload
 ```
-
-La protection est celle de la variante simple. Pour une clé chiffrée sur
-disque, utiliser une VM avec TPM virtuel plutôt qu'un conteneur.
 
 ### 3.4 Changer de clé
 
@@ -296,14 +305,14 @@ ouvrir de port. Elle lit la clé : la lancer en root.
 | Option | Défaut | Rôle |
 |---|---|---|
 | `--config <chemin>` | `/etc/mediaserver/speech-config.json` | le fichier de configuration |
-| `--api-key-file <chemin>` | `$CREDENTIALS_DIRECTORY/mistral-api-key` | la clé Mistral, hors `LoadCredential` |
+| `--api-key-file <chemin>` | `$CREDENTIALS_DIRECTORY/mistral-api-key`, sinon `/run/speech-server/api.key` | la clé Mistral |
 | `--check` | — | valide la configuration et la clé, puis sort |
 
 ## 5. Démarrer, recharger, arrêter
 
 ```sh
 systemctl enable --now speech-server     # démarrer, et à chaque démarrage de la machine
-systemctl reload speech-server           # relire la configuration (SIGHUP)
+systemctl reload speech-server           # vérifier puis relire la configuration (SIGHUP)
 systemctl restart speech-server          # redémarrer (nouvelle clé, ports, TLS)
 systemctl stop speech-server             # arrêter
 ```
@@ -312,18 +321,23 @@ systemctl stop speech-server             # arrêter
 journal, si : le fichier est absent ou n'est pas du JSON valide ; une clé
 est inconnue ou hors bornes ; `control.allow` est vide ou contient une
 entrée IPv6 ; `control.listen` est une adresse IPv6 ; les deux ports sont
-égaux ; la clé Mistral est absente.
+égaux ; la clé Mistral est absente ou lisible par d'autres que son
+propriétaire. Il sort alors avec le code 78, et systemd **ne le relance
+pas** (`RestartPreventExitStatus=78`) : `systemctl status` affiche
+`status=78`, et il faut corriger puis `systemctl start`.
 
 **Au rechargement**, s'appliquent sans couper les flux : `control.allow`,
 `limits`, `voices`, `tts`, `asr`, `comp`. Les flux déjà ouverts gardent
 leurs réglages d'ouverture. Demandent un redémarrage : `control.listen`,
 `control.port`, `streaming.*`, `mistral.*` — le journal signale un tel
 changement en attente. Un fichier invalide au rechargement est **ignoré en
-entier** (cause dans le journal) et la configuration en cours reste.
+entier** et la configuration en cours reste : `systemctl reload` vérifie
+le fichier avant d'envoyer le signal (`--check`), **échoue** et affiche la
+cause.
 
 **À l'arrêt** (`SIGTERM`), les flux sont fermés avec le code 1001, puis les
 sessions Mistral, en moins de 15 s. systemd redémarre le service s'il
-s'arrête sur une erreur.
+s'arrête sur une autre erreur (port déjà pris, plantage).
 
 ## 6. Réseau et pare-feu
 
@@ -627,17 +641,10 @@ consommées) et une ligne par échec Mistral (code HTTP ou code de
 fermeture). Le journal ne contient **jamais** le texte ni la voix des
 utilisateurs, ni un jeton entier.
 
-Prévoir une rotation, par exemple `/etc/logrotate.d/speech-server` :
-
-```
-/var/log/speech-server.log {
-    weekly
-    rotate 8
-    compress
-    missingok
-    copytruncate
-}
-```
+Le paquet livre sa rotation, `/etc/logrotate.d/speech-server` : chaque
+semaine, huit semaines gardées, compressées. `copytruncate` parce que
+systemd garde le fichier ouvert. Le fichier est conservé lors des mises à
+jour : il peut être adapté.
 
 ### 9.2 `/status/general`
 
@@ -674,11 +681,13 @@ périodiquement.
 
 | Symptôme | Cause probable | Action |
 |---|---|---|
-| Le service ne démarre pas, « no Mistral key » | clé absente, illisible, ou conteneur LXC | §3 ; en LXC, §3.3 |
+| Le service ne démarre pas, « no Mistral key » | `/etc/mediaserver/speech-api.key` absente | §3.1, puis `systemctl start` |
+| Le service ne démarre pas, `status=78`, pas de relance | erreur de configuration ou de clé : systemd ne relance pas | lire le journal, corriger, `systemctl start` |
+| `systemctl reload` échoue | fichier invalide : rien n'a été rechargé | lire la cause affichée, corriger, recommencer |
 | Le service ne démarre pas, « unknown key '…' » | faute de frappe dans le fichier | corriger ; `--check` (§4.3) |
 | Le service ne démarre pas, « 'control.allow' must be a non-empty list » | liste vide ou absente | y mettre au moins une adresse |
 | Le service ne démarre pas, « holds an IPv6 entry » | entrée IPv6 dans `control.allow` | le port de contrôle est IPv4 seulement : retirer l'entrée |
-| `reload` sans effet | clé à redémarrage (ports, TLS, `mistral.*`), ou fichier invalide | lire le journal ; `restart` si besoin |
+| `reload` sans effet | clé à redémarrage (ports, TLS, `mistral.*`) | lire le journal ; `restart` |
 | 403 sur le port de contrôle | adresse hors `control.allow` (derrière un relais : l'adresse du relais) | ajouter l'adresse, puis `reload` |
 | 403 à l'ouverture d'un flux | jeton expiré, déjà utilisé, ou d'une autre fonction | un jeton par flux, de la bonne fonction |
 | 429 à l'ouverture d'un flux | `limits.maxSessions` atteint | augmenter la borne, puis `reload` |
