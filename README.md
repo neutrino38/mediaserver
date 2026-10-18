@@ -195,6 +195,11 @@ tail -f /var/log/mcu.log             # historical convention
 journalctl -u mediaserver -f         # through the systemd journal
 ```
 
+The package ships `/etc/logrotate.d/mediaserver`: daily rotation, 14 days
+kept, compressed, plus an early rotation past 500 MB (`copytruncate`,
+since systemd keeps the file open). It is a configuration file, kept on
+upgrade.
+
 ### Command-line options / configuration
 
 Command-line options are set through the `OPTIONS` variable in

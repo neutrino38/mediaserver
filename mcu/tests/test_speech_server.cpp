@@ -132,23 +132,23 @@ TEST_F(SpeechServerBinary, CheckValidatesWithoutListening)
 
 TEST_F(SpeechServerBinary, RefusesToStartWithoutAValidSetup)
 {
-	EXPECT_EQ(1, RunToExit()) << "missing configuration file";
+	EXPECT_EQ(78, RunToExit()) << "missing configuration file";
 
 	WriteConfig(Config("[]", "[]"));
-	EXPECT_EQ(1, RunToExit()) << "empty allow list";
+	EXPECT_EQ(78, RunToExit()) << "empty allow list";
 
 	WriteConfig(R"({"control": {"allow": ["127.0.0.0/8"]}, "typo": 1})");
-	EXPECT_EQ(1, RunToExit()) << "unknown key";
+	EXPECT_EQ(78, RunToExit()) << "unknown key";
 
 	WriteConfig(Config());
 	WriteKey("test-key\n", 0644);
-	EXPECT_EQ(1, RunToExit()) << "key readable by others";
+	EXPECT_EQ(78, RunToExit()) << "key readable by others";
 
 	WriteKey("\n", 0600);
-	EXPECT_EQ(1, RunToExit()) << "empty key";
+	EXPECT_EQ(78, RunToExit()) << "empty key";
 
 	unlink((dir + "/key").c_str());
-	EXPECT_EQ(1, RunToExit()) << "missing key";
+	EXPECT_EQ(78, RunToExit()) << "missing key";
 }
 
 TEST_F(SpeechServerBinary, SighupAppliesAValidFileAndIgnoresAnInvalidOne)

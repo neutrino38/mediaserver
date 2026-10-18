@@ -143,6 +143,7 @@ function create_deb
 	install -D -m 750 bin/debug/mcu            "$PKGROOT/opt/ives/bin/mediaserver"
 	install -D -m 644 mediaserver.service      "$PKGROOT/lib/systemd/system/mediaserver.service"
 	install -D -m 644 mediaserver.sysconfig    "$PKGROOT/etc/default/mediaserver"
+	install -D -m 644 mediaserver.logrotate    "$PKGROOT/etc/logrotate.d/mediaserver"
 	install -D -m 644 type-asian.xml           "$PKGROOT/etc/mediaserver/type-asian.xml"
 	install -D -m 750 certcommunication.sh     "$PKGROOT/etc/mediaserver/certcommunication.sh"
 	install -D -m 644 mcu.csr_conf             "$PKGROOT/etc/mediaserver/mcu.csr_conf"
@@ -171,6 +172,7 @@ EOF
 	# Equivalent de %config(noreplace) : dpkg n'ecrase pas un fichier modifie.
 	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
 /etc/default/mediaserver
+/etc/logrotate.d/mediaserver
 /etc/mediaserver/mcu.csr_conf
 EOF
 
@@ -264,6 +266,7 @@ function create_deb_speech
 	install -D -m 755 bin/debug/speech-server  "$PKGROOT/opt/ives/bin/speech-server"
 	install -D -m 644 speech-server.service    "$PKGROOT/lib/systemd/system/speech-server.service"
 	install -D -m 640 speech-config.json       "$PKGROOT/etc/mediaserver/speech-config.json"
+	install -D -m 644 speech-server.logrotate  "$PKGROOT/etc/logrotate.d/speech-server"
 	install -D -m 644 LICENSE.md               "$PKGROOT/usr/share/doc/$SPEECHPKG/LICENSE.md"
 
 	DEPENDS=$(deb_runtime_depends bin/debug/speech-server)
@@ -286,6 +289,7 @@ EOF
 
 	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
 /etc/mediaserver/speech-config.json
+/etc/logrotate.d/speech-server
 EOF
 
 	cat > "$PKGROOT/DEBIAN/preinst" <<'EOF'
@@ -306,6 +310,22 @@ set -e
 if [ "$1" = "configure" ]
 then
     chgrp speech /etc/mediaserver/speech-config.json
+    # The unit copies the key itself before each start: nothing to write
+    # here, LXC included (docs/SPEECH-SERVER.md section 3).
+    if [ "$(systemd-detect-virt --container 2>/dev/null || true)" = "lxc" ]
+    then
+        echo "Installation on LXC detected: no LoadCredential here, the unit copies the key itself (nothing to do)"
+    fi
+    KEY=/etc/mediaserver/speech-api.key
+    if [ ! -e $KEY ]
+    then
+        echo "No Mistral key yet. Install it, then start the service:"
+        echo "  read -rs KEY; install -m 0600 -o root -g root /dev/stdin $KEY <<< \"\$KEY\""
+        echo "  systemctl enable --now speech-server"
+    elif [ "$(stat -c %u:%a $KEY)" != "0:600" ] && [ "$(stat -c %u:%a $KEY)" != "0:400" ]
+    then
+        echo "WARNING: $KEY must belong to root, mode 0600: chown root:root $KEY; chmod 0600 $KEY"
+    fi
     systemctl daemon-reload || true
     # Restarted on upgrade only if it was running; never enabled here.
     systemctl try-restart speech-server.service || true
