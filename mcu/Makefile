@@ -104,7 +104,7 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 
 # ipaddress.o : type d'adresse commun v4/v6 (include/ipaddress.h), socle du
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
-OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o hwprobe.o
+OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o hwprobe.o textmux.o
 
 # Client du speech-server (docs/conception/SPEECH-PROCESSOR/SPEC.md §5) : le
 # mcu demande ses jetons en libcurl (-lcurl au lien) et lit le JSON du protocole
