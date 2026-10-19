@@ -106,14 +106,20 @@ OBJS+=textmixer.o textmixerworker.o textstream.o participanttextws.o pipetextinp
 # chantier IPv6. Sans dependance sur le reste du mcu : il ne tire que la libc.
 OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.o hwprobe.o
 
-OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ) $(BFCPSTACKOBJ)
+# Client du speech-server (docs/conception/SPEECH-PROCESSOR/SPEC.md §5) : le
+# mcu demande ses jetons en libcurl (-lcurl au lien) et lit le JSON du protocole
+# (nlohmann, en-tetes seuls). taskpool, phrasesplitter et mistralhttp sont
+# communs avec le serveur, qui les reprend par SPEECHREUSEDOBJS.
+SPEECHCLIENTOBJS=taskpool.o phrasesplitter.o mistralhttp.o speechtokenclient.o speechflow.o speechservice.o
+
+OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ) $(BFCPSTACKOBJ) $(SPEECHCLIENTOBJS)
 TARGETS=mcu rtmptest
 
-# speech-server (docs/conception/SPEECH-SERVER/SPEC.md): never in OBJS, so that
-# the mcu links neither the JSON reader nor libcurl. The server reuses
-# the WebSocket reactor and Abyss, nothing from the conference engine.
-SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o phrasesplitter.o pcmconverter.o mistralhttp.o mistralspeech.o ttssession.o compcheck.o mistralchat.o compsession.o
-SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o
+# speech-server (docs/conception/SPEECH-SERVER/SPEC.md): its own objects stay
+# out of OBJS. The server reuses the WebSocket reactor, Abyss and the objects
+# it shares with the speech client, nothing from the conference engine.
+SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o pcmconverter.o mistralspeech.o ttssession.o compcheck.o mistralchat.o compsession.o
+SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o taskpool.o phrasesplitter.o mistralhttp.o
 OBJSSPEECH=$(SPEECHOBJS) $(SPEECHREUSEDOBJS) speechmain.o
 BUILDOBJSSPEECH=$(addprefix $(BUILD)/,$(OBJSSPEECH))
 TARGETS+=speech-server
@@ -345,7 +351,7 @@ mcu: $(BIN)/mcu
 MEDKITLIB = $(wildcard $(MEDKITDIR)/libmedkit.a)
 
 $(BIN)/mcu: $(OBJSMCU) $(MEDKITLIB) | $(BUILD) $(BIN)
-	$(CXX) -o $@ $(BUILDOBJSMCU) $(LDFLAGS) $(VADLD)
+	$(CXX) -o $@ $(BUILDOBJSMCU) $(LDFLAGS) -lcurl $(VADLD)
 
 .PHONY: speech-server
 speech-server: $(BIN)/speech-server
@@ -368,10 +374,10 @@ $(BIN)/speech-server: $(OBJSSPEECH) | $(BUILD) $(BIN)
 	$(CXX) -o $@ $(BUILDOBJSSPEECH) $(SPEECHAVLIBS) -lcurl $(LDXMLFLAGS)
 
 rtmptest: $(OBJSRTMPTEST)
-	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS)
+	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS) -lcurl
 
 wstest: mkdirs $(OBJSWSTEST)
-	$(CXX) -o $(BIN)/$@ $(BUILDOBJSWSTEST) $(LDFLAGS) $(VADLD)
+	$(CXX) -o $(BIN)/$@ $(BUILDOBJSWSTEST) $(LDFLAGS) -lcurl $(VADLD)
 
 flashstreamer: $(OBJSFS) $(OBJS)
 	g++ $(GNASHLD) -o $(BIN)/$@ $(BUILDOBJSFS) $(BUILDOBJS) $(GNASHBASE)/backend/.libs/libgnashagg.a  /usr/lib/libagg.a  $(LDFLAGS)

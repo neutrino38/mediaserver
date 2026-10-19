@@ -11,6 +11,8 @@ URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 Requires:  ImageMagick-c++ >= 7, ffmpeg, libsrtp
 Requires:  openssl-libs >= 3.0, xmlrpc-c, usrsctp
+# libcurl : le mediaserver demande ses jetons au speech-server (client speech).
+Requires:  libcurl
 BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
 BuildRequires: gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7

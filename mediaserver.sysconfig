@@ -9,5 +9,10 @@
 # d'hote (donc l'adresse privee) et aucun media ne passe. Sans NAT, l'omettre :
 # elle est auto-detectee au demarrage et ecrite dans le log. Si aucune adresse ne
 # peut etre determinee, le serveur refuse de demarrer.
+#
+# --speech-url / --speech-streaming-url : le speech-server (reconnaissance et
+# synthese vocales), ports de controle et de streaming, toujours ensemble.
+# Voir docs/SPEECH-SERVER.md, « Relier le mediaserver ».
 OPTIONS="--http-port 9090 --websocket-port 8100"
 #OPTIONS="--http-port 9090 --websocket-port 8100 --public-ip 203.0.113.12"
+#OPTIONS="--http-port 9090 --websocket-port 8100 --speech-url http://speech.example.net:9200 --speech-streaming-url wss://speech.example.net:9201"

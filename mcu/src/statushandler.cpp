@@ -8,6 +8,7 @@
 #include "mcu.h"
 #include "jsr309/JSR309Manager.h"
 #include "jsr309/WSEndpoint.h"
+#include "speech/speechservice.h"
 #include "dtls.h"
 #include "rtpsession.h"
 #include "addressprofiles.h"
@@ -176,9 +177,11 @@ const char* YesNo(bool v)
 /**************************************
 * StatusHandler
 *************************************/
-StatusHandler::StatusHandler(MCU *mcu,JSR309Manager *jsr309,time_t startedAt,int eventQueueExpiresSecs) :
+StatusHandler::StatusHandler(MCU *mcu,JSR309Manager *jsr309,time_t startedAt,int eventQueueExpiresSecs,
+			     SpeechService *speech) :
 	mcu(mcu),
 	jsr309(jsr309),
+	speech(speech),
 	startedAt(startedAt),
 	eventQueueExpiresSecs(eventQueueExpiresSecs)
 {
@@ -331,6 +334,26 @@ void StatusHandler::Collect(Info& info,time_t now)
 		mcu->GetLoad(info.conferences,info.participants);
 
 	info.mediaSessions = jsr309 ? jsr309->GetMediaSessionCount() : 0;
+
+	//Les flux ouverts sont comptes sur les flux eux-memes, par le service : pas
+	//de second compteur ici.
+	info.speech = Info::Speech();
+	if (speech && speech->IsConfigured())
+	{
+		const SpeechService::Counters counters = speech->GetCounters();
+		info.speech.configured		= true;
+		info.speech.controlUrl		= speech->GetControlUrl();
+		info.speech.streamingUrl	= speech->GetStreamingUrl();
+		info.speech.account		= speech->GetAccount();
+		info.speech.asrStreams		= counters.open[(int)SpeechFunction::Asr];
+		info.speech.ttsStreams		= counters.open[(int)SpeechFunction::Tts];
+		info.speech.reopenings		= counters.reopenings;
+		info.speech.rotations		= counters.rotations;
+		info.speech.failures		= counters.failures;
+		info.speech.lastFailureAt	= counters.lastFailureAt;
+		info.speech.lastFailureFunction	= counters.lastFailureFunction;
+		info.speech.lastFailureReason	= counters.lastFailureReason;
+	}
 }
 
 /**************************************
@@ -408,6 +431,27 @@ std::string StatusHandler::RenderJSON(const Info& info)
 	out += "\"conferences\":"	+ JsonInt(info.conferences);
 	out += ",\"participants\":"	+ JsonInt(info.participants);
 	out += ",\"mediaSessions\":"	+ JsonInt(info.mediaSessions);
+	out += "}";
+
+	const Info::Speech& sp = info.speech;
+	out += ",\"speech\":{";
+	out += "\"configured\":"		+ JsonBool(sp.configured);
+	out += ",\"controlUrl\":"		+ JsonString(sp.controlUrl);
+	out += ",\"streamingUrl\":"	+ JsonString(sp.streamingUrl);
+	out += ",\"account\":"		+ JsonString(sp.account);
+	out += ",\"streams\":{\"asr\":"	+ JsonInt(sp.asrStreams);
+	out += ",\"tts\":"		+ JsonInt(sp.ttsStreams) + "}";
+	out += ",\"reopenings\":"		+ JsonInt(sp.reopenings);
+	out += ",\"rotations\":"		+ JsonInt(sp.rotations);
+	out += ",\"failures\":"		+ JsonInt(sp.failures);
+	if (sp.lastFailureAt)
+	{
+		out += ",\"lastFailure\":{\"at\":" + JsonString(IsoUtc(sp.lastFailureAt));
+		out += ",\"function\":"	+ JsonString(sp.lastFailureFunction);
+		out += ",\"reason\":"	+ JsonString(sp.lastFailureReason) + "}";
+	}
+	else
+		out += ",\"lastFailure\":null";
 	out += "}}\n";
 
 	return out;
@@ -530,6 +574,31 @@ std::string StatusHandler::RenderText(const Info& info)
 	out += buf;
 	snprintf(buf,sizeof(buf),"  sessions JSR309 %d\n",info.mediaSessions);
 	out += buf;
+
+	const Info::Speech& sp = info.speech;
+	out += "\nSpeech-server\n";
+	if (!sp.configured)
+		out += "  non configure  (--speech-url) : reconnaissance et synthese indisponibles\n";
+	else
+	{
+		snprintf(buf,sizeof(buf),"  controle       %s\n",sp.controlUrl.c_str());
+		out += buf;
+		snprintf(buf,sizeof(buf),"  streaming      %s\n",sp.streamingUrl.c_str());
+		out += buf;
+		snprintf(buf,sizeof(buf),"  compte         %s\n",sp.account.empty() ? "-" : sp.account.c_str());
+		out += buf;
+		snprintf(buf,sizeof(buf),"  flux ouverts   asr %d, tts %d\n",sp.asrStreams,sp.ttsStreams);
+		out += buf;
+		snprintf(buf,sizeof(buf),"  reouvertures   %ld apres panne, %ld rotations, %ld echecs\n",
+			sp.reopenings,sp.rotations,sp.failures);
+		out += buf;
+		if (sp.lastFailureAt)
+		{
+			snprintf(buf,sizeof(buf),"  dernier echec  %s %s : %s\n",IsoUtc(sp.lastFailureAt).c_str(),
+				sp.lastFailureFunction.c_str(),sp.lastFailureReason.c_str());
+			out += buf;
+		}
+	}
 
 	return out;
 }

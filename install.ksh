@@ -430,8 +430,9 @@ function detect_distro
 # sous-module libvad (fvad), bati in-tree. C'en etait le seul consommateur.
 #
 # json-devel (EPEL) / nlohmann-json3-dev: header-only JSON reader of
-# speech-server, whose tests belong to the mcu suite. libcurl: its HTTPS
-# client towards Mistral.
+# speech-server and of the speech client of the mediaserver. libcurl: the
+# HTTPS client of speech-server towards Mistral, and the token requests of the
+# mediaserver to speech-server. Both binaries link it.
 #
 # Le paquet C++ de xmlrpc-c porte son soname dans son nom, qui varie selon la
 # distribution (libxmlrpc-c++8-dev sur Ubuntu 24.04 / Mint 22 / Debian 12) :

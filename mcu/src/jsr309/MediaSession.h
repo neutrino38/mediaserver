@@ -27,6 +27,7 @@
 #include "JSR309Event.h"
 
 class JSR309Manager;
+class SpeechService;
 class MediaSession;
 
 /**
@@ -211,6 +212,9 @@ public:
 	//ce qui permet à toute ressource (player, recorder, endpoint) de publier sans
 	//dépendre du câblage Joinable.
 	void SetEventHandler(int sessionId, JSR309Manager* mngr);
+	//Le client du speech-server (NULL : aucun). Observé : main() le possède et
+	//le fait vivre plus longtemps que les sessions.
+	void SetSpeechService(SpeechService* speech)	{ this->speech = speech; }
 
 	//Getters — copies de shared_ptr : l'appelant garde l'objet vivant même si un
 	//Delete concurrent le retire des maps (C-2).
@@ -290,6 +294,7 @@ private:
 
 	MediaSession::Listener *listener;
 	void* param;
+	SpeechService *speech;
 
 	Endpoints endpoints;
 	int maxEndpointId;

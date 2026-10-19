@@ -20,7 +20,7 @@ size_t OnBody(char* data, size_t size, size_t count, void* user)
 
 	long status = 0;
 	curl_easy_getinfo(transfer->curl, CURLINFO_RESPONSE_CODE, &status);
-	if (status != 200)
+	if (status < 200 || status > 299)
 		return bytes;
 
 	if (!transfer->onBody(data, bytes))
@@ -57,7 +57,9 @@ MistralHttp::Result MistralHttp::Post(const std::string& baseUrl, const std::str
 	const std::string acceptHeader = "Accept: " + accept;
 
 	curl_slist* headers = nullptr;
-	headers = curl_slist_append(headers, authorization.c_str());
+	// No key: a speech-server control port, which filters by address.
+	if (!apiKey.empty())
+		headers = curl_slist_append(headers, authorization.c_str());
 	headers = curl_slist_append(headers, "Content-Type: application/json");
 	headers = curl_slist_append(headers, acceptHeader.c_str());
 
@@ -84,7 +86,7 @@ MistralHttp::Result MistralHttp::Post(const std::string& baseUrl, const std::str
 		return result;
 	if (code != CURLE_OK)
 		result.error = curl_easy_strerror(code);
-	else if (result.httpStatus != 200)
+	else if (result.httpStatus < 200 || result.httpStatus > 299)
 		result.error = "HTTP " + std::to_string(result.httpStatus);
 	return result;
 }

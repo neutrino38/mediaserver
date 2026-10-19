@@ -354,6 +354,27 @@ sûr, placer un relais TLS (nginx, HAProxy) devant lui ; dans ce cas,
 
 Les deux ports sont au-dessus de 1024 : le service n'a pas besoin de root.
 
+### Relier le mediaserver
+
+Le mediaserver est un client comme les autres : il demande un jeton sur le
+port de contrôle, puis ouvre ses flux sur le port de streaming. Trois
+options de sa ligne de commande (`/etc/sysconfig/mediaserver`) :
+
+```sh
+--speech-url http://speech.example.net:9200 \
+--speech-streaming-url wss://speech.example.net:9201 \
+--speech-account clinique-nord
+```
+
+- son adresse doit figurer dans `control.allow` ;
+- `--speech-streaming-url` en `wss://` vérifie le certificat contre le
+  magasin du système, plus `--websocket-client-ca` si l'autorité est interne ;
+- `--speech-account` est facultatif : il ventile les compteurs `usage` par
+  compte.
+
+Le bloc `speech` de son `/status/general` dit si le service est joignable
+(`docs/reference/status-http.md` §3.9).
+
 ## 7. API de contrôle (HTTP)
 
 Toutes les routes sont sur le port de contrôle. Une adresse hors de

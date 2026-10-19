@@ -1,6 +1,7 @@
 # SpeechProcessor : la voix et le texte dans un appel JSR-309
 
-> Statut : **conception, rien n'est codé**. Cadrage validé le 2026-10-19.
+> Statut : **lot 1 fait** (client speech, 2026-10-19) ; lots 2 à 5 à faire.
+> Cadrage validé le 2026-10-19.
 > Version cible : 1.19.0. C'est le lot 6 de la
 > [SPEC speech-server](../SPEECH-SERVER/SPEC.md) (§12, §13.8), qu'elle
 > détaille et remplace.
@@ -81,8 +82,8 @@ direct du §1.
 - **Le speech-server.** Le protocole est décrit aux §7.3 (`tts`) et §7.4
   (`asr`) de sa SPEC. Le faux Mistral des tests (`tests/fake_mistral_*.h`)
   permet de lancer un vrai `speech-server` sans réseau.
-- **Ce qui manque.** Le mcu ne lie **ni libcurl ni lecteur JSON**
-  (`mcu/Makefile`, ligne 113). Seuls `speech-server` et les tests les lient.
+- **Ce qui manquait.** Le mcu ne liait **ni libcurl ni lecteur JSON**. Le
+  lot 1 les y a ajoutés (`SPEECHCLIENTOBJS` dans `mcu/Makefile`).
 
 ## 4. Le modèle : deux ports
 
@@ -183,13 +184,21 @@ Quand rien ne parle sur un port, le mix émet un **bruit blanc léger**, à
 
 ### 5.1 Configuration
 
-- `--speech-url` : la base commune des deux ports de `speech-server`, par
-  exemple `https://speech.example.net`, avec le port de contrôle et le port
-  de streaming (SPEC speech-server §12).
+- `--speech-url` : le **port de contrôle** de `speech-server`, où se
+  demandent les jetons, par exemple `http://speech.example.net:9200`.
+- `--speech-streaming-url` : le **port de streaming**, où s'ouvrent les
+  flux, par exemple `wss://speech.example.net:9201`.
 - `--speech-account` : facultatif. C'est le champ `account` de
   `POST /control/token`, qui ventile les compteurs de `speech-server`.
 - La confiance TLS de `wss://` reprend `--websocket-client-ca`, qui existe
   déjà.
+
+Deux URL et non une base commune (décidé au lot 1) : les deux ports
+diffèrent par le schéma (le contrôle est en HTTP clair, le streaming en
+`ws://` ou `wss://` selon `streaming.secure`) et par le numéro, et rien
+côté client ne permet de déduire l'un de l'autre sans deviner. Les deux
+options vont ensemble : une seule des deux, ou `--speech-account` sans
+elles, et le mediaserver refuse de démarrer.
 
 Sans `--speech-url`, `SpeechProcessorCreate` réussit quand même : les
 relais fonctionnent seuls. `SpeechProcessorStartRecognition` et
@@ -221,9 +230,13 @@ souvent plus longtemps que les deux. Le client s'en occupe ainsi :
 - **Rotation** : après 55 min, le flux est remplacé **au prochain silence**
   (ASR en pause, ou TTS entre deux phrases). Le client ouvre un nouveau
   flux, bascule dessus, puis ferme l'ancien par `done`.
-- **Panne** : sur une fermeture 1013 ou 1011, ou un échec d'ouverture, le
-  client réessaie après 1, 2, 5, 10, puis 30 s en boucle. La panne et le
-  retour du service sont publiés en événements (§8.4).
+- **Panne** : sur une fermeture que le client n'a pas demandée (1013, 1011,
+  ou TCP coupé : la pile WebSocket ne remonte pas le code reçu, la raison
+  vient du dernier `error` fatal), ou un échec d'ouverture, le client
+  réessaie après 1, 2, 5, 10, puis 30 s en boucle. Chaque essai demande un
+  nouveau jeton : c'est l'horloge du `SpeechService` qui les déclenche, pas
+  `ConnectLater`, qui rejouerait la même URL et donc un jeton déjà brûlé. La
+  panne et le retour du service sont publiés en événements (§8.4).
 
 **Les relais ne dépendent jamais du service speech.** Un `speech-server`
 tombé fait perdre la transcription et la synthèse, jamais l'appel.
@@ -464,6 +477,28 @@ leurs tests, puis le branchement, puis l'API et son contrat (§8.5).
 | Le protocole `asr` marque-t-il la fin du texte d'un `flush` ? | Non (SPEC speech-server §7.4). La fin d'énoncé est donc déduite d'un délai (§10.5). |
 
 ### 10.3 Lot 1 : le client speech
+
+État : **fait** le 2026-10-19. Tests `test_speech_client.cpp` (suites
+`SpeechClient` et `SpeechServiceConfig`) et deux tests du bloc `speech` dans
+`test_status.cpp`. Écarts au plan ci-dessous, tous tranchés au codage :
+
+- **Deux URL** : `--speech-url` (contrôle) et `--speech-streaming-url`
+  (streaming), voir §5.1.
+- **La reprise** passe par l'horloge du `SpeechService` (un tour toutes les
+  100 ms), pas par `ConnectLater` : chaque essai doit demander un nouveau
+  jeton (§5.3).
+- **Les rappels** de `SpeechFlow::Listener` arrivent du réacteur, du
+  `TaskPool` ou de l'horloge, jamais sous un verrou du flux. La règle ne
+  change pas : ils déposent dans une file et rendent la main.
+- **`onReady`** est rappelé à chaque nouveau flux, rotation comprise, alors
+  que `onState` ne l'est qu'au changement d'état : les `id` de phrase de la
+  TTS repartent de 1 avec chaque flux, et le propriétaire doit le savoir.
+- **`MistralHttp`** accepte tout code 2xx : `POST /control/token` répond
+  **201**, pas 200.
+- **`JSR309Manager::SetSpeechService`** remet le service à chaque
+  `MediaSession`. Le service n'est donné que s'il est configuré.
+- Le mediaserver arrête le service **avant** le réacteur WebSocket, pour
+  qu'aucun jeton ni aucune connexion sortante ne vise un serveur arrêté.
 
 **Construction.**
 - `mcu/Makefile` : un groupe `SPEECHCLIENTOBJS` (`taskpool.o`,

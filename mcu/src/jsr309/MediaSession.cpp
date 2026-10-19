@@ -97,6 +97,8 @@ MediaSession::MediaSession(std::wstring tag)
 	maxVideoMixerId = 1;
 	maxVideoTranscoderId = 1;
 	maxEventContextId = 1;
+	//Pas de service speech tant que le manager n'en donne pas
+	speech = NULL;
 	//No listener
 	listener = NULL;
 	param = NULL;
