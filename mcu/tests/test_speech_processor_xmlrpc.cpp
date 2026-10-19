@@ -263,3 +263,31 @@ TEST(SpeechProcessorXmlRpc, LesRefusDisentQuoiCorriger)
 	// MediaSessionDelete emporte le SpeechProcessor restant
 	EXPECT_EQ(1, Call(m, "MediaSessionDelete", "(i)", S).code);
 }
+
+// §8.2 : sans --speech-url, la reconnaissance est refusée et le dit ; les
+// paramètres incohérents aussi.
+TEST(SpeechProcessorXmlRpc, LaReconnaissanceSansServiceSpeechEstRefusee)
+{
+	Controller c;
+	JSR309Manager& m = c.manager;
+
+	EXPECT_TRUE(FindCommand("SpeechProcessorStartRecognition") != NULL);
+	EXPECT_TRUE(FindCommand("SpeechProcessorStopRecognition") != NULL);
+
+	const int S = Call(m, "MediaSessionCreate", "(si)", "sans-speech", 0).value;
+	const int SP = Call(m, "SpeechProcessorCreate", "(is)", S, "sp").value;
+
+	const Answer none = Call(m, "SpeechProcessorStartRecognition", "(iiibib)", S, SP, 0, 1, 1, 0);
+	EXPECT_EQ(0, none.code);
+	EXPECT_EQ("speech service not configured", none.error);
+
+	const Answer textPort = Call(m, "SpeechProcessorStartRecognition", "(iiibib)", S, SP, 0, 1, 2, 0);
+	EXPECT_NE(std::string::npos, textPort.error.find("textPort")) << textPort.error;
+	const Answer nowhere = Call(m, "SpeechProcessorStartRecognition", "(iiibib)", S, SP, 0, 0, -1, 0);
+	EXPECT_NE(std::string::npos, nowhere.error.find("somewhere")) << nowhere.error;
+
+	// Arrêter ce qui n'a pas démarré n'est pas une faute
+	EXPECT_EQ(1, Call(m, "SpeechProcessorStopRecognition", "(iii)", S, SP, 0).code);
+	EXPECT_EQ(0, Call(m, "SpeechProcessorStopRecognition", "(iii)", S, SP, 3).code);
+	EXPECT_EQ(1, Call(m, "MediaSessionDelete", "(i)", S).code);
+}

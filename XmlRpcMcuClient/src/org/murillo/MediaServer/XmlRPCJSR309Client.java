@@ -1260,4 +1260,29 @@ public class XmlRPCJSR309Client {
         //Return
         return (((Integer)response.get("returnCode"))==1);
     }
+
+    /**
+     * Transcribe the voice entering the port: to events (SpeechRecognizedEvent)
+     * and/or as T.140 on textPort (-1 for none). Fails when the media server
+     * runs without --speech-url.
+     */
+    public boolean SpeechProcessorStartRecognition(int sessId,int spId,int port,boolean toEvents,int textPort,boolean halfDuplex) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,toEvents,textPort,halfDuplex};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorStartRecognition", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    public boolean SpeechProcessorStopRecognition(int sessId,int spId,int port) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorStopRecognition", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
 }

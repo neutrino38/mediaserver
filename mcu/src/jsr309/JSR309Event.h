@@ -36,7 +36,12 @@ public:
 		RecorderStartedEvent		= 4,
 		RecorderStoppedEvent		= 5,
 		EndpointDisconnectedEvent	= 6,	// watchdog d'inactivité RTP (gap 5)
-		EndpointConnectedEvent		= 7	// P5 : média établi (DTLS OK + 1er RTP reçu)
+		EndpointConnectedEvent		= 7,	// P5 : média établi (DTLS OK + 1er RTP reçu)
+		SpeechRecognizedEvent		= 8,
+		SpeechSynthesisStartedEvent	= 9,
+		SpeechSynthesisDoneEvent	= 10,
+		SpeechActivityEvent		= 11,
+		SpeechServiceEvent		= 12
 	};
 public:
 	JSR309Event();

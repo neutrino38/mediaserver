@@ -3365,6 +3365,63 @@ xmlrpc_value* SpeechProcessorDettach(xmlrpc_env *env, xmlrpc_value *param_array,
 	return xmlok(env);
 }
 
+xmlrpc_value* SpeechProcessorStartRecognition(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	xmlrpc_bool toEvents;
+	int textPort;
+	xmlrpc_bool halfDuplex;
+	xmlrpc_parse_value(env, param_array, "(iiibib)", &sessionId, &spId, &port, &toEvents, &textPort, &halfDuplex);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+	if (textPort!=-1 && !SpeechProcessor::IsValidPort(textPort))
+		return xmlerror(env,"SpeechProcessor textPort must be 0 (A), 1 (B) or -1 (none)");
+	if (!toEvents && textPort==-1)
+		return xmlerror(env,"Recognized text must go somewhere: toEvents, textPort or both");
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+	if(!session->HasSpeechService())
+		return xmlerror(env,"speech service not configured");
+
+	if(!session->SpeechProcessorStartRecognition(spId,port,toEvents,textPort,halfDuplex))
+		return xmlerror(env,"Could not start recognition\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorStopRecognition(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId, &spId, &port);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorStopRecognition(spId,port))
+		return xmlerror(env,"Could not stop recognition\n");
+
+	return xmlok(env);
+}
+
 XmlHandlerCmd jsr309CmdList[] =
 {
 	{"GetNetworkProfiles",			GetNetworkProfiles},
@@ -3459,6 +3516,8 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"SpeechProcessorAttachToEndpoint",	SpeechProcessorAttachToEndpoint},
 	{"EndpointAttachToSpeechProcessor",	EndpointAttachToSpeechProcessor},
 	{"SpeechProcessorDettach",		SpeechProcessorDettach},
+	{"SpeechProcessorStartRecognition",	SpeechProcessorStartRecognition},
+	{"SpeechProcessorStopRecognition",	SpeechProcessorStopRecognition},
 	{NULL,NULL}
 };
 

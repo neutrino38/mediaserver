@@ -1,7 +1,7 @@
 # SpeechProcessor : la voix et le texte dans un appel JSR-309
 
-> Statut : **lots 1 et 2 faits** (client speech ; SpeechProcessor sans
-> speech, 2026-10-19) ; lots 3 à 5 à faire.
+> Statut : **lots 1 à 3 faits** (client speech ; SpeechProcessor sans
+> speech ; reconnaissance, 2026-10-19) ; lots 4 et 5 à faire.
 > Cadrage validé le 2026-10-19.
 > Version cible : 1.19.0. C'est le lot 6 de la
 > [SPEC speech-server](../SPEECH-SERVER/SPEC.md) (§12, §13.8), qu'elle
@@ -648,6 +648,33 @@ dans `jsr309CmdList`.
 **Commits** : (a) `TextMux` ; (b) SpeechProcessor, API et contrat.
 
 ### 10.5 Lot 3 : la reconnaissance
+
+État : **fait** le 2026-10-19. Tests `test_speech_processor_asr.cpp` (vrai
+speech-server, faux Voxtral, voix `tts16k.wav` injectée en PCMA à vitesse
+réelle) et un test de refus dans `test_speech_processor_xmlrpc.cpp`. Écarts au
+plan ci-dessous :
+
+- **Le tour lit l'entrée de chaque port une seule fois**, et la même trame
+  sert au relais vers l'autre port et à la reconnaissance. L'ASR hérite donc
+  de l'avance de 40 ms du relais.
+- **Les événements 8, 11 et 12** sont déclarés dans `SpeechProcessor.h`, pas
+  dans `MediaSession.h` : c'est le SpeechProcessor qui les crée. Leur tuple
+  commun est `(type, sessionTag, spId, media, port, …)`. Les numéros 9 et 10
+  sont réservés dans `JSR309Event::Events` dès ce lot.
+- **Les partiels ne sont pas complétés avant le final** : les deltas arrivés
+  dans les 250 ms qui précèdent la fin d'énoncé ne sont que dans le final.
+- **`SpeechServiceEvent` part aussi au premier `up`**, dès que le flux est
+  prêt : le contrôleur sait alors que la reconnaissance tourne.
+- **Refus ajouté** : `toEvents` faux avec `textPort` = -1. Le texte reconnu
+  n'irait nulle part, alors que l'audio serait payé.
+- **`halfDuplex` est accepté et gardé**, sans effet avant le lot 4, puisqu'il
+  porte sur la synthèse. Le test du §11.3 qui le concerne passe au lot 4.
+- **`SpeechProcessorStopRecognition` abandonne le texte d'un énoncé pas encore
+  clos.** `SpeechFlow` n'expose pas de `done`, qui demanderait d'attendre le
+  dernier texte.
+- **Les call flows du §9.8 qui démarrent la reconnaissance** sont joués par
+  `test_speech_processor_asr.cpp` au niveau de l'objet, pas par
+  `test_speech_processor_xmlrpc.cpp` : ce dernier n'a pas de speech-server.
 
 - **Par port source** : une `VAD` (`AGGRESSIVE`, 16 kHz, trames de 20 ms),
   un anneau de pré-roulement de 300 ms et un `SpeechFlow` `asr`. Ils sont

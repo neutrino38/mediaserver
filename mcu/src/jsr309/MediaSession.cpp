@@ -2196,12 +2196,23 @@ int MediaSession::onNewMediaConnection(WebSocket *ws, const std::string & token)
 int MediaSession::SpeechProcessorCreate(std::wstring tag)
 {
 	std::shared_ptr<SpeechProcessor> sp = std::make_shared<SpeechProcessor>(tag);
-	//Le tour de 20 ms démarre tout de suite : un port branché émet aussitôt,
-	//bruit de confort compris
-	sp->Init();
+	sp->SetSpeechService(speech);
 
 	std::lock_guard<std::mutex> lock(mutex);
 	int spId = maxSpeechProcessorId++;
+
+	int eventContextId;
+	{
+		std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+		eventContextId = maxEventContextId++;
+		eventContexts[eventContextId] = std::make_shared<JSR309EventContext>(spId,MediaFrame::Audio,MediaFrame::VIDEO_MAIN);
+	}
+	//Le tour publie : la session vit plus longtemps que lui (End() le joint)
+	sp->SetEventPoster([this,eventContextId](JSR309Event* event) { PostEvent(eventContextId,event); });
+
+	//Le tour de 20 ms démarre tout de suite : un port branché émet aussitôt,
+	//bruit de confort compris
+	sp->Init();
 	speechProcessors[spId] = sp;
 	return spId;
 }
@@ -2287,4 +2298,26 @@ int MediaSession::GetSpeechProcessorCount()
 {
 	std::lock_guard<std::mutex> lock(mutex);
 	return speechProcessors.size();
+}
+
+int MediaSession::SpeechProcessorStartRecognition(int spId,int port,bool toEvents,int textPort,bool halfDuplex)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->StartRecognition(port,toEvents,textPort,halfDuplex);
+}
+
+int MediaSession::SpeechProcessorStopRecognition(int spId,int port)
+{
+	std::shared_ptr<SpeechProcessor> sp;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		SpeechProcessors::iterator it = speechProcessors.find(spId);
+		if (it==speechProcessors.end())
+			return Error("SpeechProcessor not found\n");
+		sp = it->second;
+	}
+	return sp->StopRecognition(port);
 }

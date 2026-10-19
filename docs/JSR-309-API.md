@@ -376,6 +376,11 @@ Le mécanisme se désarme entièrement avec `--event-queue-expires 0`
 | 5 | RecorderStoppedEvent | `(int type, string sessionTag, string recorderTag, int reason)` |
 | 6 | EndpointDisconnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
 | 7 | EndpointConnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
+| 8 | SpeechRecognizedEvent | `(int type, string sessionTag, int spId, int media, int port, string text, bool final)` |
+| 9 | SpeechSynthesisStartedEvent | réservé à la synthèse vocale |
+| 10 | SpeechSynthesisDoneEvent | réservé à la synthèse vocale |
+| 11 | SpeechActivityEvent | `(int type, string sessionTag, int spId, int media, int port, bool speaking)` |
+| 12 | SpeechServiceEvent | `(int type, string sessionTag, int spId, int media, int port, string function, string state, string reason)` |
 
 - **PlayerEndOfFileEvent** (1) : un `Player` a atteint la fin du fichier.
   `playerTag` = nom passé à `PlayerCreate`.
@@ -414,9 +419,35 @@ le média d'une jambe est établi, ou il est perdu. `joinableId` = `endpointId`,
   - **Texte sur WebSocket sortant** (§6.12) : émis à **chaque** ouverture de la
     connexion, donc à chaque reprise après une coupure.
 
+Les événements **8, 11 et 12** viennent d'un SpeechProcessor (§6.13).
+`spId` est l'identifiant rendu par `SpeechProcessorCreate`. `port` est celui
+de la voix : 0 (A) ou 1 (B). `media` vaut Text (2) pour l'événement 8, Audio
+(0) pour les autres.
+
+- **SpeechRecognizedEvent** (8) : du texte reconnu dans la voix du port,
+  quand `SpeechProcessorStartRecognition` a demandé `toEvents`.
+  - `final = false` : les deltas arrivés depuis l'événement précédent. Au plus
+    un toutes les 250 ms par port. Ils se mettent bout à bout, sans retour en
+    arrière. Les derniers mots d'un énoncé peuvent n'arriver que dans le
+    final.
+  - `final = true` : l'**énoncé entier**. Il part quand la personne s'est tue
+    700 ms, puis que le texte n'a plus bougé pendant 500 ms. C'est cette forme
+    qu'un chatbot donne à son modèle de langage. Une reprise de parole avant
+    ces 500 ms clôt aussi l'énoncé.
+- **SpeechActivityEvent** (11) : la VAD du port a entendu quelqu'un commencer
+  (`speaking = true`) ou finir de parler (`false`, après 700 ms de silence).
+  Il sert au barge-in : le contrôleur décide s'il coupe la synthèse.
+- **SpeechServiceEvent** (12) : un flux vers speech-server change d'état.
+  `function` vaut `asr` ou `tts`, `state` vaut `up` ou `down`. `reason` dit
+  pourquoi le flux est tombé, et reste vide pour `up`. Un `up` suit chaque
+  démarrage, dès que le flux est prêt. Un `down` est émis une seule fois par
+  panne : le serveur réessaie seul à 1, 2, 5, 10, puis 30 s, et publie `up`
+  au retour. Une panne ne coupe jamais l'appel : seuls la reconnaissance ou la
+  synthèse s'arrêtent, les relais continuent.
+
 Réf. : `mcu/src/jsr309/JSR309Event.h`, `MediaSession.h` (events Player/Recorder),
 `RTPEndpoint.cpp` (ExternalFIR / EndpointDisconnected / EndpointConnected),
-`WSEndpoint.cpp` (jambe texte sortante).
+`WSEndpoint.cpp` (jambe texte sortante), `SpeechProcessor.h` (8, 11, 12).
 
 ---
 
@@ -1066,6 +1097,8 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
 | `SpeechProcessorAttachToEndpoint` | `i sessionId, i spId, i port, i endpointId, i media` | `[]` |
 | `EndpointAttachToSpeechProcessor` | `i sessionId, i endpointId, i spId, i port, i media` | `[]` |
 | `SpeechProcessorDettach` | `i sessionId, i spId, i port, i media` | `[]` |
+| `SpeechProcessorStartRecognition` | `i sessionId, i spId, i port, b toEvents, i textPort, b halfDuplex` | `[]` |
+| `SpeechProcessorStopRecognition` | `i sessionId, i spId, i port` | `[]` |
 
 - `port` = `0` (A) ou `1` (B). `media` = `Audio` (0) ou `Text` (2), §4.
   `codec` = `AudioCodec::Type`. Même convention que le reste de l'API :
@@ -1096,9 +1129,29 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
   (RFC 4103) si l'endpoint attaché l'accepte dans sa `rtpMap` de sortie, du
   T.140 nu sinon. Le texte entrant peut être de l'un ou de l'autre. Il part par
   paquets espacés de 300 ms au plus.
-- La reconnaissance et la synthèse vocales s'ajouteront à ce même objet ; en
-  attendant, le SpeechProcessor est un relais audio et texte entre deux
-  codecs.
+- **La reconnaissance vocale** (`SpeechProcessorStartRecognition`) transcrit
+  la voix qui entre sur `port`. Le texte va aux événements (`toEvents`, type 8)
+  et/ou en T.140 sur la sortie texte de `textPort` (`-1` : aucune). Il faut au
+  moins une des deux destinations. En chatbot, `textPort` est le port de la
+  voix : l'utilisateur lit ce qu'il a dit. En transcription, c'est l'autre
+  port. Sur une sortie texte, la transcription et le texte relayé ne se
+  mélangent jamais au milieu d'une ligne : chaque énoncé reconnu se termine
+  par un saut de ligne (U+2028). Rappeler la méthode remplace le réglage du
+  port et rouvre le flux. `SpeechProcessorStopRecognition` arrête : le texte
+  d'un énoncé pas encore clos est perdu.
+- `halfDuplex` coupera la reconnaissance du port pendant que la synthèse lui
+  parle (secours contre l'écho). Il est accepté dès maintenant, sans effet tant
+  que la synthèse n'existe pas.
+- La reconnaissance et la synthèse exigent que le serveur connaisse
+  speech-server (`--speech-url`, `--speech-streaming-url`). Le bloc `speech` de
+  `/status/general` dit si c'est le cas.
+
+> **Ce qui se paie.** Mistral facture les secondes d'audio reçues. Le
+> SpeechProcessor n'envoie que la parole : une VAD met le flux en pause après
+> 700 ms de silence, et le reprend avec les 300 ms qui précèdent la parole,
+> pour ne pas couper la première syllabe. Il ouvre une session `asr` par port
+> source. `--speech-account` nomme le compte qui reçoit les compteurs de
+> speech-server : un compte par client permet de ventiler le coût.
 
 Erreurs propres (`returnCode` 0, `errorMsg`) :
 
@@ -1107,6 +1160,9 @@ Erreurs propres (`returnCode` 0, `errorMsg`) :
 | `port` hors de {0, 1} | `SpeechProcessor port must be 0 (A) or 1 (B)` |
 | `media` = Video | `SpeechProcessor carries audio and text only: attach video endpoint to endpoint` |
 | `dbov` hors de [-96, 0] | `Comfort noise level must be between -96 and 0 dBov (0 = silence)` |
+| `textPort` hors de {-1, 0, 1} | `SpeechProcessor textPort must be 0 (A), 1 (B) or -1 (none)` |
+| `toEvents` faux et `textPort` = -1 | `Recognized text must go somewhere: toEvents, textPort or both` |
+| serveur lancé sans `--speech-url` | `speech service not configured` |
 | endpoint sans le média demandé, `spId` ou `endpointId` inconnu | message générique de la méthode |
 
 ---
@@ -1149,6 +1205,12 @@ tuple a la forme (`(siiiiiiiiiii)`, réf. `xmlserialize()` dans
   (l'API ne nomme pas les paramètres, c'est du positionnel).
 - **Négatif = échec** : à la création, un id < 0 (ou `returnCode 0`) indique un
   échec — ne pas le stocker.
+- **Reconnaissance vocale** (§6.13) : sans `--speech-url`, seuls les relais
+  d'un SpeechProcessor fonctionnent ; lire le bloc `speech` de
+  `/status/general` avant d'en dépendre. Une panne de speech-server ne coupe
+  jamais l'appel : elle arrive en `SpeechServiceEvent` (12), et le serveur
+  reprend seul. Le barge-in est l'affaire du contrôleur : le serveur publie
+  `SpeechActivityEvent` (11), il ne coupe rien de lui-même.
 
 ---
 
@@ -1460,16 +1522,46 @@ SpeechProcessorAttachToEndpoint(S, SP, 1, B, AUDIO)
 EndpointAttachToSpeechProcessor(S, B, SP, 1, AUDIO)
 ```
 
-Tant que la synthèse n'existe pas, B n'entend que le bruit de confort et A ne
-reçoit pas de texte : le cas 2 ne prend son sens qu'avec la reconnaissance et
-la synthèse.
+Puis la transcription de la voix de B vers le texte de A :
+
+```
+SpeechProcessorStartRecognition(S, SP, 1, false, 0, false)   // voix de B → texte de A
+```
+
+Tant que la synthèse n'existe pas, B n'entend que le bruit de confort.
+
+Pour les cas 3 et 4, la voix de B est transcrite vers le texte de A, et la
+voix de A, si le contrôleur le veut, vers le texte de B :
+
+```
+SpeechProcessorStartRecognition(S, SP, 1, false, 0, false)   // voix de B → texte de A
+SpeechProcessorStartRecognition(S, SP, 0, false, 1, false)   // facultatif
+```
 
 **Cas 1 — texte et voix côté A, voix côté B** : comme les cas 3 et 4, sans les
 deux attaches TEXT du port B.
 
+**Chatbot — une seule jambe, sur le port A.** La voix de l'utilisateur part
+en événements ; `final = true` porte l'énoncé à donner au modèle de langage.
+Sa transcription peut aussi revenir en texte à l'utilisateur, sur le même
+port.
+
+```
+SpeechProcessorCreate(S, "chatbot")                   → SP
+SpeechProcessorPortSetCodec(S, SP, 0, codecAudioA)
+// pour media = AUDIO, et TEXT si la jambe en porte :
+SpeechProcessorAttachToEndpoint(S, SP, 0, A, media)
+EndpointAttachToSpeechProcessor(S, A, SP, 0, media)
+SpeechProcessorStartRecognition(S, SP, 0, true, 0, false)    // ou textPort = -1
+// événements : SpeechServiceEvent up, puis pour chaque énoncé
+// SpeechActivityEvent true, SpeechRecognizedEvent final=false…,
+// SpeechActivityEvent false, SpeechRecognizedEvent final=true
+```
+
 **Terminaison.** Le SpeechProcessor avant les endpoints qu'il relie :
 
 ```
+SpeechProcessorStopRecognition(S, SP, port)                   // facultatif
 EndpointDettach(S, A, AUDIO) ; EndpointDettach(S, A, TEXT)    // idem pour B
 SpeechProcessorDelete(S, SP)
 EndpointDelete(S, A) ; EndpointDelete(S, B)

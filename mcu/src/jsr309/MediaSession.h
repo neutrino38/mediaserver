@@ -217,6 +217,10 @@ public:
 	//L'endpoint reçoit le média du port `port`
 	int EndpointAttachToSpeechProcessor(int endpointId,int spId,int port,MediaFrame::Type media);
 	int SpeechProcessorDettach(int spId,int port,MediaFrame::Type media);
+	//§8.2. textPort -1 : pas de sortie texte.
+	int SpeechProcessorStartRecognition(int spId,int port,bool toEvents,int textPort,bool halfDuplex);
+	int SpeechProcessorStopRecognition(int spId,int port);
+	bool HasSpeechService() const		{ return speech != NULL; }
 	int GetSpeechProcessorCount();
 
 	//Events

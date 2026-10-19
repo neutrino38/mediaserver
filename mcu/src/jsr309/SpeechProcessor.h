@@ -17,19 +17,25 @@
  *  - un tour de 20 ms (§4.3) compose pour chaque port :
  *        mix = relais(entrée de l'autre port) + bruit(port)
  *    à MixRate, en addition saturée ;
- *  - le texte sortant d'un port passe par un TextMux (§9), qui recevra au
- *    lot 3 la transcription en seconde source.
+ *  - le texte sortant d'un port passe par un TextMux (§9) : source 0 le texte
+ *    relayé, source 1 la transcription.
+ *
+ * La reconnaissance (lot 3, §6) : par port source, une VAD décide de ce qui
+ * part au flux asr de speech-server, avec 300 ms de pré-roulement. Le texte
+ * reconnu va aux événements et/ou au TextMux d'un port.
  *
  * Fils d'exécution : le décodeur d'un port tourne sur le thread de sa source
  * (l'endpoint) et ne fait que déposer dans un anneau ; le texte entrant de
- * même dans le TextMux de l'autre port. Le tour de 20 ms est le seul à
- * encoder et à émettre. Aucun ne bloque.
+ * même dans le TextMux de l'autre port ; les rappels du flux asr arrivent sur
+ * le réacteur WebSocket et ne font que remplir une file. Le tour de 20 ms est
+ * le seul à encoder, à émettre et à publier les événements. Aucun ne bloque.
  */
 #ifndef SPEECHPROCESSOR_H
 #define	SPEECHPROCESSOR_H
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include "config.h"
@@ -37,6 +43,9 @@
 #include "medkit/codecs.h"
 #include "worker.h"
 #include "Joinable.h"
+#include "JSR309Event.h"
+
+class SpeechService;
 
 class SpeechProcessor : public Worker
 {
@@ -56,6 +65,12 @@ public:
 	static constexpr int	TextBufferMs = 300;
 	static constexpr int	DefaultComfortNoiseDbov = -65;
 	static constexpr int	MinComfortNoiseDbov = -96;
+	//Reconnaissance (§6) : ce qui précède la parole détectée, le silence qui
+	//met le flux en pause, le regroupement des deltas, la fin d'énoncé.
+	static constexpr int	PreRollMs = 300;
+	static constexpr int	SilenceMs = 700;
+	static constexpr int	PartialEventMs = 250;
+	static constexpr int	UtteranceEndMs = 500;
 
 	SpeechProcessor(const std::wstring& tag);
 	virtual ~SpeechProcessor();
@@ -72,6 +87,18 @@ public:
 	}
 
 	const std::wstring& GetTag() const		{ return tag; }
+
+	//À poser avant Init(). nullptr : pas de reconnaissance ni de synthèse.
+	void SetSpeechService(SpeechService* speech)	{ this->speech = speech; }
+	bool HasSpeechService() const			{ return speech != nullptr; }
+	//Prend possession de l'événement ; appelé sur le thread du tour.
+	void SetEventPoster(std::function<void(JSR309Event*)> poster)	{ this->poster = poster; }
+
+	//La voix entrée sur `port` est transcrite vers les événements et/ou vers
+	//la sortie texte de `textPort` (-1 : aucune). Rappeler remplace le
+	//réglage, et rouvre le flux.
+	int StartRecognition(int port, bool toEvents, int textPort, bool halfDuplex);
+	int StopRecognition(int port);
 
 	int SetPortCodec(int port, AudioCodec::Type codec);
 	//dbov <= 0 ; 0 = silence exact.
@@ -99,6 +126,11 @@ protected:
 private:
 	class Port;
 	friend class Port;
+	class Recognizer;
+
+	void Recognize(Recognizer& rec, const SWORD* frame, int samples, uint64_t nowMs);
+	void CloseUtterance(Recognizer& rec);
+	void Post(JSR309Event* event);
 
 	//Le texte entré sur `fromPort` part vers la sortie de l'autre port.
 	void OnTextIn(int fromPort, const std::string& utf8);
@@ -107,9 +139,69 @@ private:
 	std::shared_ptr<Port>		ports[Ports];
 	bool				clocked = false;
 	std::atomic<bool>		ended{false};
+	SpeechService*			speech = nullptr;
+	std::function<void(JSR309Event*)> poster;
 	//Heure du dernier tour : celle du texte entrant, pour que le TextMux ne
 	//voie qu'une horloge.
 	std::atomic<uint64_t>		lastTickMs{0};
+};
+
+/**
+ * Événements d'un SpeechProcessor (§8.4). Sérialisation XML-RPC :
+ * (isiii…) = {type, sessionTag, spId, media, port, …}. spId vient du contexte
+ * d'événement, media et port de l'événement lui-même.
+ */
+class SpeechEvent : public JSR309Event
+{
+public:
+	SpeechEvent(int type, MediaFrame::Type eventMedia, int port) :
+		type(type), eventMedia(eventMedia), port(port) {}
+
+	virtual xmlrpc_value* GetXmlValue(xmlrpc_env *env);
+
+protected:
+	//Les champs propres à l'événement, à la suite du préfixe commun.
+	virtual xmlrpc_value* GetTail(xmlrpc_env *env) = 0;
+
+	int			type;
+	MediaFrame::Type	eventMedia;
+	int			port;
+};
+
+//8 : (… , s text, b final). Le port est celui de la voix.
+class SpeechRecognizedEvent : public SpeechEvent
+{
+public:
+	SpeechRecognizedEvent(int port, const std::string& text, bool final) :
+		SpeechEvent(JSR309Event::SpeechRecognizedEvent, MediaFrame::Text, port), text(text), final(final) {}
+protected:
+	virtual xmlrpc_value* GetTail(xmlrpc_env *env);
+	std::string	text;
+	bool		final;
+};
+
+//11 : (… , b speaking).
+class SpeechActivityEvent : public SpeechEvent
+{
+public:
+	SpeechActivityEvent(int port, bool speaking) :
+		SpeechEvent(JSR309Event::SpeechActivityEvent, MediaFrame::Audio, port), speaking(speaking) {}
+protected:
+	virtual xmlrpc_value* GetTail(xmlrpc_env *env);
+	bool		speaking;
+};
+
+//12 : (… , s function, s state, s reason). state vaut "up" ou "down".
+class SpeechServiceEvent : public SpeechEvent
+{
+public:
+	SpeechServiceEvent(int port, const std::string& function, bool up, const std::string& reason) :
+		SpeechEvent(JSR309Event::SpeechServiceEvent, MediaFrame::Audio, port), function(function), up(up), reason(reason) {}
+protected:
+	virtual xmlrpc_value* GetTail(xmlrpc_env *env);
+	std::string	function;
+	bool		up;
+	std::string	reason;
 };
 
 #endif	/* SPEECHPROCESSOR_H */
