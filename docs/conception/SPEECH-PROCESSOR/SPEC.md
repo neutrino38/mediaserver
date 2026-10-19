@@ -1,6 +1,7 @@
 # SpeechProcessor : la voix et le texte dans un appel JSR-309
 
-> Statut : **lot 1 fait** (client speech, 2026-10-19) ; lots 2 à 5 à faire.
+> Statut : **lots 1 et 2 faits** (client speech ; SpeechProcessor sans
+> speech, 2026-10-19) ; lots 3 à 5 à faire.
 > Cadrage validé le 2026-10-19.
 > Version cible : 1.19.0. C'est le lot 6 de la
 > [SPEC speech-server](../SPEECH-SERVER/SPEC.md) (§12, §13.8), qu'elle
@@ -554,6 +555,35 @@ teste en quelques secondes.
 **Commit** : `speech : client du speech-server dans le mediaserver`.
 
 ### 10.4 Lot 2 : le SpeechProcessor sans speech
+
+État : **fait** le 2026-10-19. Tests `test_textmux.cpp`,
+`test_speech_processor_media.cpp`, `test_speech_processor_xmlrpc.cpp`, plus un
+test de `RedundentCodec` dans `test_redcodec.cpp`. Écarts au plan ci-dessous,
+tranchés au codage :
+
+- **Le texte sort par paquets de 300 ms au plus** (RFC 4103 §5), pas à chaque
+  tour : le `TextMux` est vidé à chaque tour de 20 ms, dans un tampon que le
+  port émet dès que 300 ms se sont écoulées depuis le paquet précédent. La
+  redondance vide (`EncodeNull`) suit le même rythme.
+- **Le relais ne démarre qu'avec 40 ms d'avance** dans l'anneau (60 ms au
+  plus), et reprend cette avance après un manque : sans elle, la gigue du pair
+  creusait un trou de 20 ms à chaque paquet en retard.
+- **Le bruit de confort** se règle de -96 à 0 dBov ; hors de là, refus.
+- **Sans `SpeechProcessorPortSetCodec`, un port n'émet pas d'audio**, comme un
+  port de mixer.
+- **Le PT des blocs RED** émis est `TextCodec::T140` (106), comme `DCEndpoint` :
+  un `Joinable::Listener` ne dit pas le PT T.140 négocié par sa jambe. Un pair
+  qui aurait négocié un autre PT pour le T.140 lit mal les blocs redondants
+  (le bloc primaire n'est pas touché). À reprendre si la recette le montre.
+- **Quatre défauts de `RedundentCodec` corrigés** au passage, parce que le
+  port s'y appuie : `EncoderIsIdle()` lisait un compteur non initialisé ; le
+  paquet rendu `NULL` n'était jamais libéré ; le dernier paquet de
+  redondance, qui porte encore la dernière frappe, était jeté — elle n'était
+  protégée qu'une fois au lieu de deux ; et la classe n'avait pas de
+  destructeur, donc ses générations gardées fuyaient (vu par ASan). Elle n'est
+  plus copiable. `textstream`, `WSEndpoint` et `Recorder` en profitent.
+- **`jsr309impl` n'est pas touché** : aucun objet JSR-309 standard ne
+  correspond au SpeechProcessor.
 
 **Classes pures, d'abord.**
 - `TextMux` (`mcu/include/textmux.h`, `mcu/src/textmux.cpp`) : les règles

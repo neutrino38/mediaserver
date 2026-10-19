@@ -1179,4 +1179,85 @@ public class XmlRPCJSR309Client {
         //Return
         return (((Integer)response.get("returnCode"))==1);
     }
+
+    /*
+     * SpeechProcessor: two ports, 0 (A) and 1 (B), audio and text only. The
+     * relays are automatic: a medium that enters a port leaves on the other one
+     * as soon as both ends are attached. Video goes endpoint to endpoint.
+     * Contract: docs/JSR-309-API.md §6.13.
+     */
+    public Integer SpeechProcessorCreate(int sessId,String name) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,name};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorCreate", request);
+        //Get result
+        Object[] returnVal = (Object[]) response.get("returnVal");
+        //Return speech processor id
+        return (Integer)returnVal[0];
+    }
+
+    public boolean SpeechProcessorDelete(int sessId,int spId) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorDelete", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    public boolean SpeechProcessorPortSetCodec(int sessId,int spId,int port,int codec) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,codec};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorPortSetCodec", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    /** dbov between -96 and 0; 0 is exact silence. Default: -65. */
+    public boolean SpeechProcessorSetComfortNoise(int sessId,int spId,int port,int dbov) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,dbov};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorSetComfortNoise", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    /** The port receives the medium of the endpoint. */
+    public boolean SpeechProcessorAttachToEndpoint(int sessId,int spId,int port,int endpointId,Codecs.MediaType media) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,endpointId,media.valueOf()};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorAttachToEndpoint", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    /** The endpoint receives the medium of the port. */
+    public boolean EndpointAttachToSpeechProcessor(int sessId,int endpointId,int spId,int port,Codecs.MediaType media) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,endpointId,spId,port,media.valueOf()};
+        //Execute
+        HashMap response = (HashMap) client.execute("EndpointAttachToSpeechProcessor", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    public boolean SpeechProcessorDettach(int sessId,int spId,int port,Codecs.MediaType media) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,media.valueOf()};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorDettach", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
 }

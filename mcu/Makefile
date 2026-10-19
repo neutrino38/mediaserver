@@ -61,7 +61,7 @@ JSR309DIR=jsr309
 JSR309OBJ=JSR309Event.o WSEndpoint.o DCEndpoint.o RTPEndpoint.o Player.o Endpoint.o  MediaSession.o \
     JSR309Manager.o RTPMultiplexer.o xmlrpcjsr309.o AudioDecoderWorker.o \
     AudioEncoderWorker.o AudioMixerResource.o VideoDecoderWorker.o VideoEncoderWorker.o \
-    VideoMixerResource.o RTPMultiplexerSmoother.o Recorder.o AudioTranscoder.o Joinable.o
+    VideoMixerResource.o RTPMultiplexerSmoother.o Recorder.o AudioTranscoder.o Joinable.o SpeechProcessor.o
 
 
 # H264 entierement fourni par libmedkit (encoder, decoder, depacketizer). Repertoire mcu supprime.

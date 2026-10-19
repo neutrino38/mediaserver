@@ -104,7 +104,10 @@ JSR309Manager
       │    ├── VideoMixerPort (portId)
       │    └── Mosaic         (mosaicId)    ← composition visuelle
       ├── AudioTranscoder    (transcoderId)
-      └── VideoTranscoder    (videoTranscoderId)
+      ├── VideoTranscoder    (videoTranscoderId)
+      └── SpeechProcessor    (spId)        ← voix et texte entre deux jambes (§6.13)
+           ├── port 0 (A)    audio, texte
+           └── port 1 (B)    audio, texte
 ```
 
 ### Conventions d'appel
@@ -154,6 +157,9 @@ JSR309Manager
    armer la surveillance d'inactivité.
 9. Fermeture : `EndpointStopSending` / `EndpointStopReceiving` /
    `EndpointDelete`, puis `MediaSessionDelete`, puis `EventQueueDelete`.
+
+Un `SpeechProcessor` (§6.13) se crée **avant** ses attaches (étape 7) et se
+supprime **avant** les endpoints qu'il relie (étape 9).
 
 > 📎 Le déroulé **détaillé** entrant / sortant, avec la correspondance
 > SDP offer/answer ↔ RPC (ordre exact, crypto, ICE, armement du watchdog,
@@ -1044,6 +1050,65 @@ n'ouvre jamais de connexion vers nous — une passerelle, un service tiers.
   une autorité, `--websocket-client-insecure` désactive la vérification
   (`README.md`).
 
+### 6.13 SpeechProcessor (voix et texte entre deux jambes)
+
+Un `SpeechProcessor` relie **deux ports**, `0` (A) et `1` (B), chacun branché
+sur un endpoint, pour l'**audio** et le **texte** seulement. Il sert à la
+transcription d'un appel (une jambe de chaque côté) et au chatbot (une seule
+jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
+
+| Méthode | Paramètres | `returnVal` |
+|---------|-----------|-------------|
+| `SpeechProcessorCreate` | `i sessionId, s name` | `[ int spId ]` |
+| `SpeechProcessorDelete` | `i sessionId, i spId` | `[]` |
+| `SpeechProcessorPortSetCodec` | `i sessionId, i spId, i port, i codec` | `[]` |
+| `SpeechProcessorSetComfortNoise` | `i sessionId, i spId, i port, i dbov` | `[]` |
+| `SpeechProcessorAttachToEndpoint` | `i sessionId, i spId, i port, i endpointId, i media` | `[]` |
+| `EndpointAttachToSpeechProcessor` | `i sessionId, i endpointId, i spId, i port, i media` | `[]` |
+| `SpeechProcessorDettach` | `i sessionId, i spId, i port, i media` | `[]` |
+
+- `port` = `0` (A) ou `1` (B). `media` = `Audio` (0) ou `Text` (2), §4.
+  `codec` = `AudioCodec::Type`. Même convention que le reste de l'API :
+  `XAttachToY` veut dire que **X reçoit de Y**. Un port se branche donc par
+  deux appels et par média : `SpeechProcessorAttachToEndpoint` (le port reçoit
+  de l'endpoint) et `EndpointAttachToSpeechProcessor` (l'endpoint reçoit du
+  port).
+- **Chaque média est facultatif** sur un port : une jambe texte seule d'un côté
+  et une jambe audio seule de l'autre est un montage valide.
+- **La vidéo ne passe pas par le SpeechProcessor.** Elle va d'un endpoint à
+  l'autre par `EndpointAttachToEndpoint`, ce qui garde les FPU, REMB et RPSI de
+  bout en bout.
+- **Les relais sont automatiques.** Dès qu'un média entre sur un port et que la
+  sortie du même média est branchée sur l'autre, il passe. Aucun appel ne les
+  active.
+- **L'audio est toujours décodé, mixé, puis réencodé** au codec du port. Il
+  faut donc un `SpeechProcessorPortSetCodec` par port qui émet de l'audio,
+  d'après le SDP de sa jambe ; sans lui, le port n'émet rien. Une jambe PCMA et
+  une jambe Opus se parlent ainsi sans transcodeur. Le flux sortant garde un
+  SSRC et des timestamps continus. Le mix interne est à 16 kHz : un relais
+  Opus ↔ Opus perd la bande au-delà de 8 kHz. Latence ajoutée : 40 à 80 ms.
+- **Le bruit de confort.** Le port émet sans interruption, et mêle à l'audio un
+  bruit blanc léger (-65 dBov par défaut). Un silence numérique pur ressemble à
+  une ligne coupée, et un pair sans DTX finit par déclarer le flux mort.
+  `SpeechProcessorSetComfortNoise` le règle par port, de -96 à 0 dBov ; `0`
+  donne un silence exact.
+- **Le codec du texte sortant** n'est pas à poser : le port émet du T.140 RED
+  (RFC 4103) si l'endpoint attaché l'accepte dans sa `rtpMap` de sortie, du
+  T.140 nu sinon. Le texte entrant peut être de l'un ou de l'autre. Il part par
+  paquets espacés de 300 ms au plus.
+- La reconnaissance et la synthèse vocales s'ajouteront à ce même objet ; en
+  attendant, le SpeechProcessor est un relais audio et texte entre deux
+  codecs.
+
+Erreurs propres (`returnCode` 0, `errorMsg`) :
+
+| Cas | `errorMsg` |
+|-----|-----------|
+| `port` hors de {0, 1} | `SpeechProcessor port must be 0 (A) or 1 (B)` |
+| `media` = Video | `SpeechProcessor carries audio and text only: attach video endpoint to endpoint` |
+| `dbov` hors de [-96, 0] | `Comfort noise level must be between -96 and 0 dBov (0 = silence)` |
+| endpoint sans le média demandé, `spId` ou `endpointId` inconnu | message générique de la méthode |
+
 ---
 
 ## 7. Format des statistiques (`EndpointGetStatistics`)
@@ -1356,6 +1421,62 @@ Par média offert :
   vers la négociation et les autres vers le transport.
 - Les paramètres `fmtp` renvoyés sont **sans** `a=fmtp:<pt> ` : le contrôleur SIP
   préfixe lui-même avec le PT (qu'il connaît déjà, clé de la struct).
+
+### 9.8 Voix et texte par un SpeechProcessor
+
+A est l'utilisateur sourd, sur un client SIP ; B est l'entendant. Les deux
+jambes sont montées comme au §9.1 et au §9.2 (StartReceiving, StartSending,
+sécurité) ; seul le routage diffère de celui du §9.3. Ces suites d'appels sont
+jouées par `mcu/tests/test_speech_processor_xmlrpc.cpp`.
+
+**Cas 3 et 4 — texte et voix des deux côtés, avec ou sans vidéo.** La voix et le
+texte de chaque côté passent à l'autre.
+
+```
+SpeechProcessorCreate(S, "transcription")             → SP
+SpeechProcessorPortSetCodec(S, SP, 0, codecAudioA)    // d'après le SDP de A
+SpeechProcessorPortSetCodec(S, SP, 1, codecAudioB)    // d'après le SDP de B
+// pour media = AUDIO, puis TEXT :
+SpeechProcessorAttachToEndpoint(S, SP, 0, A, media)   // le port A reçoit de A
+EndpointAttachToSpeechProcessor(S, A, SP, 0, media)   // A reçoit du port A
+SpeechProcessorAttachToEndpoint(S, SP, 1, B, media)
+EndpointAttachToSpeechProcessor(S, B, SP, 1, media)
+// cas 3 seulement, la vidéo de bout en bout :
+EndpointAttachToEndpoint(S, A, B, VIDEO)
+EndpointAttachToEndpoint(S, B, A, VIDEO)
+// facultatif :
+SpeechProcessorSetComfortNoise(S, SP, 1, -60)
+```
+
+**Cas 2 — texte seul côté A, voix côté B.** Le port A ne porte que le texte, le
+port B que l'audio.
+
+```
+SpeechProcessorCreate(S, "texte-voix")                → SP
+SpeechProcessorAttachToEndpoint(S, SP, 0, A, TEXT)
+EndpointAttachToSpeechProcessor(S, A, SP, 0, TEXT)
+SpeechProcessorPortSetCodec(S, SP, 1, codecAudioB)
+SpeechProcessorAttachToEndpoint(S, SP, 1, B, AUDIO)
+EndpointAttachToSpeechProcessor(S, B, SP, 1, AUDIO)
+```
+
+Tant que la synthèse n'existe pas, B n'entend que le bruit de confort et A ne
+reçoit pas de texte : le cas 2 ne prend son sens qu'avec la reconnaissance et
+la synthèse.
+
+**Cas 1 — texte et voix côté A, voix côté B** : comme les cas 3 et 4, sans les
+deux attaches TEXT du port B.
+
+**Terminaison.** Le SpeechProcessor avant les endpoints qu'il relie :
+
+```
+EndpointDettach(S, A, AUDIO) ; EndpointDettach(S, A, TEXT)    // idem pour B
+SpeechProcessorDelete(S, SP)
+EndpointDelete(S, A) ; EndpointDelete(S, B)
+MediaSessionDelete(S)
+```
+
+`MediaSessionDelete` emporte aussi un SpeechProcessor oublié.
 
 ---
 
