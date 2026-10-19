@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "redcodec.h"
+#include "medkit/codecs.h"
 #include "rtp.h"
 
 namespace {
@@ -164,4 +165,36 @@ TEST(RedCodec, UnePerteRecuperableNeProduitPasDeMarque)
 
 	EXPECT_EQ(0u, out.replacements);
 	EXPECT_EQ(2u, out.total);           //le bloc redondant, puis le primaire
+}
+
+//Encodeur : apres une frappe, la redondance part deux fois (RFC 4103, deux
+//generations), puis l'encodeur se dit au repos et ne produit plus rien. Le
+//second paquet vide etait jete — la derniere frappe n'etait protegee qu'une
+//fois —, EncoderIsIdle lisait un compteur non initialise, et le paquet jete
+//n'etait jamais libere.
+TEST(RedCodec, LaDerniereFrappePartDeuxFoisEnRedondancePuisLEncodeurSeTait)
+{
+	RedundentCodec codec;
+	TextFrame frame(1000,(const BYTE*)"a",1);
+
+	RTPRedundantPacket* first = codec.Encode(&frame,TextCodec::T140);
+	ASSERT_NE((RTPRedundantPacket*)NULL,first);
+	EXPECT_FALSE(codec.EncoderIsIdle());
+	delete first;
+
+	RTPRedundantPacket* second = codec.EncodeNull(TextCodec::T140);
+	ASSERT_NE((RTPRedundantPacket*)NULL,second);
+	EXPECT_FALSE(codec.EncoderIsIdle());
+	delete second;
+
+	RTPRedundantPacket* third = codec.EncodeNull(TextCodec::T140);
+	ASSERT_NE((RTPRedundantPacket*)NULL,third) << "la seconde generation de redondance doit partir";
+	//Le paquet porte bien la frappe, en plus vieille redondance
+	ASSERT_EQ(2,third->GetRedundantCount());
+	EXPECT_EQ(1u,third->GetRedundantPayloadSize(0));
+	EXPECT_TRUE(codec.EncoderIsIdle());
+	delete third;
+
+	EXPECT_EQ((RTPRedundantPacket*)NULL,codec.EncodeNull(TextCodec::T140));
+	EXPECT_TRUE(codec.EncoderIsIdle());
 }

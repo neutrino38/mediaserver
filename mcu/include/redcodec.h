@@ -16,6 +16,11 @@ class RedundentCodec
 {
 public:
     RedundentCodec();
+    //Libere les generations de redondance encore gardees
+    ~RedundentCodec();
+    //Possede les trames de `reds` : une copie les libererait deux fois
+    RedundentCodec(const RedundentCodec&) = delete;
+    RedundentCodec& operator=(const RedundentCodec&) = delete;
 
     /**
      * Decode one redundant RTP packet and send the resut into a Text output.
