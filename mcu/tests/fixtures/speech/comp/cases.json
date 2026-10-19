@@ -1,0 +1,12 @@
+[
+  { "context": "", "text": "Bonjr je voudrait", "expected": ["Bonjour je voudrais"] },
+  { "context": "Bonjour je voudrais", "text": " une piza svp", "expected": [" une pizza svp"] },
+  { "context": "", "text": "Jai bien recu votre mesage merci", "expected": ["J'ai bien reçu votre message merci"] },
+  { "context": "", "text": "Pouvez vous me rapeler demain matin", "expected": ["Pouvez-vous me rappeler demain matin", "Pouvez vous me rappeler demain matin"] },
+  { "context": "Je serai", "text": " la dans dix minute", "expected": [" là dans dix minutes"] },
+  { "context": "", "text": "Est ce que vous pouvez m'envoyer le dossié", "expected": ["Est-ce que vous pouvez m'envoyer le dossier"] },
+  { "context": "", "text": "Les enfant sont arrivé hier soir", "expected": ["Les enfants sont arrivés hier soir"] },
+  { "context": "", "text": "Je vous remerci pour votre aide", "expected": ["Je vous remercie pour votre aide"] },
+  { "context": "Il faut que je parte", "text": " a la gare", "expected": [" à la gare"] },
+  { "context": "", "text": "Rendez-vous à 15 h, svp", "expected": ["Rendez-vous à 15 h, svp"] }
+]

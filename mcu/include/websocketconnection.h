@@ -388,7 +388,8 @@ public:
 	//et un echec avant le 101 doit deja pouvoir se dire.
 	int InitClient(int fd, std::unique_ptr<WebSocketTransport> transport,
 		       const std::string& host, const std::string& path,
-		       std::weak_ptr<WebSocket::Listener> wsl);
+		       std::weak_ptr<WebSocket::Listener> wsl,
+		       const std::map<std::string,std::string>& headers = {});
 
 	Role GetRole() const		{ return role;		}
 	bool IsClient() const		{ return role==Client;	}
@@ -401,7 +402,9 @@ public:
 	virtual void SendMessage(const std::string& message);
 	virtual void SendMessage(const BYTE* data, const DWORD size);
 	virtual void Close();
+	virtual void Close(const WORD code, const char* reason);
 	virtual std::weak_ptr<WebSocket> GetWeakPtr();
+	virtual IPEndpoint GetRemoteEndpoint() const	{ return remote; }
 
 	//HTTPParser listener
 	virtual int on_url (HTTPParser*, const char *at, DWORD length);
@@ -458,6 +461,7 @@ private:
 	ClientState clientState;
 	std::string clientHost;
 	std::string clientPath;
+	std::map<std::string,std::string> clientHeaders;
 	std::string secWebSocketKey;
 	//En-tetes de la reponse, clefs en MINUSCULES : la casse d'un en-tete HTTP
 	//est libre, et le pair n'est plus notre serveur. Ils ne peuvent pas se poser
@@ -478,7 +482,11 @@ private:
 	//Fermeture demandée depuis un autre thread (Close) ou le pair (trame Close).
 	std::atomic<bool>	closeRequested;
 	//Fermeture différée : fermer une fois toute la sortie écoulée (Reject).
-	bool			closeAfterFlush;
+	std::atomic<bool>	closeAfterFlush;
+	//A Close frame is queued: no frame may follow it. Guarded by framesMutex.
+	bool			closeFrameQueued = false;
+	//Set by Init, immutable afterwards.
+	IPEndpoint		remote;
 
 	bool inited;
 

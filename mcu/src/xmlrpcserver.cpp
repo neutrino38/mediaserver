@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <mutex>
 #include <log.h>
 #include <xmlrpc-c/abyss.h>
 #include "xmlrpcserver.h"
@@ -20,14 +21,23 @@
 **************************************/
 XmlRpcServer::XmlRpcServer(int port)
 {
-	//Iniciamos la fecha
-	DateInit();
+	//Abyss globals: a second MIMETypeInit() aborts the process.
+	static std::once_flag abyssInit;
+	std::call_once(abyssInit, [] {
+		//Iniciamos la fecha
+		DateInit();
 
-	//Los mime tipes
-	MIMETypeInit();
+		//Los mime tipes
+		MIMETypeInit();
+	});
 
 	//Store port
 	this->port = port;
+}
+
+XmlRpcServer::XmlRpcServer(const IPEndpoint& listenOn) : XmlRpcServer(listenOn.Port())
+{
+	this->listenOn = listenOn;
 }
 
 XmlRpcServer::~XmlRpcServer()
@@ -45,9 +55,7 @@ int XmlRpcServer::Start()
 	running = 1;
 
 	//And run
-	Run();
-	
-	return 1;
+	return Run();
 }
 
 /**************************************
@@ -83,11 +91,11 @@ int XmlRpcServer::Run()
 		//Une seule socket, donc une seule famille quand l'adresse est précise :
 		//si les deux profils internes sont configurés, l'IPv4 l'emporte (choix
 		//déterministe, majoritaire sur les plans de contrôle). Le log le dit.
-		IPAddress listenAddr;
+		IPAddress listenAddr = listenOn.Address();
 
-		if (AddressProfiles::IsAvailable(AddressProfiles::InternalV4))
+		if (!listenOn.IsSet() && AddressProfiles::IsAvailable(AddressProfiles::InternalV4))
 			listenAddr = AddressProfiles::BindAddress(AddressProfiles::InternalV4);
-		else if (AddressProfiles::IsAvailable(AddressProfiles::InternalV6))
+		else if (!listenOn.IsSet() && AddressProfiles::IsAvailable(AddressProfiles::InternalV6))
 			listenAddr = AddressProfiles::BindAddress(AddressProfiles::InternalV6);
 
 		const int listenFamily = listenAddr.IsSet() ? listenAddr.Family() : AF_INET6;
@@ -113,16 +121,18 @@ int XmlRpcServer::Run()
 				Error("-XmlRpcServer: cannot clear IPV6_V6ONLY (errno %d) — IPv4 controllers will not be served\n",errno);
 		}
 
-		const IPEndpoint listenOn = listenAddr.IsSet() ? listenAddr.To(port)
-		                                              : IPAddress::Any(AF_INET6).To(port);
+		const IPEndpoint bindTo = listenAddr.IsSet() ? listenAddr.To(port)
+		                                            : IPAddress::Any(AF_INET6).To(port);
 
-		if (listenAddr.IsSet())
+		if (listenOn.IsSet())
+			Log("-XmlRpcServer: ecoute sur [%s]\n",bindTo.ToString().c_str());
+		else if (listenAddr.IsSet())
 			Log("-XmlRpcServer: ecoute restreinte au reseau interne [%s:%d] (--internal-ip)\n",
 			    listenAddr.ToString().c_str(),port);
 		else
 			Log("-XmlRpcServer: ecoute sur toutes les interfaces [:::%d]\n",port);
 
-		if (bind(listenFd, listenOn, listenOn.Len()) < 0)
+		if (bind(listenFd, bindTo, bindTo.Len()) < 0)
 		{
 			Error("-XmlRpcServer: cannot bind %s:%d (errno %d)\n",
 			      listenAddr.IsSet() ? listenAddr.ToString().c_str() : "::",port,errno);
@@ -139,7 +149,7 @@ int XmlRpcServer::Run()
 		}
 
 		//Creamos el servidor
-		ServerCreateSocket(&srv,name, listenFd, DEFAULT_DOCS, "http.log");
+		ServerCreateSocket(&srv,name, listenFd, DEFAULT_DOCS, listenOn.IsSet() ? NULL : "http.log");
 
 		//Iniciamos el servidor
 		ServerInit(&srv);
@@ -247,7 +257,7 @@ int XmlRpcServer::DispatchRequest(TSession *ses)
 	LstHandlers::reverse_iterator it;
 
 	//Check stop
-	if (uri.find("/stop")==0)
+	if (!listenOn.IsSet() && uri.find("/stop")==0)
 	{
 		//Stop
 		Stop();

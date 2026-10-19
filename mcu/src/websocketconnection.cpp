@@ -5,6 +5,7 @@
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <string>
+#include <algorithm>
 #include <strings.h>
 #include <ctype.h>
 #include <openssl/sha.h>
@@ -102,6 +103,9 @@ int WebSocketConnection::Init(int fd, std::unique_ptr<WebSocketTransport> transp
 	this->transport = std::move(transport);
 	this->transport->Init(fd);
 
+	if (getpeername(fd,remote.Data(),remote.LenPtr())<0)
+		remote = IPEndpoint();
+
 	//I am inited
 	inited = true;
 
@@ -115,12 +119,14 @@ int WebSocketConnection::Init(int fd, std::unique_ptr<WebSocketTransport> transp
 
 int WebSocketConnection::InitClient(int fd, std::unique_ptr<WebSocketTransport> transport,
 				    const std::string& host, const std::string& path,
-				    std::weak_ptr<WebSocket::Listener> wsl)
+				    std::weak_ptr<WebSocket::Listener> wsl,
+				    const std::map<std::string,std::string>& headers)
 {
 	//Poser le listener AVANT d'initialiser : un echec de connexion doit se dire
 	//meme s'il survient avant le 101 (§4.6).
 	this->wsl	  = wsl;
 	this->clientHost  = host;
+	this->clientHeaders = headers;
 	//Une requete HTTP porte toujours un chemin absolu
 	this->clientPath  = path.empty() ? "/" : path;
 	//Le socket est en cours de connexion : on attend POLLOUT
@@ -135,6 +141,29 @@ void WebSocketConnection::Close()
 	//traitera à son prochain tour de boucle.
 	closeRequested = true;
 	//Réveiller le serveur pour qu'il traite la fermeture rapidement
+	if (listener)
+		listener->onWakeupNeeded();
+}
+
+void WebSocketConnection::Close(const WORD code, const char* reason)
+{
+	//A control frame carries at most 125 bytes: 2 for the code, 123 for the reason.
+	BYTE payload[125];
+	payload[0] = code >> 8;
+	payload[1] = code & 0xFF;
+	const size_t reasonLen = reason ? std::min<size_t>(strlen(reason),sizeof(payload)-2) : 0;
+	if (reasonLen)
+		memcpy(payload+2,reason,reasonLen);
+
+	{
+		std::lock_guard<std::mutex> lock(framesMutex);
+		if (closeFrameQueued)
+			return;
+		closeFrameQueued = true;
+		frames.push_back(new Frame(true,WebSocketFrameHeader::Close,payload,2+reasonLen,IsClient()));
+		closeAfterFlush = true;
+	}
+
 	if (listener)
 		listener->onWakeupNeeded();
 }
@@ -575,6 +604,11 @@ void  WebSocketConnection::SendMessage(const std::string& message)
 	{
 		//Lock frames
 		std::lock_guard<std::mutex> lock(framesMutex);
+		if (closeFrameQueued)
+		{
+			delete(frame);
+			return;
+		}
 		//Push frame
 		frames.push_back(frame);
 	}
@@ -601,6 +635,8 @@ void WebSocketConnection::SendMessage(const BYTE* data, const DWORD size)
 	{
 		//Lock frames
 		std::lock_guard<std::mutex> lock(framesMutex);
+		if (closeFrameQueued)
+			return;
 
 		//Send 1300 byte frames
 		while (!last)
@@ -849,6 +885,8 @@ bool WebSocketConnection::SendUpgradeRequest()
 	request.AddHeader("Connection"			, "Upgrade");
 	request.AddHeader("Sec-WebSocket-Key"		, secWebSocketKey);
 	request.AddHeader("Sec-WebSocket-Version"	, "13");
+	for (const auto& header : clientHeaders)
+		request.AddHeader(header.first, header.second);
 
 	const std::string out = request.Serialize();
 

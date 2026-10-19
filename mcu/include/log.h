@@ -92,11 +92,10 @@ inline int Log(const char *msg, ...)
 
 inline int Log2(const char* prefix, const char *msg, ...)
 {
-	struct timeval tv;
+	char buf[80];
 	va_list ap;
-	
-	gettimeofday(&tv,NULL);
-	fprintf(Logger::Output(), "[0x%lx][%.10ld.%.3ld][LOG]%s ", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000, prefix);
+
+	fprintf(Logger::Output(), "[0x%lx][%s][LOG]%s ", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)), prefix);
 	va_start(ap, msg);
 	vfprintf(Logger::Output(), msg, ap);
 	va_end(ap);
@@ -108,11 +107,10 @@ inline void Debug(const char *msg, ...)
 {
 	if( Logger::IsDebugEnabled() )
 	{
-		struct timeval tv;
+		char buf[80];
 		va_list ap;
 
-		gettimeofday( &tv, NULL );
-		fprintf(Logger::Output(), "[0x%lx][%.10ld.%.3ld][DBG]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000 );
+		fprintf(Logger::Output(), "[0x%lx][%s][DBG]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
 		va_start( ap, msg );
 		vfprintf(Logger::Output(), msg, ap);
 		va_end( ap );
@@ -122,11 +120,10 @@ inline void Debug(const char *msg, ...)
 
 inline int Error(const char *msg, ...)
 {
-	struct timeval tv;
+	char buf[80];
 	va_list ap;
 
-	gettimeofday(&tv,NULL);
-	fprintf(Logger::Output(), "[0x%lx][%.10ld.%.3ld][ERR]", (long)pthread_self(), (long)tv.tv_sec, (long)tv.tv_usec/1000);
+	fprintf(Logger::Output(), "[0x%lx][%s][ERR]", (long)pthread_self(), LogFormatDateTime(buf, sizeof(buf)));
 	va_start(ap, msg);
 	vfprintf(Logger::Output(), msg, ap);
 	va_end(ap);

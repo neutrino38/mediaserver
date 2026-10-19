@@ -1,0 +1,11 @@
+# Rotation of the mediaserver log. systemd keeps the file open in append
+# mode (StandardOutput=append:), hence copytruncate.
+/var/log/mcu.log {
+    daily
+    rotate 14
+    maxsize 500M
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

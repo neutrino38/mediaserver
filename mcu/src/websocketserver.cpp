@@ -64,14 +64,19 @@ void WebSocketServer::AddHandler(const std::string base,Handler* hnd)
 *************************/
 int WebSocketServer::Init(int port)
 {
+	return Init(IPAddress::Any(AF_INET6).To(port));
+}
 
+int WebSocketServer::Init(const IPEndpoint& listenOn)
+{
+	const int port = listenOn.Port();
 
 	//Check not already inited
 	if (inited)
 		//Error
 		return Error("-Init: WebSocket Server is already running.\n");
 
-	Log("-Init WebSocket Server [%d]\n",port);
+	Log("-Init WebSocket Server [%s]\n",listenOn.ToString().c_str());
 
 	//Save server port
 	serverPort = port;
@@ -90,7 +95,8 @@ int WebSocketServer::Init(int port)
 	//familles, un client v4 arrivant en ::ffff:a.b.c.d. Les plans de contrôle
 	//doivent tout entendre — contrairement au média, dont la famille est choisie
 	//par le profil d'adressage (NETWORK-CONFIGURATION.md).
-	server = socket(AF_INET6, SOCK_STREAM, 0);
+	const IPAddress listenAddr = listenOn.Address();
+	server = socket(listenAddr.Family(), SOCK_STREAM, 0);
 
 	//Set SO_REUSEADDR on a socket to true (1):
 	int optval = 1;
@@ -100,12 +106,11 @@ int WebSocketServer::Init(int port)
 	//tous les clients v4 d'un coup. Un échec n'est pas fatal (certains noyaux
 	//imposent net.ipv6.bindv6only=1), mais il change le service rendu : il se
 	//journalise.
+	//Irrelevant on a specific address: it has a single family.
 	int v6only = 0;
-	if (setsockopt(server, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
+	if (listenAddr.IsV6() && listenAddr.IsUnspecified()
+	    && setsockopt(server, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only)) < 0)
 		Error("-WebSocket Server: cannot clear IPV6_V6ONLY (errno %d) — IPv4 clients will not be served\n",errno);
-
-	//Bind to first available port
-	const IPEndpoint listenOn = IPAddress::Any(AF_INET6).To(serverPort);
 
 	//Bind
      	if (bind(server, listenOn, listenOn.Len()) < 0)
@@ -403,6 +408,12 @@ bool WebSocketServer::ParseWsUrl(const std::string& url, Target& target)
  **************************/
 bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener)
 {
+	return Connect(url,listener,{});
+}
+
+bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener,
+			      const std::map<std::string,std::string>& headers)
+{
 	//Sans réacteur, personne ne piloterait la connexion : l'échouer tout de
 	//suite vaut mieux que de la laisser dormir dans la file.
 	if (!inited)
@@ -479,6 +490,7 @@ bool WebSocketServer::Connect(const std::string& url, std::weak_ptr<WebSocket::L
 	request.fd	  = fd;
 	request.host	  = hostHeader;
 	request.path	  = path;
+	request.headers	  = headers;
 	request.transport = std::move(transport);
 	request.listener  = listener;
 
@@ -663,7 +675,7 @@ void WebSocketServer::CreateClientConnection(PendingConnect& request)
 	//Le listener est posé ICI : en mode client personne n'appelle Accept(), et
 	//un échec avant le 101 doit déjà pouvoir se dire.
 	conn->InitClient(request.fd, std::move(request.transport),
-			 request.host, request.path, request.listener);
+			 request.host, request.path, request.listener, request.headers);
 
 	//Store it
 	connections[id] = conn;

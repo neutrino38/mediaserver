@@ -1,0 +1,10 @@
+# Rotation of the speech-server log. systemd keeps the file open in append
+# mode (StandardOutput=append:), hence copytruncate.
+/var/log/speech-server.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+    copytruncate
+}

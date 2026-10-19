@@ -36,6 +36,8 @@ public:
 	~WebSocketServer();
 
 	int Init(int port);
+	//Listens on the given address; `::` also hears IPv4.
+	int Init(const IPEndpoint& listenOn);
 	void AddHandler(const std::string base,Handler* hnd);
 	int End();
 
@@ -61,6 +63,10 @@ public:
 	 * serveur (SetSecure) ne concerne QUE ses connexions entrantes.
 	 */
 	bool Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener);
+	//Same, with extra upgrade request headers (e.g. Authorization). They are
+	//never logged.
+	bool Connect(const std::string& url, std::weak_ptr<WebSocket::Listener> listener,
+		     const std::map<std::string,std::string>& headers);
 
 	/**
 	 * Cible d'une connexion sortante, telle que l'URL la décrit.
@@ -125,6 +131,7 @@ private:
 		int		fd;
 		std::string	host;	//valeur de l'en-tête Host (hôte[:port])
 		std::string	path;	//chemin + query
+		std::map<std::string,std::string> headers;
 		std::unique_ptr<WebSocketTransport> transport;
 		std::weak_ptr<WebSocket::Listener> listener;
 	};

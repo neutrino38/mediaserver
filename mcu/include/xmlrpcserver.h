@@ -6,6 +6,7 @@
 #include <string>
 #include <map>
 #include "config.h"
+#include "ipaddress.h"
 
 
 class Handler
@@ -18,6 +19,10 @@ class XmlRpcServer
 {
 public:
 	XmlRpcServer(int port);
+	//Listens on the given address: no address profile, no /stop, no log file.
+	//Abyss stores the peer address in a 16-byte `struct sockaddr`, so
+	//SessionGetChannelInfo is only exact on AF_INET.
+	XmlRpcServer(const IPEndpoint& listenOn);
 	~XmlRpcServer();
 	int AddHandler(std::string base,Handler* hnd);
 
@@ -38,6 +43,7 @@ private:
 	typedef std::map<std::string,Handler *> LstHandlers;
 	int running;
 	int port;
+	IPEndpoint listenOn;
 	TServer srv;
 	LstHandlers lstHandlers;
 

@@ -1,0 +1,212 @@
+[
+{
+"t": 0.4688,
+"len": 25,
+"head": "event: speech.audio.delta"
+},
+{
+"t": 0.4688,
+"len": 1,
+"head": "\n"
+},
+{
+"t": 0.4701,
+"len": 8192,
+"head": "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AACguQAAPrk"
+},
+{
+"t": 0.4701,
+"len": 490,
+"head": "9AABbPQAAVT0AAFI9AABOPQAARj0AAD49AAAxPQAAIj0AABY9AAAKPQAA/zw"
+},
+{
+"t": 0.5089,
+"len": 7702,
+"head": "T4AAFM+AABXPgAAWD4AAFM+AABJPgAAPD4AACw+AAAaPgAABT4AANs9AACoP"
+},
+{
+"t": 0.5093,
+"len": 8192,
+"head": "+AABGPgAAOD4AACc+AAAUPgAAAz4AAOI9AADBPQAAoT0AAIM9AABJPQAABz0"
+},
+{
+"t": 0.5473,
+"len": 8192,
+"head": "8AAAJPQAAMj0AABY9AACZPAAA2DwAACg9AADnPAAAejwAAPU8AAAmPQAAszw"
+},
+{
+"t": 0.5476,
+"len": 8192,
+"head": "9AAAYvQAAGb0AABm9AAAavQAAG70AACC9AAAnvQAAL70AADm9AABFvQAAUb0"
+},
+{
+"t": 0.548,
+"len": 8178,
+"head": "7AACvOwAArTsAAK47AAC3OwAAsDsAAK47AAClOwAAmTsAAJE7AACEOwAAczs"
+},
+{
+"t": 0.5484,
+"len": 2141,
+"head": "ABYOQAAE7kAAA+5AAAauQAAtzUAAEc5AACfuQAACLoAACm6AADeuQAAMbkAA"
+},
+{
+"t": 0.5486,
+"len": 8192,
+"head": "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AAAduQAAEjg"
+},
+{
+"t": 0.5498,
+"len": 16384,
+"head": "5AABxOQAAOjkAAD45AABGOQAAGTkAABQ5AACJOAAABTgAAFk4AABlNwAAYzc"
+},
+{
+"t": 0.55,
+"len": 8192,
+"head": "5AAATuQAAR7kAAAy5AABDuQAAJbkAAPy4AAAXuQAAPrkAAFK5AAApuQAAFbk"
+},
+{
+"t": 0.586,
+"len": 8192,
+"head": "5AADbuAAA/bgAAPq4AADVuAAA6LgAAAG5AADpuAAA17gAAIO4AACjuAAA4Lg"
+},
+{
+"t": 0.587,
+"len": 18511,
+"head": "4AACiuAAAr7gAAJS4AADCuAAAzLgAAO24AAD2uAAA+7gAADO5AAAnuQAAELk"
+},
+{
+"t": 0.5899,
+"len": 43061,
+"head": "2AABNOAAAqzgAAOo4AAAfOQAAPjkAACs5AAA3OQAAtzgAAA04AABLNgAAv7U"
+},
+{
+"t": 0.6179,
+"len": 25,
+"head": "event: speech.audio.delta"
+},
+{
+"t": 0.618,
+"len": 1,
+"head": "\n"
+},
+{
+"t": 0.6226,
+"len": 32754,
+"head": "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AAAiuwAAWzs"
+},
+{
+"t": 0.6252,
+"len": 16384,
+"head": "ACuPQAArz0AAKc9AACUPQAAez0AAEg9AAAdPQAA5zwAAJA8AAC7OwAAxLsAA"
+},
+{
+"t": 0.6256,
+"len": 2115,
+"head": "ACZOgAAqToAALM6AAC2OgAA1DoAAPc6AAAJOwAAHDsAADk7AABWOwAAcTsAA"
+},
+{
+"t": 0.6913,
+"len": 26,
+"head": "event: speech.audio.delta\n"
+},
+{
+"t": 0.6924,
+"len": 8192,
+"head": "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AADCugAAvro"
+},
+{
+"t": 0.6944,
+"len": 32754,
+"head": "7AACTuwAA2bsAAKe7AABzuwAAbboAAAk6AAAZugAAD7sAANm6AACzOQAAQDs"
+},
+{
+"t": 0.6947,
+"len": 10307,
+"head": "ACIvAAAjrwAAJG8AACTvAAAl7wAAJe8AACXvAAAmbwAAJm8AACbvAAAobwAA"
+},
+{
+"t": 0.8871,
+"len": 25,
+"head": "event: speech.audio.delta"
+},
+{
+"t": 0.8872,
+"len": 1,
+"head": "\n"
+},
+{
+"t": 0.8879,
+"len": 8192,
+"head": "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AAAePAAAxzk"
+},
+{
+"t": 0.889,
+"len": 16384,
+"head": "8AADIvAAAwbwAAJ+8AACBvAAAXbwAAGS8AAB9vAAAnbwAALy8AADfvAAAAL0"
+},
+{
+"t": 0.8901,
+"len": 16370,
+"head": "9AABWPQAARj0AADo9AAA3PQAAOj0AAEA9AAA9PQAAMT0AAB09AAAEPQAA1Tw"
+},
+{
+"t": 0.892,
+"len": 32752,
+"head": "AB9vAAAhbwAAIi8AACLvAAAi7wAAIy8AACQvAAAlLwAAJ68AAClvAAArbwAA"
+},
+{
+"t": 0.8939,
+"len": 24606,
+"head": "ACiOgAAI7kAAHy6AAC1ugAANjoAANc6AAAVOgAAe7kAAMO6AAA7ugAA2DoAA"
+},
+{
+"t": 0.8949,
+"len": 16384,
+"head": "5AABROQAAVzkAAFc5AAA4OQAA4zgAAK84AAA+OQAAJjkAAB05AAA+OQAAcjk"
+},
+{
+"t": 0.8999,
+"len": 81874,
+"head": "5AADEOQAAzDkAANI5AADlOQAA3jkAANQ5AADkOQAAADoAABk6AAAPOgAA5Dk"
+},
+{
+"t": 0.9286,
+"len": 49136,
+"head": "ADRuwAAT7wAAIy8AAC6vAAA87wAACG9AABJvQAAar0AAIK9AACOvQAAmL0AA"
+},
+{
+"t": 0.9293,
+"len": 10355,
+"head": "ACSvQAAlr0AAJu9AACgvQAApr0AAK29AACwvQAAtb0AALi9AAC7vQAAwb0AA"
+},
+{
+"t": 1.0139,
+"len": 26,
+"head": "event: speech.audio.delta\n"
+},
+{
+"t": 1.0156,
+"len": 16384,
+"head": "data: {\"type\":\"speech.audio.delta\",\"audio_data\":\"AAAEPAAA5Ds"
+},
+{
+"t": 1.0174,
+"len": 49122,
+"head": "9AAC1PQAAzD0AANk9AADhPQAA4D0AANk9AADLPQAAsj0AAJU9AABqPQAAKz0"
+},
+{
+"t": 1.0202,
+"len": 40944,
+"head": "ACBvQAAhL0AAIK9AACBvQAAfb0AAHS9AABpvQAAWb0AAEe9AAA2vQAAH70AA"
+},
+{
+"t": 1.0214,
+"len": 47500,
+"head": "ACuOgAAbjoAANY6AACVOgAArDkAAKc5AAAfugAAf7oAANO6AAC5ugAAA7sAA"
+},
+{
+"t": 1.0214,
+"len": 2,
+"head": "\n\n"
+}
+]

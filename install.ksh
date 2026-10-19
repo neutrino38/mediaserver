@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PROJET=mcumediaserver
-VERSION="1.17.0"
+VERSION="1.18.0"
 #Repertoire d'installation des includes
 DESTDIR_INC=/usr/include/
 #Repertoire d'installation des librairies
@@ -143,6 +143,7 @@ function create_deb
 	install -D -m 750 bin/debug/mcu            "$PKGROOT/opt/ives/bin/mediaserver"
 	install -D -m 644 mediaserver.service      "$PKGROOT/lib/systemd/system/mediaserver.service"
 	install -D -m 644 mediaserver.sysconfig    "$PKGROOT/etc/default/mediaserver"
+	install -D -m 644 mediaserver.logrotate    "$PKGROOT/etc/logrotate.d/mediaserver"
 	install -D -m 644 type-asian.xml           "$PKGROOT/etc/mediaserver/type-asian.xml"
 	install -D -m 750 certcommunication.sh     "$PKGROOT/etc/mediaserver/certcommunication.sh"
 	install -D -m 644 mcu.csr_conf             "$PKGROOT/etc/mediaserver/mcu.csr_conf"
@@ -171,6 +172,7 @@ EOF
 	# Equivalent de %config(noreplace) : dpkg n'ecrase pas un fichier modifie.
 	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
 /etc/default/mediaserver
+/etc/logrotate.d/mediaserver
 /etc/mediaserver/mcu.csr_conf
 EOF
 
@@ -239,6 +241,129 @@ EOF
 
 	rm -rf "$PWD/debbuild"
 	echo "Paquet produit : ${PROJET}_${VERSION}_${ARCH}.deb"
+
+	create_deb_speech "$ARCH"
+}
+
+# speech-server: its own package, installable without the mediaserver on a
+# dedicated machine. Not enabled at install: without its key it cannot start.
+function create_deb_speech
+{
+	ARCH=$1
+	SPEECHPKG=mediaserver-speech
+
+	if [ ! -x bin/debug/speech-server ]
+	then
+		echo "bin/debug/speech-server absent : lancer d'abord ./install.ksh localcompile"
+		exit 20
+	fi
+
+	PKGROOT=$PWD/debbuild/${SPEECHPKG}_${VERSION}_${ARCH}
+	echo "Construction du paquet ${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	rm -rf "$PKGROOT"
+	mkdir -p "$PKGROOT/DEBIAN"
+
+	install -D -m 755 bin/debug/speech-server  "$PKGROOT/opt/ives/bin/speech-server"
+	install -D -m 644 speech-server.service    "$PKGROOT/lib/systemd/system/speech-server.service"
+	install -D -m 640 speech-config.json       "$PKGROOT/etc/mediaserver/speech-config.json"
+	install -D -m 644 speech-server.logrotate  "$PKGROOT/etc/logrotate.d/speech-server"
+	install -D -m 644 LICENSE.md               "$PKGROOT/usr/share/doc/$SPEECHPKG/LICENSE.md"
+
+	DEPENDS=$(deb_runtime_depends bin/debug/speech-server)
+	INSTALLEDSIZE=$(du -ks "$PKGROOT" | cut -f1)
+
+	cat > "$PKGROOT/DEBIAN/control" <<EOF
+Package: $SPEECHPKG
+Version: $VERSION
+Section: comm
+Priority: optional
+Architecture: $ARCH
+Maintainer: IVeS <support@ives.fr>
+Homepage: http://www.ives.fr
+Installed-Size: $INSTALLEDSIZE
+Depends: adduser, $DEPENDS
+Description: IVeS speech-server (ASR, TTS et correction de texte par Mistral AI)
+ Trois services en flux WebSocket, calcules par Mistral AI : reconnaissance
+ vocale, synthese vocale et correction de texte.
+EOF
+
+	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
+/etc/mediaserver/speech-config.json
+/etc/logrotate.d/speech-server
+EOF
+
+	cat > "$PKGROOT/DEBIAN/preinst" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "install" ] || [ "$1" = "upgrade" ]
+then
+    getent group speech > /dev/null || addgroup --system speech
+    getent passwd speech > /dev/null || adduser --system --ingroup speech --no-create-home --home / --shell /usr/sbin/nologin speech
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]
+then
+    chgrp speech /etc/mediaserver/speech-config.json
+    # The unit copies the key itself before each start: nothing to write
+    # here, LXC included (docs/SPEECH-SERVER.md section 3).
+    if [ "$(systemd-detect-virt --container 2>/dev/null || true)" = "lxc" ]
+    then
+        echo "Installation on LXC detected: no LoadCredential here, the unit copies the key itself (nothing to do)"
+    fi
+    KEY=/etc/mediaserver/speech-api.key
+    if [ ! -e $KEY ]
+    then
+        echo "No Mistral key yet. Install it, then start the service:"
+        echo "  read -rs KEY; install -m 0600 -o root -g root /dev/stdin $KEY <<< \"\$KEY\""
+        echo "  systemctl enable --now speech-server"
+    elif [ "$(stat -c %u:%a $KEY)" != "0:600" ] && [ "$(stat -c %u:%a $KEY)" != "0:400" ]
+    then
+        echo "WARNING: $KEY must belong to root, mode 0600: chown root:root $KEY; chmod 0600 $KEY"
+    fi
+    systemctl daemon-reload || true
+    # Restarted on upgrade only if it was running; never enabled here.
+    systemctl try-restart speech-server.service || true
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/prerm" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ]
+then
+    systemctl stop speech-server.service || true
+    systemctl disable speech-server.service || true
+fi
+EOF
+
+	cat > "$PKGROOT/DEBIAN/postrm" <<'EOF'
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "purge" ]
+then
+    systemctl daemon-reload || true
+fi
+EOF
+
+	chmod 755 "$PKGROOT/DEBIAN/preinst" "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/prerm" "$PKGROOT/DEBIAN/postrm"
+
+	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	if [ $? != 0 ]
+	then
+		echo "*** error during build ***"
+		exit 20
+	fi
+
+	rm -rf "$PWD/debbuild"
+	echo "Paquet produit : ${SPEECHPKG}_${VERSION}_${ARCH}.deb"
 }
 
 function clean
@@ -303,8 +428,48 @@ function detect_distro
 #
 # webrtc-audio-processing n'y figure plus non plus : la VAD passe par le
 # sous-module libvad (fvad), bati in-tree. C'en etait le seul consommateur.
-RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool"
-DEB_PREREQ="libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev libxmlrpc-c++9-dev libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
+#
+# json-devel (EPEL) / nlohmann-json3-dev: header-only JSON reader of
+# speech-server, whose tests belong to the mcu suite. libcurl: its HTTPS
+# client towards Mistral.
+#
+# Le paquet C++ de xmlrpc-c porte son soname dans son nom, qui varie selon la
+# distribution (libxmlrpc-c++8-dev sur Ubuntu 24.04 / Mint 22 / Debian 12) :
+# on prend le plus recent que connait apt plutot que de l'ecrire en dur.
+function deb_xmlrpcpp_dev
+{
+	PKG=$(apt-cache pkgnames libxmlrpc-c++ 2>/dev/null | grep -E '^libxmlrpc-c\+\+[0-9]+-dev$' | sort -V | tail -1)
+	echo "${PKG:-libxmlrpc-c++8-dev}"
+}
+
+# ffmpeg >= 8 (libavutil >= 60) : Ubuntu 26.04 le livre (8.0), Mint 22 /
+# Ubuntu 24.04 non (6.1). Sur celles-ci, un ffmpeg recent bati a part dans
+# /opt/ffmpeg9 (contournement local, en attendant la prochaine Mint) est place
+# EN TETE du PKG_CONFIG_PATH, herite par les deux Makefiles (sous-module et
+# mcu) ; sans ce repertoire, rien ne change.
+FFMPEG_PCDIR=/opt/ffmpeg9/lib/pkgconfig
+FFMPEG_MIN_AVUTIL=60
+if [ -d "$FFMPEG_PCDIR" ]
+then
+	export PKG_CONFIG_PATH="$FFMPEG_PCDIR${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
+
+# Garde-fou : refuser un ffmpeg trop ancien, plutot que d'echouer cinquante
+# lignes plus loin sur une API absente (avcodec_get_supported_config...).
+function check_ffmpeg
+{
+	AVUTIL=$(pkg-config --modversion libavutil 2>/dev/null)
+	if [ -z "$AVUTIL" ] || [ "${AVUTIL%%.*}" -lt $FFMPEG_MIN_AVUTIL ]
+	then
+		echo "pkg-config resout libavutil ${AVUTIL:-(introuvable)} : ffmpeg >= 8 (libavutil >= $FFMPEG_MIN_AVUTIL) requis."
+		echo "Installer un ffmpeg plus recent, ou renseigner PKG_CONFIG_PATH."
+		exit 20
+	fi
+	echo "ffmpeg : libavutil $AVUTIL ($(pkg-config --variable=prefix libavutil))"
+}
+
+RPM_PREREQ="ffmpeg-devel libsrtp-devel xmlrpc-c-devel usrsctp-devel ImageMagick-c++-devel libtool json-devel libcurl-devel"
+DEB_PREREQ="nlohmann-json3-dev libcurl4-openssl-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavfilter-dev libavdevice-dev libsrtp2-dev libxmlrpc-core-c3-dev $(command -v apt-cache > /dev/null && deb_xmlrpcpp_dev) libusrsctp-dev libmagick++-dev libssl-dev libxml2-dev zlib1g-dev libbz2-dev libtool autoconf automake pkg-config"
 
 function check_prereq
 {
@@ -335,6 +500,8 @@ function check_prereq
 		echo "Les installer : ./install.ksh prereq"
 		exit 20
 	fi
+
+	check_ffmpeg
 }
 
 function compile_mp4v2
@@ -407,7 +574,7 @@ function local_compile
 
 	mkdir -p bin/debug
 	cd mcu
-	make mcu
+	make mcu speech-server
 }
 
 function compile_rabbitmq
@@ -480,6 +647,14 @@ function compile_libmedkit
 	# inclut mp4reader.o/mp4writer.o dont depend le mediaserver via mp4streamer/
 	# mp4recorder). Ne plus surcharger OBJS ici pour eviter la desynchronisation.
 	make -C "$MEDKITDIR" all ASTERISK=no
+	if [ $? != 0 ]
+	then
+		# Sans cet arret, localcompile enchainait sur libvad et le mcu : l'erreur
+		# du sous-module se perdait dans la sortie et le script finissait sur un
+		# message sans rapport.
+		echo "Echec de la compilation de libmedkit"
+		exit 20
+	fi
 	cd $MEDIASERVERPATH
 }
 
@@ -515,6 +690,11 @@ function compile_libvad
 			CFLAGS="-g -O2 -fPIC -I./sources -I./sources/signal_processing" \
 			LIB_SRC='$(FVAD_SRC)' \
 			ST_LIB=libfvad.a
+		if [ $? != 0 ]
+		then
+			echo "Echec de la compilation de libvad"
+			exit 20
+		fi
 	fi
 	cd $MEDIASERVERPATH
 }

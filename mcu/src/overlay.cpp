@@ -16,6 +16,19 @@ extern "C" {
 }
 
 using Magick::Quantum;
+
+//Couleur RGBA, 4e canal toujours en ALPHA (0 = transparent, QuantumRange =
+//opaque), quelle que soit la version d'ImageMagick : IM7 lit un alpha, IM6 une
+//« opacity » de sens inverse (QuantumRange = transparent). Debian/Ubuntu/Mint
+//livrent encore Magick++ 6.9, AlmaLinux 9 la 7.
+static Magick::Color ColorRGBA(Quantum r, Quantum g, Quantum b, Quantum alpha)
+{
+#if MagickLibVersion >= 0x700
+	return Magick::Color(r, g, b, alpha);
+#else
+	return Magick::Color(r, g, b, QuantumRange - alpha);
+#endif
+}
     
 // Helper function de check the language of a text string
 // Script Code - ISO 15924
@@ -305,17 +318,15 @@ int Overlay::RenderText(const char* msg, int scriptCode)
     }
 
         Magick::Blob bob;
-        //ImageMagick 7 a INVERSÉ la sémantique du 4e canal de Color : IM6 y
-        //lisait une « opacity » (QuantumRange = transparent), IM7 un « alpha »
-        //(QuantumRange = OPAQUE). L'ancien Color(0,0,0,QuantumRange) — fond
-        //transparent voulu à l'époque IM6 — produisait donc un bandeau NOIR
-        //OPAQUE plein slot qui masquait toute la vidéo (vécu en recette).
-        //Fond : alpha 0 = transparent ; boîte grise : 75 % opaque comme
-        //l'intention d'origine (opacity QR/4 en IM6).
+        //ImageMagick 7 a INVERSÉ la sémantique du 4e canal de Color (cf.
+        //ColorRGBA) : un 4e canal écrit pour une seule version donne, sous
+        //l'autre, un bandeau NOIR OPAQUE plein slot qui masque toute la vidéo
+        //(vécu en recette IM7, puis sous Magick++ 6.9 de Mint).
+        //Fond : alpha 0 = transparent ; boîte grise : 75 % opaque.
         Magick::Image render( Magick::Geometry(width, height),
-                          Magick::Color(0, 0, 0, 0) );
-        Magick::Color gray(QuantumRange/4, QuantumRange/4, QuantumRange/4,
-                           QuantumRange - QuantumRange/4);
+                          ColorRGBA(0, 0, 0, 0) );
+        Magick::Color gray = ColorRGBA(QuantumRange/4, QuantumRange/4, QuantumRange/4,
+                                       QuantumRange - QuantumRange/4);
 
         render.strokeColor( gray );
         render.fillColor( gray ); // Fill color

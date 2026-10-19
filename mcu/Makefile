@@ -109,6 +109,15 @@ OBJS+=ipaddress.o addressprofiles.o stunclient.o audioresampler.o rtpsessionset.
 OBJS+= $(DOCSHARINGOBJ) $(JSR309OBJ) $(SCTPOBJ) $(BFCPSTACKOBJ)
 TARGETS=mcu rtmptest
 
+# speech-server (docs/conception/SPEECH-SERVER/SPEC.md): never in OBJS, so that
+# the mcu links neither the JSON reader nor libcurl. The server reuses
+# the WebSocket reactor and Abyss, nothing from the conference engine.
+SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o taskpool.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o phrasesplitter.o pcmconverter.o mistralhttp.o mistralspeech.o ttssession.o compcheck.o mistralchat.o compsession.o
+SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o
+OBJSSPEECH=$(SPEECHOBJS) $(SPEECHREUSEDOBJS) speechmain.o
+BUILDOBJSSPEECH=$(addprefix $(BUILD)/,$(OBJSSPEECH))
+TARGETS+=speech-server
+
 ifeq ($(FLASHSTREAMER),yes)
 	OBJS+= flash.o xmlrpcflash.o 
 	OBJSFS   = flashstreamer.o FlashPlayer.o FlashSoundHandler.o $(OBJS)
@@ -168,6 +177,7 @@ VPATH +=  %.cpp src/$(SCTPDIR)
 VPATH +=  %.cpp src/bfcp
 VPATH +=  %.cpp src/bfcp/attributes
 VPATH +=  %.cpp src/bfcp/messages
+VPATH +=  %.cpp src/speech
 
 ifeq ($(MOTELI),yes)
     VPATH +=  %.cpp src/$(MOTELIDIR)
@@ -303,6 +313,8 @@ mkdirs: | $(BUILD) $(BIN)
 
 clean:
 	rm -f $(BUILDOBJSMCU)
+	rm -f $(BUILDOBJSSPEECH)
+	rm -f "$(BIN)/speech-server"
 	rm -f $(BUILDOBJSFS)
 	rm -f "$(BIN)/mcu"
 	rm -f "$(BIN)/flashstreamer"
@@ -335,6 +347,26 @@ MEDKITLIB = $(wildcard $(MEDKITDIR)/libmedkit.a)
 $(BIN)/mcu: $(OBJSMCU) $(MEDKITLIB) | $(BUILD) $(BIN)
 	$(CXX) -o $@ $(BUILDOBJSMCU) $(LDFLAGS) $(VADLD)
 
+.PHONY: speech-server
+speech-server: $(BIN)/speech-server
+
+# The comp prompt is a versioned text file, compiled in as a raw string.
+$(BUILD)/comp_prompt.inc: src/speech/comp_prompt.txt | $(BUILD)
+	{ printf 'R"PROMPT('; cat $<; printf ')PROMPT"\n'; } > $@
+compsession.o: $(BUILD)/comp_prompt.inc
+compsession.o: CXXFLAGS += -I$(BUILD)
+
+# libswresample/libavutil par pkg-config, comme pour le mcu : un -lavutil nu
+# prend le ffmpeg du prefixe systeme (6.1 sur Debian/Ubuntu) alors que les objets
+# sont compiles avec les en-tetes de ffmpeg 9 — deux ABI dans un binaire.
+SPEECHAVLIBS := $(shell pkg-config --libs libswresample libavutil 2>/dev/null)
+ifeq ($(strip $(SPEECHAVLIBS)),)
+SPEECHAVLIBS := -lswresample -lavutil
+endif
+
+$(BIN)/speech-server: $(OBJSSPEECH) | $(BUILD) $(BIN)
+	$(CXX) -o $@ $(BUILDOBJSSPEECH) $(SPEECHAVLIBS) -lcurl $(LDXMLFLAGS)
+
 rtmptest: $(OBJSRTMPTEST)
 	$(CXX) -o $(BIN)/$@ $(BUILDOBJSRTMPTEST) $(LDFLAGS)
 
@@ -359,7 +391,7 @@ flashstreamer: $(OBJSFS) $(OBJS)
 GTEST_CFLAGS := $(shell pkg-config --cflags gtest 2>/dev/null)
 GTEST_LIBS   := $(shell pkg-config --libs gtest 2>/dev/null)
 TESTSRCS     := $(wildcard tests/*.cpp)
-BUILDOBJSTEST = $(addprefix $(BUILD)/,$(OBJS))
+BUILDOBJSTEST = $(addprefix $(BUILD)/,$(OBJS) $(SPEECHOBJS))
 # Fixture pcap RTP/RTCP versionnee ; son chemin absolu est injecte (surchargeable :
 # make check TEST_PCAP=/chemin/vers.pcap).
 TEST_PCAP    ?= $(abspath tests/fixtures/rtp_rtcp.pcap)
@@ -375,14 +407,17 @@ TESTBIN = tests/runtests$(if $(filter-out debug,$(TAG)),-$(TAG),)
 # $(BUILD) en prerequis ORDER-ONLY, pas `mkdirs` : celui-ci n'etant pas un fichier,
 # il etait toujours plus recent que tests/runtests et forcait la recompilation de
 # TOUTE la suite gtest a chaque `make check`, meme sans modification.
-$(TESTBIN): $(OBJS) $(TESTSRCS) $(MEDKITLIB) | $(BUILD)
+$(TESTBIN): $(OBJS) $(SPEECHOBJS) $(TESTSRCS) $(MEDKITLIB) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(GTEST_CFLAGS) -DTEST_PCAP_FILE='"$(TEST_PCAP)"' \
+		-DSPEECH_SERVER_BIN='"$(abspath $(BIN)/speech-server)"' \
+		-DSPEECH_FIXTURES_DIR='"$(abspath tests/fixtures/speech)"' \
 		$(TESTSRCS) $(BUILDOBJSTEST) \
-		-o $(TESTBIN) $(LDFLAGS) $(VADLD) $(GTEST_LIBS)
+		-o $(TESTBIN) $(LDFLAGS) -lcurl $(VADLD) $(GTEST_LIBS)
 
 tests: $(TESTBIN)
 
-check: $(TESTBIN)
+# tests/test_speech_server.cpp runs the speech-server binary.
+check: $(TESTBIN) $(BIN)/speech-server
 	./$(TESTBIN)
 
 # Suite IPv6 (tag :ipv6, cf. tests/test_ipv6.cpp).
@@ -409,7 +444,11 @@ check-senderbwe: $(TESTBIN)
 check-transcoder: $(TESTBIN)
 	./$(TESTBIN) --gtest_filter='TranscoderRecette*:TranscoderCharacterization*:AudioDecoderInline*:VideoDecoderInline*:AudioEncoderInline*:VideoEncoderInline*:AudioBridgingTest*:VideoBridgingTest*'
 
-.PHONY: tests check check-ipv6 check-ratecontrol check-senderbwe check-transcoder
+# Le prompt de comp contre le vrai Mistral (reseau et cle requis, hors check).
+check-speech-comp: $(TESTBIN)
+	./$(TESTBIN) --gtest_filter='DISABLED_SpeechCompReference*' --gtest_also_run_disabled_tests
+
+.PHONY: tests check check-ipv6 check-speech-comp check-ratecontrol check-senderbwe check-transcoder
 
 ############################################
 # Dependances generees automatiquement (headers -> objets)

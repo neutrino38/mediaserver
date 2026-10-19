@@ -88,6 +88,24 @@ int CountThreads()
 	return count;
 }
 
+// Référence prise une fois le nombre de threads stabilisé : ceux des tests
+// précédents (pools ffmpeg/x264) finissent de mourir tout seuls, et un départ
+// pendant la mesure ferait échouer la comparaison sans rapport avec le code
+// testé (cf. test_transcoder_recette.cpp).
+int SettledThreadCount()
+{
+	int last = CountThreads();
+	for (int i = 0; i < 20; i++)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(25));
+		const int now = CountThreads();
+		if (now == last)
+			return now;
+		last = now;
+	}
+	return last;
+}
+
 // L'appel de `Multiplex` d'un RTPMultiplexer tient son verrou pendant tout
 // l'appel aux listeners : c'est la barrière sur laquelle le lot s'appuie.
 TEST(AudioDecoderInline, LaTrameDecodeeEstLaAuRetourDeMultiplex)
@@ -143,7 +161,7 @@ TEST(AudioDecoderInline, DemarrerLeDecodeurNeCreeAucunThread)
 	AudioDecoderJoinableWorker decoder;
 	ASSERT_EQ(1, decoder.Init(&output));
 
-	const int before = CountThreads();
+	const int before = SettledThreadCount();
 	ASSERT_GT(before, 0);
 
 	auto source = std::make_shared<RTPMultiplexer>();

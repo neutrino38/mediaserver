@@ -9,6 +9,7 @@
 #define	WEBSOCKETS_H
 
 #include <memory>
+#include "ipaddress.h"
 
 class WebSocket
 {
@@ -34,12 +35,18 @@ public:
 	virtual void SendMessage(const std::string& message) = 0;
 	virtual void SendMessage(const BYTE* data, const DWORD size) = 0;
 	virtual void Close() = 0;
+	//RFC 6455 §5.5.1 closing: a Close frame carrying `code`, then the cut once
+	//the output is flushed. Nothing is sent after it.
+	virtual void Close(const WORD code, const char* reason) = 0;
 
 	//Renvoie un weak_ptr vers ce WebSocket, pour qu'un consommateur (ex. WSEndpoint,
 	//sur un autre thread) puisse verrouiller la référence avant chaque appel et
 	//éviter tout usage-après-libération. Défaut : vide (surchargé par les
 	//implémentations gérées par shared_ptr, comme WebSocketConnection).
 	virtual std::weak_ptr<WebSocket> GetWeakPtr()	{ return std::weak_ptr<WebSocket>(); }
+
+	//Peer address, empty when unknown.
+	virtual IPEndpoint GetRemoteEndpoint() const	{ return IPEndpoint(); }
 
 	virtual void* GetUserData()			{ return userData;		}
 	virtual void  SetUserData(void* userData)	{ this->userData = userData;	}
