@@ -144,6 +144,11 @@ latence.
 **Fréquence interne : 16 kHz**, celle de `speech-server` et du mixeur de
 conférence. Un relais Opus ↔ Opus (cas 3 en WebRTC) perd donc la bande
 au-delà de 8 kHz. C'est accepté en version 1, parce que l'usage est la voix.
+Tranché le 2026-10-19 : si la recette (§12) juge la qualité insuffisante, la
+fréquence interne passe à **48 kHz**. Seuls le mix et le bruit de confort
+changent : l'ASR et la TTS restent à 16 kHz, rééchantillonnées à
+l'entrée et à la sortie du flux speech. La fréquence est donc une constante
+de la classe, jamais une valeur écrite en dur dans les calculs.
 
 ### 4.3 Le cadencement
 
@@ -209,12 +214,10 @@ souvent plus longtemps que les deux. Le client s'en occupe ainsi :
 
 - **TTS** : tant que la synthèse est active, le client envoie
   `{"type":"flush"}` toutes les 30 s s'il n'a rien envoyé d'autre. Un
-  `flush` sur un tampon vide ne coûte rien chez Mistral. Le lot 1 le
-  vérifie par un test.
+  `flush` sur un tampon vide ne coûte rien chez Mistral (vérifié, §10.2).
 - **ASR** : le client est mis en pause par la VAD (§6.1). En pause, il
-  renvoie `{"type":"pause"}` toutes les 30 s. Le lot 1 vérifie que
-  `speech-server` accepte une pause répétée sans effet. Sinon, il faut l'y
-  rendre idempotente : c'est un changement d'une ligne dans `AsrSession`.
+  renvoie `{"type":"pause"}` toutes les 30 s. Une pause répétée est sans
+  effet (vérifié, §10.2).
 - **Rotation** : après 55 min, le flux est remplacé **au prochain silence**
   (ASR en pause, ou TTS entre deux phrases). Le client ouvre un nouveau
   flux, bascule dessus, puis ferme l'ancien par `done`.
@@ -264,7 +267,8 @@ noierait la file du long-poll. Il y a donc deux formes :
 - `SpeechRecognized` avec `final=false` : les deltas regroupés, au plus un
   événement toutes les **250 ms** par port ;
 - `SpeechRecognized` avec `final=true` : l'**énoncé entier**, émis quand la
-  VAD a mis le flux en pause et que le texte du flush est arrivé. C'est la
+  VAD a mis le flux en pause et que le texte du flush est arrivé (500 ms
+  sans delta après la pause, §10.5). C'est la
   forme dont un chatbot a besoin pour interroger un modèle de langage.
 
 ## 7. La synthèse (TTS)
@@ -278,7 +282,9 @@ noierait la file du long-poll. Il y a donc deux formes :
 
 Les deux sources peuvent viser le même port en même temps. Par exemple, une
 annonce du contrôleur pendant une transcription. Elles partagent alors le
-flux TTS de ce port, dans l'ordre d'arrivée.
+flux TTS de ce port, dans l'ordre d'arrivée. Avant un `Say`, le client
+envoie un `flush` si une phrase tapée est en cours : sinon le découpeur du
+serveur collerait l'annonce à la fin de cette phrase.
 
 ### 7.2 Associer les phrases à un `Say`
 
@@ -313,7 +319,9 @@ sait si une interruption est attendue.
 
 En transcription, un retour arrière du sourd qui remonte dans du texte déjà
 envoyé à la synthèse est une correction (SPEC speech-server §7.3). Le
-SpeechProcessor suit la bulle T.140 du port source. Quand un retour arrière
+SpeechProcessor suit la bulle T.140 du port source. Il coupe lui-même les
+phrases sur un silence de frappe (1 200 ms, sous les 1 500 ms du serveur),
+pour savoir exactement ce qui a été envoyé (§10.6). Quand un retour arrière
 dépasse ce qui a été envoyé, il envoie `stop`, puis l'annonce
 (« Correction : » en français), puis le texte retapé jusqu'à la fin de la
 ligne.
@@ -350,9 +358,8 @@ l'existant : `XAttachToY` veut dire que X **reçoit** de Y.
 
 **Le codec de la sortie texte.** L'endpoint attaché dit ce qu'il accepte
 (`Joinable::Listener::TryCheckCodec`) : le port produit du T.140 RED s'il est
-accepté, du T.140 nu sinon. Le lot 0 vérifie que `RTPEndpoint` répond juste
-pour le texte. Sinon, on ajoute un `SpeechProcessorPortSetTextCodec`
-explicite.
+accepté, du T.140 nu sinon. `RTPEndpoint` répond d'après sa `rtpMap` de
+sortie (vérifié, §10.2).
 
 ### 8.2 Reconnaissance
 
@@ -394,7 +401,7 @@ méthode** :
 
 - les schémas protobuf MOTELI v2 d'elixip (`apps/elixip2/priv/proto/moteli_*.proto`) ;
 - les clients Java (`XmlRpcMcuClient`, `jsr309impl`) ;
-- `docs/JSR-309-API.md` ;
+- `docs/JSR-309-API.md`, section par section (§10.8) ;
 - `/status/general` : un bloc `speech` avec l'URL configurée ou non, les
   flux ouverts par fonction, le dernier échec et les réouvertures cumulées
   (`docs/reference/status-http.md`).
@@ -425,17 +432,253 @@ tard, en option. Il n'est pas prévu en version 1 (§13).
 
 ## 10. Plan d'implémentation
 
+### 10.1 Vue d'ensemble
+
 | Lot | Contenu | Condition de fin |
 |---|---|---|
-| 0 | Vérifications : `TryCheckCodec` sur une jambe texte, fréquence de sortie de `AudioDecoderJoinableWorker`, `flush` sur un tampon vide, `pause` répétée | Réponses écrites ici, au §3 |
-| 1 | Client speech : libcurl et nlohmann-json liés au mcu, `SpeechTokenClient`, `SpeechFlow` (asr/tts, garde ouverte, rotation, reprise), `--speech-url`, `--speech-account`, bloc `speech` de `/status/general` | Tests §11.1 verts |
-| 2 | SpeechProcessor sans speech : ports, branchement, mix et cadencement, bruit de confort, relais texte, `TextMux` ; API §8.1 et contrat §8.5 | Tests §11.2 verts |
-| 3 | ASR : VAD, pré-roulement, événements regroupés, sortie texte, `halfDuplex` ; API §8.2, événements 8, 11 et 12 | Tests §11.3 verts |
-| 4 | TTS : `Say`, source port, tampon de lecture, arrêt, corrections ; API §8.3, événements 9 et 10 | Tests §11.4 verts |
+| 1 | Client speech dans le mediaserver, sans API JSR-309 | Tests §11.1 verts |
+| 2 | SpeechProcessor sans speech : ports, relais, mix, bruit, `TextMux` ; API §8.1 | Tests §11.2 verts |
+| 3 | ASR : VAD, pré-roulement, événements, sortie texte ; API §8.2 | Tests §11.3 verts |
+| 4 | TTS : `Say`, source port, tampon de lecture, arrêt, corrections ; API §8.3 | Tests §11.4 verts |
 | 5 | Côté elixip : les quatre cas d'appel et le chatbot | Recette §12 |
 
-Chaque lot est livrable seul. Le lot 2 a déjà une valeur sans service
-speech : il joue le rôle d'un transcodeur audio et texte.
+Chaque lot de 2 à 4 enrichit `docs/JSR-309-API.md` dans son propre commit (§10.8).
+
+L'ancien lot 0 est soldé : chaque vérification qu'il prévoyait a été faite
+en lisant le code (§10.2). Chaque lot donne un commit qui se suffit à
+lui-même, avec un `make check` vert. Le lot 2 a déjà une valeur sans
+service speech : il remplace un transcodeur audio et texte.
+
+Ordre de travail à l'intérieur d'un lot : d'abord les classes pures et
+leurs tests, puis le branchement, puis l'API et son contrat (§8.5).
+
+### 10.2 Vérifications faites le 2026-10-19 (ancien lot 0)
+
+| Question | Réponse, d'après le code |
+|---|---|
+| Une `pause` répétée est-elle sans effet ? | Oui. `AsrSession::OnText` rend la main si le flux est déjà en pause. Et toute trame du client remet à zéro le délai d'inactivité (`SpeechSession::onMessageEnd`). |
+| Un `flush` à vide coûte-t-il quelque chose chez Mistral ? | Non. `TtsSession::Enqueue` jette une phrase vide avant la file. |
+| L'endpoint dit-il quel codec texte il accepte ? | Oui. `RTPMultiplexer::TryCheckCodec` interroge chaque écouteur, et `RTPEndpoint::TryCheckCodec` vérifie la `rtpMap` de sortie (`CanSendCodec`) avant de basculer. Pas besoin de `SetTextCodec`. |
+| À quelle fréquence arrive l'audio décodé ? | À celle du codec : `AudioDecoderJoinableWorker` appelle `StartPlaying(codec->GetRate())` puis `PlayFrame`. Le port rééchantillonne avec `AudioResampler`, comme `EncodeSamples` le fait déjà de son côté. |
+| Le client HTTP de speech-server sert-il pour le jeton ? | Presque. `MistralHttp::Post` pose toujours `Authorization: Bearer`. Il faut ne plus le poser quand la clé est vide : une ligne. |
+| Le protocole `asr` marque-t-il la fin du texte d'un `flush` ? | Non (SPEC speech-server §7.4). La fin d'énoncé est donc déduite d'un délai (§10.5). |
+
+### 10.3 Lot 1 : le client speech
+
+**Construction.**
+- `mcu/Makefile` : un groupe `SPEECHCLIENTOBJS` (`taskpool.o`,
+  `phrasesplitter.o`, `mistralhttp.o`, plus les objets neufs ci-dessous),
+  ajouté à `OBJS`, avec `-lcurl` sur la ligne de lien du mcu. Le
+  commentaire « the mcu links neither the JSON reader nor libcurl » est à
+  corriger. Les objets propres au serveur (`speechsession.o`,
+  `asrsession.o`, etc.) restent hors du mcu.
+- `install.ksh prereq` et `mcumediaserver.spec` : `libcurl-devel` et
+  `json-devel` en dépendances de build du paquet principal, et `libcurl` en
+  dépendance d'exécution. Les deux sont déjà là pour `mediaserver-speech`.
+  Même chose côté `.deb`.
+- `MistralHttp::Post` : ne pose pas l'en-tête `Authorization` quand la clé
+  est vide.
+
+**Classes** (`mcu/include/speech/`, `mcu/src/speech/`) :
+- `SpeechTokenClient` : `POST /control/token` avec `function` et `account`,
+  et rend le jeton par un rappel. L'appel tourne **dans un `TaskPool`**
+  (deux threads), jamais dans le réacteur.
+- `SpeechFlow` : un flux `asr` ou `tts`. C'est une machine à états
+  (`Idle → Token → Connecting → Ready → Down`), avec :
+  - l'ouverture par `WebSocketServer::Connect` sur
+    `/streaming/<fonction>/<jeton>` ;
+  - la garde ouverte du §5.3 : un `flush` ou une `pause` toutes les 30 s
+    sans autre trame ;
+  - la rotation à 55 min, au premier silence que signale le propriétaire du
+    flux (`CanRotate()`) ;
+  - la reprise à 1, 2, 5, 10, puis 30 s, par `ConnectLater`.
+
+  Son écouteur (`SpeechFlow::Listener`) reçoit `onReady`, `onText`,
+  `onPcm`, `onSay`, `onDone`, `onStopped` et `onState(up|down, raison)`.
+  **Tous ces rappels arrivent sur le thread du réacteur WebSocket** : ils
+  ne font que déposer dans une file protégée par un verrou court
+  (règle du `websocket-refactor-plan`, et `docs/reference/threads-rtp.md`).
+- `SpeechService` : un seul par processus, possédé par `main()`. Il porte
+  l'URL, le compte, le `TaskPool`, une référence au `WebSocketServer`, et les
+  compteurs que lit `/status/general` (flux ouverts par fonction, dernier
+  échec, réouvertures). Il fabrique les `SpeechFlow`.
+
+**Branchement.**
+- `main.cpp` : `--speech-url` et `--speech-account`, avec le texte d'aide.
+  `SpeechService` est construit après `wsServer`, puis passé au
+  `JSR309Manager` (qui le passe à chaque `MediaSession`).
+- `statushandler.cpp` : le bloc `speech`, en JSON et en texte.
+  `docs/reference/status-http.md` le décrit.
+
+**Tests** (`test_speech_client.cpp`). Ils lancent le vrai binaire
+`speech-server` contre les faux Mistral, sur le modèle de
+`test_speech_server.cpp`, et couvrent les cas du §11.1. La durée maximale et
+les délais sont des paramètres de `SpeechFlow`, pour que la rotation se
+teste en quelques secondes.
+
+**Commit** : `speech : client du speech-server dans le mediaserver`.
+
+### 10.4 Lot 2 : le SpeechProcessor sans speech
+
+**Classes pures, d'abord.**
+- `TextMux` (`mcu/include/textmux.h`, `mcu/src/textmux.cpp`) : les règles
+  du §9. On lui passe l'heure à chaque appel, sans horloge propre, et il
+  rend les caractères à émettre.
+- `ComfortNoise` : un générateur de bruit blanc à niveau en dBov, sur un
+  tirage pseudo-aléatoire à graine fixe pour que les tests soient
+  reproductibles. Il est assez petit pour vivre dans `SpeechProcessor.cpp`.
+
+**`SpeechProcessor`** (`mcu/src/jsr309/SpeechProcessor.{h,cpp}`, ajouté à
+`JSR309OBJ`) :
+- C'est un `Worker` qui bat 20 ms (§4.3). La fréquence interne est une
+  constante de la classe (`MixRate = 16000`).
+- `Port` (deux instances) contient :
+  - **entrée audio** : `AudioDecoderJoinableWorker`, initialisé avec un
+    `PortAudioSink : AudioOutput` qui rééchantillonne à `MixRate` et dépose
+    dans l'anneau de relais (60 ms au plus) ;
+  - **sortie audio** : `AudioEncoderMultiplexerWorker` en mode push
+    (`Init()` sans entrée), qui reçoit le mix par `EncodeSamples` ;
+  - **entrée texte** : `PortTextSink : Joinable::Listener`, qui décode le
+    RED par `RedundentCodec::Decode`, ou le T.140 nu, sur le modèle de
+    `Recorder::onTextPacket` ;
+  - **sortie texte** : un `RTPMultiplexer` qui produit des paquets T.140
+    ou T.140 RED selon `TryCheckCodec(T140RED)`. Le RED est encodé par
+    `RedundentCodec::Encode`, avec `EncodeNull` tant que
+    `EncoderIsIdle()` est faux, comme dans `WSEndpoint`. Le `TextMux` de
+    la sortie se vide à chaque tour de 20 ms ;
+  - le niveau de bruit.
+- `GetJoinable(port, media)` rend un `shared_ptr` aliasing sur le port
+  (lien A, comme `AudioMixerResource`). `Attach(port, media, joinable)` et
+  `Dettach(port, media)`.
+- `End()` est idempotent : il arrête le `Worker`, puis détache les
+  décodeurs, puis arrête les encodeurs.
+
+**`MediaSession`** : une map `SpeechProcessors` de `shared_ptr`, avec
+`SpeechProcessorCreate`, `Delete`, `Get`, `PortSetCodec`,
+`SetComfortNoise`, `AttachToEndpoint`, `Dettach`, et
+`EndpointAttachToSpeechProcessor` (par `Endpoint::Attach(media,
+VIDEO_MAIN, sp->GetJoinable(port, media))`). `Delete` suit le motif du
+CLAUDE.md : extraire sous le verrou, effacer de la map, puis `End()` hors
+du verrou. Video et un port hors de {0, 1} sont refusés.
+
+**API** (`xmlrpcjsr309.cpp`) : les sept méthodes du §8.1, et leurs entrées
+dans `jsr309CmdList`.
+
+**Contrat, dans le même commit** :
+- elixip `apps/elixip2/priv/proto/moteli_jsr309.proto` ;
+- `XmlRpcMcuClient/src/org/murillo/MediaServer/XmlRPCJSR309Client.java`.
+  `jsr309impl` seulement si l'objet y trouve un pendant JSR-309 (aucun
+  `MediaMixer` standard ne lui correspond : à juger au moment du lot) ;
+- `docs/JSR-309-API.md` : modèle objet, §6.13 (méthodes du §8.1), et le
+  §9.8 des call flows pour les relais (§10.8).
+
+**Tests** :
+- `test_textmux.cpp` : les règles du §9, sans thread ;
+- `test_speech_processor_media.cpp` : un faux `Joinable` qui injecte des
+  `RTPPacket` (PCMA, T.140, T.140 RED avec pertes) et un faux écouteur qui
+  les recueille et les décode. Sans réseau, sans `speech-server`. Les cas
+  sont ceux du §11.2, plus un passage sous `runtests-asan` et
+  `runtests-tsan` pour la suppression pendant un relais.
+
+**Commits** : (a) `TextMux` ; (b) SpeechProcessor, API et contrat.
+
+### 10.5 Lot 3 : la reconnaissance
+
+- **Par port source** : une `VAD` (`AGGRESSIVE`, 16 kHz, trames de 20 ms),
+  un anneau de pré-roulement de 300 ms et un `SpeechFlow` `asr`. Ils sont
+  alimentés par le tour de 20 ms, depuis l'anneau d'entrée du port, et
+  jamais depuis le thread du décodeur.
+- **Transitions de la VAD** : parole → `resume`, pré-roulement, direct ;
+  silence de `silenceMs` → `pause`. `SpeechActivity` est émis à chaque
+  transition.
+- **Fin d'énoncé.** Le protocole ne marque pas la fin du texte d'un
+  `flush` (§10.2). L'énoncé est donc clos 500 ms après la `pause` sans
+  nouveau delta, ou plus tôt par un `resume`. Si la recette montre que ce
+  délai coupe des fins de phrase, un message `flushed` côté speech-server
+  (`AsrSession`, quelques lignes) remplacera la déduction. Ce changement
+  serait le seul du lot hors du mediaserver.
+- **Routage du texte** : vers la file d'événements (regroupés toutes les
+  250 ms, puis `final`) et/ou vers le `TextMux` du port `textPort`.
+- **`halfDuplex`** : tant que le tampon TTS du port n'est pas vide, la VAD
+  de ce port est forcée au silence.
+- **Événements** 8, 11 et 12 : des classes dans `MediaSession.h` sur le
+  modèle de `PlayerEvent`, et leurs numéros dans `JSR309Event::Events`.
+- **API** §8.2 et contrat §8.5. `docs/JSR-309-API.md` : événements 8, 11
+  et 12, méthodes du §8.2, encadré « Ce qui se paie », notes
+  d'intégration, et call flows complétés (§10.8).
+- **Tests** (`test_speech_processor_asr.cpp`) : le vrai `speech-server`, le
+  faux Mistral Realtime qui rejoue `fixtures/speech/asr_*.jsonl`, et une
+  voix injectée (`fixtures/speech/tts16k.wav`, encodée en PCMA par le
+  test). Les cas sont ceux du §11.3.
+- **Commit** : `jsr309 : reconnaissance vocale du SpeechProcessor`.
+
+### 10.6 Lot 4 : la synthèse
+
+- **Par port destination** : un `SpeechFlow` `tts` et un tampon de lecture
+  (S16, `MixRate`) que vide le tour de 20 ms. Le PCM de `speech-server`
+  (16 kHz) est rééchantillonné si `MixRate` change (§4.2).
+- **`Say`** : le texte puis `flush`. Le nombre de phrases attendues est
+  calculé avec `PhraseSplitter` (§7.2). **Règle ajoutée** : si une phrase
+  tapée sur le port source est en cours sur ce flux, le client envoie
+  d'abord un `flush`. Sinon, le découpeur du serveur collerait l'annonce à
+  la fin de la phrase tapée. Le §7.1 de cette SPEC est complété dans le
+  même commit.
+- **Source port** : le T.140 décodé part tel quel vers le flux. Le client
+  garde une **copie locale de `PhraseSplitter`** pour savoir ce qui a déjà
+  été envoyé à la synthèse. Pour que cette copie ne diverge pas du serveur,
+  c'est **le client qui coupe sur le silence de frappe** : il envoie
+  `flush` après 1 200 ms, sous le `tts.phraseSilenceMs` du serveur
+  (1 500 ms). Le serveur ne coupe alors plus jamais seul sur un silence.
+- **Corrections** (§7.5) : un `CorrectionTracker` pur suit la ligne en
+  cours, avec la part déjà envoyée et la part non envoyée. Un U+0008 qui
+  entame la part envoyée déclenche `stop`, puis l'annonce, puis le texte
+  retapé jusqu'à la fin de la ligne.
+- **`StopSpeaking`** : `stop`, vidage du tampon, puis `Done` avec
+  `interrupted=true`.
+- **Événements** 9 et 10, **API** §8.3 et contrat §8.5.
+  `docs/JSR-309-API.md` : événements 9 et 10, méthodes du §8.3, call flows
+  du chatbot et des quatre cas complets (§10.8).
+- **Tests** : `test_correction_tracker.cpp` (pur) et
+  `test_speech_processor_tts.cpp` (vrai `speech-server`, faux Mistral HTTP
+  qui rejoue `fixtures/speech/tts_stream_*`). Les cas sont ceux du §11.4.
+- **Commit** : `jsr309 : synthèse vocale du SpeechProcessor`.
+
+### 10.7 Lot 5 : elixip et la recette
+
+Ce lot se fait dans le dépôt elixip, pas dans celui-ci :
+- le plan de jambes des quatre cas du §2. La vidéo est branchée par
+  `EndpointAttachToEndpoint`, l'audio et le texte sur les ports du
+  SpeechProcessor, et le codec de chaque port suit la négociation SDP de
+  sa jambe ;
+- le chatbot : `final=true` vers le dialogue, `Say` pour les réponses, et
+  le barge-in par `SpeechActivity` puis `StopSpeaking` ;
+- les alias de voix sont lus par `GET /control/voices` sur speech-server,
+  jamais recopiés.
+
+Puis la recette du §12.
+
+### 10.8 La documentation de l'API XML-RPC JSR-309
+
+`docs/JSR-309-API.md` est le contrat qu'un contrôleur lit. Il s'enrichit
+**dans le commit de chaque lot qui ajoute une méthode ou un événement**,
+pas dans un lot de documentation à part, comme les protos MOTELI (§8.5).
+
+| Section de `JSR-309-API.md` | Ce qui s'ajoute | Lot |
+|---|---|---|
+| §3 Modèle objet | `SpeechProcessor (spId)` dans l'arbre, avec ses deux ports. Convention : port 0 = A, 1 = B ; Audio et Text seulement | 2 |
+| §3 Cycle de vie type | une ligne : créer le SpeechProcessor avant les attaches, le supprimer avant les endpoints | 2 |
+| §5 Types d'événements | les types 8 à 12 : tuple XML-RPC exact (`int type, string sessionTag, int joinableId, int media, int port, …`), et pour chacun quand il part et ce que le contrôleur en fait | 3 (8, 11, 12), 4 (9, 10) |
+| §6.13 SpeechProcessor (nouvelle) | le tableau des méthodes au format de l'existant (`i sessionId, i spId, i port, …` → `returnVal`), les erreurs propres (port invalide, media Video, « speech service not configured », synthèse non active pour `Say`), le relais automatique, le bruit de confort, le codec texte choisi par `TryCheckCodec` | 2 (§8.1), 3 (§8.2), 4 (§8.3) |
+| §6.13, encadré « Ce qui se paie » | l'ASR n'envoie que la parole (VAD), une session `asr` par port source et une `tts` par port destination, `--speech-account` pour ventiler | 3 |
+| §8 Notes d'intégration | sans `--speech-url`, seuls les relais fonctionnent ; les alias de voix se demandent à `GET /control/voices` du speech-server ; une panne speech ne coupe jamais l'appel (`SpeechServiceEvent`) ; le barge-in est l'affaire du contrôleur | 3, 4 |
+| §9.8 Call flows (nouvelle) | la suite exacte des appels RPC pour chacun des quatre cas du §2 et pour le chatbot, sur le modèle du §9.3 : création, `PortSetCodec` d'après le SDP de chaque jambe, attaches audio et texte sur les ports, vidéo par `EndpointAttachToEndpoint`, `Start*`, puis la terminaison | 2 (relais), complétée aux lots 3 et 4 |
+
+Deux règles pour la rédaction :
+- chaque exemple de call flow est **joué par un test** du lot (les tests
+  XML-RPC appellent les méthodes dans l'ordre que donne la doc). Ainsi la
+  doc ne peut pas dériver du code sans qu'un test casse ;
+- `docs/reference/status-http.md` décrit le bloc `speech` de
+  `/status/general` au lot 1.
 
 ## 11. Tests
 
@@ -517,6 +760,8 @@ et un téléphone côté entendant.
   défaut.
 - Coupure de `speech-server` pendant un appel : l'appel continue, et les
   événements `down` puis `up` arrivent au contrôleur.
+- La qualité du relais Opus ↔ Opus à 16 kHz (cas 3 en WebRTC) : si elle
+  est jugée insuffisante, passer à 48 kHz (§4.2).
 - Le coût d'un appel d'une heure, lu dans `usage` de `speech-server`, avec
   et sans la VAD.
 
@@ -532,7 +777,8 @@ n'est pas tranchée.
    ne le fait pas. Le SpeechProcessor devrait-il corriger le texte du sourd
    avant de le dire ? Non. C'est le rôle du client d'appeler le speech server
 3. **La fréquence interne** (§4.2) : passer à 48 kHz si la recette juge que
-   la perte de bande du cas 3 en WebRTC s'entend. (16 kHz.). Ok
+   la perte de bande du cas 3 en WebRTC s'entend. Tranché : 16 kHz, et
+   48 kHz si la recette juge la qualité insuffisante (§4.2).
 4. **La conférence MCU** : la lecture du T.140 d'un participant et les
    annonces sont décrites dans la [SPEC TTS](../TTS/SPEC.md), sur le même
    client speech (§5). (Hors de cette SPEC.). Ok mais pas dans cette phase.
