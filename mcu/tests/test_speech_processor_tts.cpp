@@ -353,6 +353,23 @@ TEST_F(SpeechProcessorTts, UnSayDeDeuxPhrasesDonneUnStartedEtUnDone)
 	EXPECT_EQ(0, audio[0].Loud()) << "rien vers l'autre port";
 }
 
+// Un Say émis juste après StartSynthesis arrive avant le flux : il attend le
+// `ready`, il n'est pas perdu (appel du 2026-10-20, le message d'accueil d'un
+// chatbot n'était jamais dit).
+TEST_F(SpeechProcessorTts, UnSayAvantLeFluxPretEstDitQuandIlArrive)
+{
+	ASSERT_TRUE(sp->StartSynthesis(1, -1, "fr-homme", true));
+	const int sayId = sp->Say(1, "Bonjour.");
+	ASSERT_GT(sayId, 0);
+
+	ASSERT_TRUE(Eventually([&] { return !events.Of(JSR309Event::SpeechSynthesisDoneEvent).empty(); }));
+	EXPECT_EQ((std::vector<std::string>{"Bonjour."}), Inputs());
+	const std::vector<Event> ended = events.Of(JSR309Event::SpeechSynthesisDoneEvent);
+	ASSERT_EQ(1u, ended.size());
+	EXPECT_EQ((std::vector<std::string>{std::to_string(sayId), "false"}), ended[0].tail);
+	EXPECT_EQ(1u, events.Of(JSR309Event::SpeechSynthesisStartedEvent).size());
+}
+
 // §11.4 : StopSpeaking au milieu, plus aucun échantillon de synthèse dans les
 // 20 ms qui suivent, et Done avec interrupted=true.
 TEST_F(SpeechProcessorTts, StopSpeakingCoupeTout)

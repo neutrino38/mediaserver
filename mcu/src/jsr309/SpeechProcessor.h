@@ -149,7 +149,9 @@ private:
 
 	void Recognize(Recognizer& rec, const SWORD* frame, int samples, uint64_t nowMs);
 	void Synthesize(Synthesizer& synth, uint64_t nowMs);
-	void SendPhrases(Synthesizer& synth, int sayId, const std::string& text);
+	bool SendPhrases(Synthesizer& synth, int sayId, const std::string& text);
+	void SendHeld(Synthesizer& synth);
+	void DropHeld(Synthesizer& synth);
 	void StopSynthesizer(Synthesizer& synth);
 	std::shared_ptr<Synthesizer> GetSynthesizer(int port);
 	void CloseUtterance(Recognizer& rec);

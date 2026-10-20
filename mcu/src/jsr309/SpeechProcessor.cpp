@@ -528,6 +528,10 @@ public:
 	std::map<int, int>	remaining;	// sayId -> phrases pas encore dites
 	std::set<int>		started;
 	int			nextPhraseId = 1;
+	//Ce qui attend un flux prêt : un Say émis juste après StartSynthesis
+	//arrive avant lui. Dit au prochain `ready`, abandonné sur un `down`.
+	std::deque<std::pair<int, std::string>>	held;
+	bool			streamReady = false;
 	std::atomic<bool>	idle{true};
 
 private:
@@ -770,25 +774,50 @@ int SpeechProcessor::StopSpeaking(int port)
 	return 1;
 }
 
-void SpeechProcessor::SendPhrases(Synthesizer& synth, int sayId, const std::string& text)
+bool SpeechProcessor::SendPhrases(Synthesizer& synth, int sayId, const std::string& text)
 {
 	const std::vector<std::string> phrases = SplitPhrases(text);
 	if (phrases.empty())
-		return;
+		return true;
 
-	for (const std::string& phrase : phrases)
-		if (!synth.flow->SendText(phrase) || !synth.flow->Flush())
+	for (size_t i = 0; i < phrases.size(); ++i)
+		if (!synth.flow->SendText(phrases[i]) || !synth.flow->Flush())
 		{
-			//Pas de flux prêt : rien ne sera dit
+			//Rien de parti : le texte attend le prochain flux
+			if (i == 0)
+				return false;
+			//Flux perdu au milieu : le reste ne sera pas dit
 			if (sayId)
 				Post(new SpeechSynthesisDoneEvent(synth.port, sayId, true));
-			return;
+			return true;
 		}
 
 	for (size_t i = 0; i < phrases.size(); ++i)
 		synth.owners[synth.nextPhraseId++] = sayId;
 	if (sayId)
 		synth.remaining[sayId] = phrases.size();
+	return true;
+}
+
+void SpeechProcessor::SendHeld(Synthesizer& synth)
+{
+	while (synth.streamReady && !synth.held.empty())
+	{
+		if (!SendPhrases(synth, synth.held.front().first, synth.held.front().second))
+		{
+			synth.streamReady = false;
+			return;
+		}
+		synth.held.pop_front();
+	}
+}
+
+void SpeechProcessor::DropHeld(Synthesizer& synth)
+{
+	for (const auto& say : synth.held)
+		if (say.first)
+			Post(new SpeechSynthesisDoneEvent(synth.port, say.first, true));
+	synth.held.clear();
 }
 
 void SpeechProcessor::StopSynthesizer(Synthesizer& synth)
@@ -802,6 +831,7 @@ void SpeechProcessor::StopSynthesizer(Synthesizer& synth)
 	synth.owners.clear();
 	synth.remaining.clear();
 	synth.started.clear();
+	DropHeld(synth);
 }
 
 void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
@@ -832,6 +862,7 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 				synth.remaining.clear();
 				synth.started.clear();
 				synth.nextPhraseId = 1;
+				synth.streamReady = true;
 				break;
 			case Synthesizer::Notice::Say:
 			{
@@ -863,6 +894,11 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 				break;
 			}
 			case Synthesizer::Notice::State:
+				if (!notice.up)
+				{
+					synth.streamReady = false;
+					DropHeld(synth);
+				}
 				Post(new SpeechServiceEvent(synth.port, "tts", notice.up, notice.reason));
 				break;
 		}
@@ -871,8 +907,8 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 	if (stop)
 		StopSynthesizer(synth);
 
-	for (const auto& say : says)
-		SendPhrases(synth, say.first, say.second);
+	synth.held.insert(synth.held.end(), says.begin(), says.end());
+	SendHeld(synth);
 
 	std::vector<CorrectionTracker::Action> actions = synth.tracker.Add(typed, nowMs);
 	for (const CorrectionTracker::Action& action : synth.tracker.Tick(nowMs))
@@ -881,9 +917,12 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 		if (action.kind == CorrectionTracker::Action::Stop)
 			StopSynthesizer(synth);
 		else
-			SendPhrases(synth, 0, action.text);
+		{
+			synth.held.emplace_back(0, action.text);
+			SendHeld(synth);
+		}
 
-	synth.idle = synth.owners.empty() && !synth.IsSpeaking();
+	synth.idle = synth.owners.empty() && synth.held.empty() && !synth.IsSpeaking();
 }
 
 //La reconnaissance parle au flux asr dans la fréquence du mix
