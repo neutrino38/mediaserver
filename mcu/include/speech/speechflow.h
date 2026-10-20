@@ -71,6 +71,8 @@ public:
 		virtual void onSay(SpeechFlow* flow, int id, const std::string& text) {}
 		virtual void onDone(SpeechFlow* flow, int id) {}
 		virtual void onStopped(SpeechFlow* flow, const std::vector<int>& ids) {}
+		// tts: the phrase will not be spoken (moderation); no done follows.
+		virtual void onRejected(SpeechFlow* flow, int id) {}
 		// Once per change: the service went away, or came back.
 		virtual void onState(SpeechFlow* flow, bool up, const std::string& reason) {}
 		// Asked on the Tick thread once the stream is old: true at a silence.

@@ -2321,3 +2321,50 @@ int MediaSession::SpeechProcessorStopRecognition(int spId,int port)
 	}
 	return sp->StopRecognition(port);
 }
+
+int MediaSession::SpeechProcessorStartSynthesis(int spId,int port,int textSourcePort,const std::string& voice,bool announceCorrections)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->StartSynthesis(port,textSourcePort,voice,announceCorrections);
+}
+
+int MediaSession::SpeechProcessorStopSynthesis(int spId,int port)
+{
+	std::shared_ptr<SpeechProcessor> sp;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		SpeechProcessors::iterator it = speechProcessors.find(spId);
+		if (it==speechProcessors.end())
+			return Error("SpeechProcessor not found\n");
+		sp = it->second;
+	}
+	return sp->StopSynthesis(port);
+}
+
+bool MediaSession::SpeechProcessorIsSynthesisActive(int spId,int port)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	return it!=speechProcessors.end() && it->second->IsSynthesisActive(port);
+}
+
+int MediaSession::SpeechProcessorSay(int spId,int port,const std::string& text)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->Say(port,text);
+}
+
+int MediaSession::SpeechProcessorStopSpeaking(int spId,int port)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->StopSpeaking(port);
+}

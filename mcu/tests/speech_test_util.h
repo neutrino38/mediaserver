@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <set>
 #include <string>
 #include "config.h"
 #include "ipaddress.h"
@@ -21,21 +23,31 @@
 namespace speechtest
 {
 
-// A port the kernel just handed out, then released.
+// A port the kernel just handed out, then released. Released, the kernel may
+// hand it out again: a test that asks several ports in a row would then give
+// two servers the same one. A port is never returned twice in a process.
 inline int FreePort(int family)
 {
-	int fd = socket(family, SOCK_STREAM, 0);
-	const IPEndpoint any = IPAddress::Any(family).To(0);
-	if (fd < 0 || bind(fd, any, any.Len()) != 0)
+	static std::mutex mutex;
+	static std::set<int> given;
+	for (int attempt = 0; attempt < 100; ++attempt)
 	{
-		if (fd >= 0)
-			close(fd);
-		return 0;
+		int fd = socket(family, SOCK_STREAM, 0);
+		const IPEndpoint any = IPAddress::Any(family).To(0);
+		if (fd < 0 || bind(fd, any, any.Len()) != 0)
+		{
+			if (fd >= 0)
+				close(fd);
+			return 0;
+		}
+		IPEndpoint bound;
+		getsockname(fd, bound.Data(), bound.LenPtr());
+		close(fd);
+		std::lock_guard<std::mutex> lock(mutex);
+		if (given.insert(bound.Port()).second)
+			return bound.Port();
 	}
-	IPEndpoint bound;
-	getsockname(fd, bound.Data(), bound.LenPtr());
-	close(fd);
-	return bound.Port();
+	return 0;
 }
 
 inline int Connect(const std::string& address, int port)

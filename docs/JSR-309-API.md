@@ -377,8 +377,8 @@ Le mécanisme se désarme entièrement avec `--event-queue-expires 0`
 | 6 | EndpointDisconnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
 | 7 | EndpointConnectedEvent | `(int type, string sessionTag, int joinableId, int media, int role)` |
 | 8 | SpeechRecognizedEvent | `(int type, string sessionTag, int spId, int media, int port, string text, bool final)` |
-| 9 | SpeechSynthesisStartedEvent | réservé à la synthèse vocale |
-| 10 | SpeechSynthesisDoneEvent | réservé à la synthèse vocale |
+| 9 | SpeechSynthesisStartedEvent | `(int type, string sessionTag, int spId, int media, int port, int sayId)` |
+| 10 | SpeechSynthesisDoneEvent | `(int type, string sessionTag, int spId, int media, int port, int sayId, bool interrupted)` |
 | 11 | SpeechActivityEvent | `(int type, string sessionTag, int spId, int media, int port, bool speaking)` |
 | 12 | SpeechServiceEvent | `(int type, string sessionTag, int spId, int media, int port, string function, string state, string reason)` |
 
@@ -419,10 +419,11 @@ le média d'une jambe est établi, ou il est perdu. `joinableId` = `endpointId`,
   - **Texte sur WebSocket sortant** (§6.12) : émis à **chaque** ouverture de la
     connexion, donc à chaque reprise après une coupure.
 
-Les événements **8, 11 et 12** viennent d'un SpeechProcessor (§6.13).
-`spId` est l'identifiant rendu par `SpeechProcessorCreate`. `port` est celui
-de la voix : 0 (A) ou 1 (B). `media` vaut Text (2) pour l'événement 8, Audio
-(0) pour les autres.
+Les événements **8 à 12** viennent d'un SpeechProcessor (§6.13).
+`spId` est l'identifiant rendu par `SpeechProcessorCreate`. `port` vaut 0 (A)
+ou 1 (B) : le port de la voix reconnue pour 8 et 11, le port où la synthèse
+parle pour 9 et 10. `media` vaut Text (2) pour l'événement 8, Audio (0) pour
+les autres.
 
 - **SpeechRecognizedEvent** (8) : du texte reconnu dans la voix du port,
   quand `SpeechProcessorStartRecognition` a demandé `toEvents`.
@@ -434,6 +435,16 @@ de la voix : 0 (A) ou 1 (B). `media` vaut Text (2) pour l'événement 8, Audio
     700 ms, puis que le texte n'a plus bougé pendant 500 ms. C'est cette forme
     qu'un chatbot donne à son modèle de langage. Une reprise de parole avant
     ces 500 ms clôt aussi l'énoncé.
+- **SpeechSynthesisStartedEvent** (9) : la première phrase d'un `Say`
+  commence à sortir sur le port. `sayId` est celui que `SpeechProcessorSay` a
+  rendu. `sayId = 0` : une phrase tapée sur le port source (`textSourcePort`),
+  avec un événement par phrase.
+- **SpeechSynthesisDoneEvent** (10) : la dernière phrase d'un `Say` est dite
+  (`interrupted = false`), ou le `Say` a été coupé (`interrupted = true`) :
+  `SpeechProcessorStopSpeaking`, correction du texte tapé, panne ou
+  réouverture du flux, flux pas prêt au moment du `Say`. Une phrase refusée par
+  la modération de Mistral compte comme dite, sans audio. Chaque `Say` reçoit
+  exactement un événement 10.
 - **SpeechActivityEvent** (11) : la VAD du port a entendu quelqu'un commencer
   (`speaking = true`) ou finir de parler (`false`, après 700 ms de silence).
   Il sert au barge-in : le contrôleur décide s'il coupe la synthèse.
@@ -1099,6 +1110,10 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
 | `SpeechProcessorDettach` | `i sessionId, i spId, i port, i media` | `[]` |
 | `SpeechProcessorStartRecognition` | `i sessionId, i spId, i port, b toEvents, i textPort, b halfDuplex` | `[]` |
 | `SpeechProcessorStopRecognition` | `i sessionId, i spId, i port` | `[]` |
+| `SpeechProcessorStartSynthesis` | `i sessionId, i spId, i port, i textSourcePort, s voice, b announceCorrections` | `[]` |
+| `SpeechProcessorStopSynthesis` | `i sessionId, i spId, i port` | `[]` |
+| `SpeechProcessorSay` | `i sessionId, i spId, i port, s text` | `[ int sayId ]` |
+| `SpeechProcessorStopSpeaking` | `i sessionId, i spId, i port` | `[]` |
 
 - `port` = `0` (A) ou `1` (B). `media` = `Audio` (0) ou `Text` (2), §4.
   `codec` = `AudioCodec::Type`. Même convention que le reste de l'API :
@@ -1139,9 +1154,31 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
   par un saut de ligne (U+2028). Rappeler la méthode remplace le réglage du
   port et rouvre le flux. `SpeechProcessorStopRecognition` arrête : le texte
   d'un énoncé pas encore clos est perdu.
-- `halfDuplex` coupera la reconnaissance du port pendant que la synthèse lui
-  parle (secours contre l'écho). Il est accepté dès maintenant, sans effet tant
-  que la synthèse n'existe pas.
+- `halfDuplex` coupe la reconnaissance du port tant que la synthèse lui
+  parle. C'est un secours contre l'écho : un téléphone en mains libres
+  renverrait la synthèse, qui serait transcrite.
+- **La synthèse vocale** (`SpeechProcessorStartSynthesis`) parle dans l'audio
+  qui sort de `port`, mélangée au relais et au bruit de confort. Elle dit :
+  - les `SpeechProcessorSay` du contrôleur, dans l'ordre d'arrivée. `Say` rend
+    tout de suite un `sayId`, que portent les événements 9 et 10 ;
+  - la frappe de `textSourcePort` (`-1` : le contrôleur seul), au fil de la
+    frappe. Une phrase part sur une ponctuation finale suivie d'un blanc, une
+    fin de ligne, ou 1,2 s sans frappe.
+- `voice` est un **alias** de la configuration de speech-server (vide : la
+  voix par défaut de la langue), jamais un `voice_id` Mistral. La liste se
+  demande à speech-server (`GET /control/voices`) : ne pas la recopier côté
+  contrôleur.
+- **Les corrections.** Un retour arrière qui remonte dans du texte déjà dit
+  coupe la synthèse (comme `StopSpeaking`). La ligne corrigée est dite à la
+  fin de la ligne, ou après 1,2 s sans frappe, précédée de « Correction : »
+  si `announceCorrections` est vrai. Exemple : « deux pizas. », puis sept
+  retours arrière et « pizzas pour ce soir. » donnent « Correction : deux
+  pizzas pour ce soir. ».
+- `SpeechProcessorStopSpeaking` coupe tout de suite ce qui est dit et ce qui
+  attend. Chaque `Say` pas fini reçoit son événement 10 avec
+  `interrupted = true`. C'est l'outil du barge-in.
+- `SpeechProcessorStopSynthesis` ferme le flux : les `Say` en cours s'arrêtent
+  sans événement 10.
 - La reconnaissance et la synthèse exigent que le serveur connaisse
   speech-server (`--speech-url`, `--speech-streaming-url`). Le bloc `speech` de
   `/status/general` dit si c'est le cas.
@@ -1150,7 +1187,9 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
 > SpeechProcessor n'envoie que la parole : une VAD met le flux en pause après
 > 700 ms de silence, et le reprend avec les 300 ms qui précèdent la parole,
 > pour ne pas couper la première syllabe. Il ouvre une session `asr` par port
-> source. `--speech-account` nomme le compte qui reçoit les compteurs de
+> source. La synthèse est facturée au caractère : une session `tts` par port
+> destination, et une phrase dite deux fois (correction) est payée deux fois.
+> `--speech-account` nomme le compte qui reçoit les compteurs de
 > speech-server : un compte par client permet de ventiler le coût.
 
 Erreurs propres (`returnCode` 0, `errorMsg`) :
@@ -1162,6 +1201,9 @@ Erreurs propres (`returnCode` 0, `errorMsg`) :
 | `dbov` hors de [-96, 0] | `Comfort noise level must be between -96 and 0 dBov (0 = silence)` |
 | `textPort` hors de {-1, 0, 1} | `SpeechProcessor textPort must be 0 (A), 1 (B) or -1 (none)` |
 | `toEvents` faux et `textPort` = -1 | `Recognized text must go somewhere: toEvents, textPort or both` |
+| `textSourcePort` hors de {-1, 0, 1} | `SpeechProcessor textSourcePort must be 0 (A), 1 (B) or -1 (controller only)` |
+| `Say` ou `StopSpeaking` sans synthèse active sur le port | `speech synthesis not active on this port` |
+| `Say` d'un texte vide ou blanc | `Nothing to say` |
 | serveur lancé sans `--speech-url` | `speech service not configured` |
 | endpoint sans le média demandé, `spId` ou `endpointId` inconnu | message générique de la méthode |
 
@@ -1210,7 +1252,9 @@ tuple a la forme (`(siiiiiiiiiii)`, réf. `xmlserialize()` dans
   `/status/general` avant d'en dépendre. Une panne de speech-server ne coupe
   jamais l'appel : elle arrive en `SpeechServiceEvent` (12), et le serveur
   reprend seul. Le barge-in est l'affaire du contrôleur : le serveur publie
-  `SpeechActivityEvent` (11), il ne coupe rien de lui-même.
+  `SpeechActivityEvent` (11), il ne coupe rien de lui-même ; le contrôleur
+  appelle `SpeechProcessorStopSpeaking` s'il veut couper la synthèse.
+- **Voix** : les alias se demandent à speech-server (`GET /control/voices`).
 
 ---
 
@@ -1522,18 +1566,20 @@ SpeechProcessorAttachToEndpoint(S, SP, 1, B, AUDIO)
 EndpointAttachToSpeechProcessor(S, B, SP, 1, AUDIO)
 ```
 
-Puis la transcription de la voix de B vers le texte de A :
+Puis la synthèse du texte de A vers B, et la transcription de la voix de B
+vers le texte de A :
 
 ```
+SpeechProcessorStartSynthesis(S, SP, 1, 0, "", true)          // texte de A → voix vers B
 SpeechProcessorStartRecognition(S, SP, 1, false, 0, false)   // voix de B → texte de A
 ```
 
-Tant que la synthèse n'existe pas, B n'entend que le bruit de confort.
-
-Pour les cas 3 et 4, la voix de B est transcrite vers le texte de A, et la
-voix de A, si le contrôleur le veut, vers le texte de B :
+Pour les cas 3 et 4, le texte de A est dit vers B, la voix de B est
+transcrite vers le texte de A, et la voix de A, si le contrôleur le veut, vers
+le texte de B :
 
 ```
+SpeechProcessorStartSynthesis(S, SP, 1, 0, "", true)          // texte de A → voix vers B
 SpeechProcessorStartRecognition(S, SP, 1, false, 0, false)   // voix de B → texte de A
 SpeechProcessorStartRecognition(S, SP, 0, false, 1, false)   // facultatif
 ```
@@ -1553,15 +1599,21 @@ SpeechProcessorPortSetCodec(S, SP, 0, codecAudioA)
 SpeechProcessorAttachToEndpoint(S, SP, 0, A, media)
 EndpointAttachToSpeechProcessor(S, A, SP, 0, media)
 SpeechProcessorStartRecognition(S, SP, 0, true, 0, false)    // ou textPort = -1
-// événements : SpeechServiceEvent up, puis pour chaque énoncé
+SpeechProcessorStartSynthesis(S, SP, 0, -1, "", false)        // le contrôleur parle
+// événements : SpeechServiceEvent up (asr, puis tts), puis pour chaque énoncé
 // SpeechActivityEvent true, SpeechRecognizedEvent final=false…,
 // SpeechActivityEvent false, SpeechRecognizedEvent final=true
+SpeechProcessorSay(S, SP, 0, "Bonjour, que puis-je faire ?") → sayId
+// SpeechSynthesisStartedEvent sayId … SpeechSynthesisDoneEvent sayId
+// barge-in : SpeechActivityEvent true pendant la synthèse →
+SpeechProcessorStopSpeaking(S, SP, 0)                         // Done interrupted=true
 ```
 
 **Terminaison.** Le SpeechProcessor avant les endpoints qu'il relie :
 
 ```
 SpeechProcessorStopRecognition(S, SP, port)                   // facultatif
+SpeechProcessorStopSynthesis(S, SP, port)                     // facultatif
 EndpointDettach(S, A, AUDIO) ; EndpointDettach(S, A, TEXT)    // idem pour B
 SpeechProcessorDelete(S, SP)
 EndpointDelete(S, A) ; EndpointDelete(S, B)

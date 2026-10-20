@@ -471,7 +471,9 @@ void SpeechFlow::OnLinkMessage(Link* link, const json& message)
 			else
 				Log("-SpeechFlow: %s error [reason:%s,token:%s]\n", SpeechFunctionName(function),
 				    reason.c_str(), link->tokenPrefix.c_str());
-			return;
+			// A phrase refused by moderation gets no done: its owner must hear of it.
+			if (!message.contains("id") || !message["id"].is_number_integer() || !isServing)
+				return;
 		}
 
 		if (type == "ready")
@@ -540,6 +542,8 @@ void SpeechFlow::OnLinkMessage(Link* link, const json& message)
 		target->onSay(this, message.value("id", 0), message.value("text", ""));
 	else if (type == "done")
 		target->onDone(this, message.value("id", 0));
+	else if (type == "error")
+		target->onRejected(this, message["id"].get<int>());
 	else if (type == "stopped")
 	{
 		std::vector<int> ids;

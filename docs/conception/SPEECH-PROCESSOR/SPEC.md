@@ -1,7 +1,8 @@
 # SpeechProcessor : la voix et le texte dans un appel JSR-309
 
-> Statut : **lots 1 à 3 faits** (client speech ; SpeechProcessor sans
-> speech ; reconnaissance, 2026-10-19) ; lots 4 et 5 à faire.
+> Statut : **lots 1 à 4 faits** (client speech ; SpeechProcessor sans
+> speech ; reconnaissance ; synthèse, 2026-10-19) ; reste le lot 5 (elixip)
+> et la recette.
 > Cadrage validé le 2026-10-19.
 > Version cible : 1.19.0. C'est le lot 6 de la
 > [SPEC speech-server](../SPEECH-SERVER/SPEC.md) (§12, §13.8), qu'elle
@@ -290,25 +291,30 @@ noierait la file du long-poll. Il y a donc deux formes :
 ### 7.1 Deux sources
 
 - **Le contrôleur** : `SpeechProcessorSay(port, text)` rend un `sayId`.
-- **L'entrée texte d'un port** (`textSourcePort`), en transcription. Le flux
-  T.140 est transmis à `speech-server` tel quel, au fil de la frappe :
-  `speech-server` découpe déjà les phrases et applique les U+0008.
+- **L'entrée texte d'un port** (`textSourcePort`), en transcription. Le client
+  découpe la frappe T.140 en phrases, avec la même classe `PhraseSplitter`
+  que speech-server : une phrase finit sur une ponctuation finale suivie d'un
+  blanc, une fin de ligne, ou 1 200 ms sans frappe. Les U+0008 qui ne
+  touchent que du texte pas encore dit l'effacent sur place.
 
 Les deux sources peuvent viser le même port en même temps. Par exemple, une
 annonce du contrôleur pendant une transcription. Elles partagent alors le
-flux TTS de ce port, dans l'ordre d'arrivée. Avant un `Say`, le client
-envoie un `flush` si une phrase tapée est en cours : sinon le découpeur du
-serveur collerait l'annonce à la fin de cette phrase.
+flux TTS de ce port, dans l'ordre d'arrivée. Une phrase tapée en cours n'est
+jamais chez speech-server : elle reste chez le client jusqu'à sa coupure. Une
+annonce ne peut donc pas se coller à elle.
 
 ### 7.2 Associer les phrases à un `Say`
 
 `speech-server` numérote les phrases (`say`/`done` avec `id`), pas les
-`Say`, et un `Say` « A. B. » donne deux phrases. Le client envoie chaque
-`Say` suivi de `flush`. Il passe aussi le texte dans **la même classe
-`PhraseSplitter`** que le serveur (classe pure, liée aussi au mcu) pour
-savoir combien de phrases il doit attendre. `SpeechSynthesisStarted` part au
-premier `say` du `Say`, `SpeechSynthesisDone` au `done` de sa dernière
-phrase.
+`Say`. Il les numérote dans l'ordre où il les reçoit, à partir de 1 pour
+chaque flux. Le client envoie donc **des phrases déjà coupées**, chacune
+suivie de `flush` : chaque envoi est une phrase du serveur, et son `id` se
+déduit de l'ordre d'envoi. Un `Say` « A. B. » part en deux phrases.
+
+`SpeechSynthesisStarted` part au premier `say` du `Say`,
+`SpeechSynthesisDone` au `done` de sa dernière phrase. Une phrase refusée par
+la modération (`error` avec son `id`) compte comme dite. Un flux rouvert, ou
+un `Say` envoyé sans flux prêt, finit ses `Say` avec `interrupted=true`.
 
 ### 7.3 Le tampon de lecture
 
@@ -705,6 +711,29 @@ plan ci-dessous :
 - **Commit** : `jsr309 : reconnaissance vocale du SpeechProcessor`.
 
 ### 10.6 Lot 4 : la synthèse
+
+État : **fait** le 2026-10-19. Tests `test_correction_tracker.cpp` (pur),
+`test_speech_processor_tts.cpp` (vrai speech-server, faux Voxtral TTS) et un
+test de refus dans `test_speech_processor_xmlrpc.cpp`. Écarts au plan
+ci-dessous :
+
+- **Le client envoie des phrases déjà coupées**, pas le T.140 au fil de la
+  frappe (§7.1, §7.2). Une copie locale du découpeur aurait pu diverger de
+  celle du serveur ; ici chaque envoi est une phrase du serveur, et la
+  correspondance `id` ↔ `sayId` est exacte. La latence ne change pas : le
+  serveur aurait coupé au même moment. La règle « `flush` avant un `Say` »
+  devient sans objet.
+- **Une correction se ferme aussi sur le silence de frappe** (1 200 ms), pas
+  seulement en fin de ligne : un client SIP n'envoie pas toujours de fin de
+  ligne. La phrase dite est la ligne entière corrigée, précédée de
+  « Correction : » si l'option est vraie.
+- **`SpeechFlow` remonte le refus d'une phrase** (`onRejected`), qui sinon ne
+  recevait jamais de `done` : le `Say` ne finissait pas.
+- **`StopSynthesis` ne publie pas de Done** pour les `Say` en cours.
+- **`halfDuplex` n'est pas testé de bout en bout** : il faudrait les deux
+  faux Mistral (Realtime en WebSocket, TTS en HTTP) derrière une seule
+  `mistral.url`, ce que speech-server ne permet pas. La recette (§12) le
+  vérifie en appel réel.
 
 - **Par port destination** : un `SpeechFlow` `tts` et un tampon de lecture
   (S16, `MixRate`) que vide le tour de 20 ms. Le PCM de `speech-server`

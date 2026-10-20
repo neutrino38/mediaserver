@@ -34,6 +34,9 @@ public:
 
 	void Clear()	{ pending.clear(); }
 
+	// Typed, not yet cut into a phrase.
+	const std::string& Pending() const	{ return pending; }
+
 	void SetSilenceMs(int ms)	{ silenceMs = ms; }
 
 private:

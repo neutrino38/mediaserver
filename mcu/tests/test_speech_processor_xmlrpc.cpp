@@ -291,3 +291,32 @@ TEST(SpeechProcessorXmlRpc, LaReconnaissanceSansServiceSpeechEstRefusee)
 	EXPECT_EQ(0, Call(m, "SpeechProcessorStopRecognition", "(iii)", S, SP, 3).code);
 	EXPECT_EQ(1, Call(m, "MediaSessionDelete", "(i)", S).code);
 }
+
+// §8.3 : sans --speech-url, la synthèse est refusée ; un Say sans synthèse
+// active aussi, et le dit.
+TEST(SpeechProcessorXmlRpc, LaSyntheseSansServiceSpeechEstRefusee)
+{
+	Controller c;
+	JSR309Manager& m = c.manager;
+
+	for (const char* name : {"SpeechProcessorStartSynthesis", "SpeechProcessorStopSynthesis",
+				 "SpeechProcessorSay", "SpeechProcessorStopSpeaking"})
+		EXPECT_TRUE(FindCommand(name) != NULL) << name;
+
+	const int S = Call(m, "MediaSessionCreate", "(si)", "sans-speech", 0).value;
+	const int SP = Call(m, "SpeechProcessorCreate", "(is)", S, "sp").value;
+
+	const Answer none = Call(m, "SpeechProcessorStartSynthesis", "(iiiisb)", S, SP, 1, 0, "", 1);
+	EXPECT_EQ(0, none.code);
+	EXPECT_EQ("speech service not configured", none.error);
+
+	const Answer source = Call(m, "SpeechProcessorStartSynthesis", "(iiiisb)", S, SP, 1, 5, "", 1);
+	EXPECT_NE(std::string::npos, source.error.find("textSourcePort")) << source.error;
+
+	const Answer say = Call(m, "SpeechProcessorSay", "(iiis)", S, SP, 1, "Bonjour.");
+	EXPECT_EQ(0, say.code);
+	EXPECT_EQ("speech synthesis not active on this port", say.error);
+	EXPECT_EQ(0, Call(m, "SpeechProcessorStopSpeaking", "(iii)", S, SP, 1).code);
+	EXPECT_EQ(1, Call(m, "SpeechProcessorStopSynthesis", "(iii)", S, SP, 1).code);
+	EXPECT_EQ(1, Call(m, "MediaSessionDelete", "(i)", S).code);
+}

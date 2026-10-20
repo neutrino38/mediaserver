@@ -220,6 +220,13 @@ public:
 	//§8.2. textPort -1 : pas de sortie texte.
 	int SpeechProcessorStartRecognition(int spId,int port,bool toEvents,int textPort,bool halfDuplex);
 	int SpeechProcessorStopRecognition(int spId,int port);
+	//§8.3. textSourcePort -1 : le contrôleur seul.
+	int SpeechProcessorStartSynthesis(int spId,int port,int textSourcePort,const std::string& voice,bool announceCorrections);
+	int SpeechProcessorStopSynthesis(int spId,int port);
+	bool SpeechProcessorIsSynthesisActive(int spId,int port);
+	//Rend le sayId, 0 en cas d'échec
+	int SpeechProcessorSay(int spId,int port,const std::string& text);
+	int SpeechProcessorStopSpeaking(int spId,int port);
 	bool HasSpeechService() const		{ return speech != NULL; }
 	int GetSpeechProcessorCount();
 

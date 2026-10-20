@@ -1285,4 +1285,52 @@ public class XmlRPCJSR309Client {
         //Return
         return (((Integer)response.get("returnCode"))==1);
     }
+
+    /**
+     * Speak into the audio leaving the port: the Says, and the typing of
+     * textSourcePort (-1 for the controller only). voice is a speech-server
+     * alias, empty for the default.
+     */
+    public boolean SpeechProcessorStartSynthesis(int sessId,int spId,int port,int textSourcePort,String voice,boolean announceCorrections) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,textSourcePort,voice,announceCorrections};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorStartSynthesis", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    public boolean SpeechProcessorStopSynthesis(int sessId,int spId,int port) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorStopSynthesis", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
+
+    /** Returns the sayId that the synthesis events carry. */
+    public Integer SpeechProcessorSay(int sessId,int spId,int port,String text) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port,text};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorSay", request);
+        //Get result
+        Object[] returnVal = (Object[]) response.get("returnVal");
+        //Return say id
+        return (Integer)returnVal[0];
+    }
+
+    public boolean SpeechProcessorStopSpeaking(int sessId,int spId,int port) throws XmlRpcException
+    {
+        //Create request
+        Object[] request = new Object[]{sessId,spId,port};
+        //Execute
+        HashMap response = (HashMap) client.execute("SpeechProcessorStopSpeaking", request);
+        //Return
+        return (((Integer)response.get("returnCode"))==1);
+    }
 }

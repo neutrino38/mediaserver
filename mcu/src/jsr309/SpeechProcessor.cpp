@@ -4,13 +4,17 @@
  */
 #include <chrono>
 #include <cmath>
+#include <climits>
 #include <deque>
+#include <map>
 #include <mutex>
+#include <set>
 #include <vector>
 #include "log.h"
 #include "text.h"
 #include "redcodec.h"
 #include "textmux.h"
+#include "correctiontracker.h"
 #include "audioresampler.h"
 #include "vad.h"
 #include "speech/speechservice.h"
@@ -310,6 +314,10 @@ public:
 	//contrôle, lue par le tour
 	std::mutex			asrMutex;
 	std::shared_ptr<Recognizer>	recognizer;
+
+	//Synthèse vers ce port, de même
+	std::mutex			ttsMutex;
+	std::shared_ptr<Synthesizer>	synthesizer;
 };
 
 /**
@@ -372,6 +380,181 @@ public:
 	std::string		partial;
 };
 
+/**
+ * La synthèse vers un port destination (§7). Une phrase envoyée au flux est
+ * une phrase du serveur : le client découpe lui-même, et le serveur numérote
+ * ses phrases dans l'ordre d'envoi, à partir de 1 pour chaque flux. C'est ce
+ * qui relie les `id` de say/done aux sayId du contrôleur.
+ */
+class SpeechProcessor::Synthesizer : public SpeechFlow::Listener
+{
+public:
+	struct Notice
+	{
+		enum Kind { Ready, Say, Done, State };
+		Kind		kind;
+		int		id = 0;
+		bool		up = false;
+		std::string	reason;
+	};
+
+	Synthesizer(int port, int textSourcePort, bool announceCorrections) :
+		port(port),
+		textSourcePort(textSourcePort),
+		tracker(TypingSilenceMs, announceCorrections)
+	{
+	}
+
+	void Stop()
+	{
+		if (flow)
+			flow->Stop();
+	}
+
+	void PushSay(int sayId, const std::string& text)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		says.emplace_back(sayId, text);
+	}
+
+	void PushStopSpeaking()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		stopRequested = true;
+	}
+
+	void PushTyped(const std::string& text)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		typed += text;
+	}
+
+	bool IsSpeaking()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		return !playback.empty();
+	}
+
+	//Ajoute au mix ce qui est à dire, 20 ms au plus
+	void Mix(std::vector<int>& mix)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		for (int i = 0; i < FrameSamples && !playback.empty(); ++i)
+		{
+			mix[i] += playback.front();
+			playback.pop_front();
+		}
+	}
+
+	//Vide le tampon et, si `untilStopped`, jette le PCM en vol jusqu'à la
+	//réponse `stopped`
+	void Discard(bool untilStopped)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		playback.clear();
+		hasCarry = false;
+		discarding = untilStopped;
+	}
+
+	//SpeechFlow::Listener, sur le réacteur ou l'horloge du service
+	//Un flux neuf : rien de l'ancien n'arrivera plus, ni son `stopped`
+	virtual void onReady(SpeechFlow* flow) override
+	{
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			discarding = false;
+		}
+		Push({Notice::Ready});
+	}
+	virtual void onSay(SpeechFlow* flow, int id, const std::string& text) override	{ Push({Notice::Say, id}); }
+	virtual void onDone(SpeechFlow* flow, int id) override	{ Push({Notice::Done, id}); }
+	//Refusée par la modération : finie, sans audio
+	virtual void onRejected(SpeechFlow* flow, int id) override	{ Push({Notice::Done, id}); }
+	virtual void onStopped(SpeechFlow* flow, const std::vector<int>& ids) override
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		discarding = false;
+	}
+	virtual void onState(SpeechFlow* flow, bool up, const std::string& reason) override
+	{
+		Notice notice{Notice::State};
+		notice.up = up;
+		notice.reason = reason;
+		Push(notice);
+	}
+	virtual void onPcm(SpeechFlow* flow, const BYTE* data, DWORD size) override
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		if (discarding)
+			return;
+		DWORD pos = 0;
+		if (hasCarry && size)
+		{
+			playback.push_back((SWORD)(carry | (data[0] << 8)));
+			hasCarry = false;
+			pos = 1;
+		}
+		for (; pos + 1 < size; pos += 2)
+			playback.push_back((SWORD)(data[pos] | (data[pos + 1] << 8)));
+		if (pos < size)
+		{
+			carry = data[pos];
+			hasCarry = true;
+		}
+	}
+	//Remplacer le flux au milieu d'une phrase la couperait
+	virtual bool CanRotate(SpeechFlow* flow) override
+	{
+		return idle;
+	}
+
+	const int			port;
+	const int			textSourcePort;
+	std::shared_ptr<SpeechFlow>	flow;
+
+	std::mutex				mutex;
+	std::deque<std::pair<int, std::string>>	says;
+	bool					stopRequested = false;
+	std::string				typed;
+	std::vector<Notice>			notices;
+	std::deque<SWORD>			playback;
+	BYTE					carry = 0;
+	bool					hasCarry = false;
+	bool					discarding = false;
+
+	//Le tour seulement, sauf `idle` que lit aussi CanRotate
+	CorrectionTracker	tracker;
+	std::map<int, int>	owners;		// id de phrase du serveur -> sayId
+	std::map<int, int>	remaining;	// sayId -> phrases pas encore dites
+	std::set<int>		started;
+	int			nextPhraseId = 1;
+	std::atomic<bool>	idle{true};
+
+private:
+	void Push(const Notice& notice)
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		notices.push_back(notice);
+	}
+};
+
+namespace
+{
+
+//Les phrases d'un texte, coupées comme speech-server les couperait : une
+//phrase envoyée suivie d'un flush est alors une phrase du serveur.
+std::vector<std::string> SplitPhrases(const std::string& text)
+{
+	PhraseSplitter splitter(INT_MAX);
+	std::vector<std::string> phrases = splitter.Add(text, 0);
+	const std::string last = splitter.Flush();
+	if (!last.empty())
+		phrases.push_back(last);
+	return phrases;
+}
+
+}
+
 SpeechProcessor::SpeechProcessor(const std::wstring& tag) :
 	tag(tag)
 {
@@ -411,7 +594,10 @@ int SpeechProcessor::End()
 	StopThread();
 
 	for (int i = 0; i < Ports; ++i)
+	{
 		StopRecognition(i);
+		StopSynthesis(i);
+	}
 
 	for (int i = 0; i < Ports; ++i)
 	{
@@ -486,10 +672,218 @@ int SpeechProcessor::GetRelayBufferedMs(int port)
 
 void SpeechProcessor::OnTextIn(int fromPort, const std::string& utf8)
 {
-	Port& to = *ports[1 - fromPort];
-	std::lock_guard<std::mutex> lock(to.textMutex);
-	//Source 0 du multiplexeur : le texte tapé de l'autre côté
-	to.mux.Push(0, utf8, lastTickMs);
+	{
+		Port& to = *ports[1 - fromPort];
+		std::lock_guard<std::mutex> lock(to.textMutex);
+		//Source 0 du multiplexeur : le texte tapé de l'autre côté
+		to.mux.Push(0, utf8, lastTickMs);
+	}
+	//Et la synthèse qui dit la frappe de ce port
+	for (int i = 0; i < Ports; ++i)
+	{
+		std::shared_ptr<Synthesizer> synth = GetSynthesizer(i);
+		if (synth && synth->textSourcePort == fromPort)
+			synth->PushTyped(utf8);
+	}
+}
+
+std::shared_ptr<SpeechProcessor::Synthesizer> SpeechProcessor::GetSynthesizer(int port)
+{
+	std::lock_guard<std::mutex> lock(ports[port]->ttsMutex);
+	return ports[port]->synthesizer;
+}
+
+int SpeechProcessor::StartSynthesis(int port, int textSourcePort, const std::string& voice, bool announceCorrections)
+{
+	if (!speech)
+		return Error("-SpeechProcessor: speech service not configured\n");
+	if (!IsValidPort(port) || (textSourcePort != -1 && !IsValidPort(textSourcePort)))
+		return Error("-SpeechProcessor: invalid port [port:%d,textSourcePort:%d]\n", port, textSourcePort);
+
+	auto synth = std::make_shared<Synthesizer>(port, textSourcePort, announceCorrections);
+	SpeechFlow::Params params;
+	if (!voice.empty())
+		params.query["voice"] = voice;
+	synth->flow = speech->CreateFlow(SpeechFunction::Tts, synth, params);
+	if (!synth->flow)
+		return Error("-SpeechProcessor: speech service not configured\n");
+
+	std::shared_ptr<Synthesizer> previous;
+	{
+		std::lock_guard<std::mutex> lock(ports[port]->ttsMutex);
+		previous = ports[port]->synthesizer;
+		ports[port]->synthesizer = synth;
+	}
+	if (previous)
+		previous->Stop();
+
+	synth->flow->Start();
+	Log("-SpeechProcessor: synthesis started [%ls,port:%d,textSourcePort:%d,voice:%s]\n",
+	    tag.c_str(), port, textSourcePort, voice.c_str());
+	return 1;
+}
+
+int SpeechProcessor::StopSynthesis(int port)
+{
+	if (!IsValidPort(port))
+		return Error("-SpeechProcessor: invalid port %d\n", port);
+
+	std::shared_ptr<Synthesizer> previous;
+	{
+		std::lock_guard<std::mutex> lock(ports[port]->ttsMutex);
+		previous.swap(ports[port]->synthesizer);
+	}
+	//Les Say en cours s'arrêtent avec le flux, sans Done
+	if (previous)
+		previous->Stop();
+	return 1;
+}
+
+bool SpeechProcessor::IsSynthesisActive(int port)
+{
+	return IsValidPort(port) && GetSynthesizer(port) != nullptr;
+}
+
+int SpeechProcessor::Say(int port, const std::string& text)
+{
+	if (!IsValidPort(port))
+		return Error("-SpeechProcessor: invalid port %d\n", port);
+	std::shared_ptr<Synthesizer> synth = GetSynthesizer(port);
+	if (!synth)
+		return Error("-SpeechProcessor: synthesis not active on port %d\n", port);
+	if (SplitPhrases(text).empty())
+		return Error("-SpeechProcessor: nothing to say\n");
+
+	const int sayId = nextSayId++;
+	synth->PushSay(sayId, text);
+	return sayId;
+}
+
+int SpeechProcessor::StopSpeaking(int port)
+{
+	if (!IsValidPort(port))
+		return Error("-SpeechProcessor: invalid port %d\n", port);
+	std::shared_ptr<Synthesizer> synth = GetSynthesizer(port);
+	if (!synth)
+		return Error("-SpeechProcessor: synthesis not active on port %d\n", port);
+	synth->PushStopSpeaking();
+	return 1;
+}
+
+void SpeechProcessor::SendPhrases(Synthesizer& synth, int sayId, const std::string& text)
+{
+	const std::vector<std::string> phrases = SplitPhrases(text);
+	if (phrases.empty())
+		return;
+
+	for (const std::string& phrase : phrases)
+		if (!synth.flow->SendText(phrase) || !synth.flow->Flush())
+		{
+			//Pas de flux prêt : rien ne sera dit
+			if (sayId)
+				Post(new SpeechSynthesisDoneEvent(synth.port, sayId, true));
+			return;
+		}
+
+	for (size_t i = 0; i < phrases.size(); ++i)
+		synth.owners[synth.nextPhraseId++] = sayId;
+	if (sayId)
+		synth.remaining[sayId] = phrases.size();
+}
+
+void SpeechProcessor::StopSynthesizer(Synthesizer& synth)
+{
+	synth.Discard(true);
+	//Sans flux prêt, aucun `stopped` ne viendra lever le rejet
+	if (!synth.flow->StopSpeaking())
+		synth.Discard(false);
+	for (const auto& entry : synth.remaining)
+		Post(new SpeechSynthesisDoneEvent(synth.port, entry.first, true));
+	synth.owners.clear();
+	synth.remaining.clear();
+	synth.started.clear();
+}
+
+void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
+{
+	std::vector<Synthesizer::Notice> notices;
+	std::deque<std::pair<int, std::string>> says;
+	bool stop;
+	std::string typed;
+	{
+		std::lock_guard<std::mutex> lock(synth.mutex);
+		notices.swap(synth.notices);
+		says.swap(synth.says);
+		stop = synth.stopRequested;
+		synth.stopRequested = false;
+		typed.swap(synth.typed);
+	}
+
+	for (const Synthesizer::Notice& notice : notices)
+	{
+		switch (notice.kind)
+		{
+			case Synthesizer::Notice::Ready:
+				//Nouveau flux : ses phrases repartent de 1, celles de l'ancien
+				//ne seront plus dites
+				for (const auto& entry : synth.remaining)
+					Post(new SpeechSynthesisDoneEvent(synth.port, entry.first, true));
+				synth.owners.clear();
+				synth.remaining.clear();
+				synth.started.clear();
+				synth.nextPhraseId = 1;
+				break;
+			case Synthesizer::Notice::Say:
+			{
+				auto it = synth.owners.find(notice.id);
+				if (it == synth.owners.end())
+					break;
+				const int sayId = it->second;
+				if (!sayId || synth.started.insert(sayId).second)
+					Post(new SpeechSynthesisStartedEvent(synth.port, sayId));
+				break;
+			}
+			case Synthesizer::Notice::Done:
+			{
+				auto it = synth.owners.find(notice.id);
+				if (it == synth.owners.end())
+					break;
+				const int sayId = it->second;
+				synth.owners.erase(it);
+				if (!sayId)
+				{
+					Post(new SpeechSynthesisDoneEvent(synth.port, 0, false));
+					break;
+				}
+				if (--synth.remaining[sayId] > 0)
+					break;
+				synth.remaining.erase(sayId);
+				synth.started.erase(sayId);
+				Post(new SpeechSynthesisDoneEvent(synth.port, sayId, false));
+				break;
+			}
+			case Synthesizer::Notice::State:
+				Post(new SpeechServiceEvent(synth.port, "tts", notice.up, notice.reason));
+				break;
+		}
+	}
+
+	if (stop)
+		StopSynthesizer(synth);
+
+	for (const auto& say : says)
+		SendPhrases(synth, say.first, say.second);
+
+	std::vector<CorrectionTracker::Action> actions = synth.tracker.Add(typed, nowMs);
+	for (const CorrectionTracker::Action& action : synth.tracker.Tick(nowMs))
+		actions.push_back(action);
+	for (const CorrectionTracker::Action& action : actions)
+		if (action.kind == CorrectionTracker::Action::Stop)
+			StopSynthesizer(synth);
+		else
+			SendPhrases(synth, 0, action.text);
+
+	synth.idle = synth.owners.empty() && !synth.IsSpeaking();
 }
 
 //La reconnaissance parle au flux asr dans la fréquence du mix
@@ -574,7 +968,15 @@ void SpeechProcessor::Recognize(Recognizer& rec, const SWORD* frame, int samples
 	{
 		SWORD full[FrameSamples] = {};
 		std::copy(frame, frame + samples, full);
-		const bool voiced = rec.vad.CalcVad(full, FrameSamples, MixRate) > 0;
+		bool voiced = rec.vad.CalcVad(full, FrameSamples, MixRate) > 0;
+		//Secours contre l'écho : pas de reconnaissance pendant que la
+		//synthèse parle vers ce même port
+		if (rec.halfDuplex)
+		{
+			std::shared_ptr<Synthesizer> synth = GetSynthesizer(rec.port);
+			if (synth && synth->IsSpeaking())
+				voiced = false;
+		}
 
 		if (voiced)
 		{
@@ -672,6 +1074,9 @@ void SpeechProcessor::Tick(uint64_t nowMs)
 		}
 		if (rec)
 			Recognize(*rec, in[i], taken[i], nowMs);
+
+		if (std::shared_ptr<Synthesizer> synth = GetSynthesizer(i))
+			Synthesize(*synth, nowMs);
 	}
 
 	for (int i = 0; i < Ports; ++i)
@@ -683,6 +1088,8 @@ void SpeechProcessor::Tick(uint64_t nowMs)
 		std::fill(mix.begin(), mix.end(), 0);
 		for (int k = 0; k < taken[o]; ++k)
 			mix[k] += in[o][k];
+		if (std::shared_ptr<Synthesizer> synth = GetSynthesizer(i))
+			synth->Mix(mix);
 		{
 			std::lock_guard<std::mutex> lock(port.noiseMutex);
 			for (int k = 0; k < FrameSamples; ++k)
@@ -760,6 +1167,16 @@ xmlrpc_value* SpeechEvent::GetXmlValue(xmlrpc_env *env)
 xmlrpc_value* SpeechRecognizedEvent::GetTail(xmlrpc_env *env)
 {
 	return xmlrpc_build_value(env,"(sb)",text.c_str(),(xmlrpc_bool)final);
+}
+
+xmlrpc_value* SpeechSynthesisStartedEvent::GetTail(xmlrpc_env *env)
+{
+	return xmlrpc_build_value(env,"(i)",sayId);
+}
+
+xmlrpc_value* SpeechSynthesisDoneEvent::GetTail(xmlrpc_env *env)
+{
+	return xmlrpc_build_value(env,"(ib)",sayId,(xmlrpc_bool)interrupted);
 }
 
 xmlrpc_value* SpeechActivityEvent::GetTail(xmlrpc_env *env)

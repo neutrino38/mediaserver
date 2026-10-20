@@ -24,6 +24,10 @@
  * part au flux asr de speech-server, avec 300 ms de pré-roulement. Le texte
  * reconnu va aux événements et/ou au TextMux d'un port.
  *
+ * La synthèse (lot 4, §7) : par port destination, un flux tts dit les Say du
+ * contrôleur et/ou la frappe d'un port source. Le PCM reçu va dans un tampon
+ * de lecture, que le tour mêle au mix du port, 20 ms à la fois.
+ *
  * Fils d'exécution : le décodeur d'un port tourne sur le thread de sa source
  * (l'endpoint) et ne fait que déposer dans un anneau ; le texte entrant de
  * même dans le TextMux de l'autre port ; les rappels du flux asr arrivent sur
@@ -71,6 +75,9 @@ public:
 	static constexpr int	SilenceMs = 700;
 	static constexpr int	PartialEventMs = 250;
 	static constexpr int	UtteranceEndMs = 500;
+	//Synthèse (§7.5, §10.6) : le silence de frappe qui coupe une phrase tapée,
+	//sous les 1 500 ms de speech-server.
+	static constexpr int	TypingSilenceMs = 1200;
 
 	SpeechProcessor(const std::wstring& tag);
 	virtual ~SpeechProcessor();
@@ -100,6 +107,17 @@ public:
 	int StartRecognition(int port, bool toEvents, int textPort, bool halfDuplex);
 	int StopRecognition(int port);
 
+	//Le flux tts du port destination `port` dit les Say et, si textSourcePort
+	//vaut 0 ou 1, la frappe de ce port. voice : alias de speech-server, vide
+	//pour le défaut. Rappeler remplace le réglage, et rouvre le flux.
+	int StartSynthesis(int port, int textSourcePort, const std::string& voice, bool announceCorrections);
+	int StopSynthesis(int port);
+	bool IsSynthesisActive(int port);
+	//Rend le sayId (> 0), 0 si la synthèse n'est pas active ou s'il n'y a rien
+	//à dire.
+	int Say(int port, const std::string& text);
+	int StopSpeaking(int port);
+
 	int SetPortCodec(int port, AudioCodec::Type codec);
 	//dbov <= 0 ; 0 = silence exact.
 	int SetComfortNoise(int port, int dbov);
@@ -127,8 +145,13 @@ private:
 	class Port;
 	friend class Port;
 	class Recognizer;
+	class Synthesizer;
 
 	void Recognize(Recognizer& rec, const SWORD* frame, int samples, uint64_t nowMs);
+	void Synthesize(Synthesizer& synth, uint64_t nowMs);
+	void SendPhrases(Synthesizer& synth, int sayId, const std::string& text);
+	void StopSynthesizer(Synthesizer& synth);
+	std::shared_ptr<Synthesizer> GetSynthesizer(int port);
 	void CloseUtterance(Recognizer& rec);
 	void Post(JSR309Event* event);
 
@@ -141,6 +164,7 @@ private:
 	std::atomic<bool>		ended{false};
 	SpeechService*			speech = nullptr;
 	std::function<void(JSR309Event*)> poster;
+	std::atomic<int>		nextSayId{1};
 	//Heure du dernier tour : celle du texte entrant, pour que le TextMux ne
 	//voie qu'une horloge.
 	std::atomic<uint64_t>		lastTickMs{0};
@@ -178,6 +202,29 @@ protected:
 	virtual xmlrpc_value* GetTail(xmlrpc_env *env);
 	std::string	text;
 	bool		final;
+};
+
+//9 : (… , i sayId). sayId 0 : une phrase tapée sur le port source.
+class SpeechSynthesisStartedEvent : public SpeechEvent
+{
+public:
+	SpeechSynthesisStartedEvent(int port, int sayId) :
+		SpeechEvent(JSR309Event::SpeechSynthesisStartedEvent, MediaFrame::Audio, port), sayId(sayId) {}
+protected:
+	virtual xmlrpc_value* GetTail(xmlrpc_env *env);
+	int		sayId;
+};
+
+//10 : (… , i sayId, b interrupted).
+class SpeechSynthesisDoneEvent : public SpeechEvent
+{
+public:
+	SpeechSynthesisDoneEvent(int port, int sayId, bool interrupted) :
+		SpeechEvent(JSR309Event::SpeechSynthesisDoneEvent, MediaFrame::Audio, port), sayId(sayId), interrupted(interrupted) {}
+protected:
+	virtual xmlrpc_value* GetTail(xmlrpc_env *env);
+	int		sayId;
+	bool		interrupted;
 };
 
 //11 : (… , b speaking).
