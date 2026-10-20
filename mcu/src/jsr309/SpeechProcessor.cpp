@@ -435,6 +435,12 @@ public:
 		return !playback.empty();
 	}
 
+	size_t PendingMs()
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		return playback.size() * 1000 / MixRate;
+	}
+
 	//Ajoute au mix ce qui est à dire, 20 ms au plus
 	void Mix(std::vector<int>& mix)
 	{
@@ -448,12 +454,15 @@ public:
 
 	//Vide le tampon et, si `untilStopped`, jette le PCM en vol jusqu'à la
 	//réponse `stopped`
-	void Discard(bool untilStopped)
+	//Rend ce qui n'a pas été dit, en ms
+	size_t Discard(bool untilStopped)
 	{
 		std::lock_guard<std::mutex> lock(mutex);
+		const size_t dropped = playback.size() * 1000 / MixRate;
 		playback.clear();
 		hasCarry = false;
 		discarding = untilStopped;
+		return dropped;
 	}
 
 	//SpeechFlow::Listener, sur le réacteur ou l'horloge du service
@@ -759,6 +768,7 @@ int SpeechProcessor::Say(int port, const std::string& text)
 		return Error("-SpeechProcessor: nothing to say\n");
 
 	const int sayId = nextSayId++;
+	Log("-SpeechProcessor: say %d [%ls,port:%d,chars:%zu]\n", sayId, tag.c_str(), port, text.size());
 	synth->PushSay(sayId, text);
 	return sayId;
 }
@@ -822,7 +832,9 @@ void SpeechProcessor::DropHeld(Synthesizer& synth)
 
 void SpeechProcessor::StopSynthesizer(Synthesizer& synth)
 {
-	synth.Discard(true);
+	const size_t dropped = synth.Discard(true);
+	Log("-SpeechProcessor: synthesis stopped [%ls,port:%d,unsaid:%zums,says:%zu]\n",
+		tag.c_str(), synth.port, dropped, synth.remaining.size() + synth.held.size());
 	//Sans flux prêt, aucun `stopped` ne viendra lever le rejet
 	if (!synth.flow->StopSpeaking())
 		synth.Discard(false);
@@ -890,6 +902,8 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 					break;
 				synth.remaining.erase(sayId);
 				synth.started.erase(sayId);
+				Log("-SpeechProcessor: say %d synthesized [%ls,port:%d,toPlay:%zums]\n",
+					sayId, tag.c_str(), synth.port, synth.PendingMs());
 				Post(new SpeechSynthesisDoneEvent(synth.port, sayId, false));
 				break;
 			}
@@ -1026,6 +1040,7 @@ void SpeechProcessor::Recognize(Recognizer& rec, const SWORD* frame, int samples
 				if (rec.awaitingFinal)
 					CloseUtterance(rec);
 				rec.speaking = true;
+				Log("-SpeechProcessor: speech starts [%ls,port:%d]\n", tag.c_str(), rec.port);
 				Post(new SpeechActivityEvent(rec.port, true));
 				rec.flow->Resume();
 				//Le pré-roulement : la première syllabe précède la détection
@@ -1053,6 +1068,7 @@ void SpeechProcessor::Recognize(Recognizer& rec, const SWORD* frame, int samples
 		rec.flow->Pause();
 		rec.awaitingFinal = true;
 		rec.pausedAtMs = nowMs;
+		Log("-SpeechProcessor: speech stops [%ls,port:%d]\n", tag.c_str(), rec.port);
 		Post(new SpeechActivityEvent(rec.port, false));
 	}
 
