@@ -57,6 +57,9 @@ private:
 	uint64_t		openingAtMs = 0;
 	bool			readySent = false;
 	bool			paused = false;
+	// Mistral refuses a flush with no audio since the last one (error 3051),
+	// and closes its session.
+	bool			audioSinceFlush = false;
 	uint64_t		pausedAtMs = 0;
 	bool			finishing = false;
 	uint64_t		finishingAtMs = 0;

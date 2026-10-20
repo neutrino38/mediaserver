@@ -170,6 +170,33 @@ TEST_F(SpeechAsr, PauseStopsTheRelayAndFlushes)
 	EXPECT_EQ(Frame('a') + Frame('b'), fake->Get(0).audio);
 }
 
+// A caller silent from the start: the client pauses before any audio. Mistral
+// refuses a flush with nothing to flush, and closes its session (2026-10-20).
+TEST_F(SpeechAsr, APauseBeforeAnyAudioDoesNotFlush)
+{
+	Start();
+	WsClient client;
+	ASSERT_EQ("ready", Open(client)["type"]);
+
+	client.SendText(R"({"type": "pause"})");
+	client.SendText(R"({"type": "resume"})");
+	client.SendBinary(Frame('a'));
+
+	EXPECT_EQ(fake->deltas[0], json::parse(client.ReadText())["text"]);
+	EXPECT_EQ(0, fake->Get(0).refusedFlushes);
+	EXPECT_EQ(0, fake->Get(0).flushes);
+	EXPECT_FALSE(fake->Get(0).closed);
+
+	// A second pause after audio flushes, a third with none since does not.
+	client.SendText(R"({"type": "pause"})");
+	ASSERT_TRUE(WaitFor([&] { return fake->Get(0).flushes == 1; }));
+	client.SendText(R"({"type": "resume"})");
+	client.SendText(R"({"type": "pause"})");
+	std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	EXPECT_EQ(0, fake->Get(0).refusedFlushes);
+	EXPECT_FALSE(fake->Get(0).closed);
+}
+
 TEST_F(SpeechAsr, ALongPauseClosesMistralAndResumeReopensIt)
 {
 	Start(R"(, "asr": {"pauseCloseSecs": 1})");
@@ -200,6 +227,27 @@ TEST_F(SpeechAsr, MistralDroppingTheSessionCloses1013)
 	EXPECT_EQ(true, error["fatal"]);
 	EXPECT_EQ(SpeechSession::CloseTryLater, client.Read().CloseCode());
 	EXPECT_NE(0, health.Get(SpeechFunction::Asr).lastFailure);
+}
+
+// A rotation: the client pauses at a silence, then ends the old stream. The
+// pause already flushed; a second flush with no audio since is refused by
+// Mistral, which closes before the end, and the session never ends cleanly.
+TEST_F(SpeechAsr, DoneRightAfterAPauseEndsWithoutASecondFlush)
+{
+	Start();
+	WsClient client;
+	ASSERT_EQ("ready", Open(client)["type"]);
+
+	client.SendBinary(Frame('a'));
+	ASSERT_EQ(fake->deltas[0], json::parse(client.ReadText())["text"]);
+
+	client.SendText(R"({"type": "pause"})");
+	ASSERT_TRUE(WaitFor([&] { return fake->Get(0).flushes == 1; }));
+	client.SendText(R"({"type": "done"})");
+
+	ASSERT_TRUE(WaitFor([&] { return fake->Get(0).ends == 1; }));
+	EXPECT_EQ(0, fake->Get(0).refusedFlushes);
+	EXPECT_EQ(1, fake->Get(0).flushes);
 }
 
 TEST_F(SpeechAsr, DoneSendsOnlyTheMissingTextThenCloses1000)
