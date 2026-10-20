@@ -766,6 +766,29 @@ ci-dessous :
 
 ### 10.7 Lot 5 : elixip et la recette
 
+État : **codé** le 2026-10-20 dans elixip, sur la branche
+`feat/speech-processor`. La recette du §12 reste à faire. Écarts au plan
+ci-dessous :
+
+- **Le déclencheur est l'option `speech:`** du tuple média
+  `{:mediaserver, …}` du scénario, à côté de `transcode:`. Elle se règle par
+  jambe : `transcribe` (la voix de la jambe part en texte vers l'autre),
+  `speak` (la frappe de la jambe est dite à l'autre), `voice`, `events`,
+  `half_duplex`, `announce_corrections`. elixip n'a pas de configuration
+  par route.
+- **`speech:` impose `audio: :force`** : chaque jambe garde le codec de tête
+  de sa liste, ce qui donne le codec de `PortSetCodec`. Avec
+  `audio: :forbid`, l'appel échoue avant toute numérotation.
+- **Une panne speech ne fait jamais échouer le pont.** Le scénario reçoit
+  `{:speech_error, reason}` sur la jambe concernée.
+- **Le chatbot** est une API à part, sur une seule jambe (port 0) :
+  `start_speech`, `say`, `stop_speaking`, `stop_speech`. Un chatbot actif
+  sur une jambe empêche le pont `speech:` de la même session.
+- **Les voix** : elixip lit `speech.controlUrl` dans le `/status/general`
+  du mediaserver, puis appelle `GET /control/voices`. Il ne garde aucune
+  adresse de speech-server dans sa configuration. Le `control.allow` de
+  speech-server doit donc admettre le serveur elixip.
+
 Ce lot se fait dans le dépôt elixip, pas dans celui-ci :
 - le plan de jambes des quatre cas du §2. La vidéo est branchée par
   `EndpointAttachToEndpoint`, l'audio et le texte sur les ports du
