@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "../src/jsr309/DCEndpoint.h"
+#include "../src/jsr309/Endpoint.h"
 #include "dtlsfixture.h"
 #include "medkit/codecs.h"
 
@@ -267,6 +268,25 @@ TEST_F(DCEndpointLoopback, LaPerteDuCanalMetUnUFFFDSurLaJambePontee)
 	const std::string& last = b.bridged.blocks.back();
 	ASSERT_EQ((size_t)3,last.size());
 	EXPECT_EQ("\xEF\xBF\xBD",last);
+}
+
+
+// Le chemin du contrôleur JSR-309 : EndpointCreate initialise l'endpoint, puis
+// ConfigureMediaConnection remplace son port texte RTP par un DCEndpoint. Le
+// port neuf n'était pas initialisé, EndpointStartReceiving échouait (« not
+// inited ») et elixip retirait le texte de la réponse (appel du 2026-10-20).
+TEST(DCEndpointJsr309, UnPortTexteBasculeEnDataChannelSOuvre)
+{
+	Endpoint endpoint(L"cx-dc", /*audio=*/false, /*video=*/false, /*text=*/true);
+	ASSERT_EQ(0, endpoint.Init());
+	ASSERT_EQ(1, endpoint.ConfigureMediaConnection(MediaFrame::Text, MediaFrame::VIDEO_MAIN,
+						       MediaFrame::SCTP, "t140"));
+
+	RTPMap rtpMap;
+	rtpMap[106] = TextCodec::T140;
+	EXPECT_GT(endpoint.StartReceiving(MediaFrame::Text, rtpMap), 0);
+
+	endpoint.End();
 }
 
 } // namespace

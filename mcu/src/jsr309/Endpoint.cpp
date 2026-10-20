@@ -895,6 +895,9 @@ int Endpoint::ConfigureMediaConnection( MediaFrame::Type media, MediaFrame::Medi
 			if ( bundle && media == MediaFrame::Audio )
 				return Error("The audio leg carries the BUNDLE transport, it cannot be replaced.\n");
 			PreparePort(p2,media);
+			//L'endpoint est initialisé dès EndpointCreate : son remplaçant doit
+			//l'être aussi, sinon StartReceiving le refuse.
+			p2->Init();
 
 			p2->SwitchJoin(p);
 			SetPort(media, role, p2);
