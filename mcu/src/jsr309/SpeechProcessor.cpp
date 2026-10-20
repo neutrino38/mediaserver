@@ -372,6 +372,7 @@ public:
 	std::deque<SWORD>	preRoll;
 	std::atomic<bool>	speaking{false};
 	uint64_t		lastVoiceMs = 0;
+	int			onsetMs = 0;	// voix accumulée avant d'être déclarée
 	bool			awaitingFinal = false;
 	uint64_t		pausedAtMs = 0;
 	uint64_t		lastDeltaMs = 0;
@@ -1033,9 +1034,16 @@ void SpeechProcessor::Recognize(Recognizer& rec, const SWORD* frame, int samples
 
 		if (voiced)
 		{
-			rec.lastVoiceMs = nowMs;
 			if (!rec.speaking)
 			{
+				if (nowMs - rec.lastVoiceMs > (uint64_t)OnsetGapMs)
+					rec.onsetMs = 0;
+				rec.onsetMs += FrameMs;
+			}
+			rec.lastVoiceMs = nowMs;
+			if (!rec.speaking && rec.onsetMs >= OnsetMs)
+			{
+				rec.onsetMs = 0;
 				//Une parole qui reprend avant la fin d'énoncé la clôt
 				if (rec.awaitingFinal)
 					CloseUtterance(rec);
@@ -1043,7 +1051,8 @@ void SpeechProcessor::Recognize(Recognizer& rec, const SWORD* frame, int samples
 				Log("-SpeechProcessor: speech starts [%ls,port:%d]\n", tag.c_str(), rec.port);
 				Post(new SpeechActivityEvent(rec.port, true));
 				rec.flow->Resume();
-				//Le pré-roulement : la première syllabe précède la détection
+				//Le pré-roulement : la première syllabe précède la détection,
+				//l'attente de OnsetMs comprise
 				std::vector<SWORD> before(rec.preRoll.begin(), rec.preRoll.end());
 				rec.preRoll.clear();
 				if (!before.empty())
@@ -1056,7 +1065,7 @@ void SpeechProcessor::Recognize(Recognizer& rec, const SWORD* frame, int samples
 		else
 		{
 			rec.preRoll.insert(rec.preRoll.end(), full, full + FrameSamples);
-			while (rec.preRoll.size() > (size_t)(PreRollMs * MixRate / 1000))
+			while (rec.preRoll.size() > (size_t)((PreRollMs + OnsetMs) * MixRate / 1000))
 				rec.preRoll.pop_front();
 		}
 	}

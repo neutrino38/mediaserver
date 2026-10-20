@@ -447,7 +447,9 @@ les autres.
   exactement un événement 10.
 - **SpeechActivityEvent** (11) : la VAD du port a entendu quelqu'un commencer
   (`speaking = true`) ou finir de parler (`false`, après 700 ms de silence).
-  Il sert au barge-in : le contrôleur décide s'il coupe la synthèse.
+  Le début n'est déclaré qu'après 250 ms de voix, sans trou de plus de
+  100 ms : un souffle ou un clic dans un micro ne compte pas. Il sert au
+  barge-in : le contrôleur décide s'il coupe la synthèse.
 - **SpeechServiceEvent** (12) : un flux vers speech-server change d'état.
   `function` vaut `asr` ou `tts`, `state` vaut `up` ou `down`. `reason` dit
   pourquoi le flux est tombé, et reste vide pour `up`. Un `up` suit chaque
@@ -1186,7 +1188,8 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
 > **Ce qui se paie.** Mistral facture les secondes d'audio reçues. Le
 > SpeechProcessor n'envoie que la parole : une VAD met le flux en pause après
 > 700 ms de silence, et le reprend avec les 300 ms qui précèdent la parole,
-> pour ne pas couper la première syllabe. Il ouvre une session `asr` par port
+> pour ne pas couper la première syllabe. Une parole n'est déclarée qu'après
+> 250 ms de voix : un bruit bref n'est pas envoyé. Il ouvre une session `asr` par port
 > source. La synthèse est facturée au caractère : une session `tts` par port
 > destination, et une phrase dite deux fois (correction) est payée deux fois.
 > `--speech-account` nomme le compte qui reçoit les compteurs de

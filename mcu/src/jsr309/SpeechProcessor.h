@@ -72,6 +72,10 @@ public:
 	//Reconnaissance (§6) : ce qui précède la parole détectée, le silence qui
 	//met le flux en pause, le regroupement des deltas, la fin d'énoncé.
 	static constexpr int	PreRollMs = 300;
+	//La parole n'est déclarée qu'après OnsetMs de voix, coupée de moins de
+	//OnsetGapMs : un souffle ou un clic ne coupe pas la synthèse (barge-in).
+	static constexpr int	OnsetMs = 250;
+	static constexpr int	OnsetGapMs = 100;
 	static constexpr int	SilenceMs = 700;
 	static constexpr int	PartialEventMs = 250;
 	static constexpr int	UtteranceEndMs = 500;

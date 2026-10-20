@@ -434,6 +434,48 @@ TEST_F(SpeechProcessorAsr, LePreRoulementPrecedeLaVoix)
 	EXPECT_LT(Rms((const BYTE*)audio.data(), 640), 100.0);
 }
 
+// Un souffle ou un clic dans le micro n'est pas une prise de parole : la VAD
+// les marque, mais la parole n'est déclarée qu'après OnsetMs de voix. Sinon
+// le barge-in d'un contrôleur coupe la synthèse (appel du 2026-10-20 : des
+// salves de 60 à 160 ms coupaient les phrases longues du chatbot).
+TEST_F(SpeechProcessorAsr, DesSalvesBrevesNeSontPasUneParole)
+{
+	StartRecognition(true, -1);
+	const std::vector<SWORD> voice = ReadWav(Voice);
+
+	// 120 ms de vraie voix : six trames bien au-dessus du silence
+	size_t at = 0;
+	for (size_t pos = 0; pos + 1920 <= voice.size(); pos += 320)
+	{
+		bool loud = true;
+		for (size_t f = 0; f < 6 && loud; ++f)
+			loud = Rms((const BYTE*)&voice[pos + f * 320], 640) > 1000.0;
+		if (loud)
+		{
+			at = pos;
+			break;
+		}
+	}
+	ASSERT_GT(at, 0u);
+	const std::vector<SWORD> burst(voice.begin() + at, voice.begin() + at + 1920);
+
+	PlaySilence(500);
+	for (int i = 0; i < 3; ++i)
+	{
+		Play(burst);
+		PlaySilence(300);
+	}
+	PlaySilence(500);
+
+	EXPECT_TRUE(events.Of(JSR309Event::SpeechActivityEvent).empty());
+	EXPECT_EQ(0, fake->Get(0).frames);
+
+	// La même voix, entière, est bien une parole
+	Play(voice);
+	ASSERT_TRUE(Eventually([&] { return !events.Of(JSR309Event::SpeechActivityEvent).empty(); }));
+	EXPECT_EQ("true", events.Of(JSR309Event::SpeechActivityEvent).front().tail[0]);
+}
+
 // §5.3 : une panne de speech-server est dite une fois, sans couper le relais.
 TEST_F(SpeechProcessorAsr, UnePanneDuServiceEstPubliee)
 {

@@ -252,9 +252,12 @@ transcrire tout l'appel ferait payer aussi les silences. Le SpeechProcessor
 passe donc l'audio décodé de chaque port source dans la `VAD` du mcu
 (libfvad, mode `AGGRESSIVE`) :
 
-- **parole détectée** : le client envoie `resume`, puis le **pré-roulement**
-  (les 300 dernières ms gardées en anneau, pour ne pas couper la première
-  syllabe), puis l'audio en direct ;
+- **parole détectée** : 250 ms de voix (`OnsetMs`), sans trou de plus de
+  100 ms. Un souffle ou un clic, que la VAD marque aussi, ne suffit pas : il
+  couperait la synthèse d'un contrôleur qui fait du barge-in. Le client
+  envoie alors `resume`, puis le **pré-roulement** (les 300 ms qui
+  précèdent la voix, plus les 250 ms de l'attente, gardés en anneau), puis
+  l'audio en direct ;
 - **silence depuis `silenceMs`** (700 ms par défaut) : le client envoie
   `pause`. `speech-server` y répond par un `input_audio.flush`, ce qui fait
   arriver tout de suite la fin de l'énoncé.
