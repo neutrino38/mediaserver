@@ -338,9 +338,14 @@ void StatusHandler::Collect(Info& info,time_t now)
 	//Les flux ouverts sont comptes sur les flux eux-memes, par le service : pas
 	//de second compteur ici.
 	info.speech = Info::Speech();
+	info.speech.unavailableReason = "speech-server not configured (--speech-url)";
 	if (speech && speech->IsConfigured())
 	{
 		const SpeechService::Counters counters = speech->GetCounters();
+		const SpeechService::Availability availability = speech->GetAvailability();
+		info.speech.available		= availability.available;
+		info.speech.unavailableReason	= availability.checkedAt ? availability.reason : "speech-server not checked yet";
+		info.speech.checkedAt		= availability.checkedAt;
 		info.speech.configured		= true;
 		info.speech.controlUrl		= speech->GetControlUrl();
 		info.speech.streamingUrl	= speech->GetStreamingUrl();
@@ -436,6 +441,9 @@ std::string StatusHandler::RenderJSON(const Info& info)
 	const Info::Speech& sp = info.speech;
 	out += ",\"speech\":{";
 	out += "\"configured\":"		+ JsonBool(sp.configured);
+	out += ",\"available\":"		+ JsonBool(sp.available);
+	out += ",\"unavailableReason\":"	+ (sp.available ? std::string("null") : JsonString(sp.unavailableReason));
+	out += ",\"checkedAt\":"		+ (sp.checkedAt ? JsonString(IsoUtc(sp.checkedAt)) : std::string("null"));
 	out += ",\"controlUrl\":"		+ JsonString(sp.controlUrl);
 	out += ",\"streamingUrl\":"	+ JsonString(sp.streamingUrl);
 	out += ",\"account\":"		+ JsonString(sp.account);
@@ -581,6 +589,9 @@ std::string StatusHandler::RenderText(const Info& info)
 		out += "  non configure  (--speech-url) : reconnaissance et synthese indisponibles\n";
 	else
 	{
+		snprintf(buf,sizeof(buf),"  disponible     %s%s%s\n",sp.available ? "oui" : "non",
+			sp.available ? "" : " : ",sp.available ? "" : sp.unavailableReason.c_str());
+		out += buf;
 		snprintf(buf,sizeof(buf),"  controle       %s\n",sp.controlUrl.c_str());
 		out += buf;
 		snprintf(buf,sizeof(buf),"  streaming      %s\n",sp.streamingUrl.c_str());

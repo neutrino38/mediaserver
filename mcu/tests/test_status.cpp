@@ -384,6 +384,8 @@ TEST(Status, SansSpeechUrlLeBlocSpeechDitNonConfigure)
 
 	EXPECT_FALSE(speech["configured"].get<bool>());
 	EXPECT_TRUE(speech["lastFailure"].is_null());
+	EXPECT_FALSE(speech["available"].get<bool>());
+	EXPECT_EQ("speech-server not configured (--speech-url)",speech["unavailableReason"]);
 	EXPECT_NE(std::string::npos,StatusHandler::RenderText(info).find("non configure"));
 }
 
@@ -405,6 +407,9 @@ TEST(Status, LeBlocSpeechPublieLesUrlsEtLesFluxOuverts)
 	EXPECT_EQ(0,block["streams"]["asr"]);
 	EXPECT_EQ(0,block["streams"]["tts"]);
 	EXPECT_EQ(0,block["failures"]);
+	EXPECT_FALSE(block["available"].get<bool>());
+	EXPECT_EQ("speech-server not checked yet",block["unavailableReason"]);
+	EXPECT_TRUE(block["checkedAt"].is_null());
 
 	const std::string text = StatusHandler::RenderText(info);
 	EXPECT_NE(std::string::npos,text.find("wss://speech.example.net:9201")) << text;

@@ -105,6 +105,10 @@ public:
 			time_t		lastFailureAt = 0;	// 0 : aucun échec
 			std::string	lastFailureFunction;
 			std::string	lastFailureReason;
+			// Ce que le contrôleur lit avant d'offrir la parole à un appel
+			bool		available = false;
+			std::string	unavailableReason;
+			time_t		checkedAt = 0;	// 0 : pas encore demandé
 		} speech;
 	};
 

@@ -32,6 +32,8 @@ class SpeechService : public Worker
 public:
 	static constexpr int TaskThreads = 2;
 	static constexpr int DefaultTickMs = 100;
+	static constexpr int DefaultProbeMs = 5000;
+	static constexpr long ProbeTimeoutSecs = 3;
 
 	struct Counters
 	{
@@ -44,8 +46,17 @@ public:
 		std::string	lastFailureReason;
 	};
 
+	// Whether speech-server answers, and what it says of Mistral. Asked every
+	// probeMs: a controller reads it before it offers speech to a call.
+	struct Availability
+	{
+		bool		available = false;
+		std::string	reason;		// empty when available
+		time_t		checkedAt = 0;	// 0: not asked yet
+	};
+
 	SpeechService(WebSocketServer& server, const std::string& controlUrl, const std::string& streamingUrl,
-		      const std::string& account, int tickMs = DefaultTickMs);
+		      const std::string& account, int tickMs = DefaultTickMs, int probeMs = DefaultProbeMs);
 	~SpeechService();
 
 	// Both URLs or none; control in http(s)://, streaming in ws(s)://.
@@ -66,6 +77,7 @@ public:
 					       const SpeechFlow::Params& params = SpeechFlow::Params());
 
 	Counters GetCounters();
+	Availability GetAvailability();
 
 	// For the flows.
 	WebSocketServer& GetServer()		{ return server; }
@@ -83,6 +95,7 @@ private:
 	const std::string		streamingUrl;
 	const std::string		account;
 	const int			tickMs;
+	const int			probeMs;
 
 	std::unique_ptr<TaskPool>		tasks;
 	std::unique_ptr<SpeechTokenClient>	tokens;
@@ -90,6 +103,12 @@ private:
 	std::mutex				mutex;
 	std::vector<std::weak_ptr<SpeechFlow>>	flows;
 	Counters				counters;
+	Availability				availability;
+	bool					probing = false;
+	uint64_t				nextProbeMs = 0;
+
+	Availability Probe() const;
+	void Probed(const Availability& result);
 };
 
 #endif

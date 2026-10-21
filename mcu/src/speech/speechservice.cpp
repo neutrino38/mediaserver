@@ -1,6 +1,8 @@
 #include "speech/speechservice.h"
 
+#include <nlohmann/json.hpp>
 #include "log.h"
+#include "speech/mistralhttp.h"
 #include "websocketserver.h"
 
 namespace
@@ -14,12 +16,13 @@ bool StartsWith(const std::string& text, const char* prefix)
 }
 
 SpeechService::SpeechService(WebSocketServer& server, const std::string& controlUrl, const std::string& streamingUrl,
-			     const std::string& account, int tickMs) :
+			     const std::string& account, int tickMs, int probeMs) :
 	server(server),
 	controlUrl(controlUrl),
 	streamingUrl(streamingUrl),
 	account(account),
-	tickMs(tickMs)
+	tickMs(tickMs),
+	probeMs(probeMs)
 {
 	if (controlUrl.empty() || streamingUrl.empty())
 		return;
@@ -127,6 +130,68 @@ SpeechService::Counters SpeechService::GetCounters()
 	return result;
 }
 
+SpeechService::Availability SpeechService::GetAvailability()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	return availability;
+}
+
+SpeechService::Availability SpeechService::Probe() const
+{
+	std::string body;
+	const MistralHttp::Result http = MistralHttp::Get(controlUrl, "/status/general", "", ProbeTimeoutSecs,
+		[&body](const char* data, size_t size) {
+			if (body.size() + size > 65536)
+				return false;
+			body.append(data, size);
+			return true;
+		});
+
+	Availability result;
+	result.checkedAt = time(NULL);
+	if (http.httpStatus == 403)
+		result.reason = "speech-server at " + controlUrl + " refuses this mediaserver (HTTP 403): add its address to control.allow";
+	else if (http.cancelled)
+		result.reason = "speech-server at " + controlUrl + " sends an oversized status";
+	else if (http.httpStatus == 0)
+		result.reason = "speech-server unreachable at " + controlUrl + ": " + http.error;
+	else if (!http.error.empty())
+		result.reason = "speech-server at " + controlUrl + " answers " + http.error;
+	if (!result.reason.empty())
+		return result;
+
+	// Mistral is unknown to a speech-server older than its probe, or before
+	// its first one: the server answers, that is all that is known.
+	const nlohmann::json status = nlohmann::json::parse(body, nullptr, false);
+	const nlohmann::json* mistral = nullptr;
+	if (status.is_object() && status.contains("backend") && status["backend"].is_object()
+	    && status["backend"].contains("mistral") && status["backend"]["mistral"].is_object())
+		mistral = &status["backend"]["mistral"];
+	if (mistral && mistral->value("state", "") == "down")
+	{
+		const nlohmann::json& reason = (*mistral)["reason"];
+		result.reason = reason.is_string() ? reason.get<std::string>() : std::string("Mistral unavailable");
+		return result;
+	}
+	result.available = true;
+	return result;
+}
+
+void SpeechService::Probed(const Availability& result)
+{
+	Availability before;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		before = availability;
+		availability = result;
+		probing = false;
+	}
+	if (!result.available && (before.available || !before.checkedAt || before.reason != result.reason))
+		Error("-SpeechService: speech processing unavailable [reason:%s]\n", result.reason.c_str());
+	else if (result.available && !before.available)
+		Log("-SpeechService: speech processing available [speech-server:%s]\n", controlUrl.c_str());
+}
+
 void SpeechService::RecordFailure(SpeechFunction function, const std::string& reason)
 {
 	std::lock_guard<std::mutex> lock(mutex);
@@ -168,6 +233,19 @@ int SpeechService::Run()
 		}
 
 		const uint64_t nowMs = SpeechFlow::NowMs();
+		bool probe = false;
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			if (!probing && nowMs >= nextProbeMs)
+			{
+				probing = true;
+				nextProbeMs = nowMs + probeMs;
+				probe = true;
+			}
+		}
+		if (probe)
+			tasks->Post([this] { Probed(Probe()); });
+
 		for (const std::shared_ptr<SpeechFlow>& flow : live)
 			flow->Tick(nowMs);
 		live.clear();
