@@ -16,6 +16,28 @@
 #include "textmux.h"
 #include "correctiontracker.h"
 #include "speech/phrasesplitter.h"
+
+//TRACE_EXCHANGE=yes : le texte de la conversation dans le journal, contrôles
+//visibles. Jamais dans un binaire en service.
+#ifdef TRACE_EXCHANGE
+static std::string ExchangeEscape(const std::string& text)
+{
+	std::string out;
+	char buf[8];
+	for (unsigned char c : text)
+		if (c < 0x20 || c == 0x7f)
+		{
+			snprintf(buf, sizeof(buf), "\\x%02x", c);
+			out += buf;
+		}
+		else
+			out += (char)c;
+	return out;
+}
+#define TraceExchange(...) Log(__VA_ARGS__)
+#else
+#define TraceExchange(...) ((void)0)
+#endif
 #include "audioresampler.h"
 #include "vad.h"
 #include "speech/speechservice.h"
@@ -496,6 +518,11 @@ public:
 	virtual void onPcm(SpeechFlow* flow, const BYTE* data, DWORD size) override
 	{
 		std::lock_guard<std::mutex> lock(mutex);
+#ifdef TRACE_EXCHANGE
+		pcmBytes += size;
+		if (discarding)
+			pcmDiscardedBytes += size;
+#endif
 		if (discarding)
 			return;
 		DWORD pos = 0;
@@ -532,6 +559,10 @@ public:
 	BYTE					carry = 0;
 	bool					hasCarry = false;
 	bool					discarding = false;
+#ifdef TRACE_EXCHANGE
+	std::atomic<uint64_t>			pcmBytes{0};
+	std::atomic<uint64_t>			pcmDiscardedBytes{0};
+#endif
 
 	//Le tour seulement, sauf `idle` que lit aussi CanRotate
 	CorrectionTracker	tracker;
@@ -690,6 +721,7 @@ int SpeechProcessor::GetRelayBufferedMs(int port)
 
 void SpeechProcessor::OnTextIn(int fromPort, const std::string& utf8)
 {
+	TraceExchange("-SpeechProcessor: exchange text in [%ls,fromPort:%d,bytes:%zu] \"%s\"\n", tag.c_str(), fromPort, utf8.size(), ExchangeEscape(utf8).c_str());
 	{
 		Port& to = *ports[1 - fromPort];
 		std::lock_guard<std::mutex> lock(to.textMutex);
@@ -808,7 +840,11 @@ bool SpeechProcessor::SendPhrases(Synthesizer& synth, int sayId, const std::stri
 		}
 
 	for (size_t i = 0; i < phrases.size(); ++i)
+	{
+		TraceExchange("-SpeechProcessor: exchange phrase sent [%ls,port:%d,phrase:%d,sayId:%d] \"%s\"\n", tag.c_str(), synth.port,
+			synth.nextPhraseId, sayId, ExchangeEscape(phrases[i]).c_str());
 		synth.owners[synth.nextPhraseId++] = sayId;
+	}
 	if (sayId)
 		synth.remaining[sayId] = phrases.size();
 	return true;
@@ -871,6 +907,7 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 		switch (notice.kind)
 		{
 			case Synthesizer::Notice::Ready:
+				TraceExchange("-SpeechProcessor: exchange tts ready [%ls,port:%d,remaining:%zu,held:%zu]\n", tag.c_str(), synth.port, synth.remaining.size(), synth.held.size());
 				//Nouveau flux : ses phrases repartent de 1, celles de l'ancien
 				//ne seront plus dites
 				for (const auto& entry : synth.remaining)
@@ -884,6 +921,8 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 				break;
 			case Synthesizer::Notice::Say:
 			{
+				TraceExchange("-SpeechProcessor: exchange phrase starts [%ls,port:%d,phrase:%d,known:%d,pcmIn:%llu,pending:%zums]\n", tag.c_str(), synth.port,
+					notice.id, (int)synth.owners.count(notice.id), (unsigned long long)synth.pcmBytes.load(), synth.PendingMs());
 				auto it = synth.owners.find(notice.id);
 				if (it == synth.owners.end())
 					break;
@@ -894,6 +933,9 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 			}
 			case Synthesizer::Notice::Done:
 			{
+				TraceExchange("-SpeechProcessor: exchange phrase done [%ls,port:%d,phrase:%d,known:%d,pcmIn:%llu,discarded:%llu,pending:%zums]\n", tag.c_str(), synth.port,
+					notice.id, (int)synth.owners.count(notice.id), (unsigned long long)synth.pcmBytes.load(),
+					(unsigned long long)synth.pcmDiscardedBytes.load(), synth.PendingMs());
 				auto it = synth.owners.find(notice.id);
 				if (it == synth.owners.end())
 					break;
@@ -941,6 +983,11 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 	std::vector<CorrectionTracker::Action> actions = synth.tracker.Add(typed, nowMs);
 	for (const CorrectionTracker::Action& action : synth.tracker.Tick(nowMs))
 		actions.push_back(action);
+#ifdef TRACE_EXCHANGE
+	for (const CorrectionTracker::Action& action : actions)
+		TraceExchange("-SpeechProcessor: exchange tracker %s [%ls,port:%d] \"%s\"\n", action.kind == CorrectionTracker::Action::Stop ? "stop" : "speak",
+			tag.c_str(), synth.port, ExchangeEscape(action.text).c_str());
+#endif
 	for (const CorrectionTracker::Action& action : actions)
 		if (action.kind == CorrectionTracker::Action::Stop)
 			StopSynthesizer(synth);

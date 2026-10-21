@@ -153,6 +153,14 @@ ifeq ($(ASAN),yes)
 	LDFLAGS += -fsanitize=address
 endif
 
+# TRACE_EXCHANGE=yes : le journal recoit le texte tape et dit de chaque appel
+# (SpeechProcessor, speech-server), pour deboguer la synthese. C'est le contenu
+# des conversations : jamais sur un serveur en service. Meme piege qu'ASAN sur le
+# melange d'objets : `make clean` avant et apres.
+ifeq ($(TRACE_EXCHANGE),yes)
+	OPTS    += -DTRACE_EXCHANGE
+endif
+
 # TSAN=yes : detecteur de courses (ThreadSanitizer). Meme usage qu'ASAN, meme
 # piege sur le melange d'objets : passer TAG=tsan pour les isoler du build
 # normal (make check TSAN=yes TAG=tsan, qui joue tests/runtests-tsan).

@@ -23,6 +23,33 @@ uint64_t CountChars(const std::string& utf8)
 
 }
 
+// TRACE_EXCHANGE=yes: the text of the conversation in the log, controls
+// visible. Never in a binary in service.
+#ifdef TRACE_EXCHANGE
+namespace
+{
+
+std::string ExchangeEscape(const std::string& text)
+{
+	std::string out;
+	char buf[8];
+	for (unsigned char c : text)
+		if (c < 0x20 || c == 0x7f)
+		{
+			snprintf(buf, sizeof(buf), "\\x%02x", c);
+			out += buf;
+		}
+		else
+			out += (char)c;
+	return out;
+}
+
+}
+#define TraceExchange(...) Log(__VA_ARGS__)
+#else
+#define TraceExchange(...) ((void)0)
+#endif
+
 TtsSession::TtsSession(const Params& params, const SpeechBackend& backend) :
 	SpeechSession(params),
 	backend(backend),
@@ -47,10 +74,14 @@ void TtsSession::OnText(const json& message)
 	{
 		if (!message.contains("text") || !message["text"].is_string())
 			return SendError("text must be a string", false);
+		TraceExchange("-TtsSession: exchange text in [token:%s] \"%s\"\n", params.tokenPrefix.c_str(), ExchangeEscape(message["text"].get<std::string>()).c_str());
 		Enqueue(splitter.Add(message["text"], NowMs()));
 	}
 	else if (type == "flush")
+	{
+		TraceExchange("-TtsSession: exchange flush [token:%s]\n", params.tokenPrefix.c_str());
 		Enqueue({splitter.Flush()});
+	}
 	else if (type == "stop")
 	{
 		json ids = json::array();
@@ -66,6 +97,7 @@ void TtsSession::OnText(const json& message)
 		queue.clear();
 		splitter.Clear();
 
+		TraceExchange("-TtsSession: exchange stop [token:%s,ids:%s]\n", params.tokenPrefix.c_str(), ids.dump().c_str());
 		Send(json{{"type", "stopped"}, {"ids", ids}});
 	}
 	else
@@ -91,7 +123,10 @@ void TtsSession::Enqueue(const std::vector<std::string>& phrases)
 {
 	for (const std::string& text : phrases)
 		if (!text.empty())
+		{
+			TraceExchange("-TtsSession: exchange phrase queued [token:%s,phrase:%d,queue:%zu] \"%s\"\n", params.tokenPrefix.c_str(), nextId, queue.size() + 1, ExchangeEscape(text).c_str());
 			queue.push_back({nextId++, text});
+		}
 	Pump();
 }
 
@@ -125,8 +160,16 @@ void TtsSession::Speak(const Phrase& phrase, std::shared_ptr<std::atomic<bool>> 
 	const MistralSpeech::Request request = {
 		params.config->mistralUrl, backend.apiKey, params.config->ttsModel, voiceId, phrase.text};
 
+#ifdef TRACE_EXCHANGE
+	size_t pcmBytes = 0;
+	const uint64_t startedMs = NowMs();
+#endif
+	TraceExchange("-TtsSession: exchange phrase to Mistral [token:%s,phrase:%d] \"%s\"\n", params.tokenPrefix.c_str(), phrase.id, ExchangeEscape(phrase.text).c_str());
 	const MistralSpeech::Result result = MistralSpeech::Synthesize(request, [&](const std::string& float32) {
 		const std::string pcm = converter.Convert(float32);
+#ifdef TRACE_EXCHANGE
+		pcmBytes += pcm.size();
+#endif
 		std::lock_guard<std::mutex> lock(mutex);
 		if (*token)
 			return false;
@@ -146,6 +189,8 @@ void TtsSession::Speak(const Phrase& phrase, std::shared_ptr<std::atomic<bool>> 
 		const std::string tail = converter.Drain();
 		if (!tail.empty())
 			SendAudio(tail);
+		TraceExchange("-TtsSession: exchange phrase synthesized [token:%s,phrase:%d,pcmBytes:%zu,tookMs:%llu]\n", params.tokenPrefix.c_str(), phrase.id,
+		    pcmBytes + tail.size(), (unsigned long long)(NowMs() - startedMs));
 		Send(json{{"type", "done"}, {"id", phrase.id}});
 		backend.health->Success(SpeechFunction::Tts, time(NULL));
 	}
