@@ -4,20 +4,23 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "speech/phrasesplitter.h"
 
 /**
  * CorrectionTracker — la frappe T.140 d'un port, découpée en phrases à dire,
  * avec ses corrections (SPEC SPEECH-PROCESSOR §7.5).
  *
- * Les phrases sont coupées comme dans speech-server (PhraseSplitter), avec un
- * silence de frappe à `silenceMs`. Un retour arrière qui ne touche que du
- * texte pas encore dit l'efface. Un retour arrière qui remonte dans du texte
- * déjà dit ouvre une CORRECTION :
- *  - l'action Stop part tout de suite, pour couper ce qui reste à dire ;
- *  - les retours arrière suivants effacent la ligne, la frappe la complète ;
- *  - en fin de ligne, ou après `silenceMs` sans frappe, la ligne corrigée
- *    part en une phrase, précédée de l'annonce si elle est demandée.
+ * Il tient une copie exacte de la ligne affichée chez l'appelant, et la part
+ * déjà envoyée à la synthèse. Une phrase part :
+ *  - sur `.`, `?`, `!`, `:` ou `…`, dès qu'il est tapé ;
+ *  - sur une fin de ligne (U+2028 ou `\n`) ;
+ *  - sur un blanc, quand plus de `MaxPendingWords` mots attendent.
+ * Jamais sur un silence : un mot n'est pas coupé en deux.
+ *
+ * Un retour arrière qui ne touche que du texte pas encore dit l'efface. Un
+ * retour arrière qui remonte dans du texte déjà dit ouvre une CORRECTION :
+ *  - Stop part tout de suite, puis l'annonce si elle est demandée ;
+ *  - la phrase touchée, depuis la ponctuation qui la précède, est redite
+ *    quand la ligne n'a pas changé pendant `stableMs`, ou en fin de ligne.
  *
  * Classe pure : ni thread, ni horloge, ni réseau. Entrée et sortie en UTF-8.
  */
@@ -33,9 +36,10 @@ public:
 		bool operator==(const Action& other) const	{ return kind == other.kind && text == other.text; }
 	};
 
-	static constexpr int DefaultSilenceMs = 1200;
+	static constexpr int DefaultStableMs = 2000;
+	static constexpr size_t MaxPendingWords = 5;
 
-	CorrectionTracker(int silenceMs, bool announce, const std::string& announcement = "Correction : ");
+	CorrectionTracker(int stableMs, bool announce, const std::string& announcement = "Correction");
 
 	std::vector<Action> Add(const std::string& utf8, uint64_t nowMs);
 	std::vector<Action> Tick(uint64_t nowMs);
@@ -46,18 +50,19 @@ public:
 	bool IsCorrecting() const	{ return correcting; }
 
 private:
-	void Speak(std::vector<Action>& actions, const std::string& phrase, const std::string& after);
-	void FinishCorrection(std::vector<Action>& actions, bool endOfLine);
+	void SpeakFrom(std::vector<Action>& actions, size_t from);
+	void FinishCorrection(std::vector<Action>& actions);
 
-	const int		silenceMs;
+	const int		stableMs;
 	const bool		announce;
 	const std::string	announcement;
-	PhraseSplitter		splitter;
-	// La ligne en cours, telle qu'elle a déjà été dite
-	std::string		lineSaid;
+	// La ligne telle qu'elle s'affiche, et combien d'octets en sont dits
+	std::string		line;
+	size_t			said = 0;
 	bool			correcting = false;
-	std::string		retyped;
-	uint64_t		lastTypedMs = 0;
+	// Où commence la phrase à redire
+	size_t			correctionStart = 0;
+	uint64_t		lastChangeMs = 0;
 };
 
 #endif

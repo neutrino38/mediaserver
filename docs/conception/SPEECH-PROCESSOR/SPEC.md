@@ -295,10 +295,11 @@ noierait la file du long-poll. Il y a donc deux formes :
 
 - **Le contrôleur** : `SpeechProcessorSay(port, text)` rend un `sayId`.
 - **L'entrée texte d'un port** (`textSourcePort`), en transcription. Le client
-  découpe la frappe T.140 en phrases, avec la même classe `PhraseSplitter`
-  que speech-server : une phrase finit sur une ponctuation finale suivie d'un
-  blanc, une fin de ligne, ou 1 200 ms sans frappe. Les U+0008 qui ne
-  touchent que du texte pas encore dit l'effacent sur place.
+  découpe la frappe T.140 en phrases (`CorrectionTracker`) : une phrase finit
+  dès qu'un `.`, `?`, `!`, `:` ou `…` est tapé, sur une fin de ligne, ou sur un
+  blanc quand plus de cinq mots attendent. Jamais sur un silence de frappe,
+  qui couperait un mot. Les U+0008 qui ne touchent que du texte pas encore
+  dit l'effacent sur place.
 
 Les deux sources peuvent viser le même port en même temps. Par exemple, une
 annonce du contrôleur pendant une transcription. Elles partagent alors le
@@ -342,12 +343,14 @@ sait si une interruption est attendue.
 
 En transcription, un retour arrière du sourd qui remonte dans du texte déjà
 envoyé à la synthèse est une correction (SPEC speech-server §7.3). Le
-SpeechProcessor suit la bulle T.140 du port source. Il coupe lui-même les
-phrases sur un silence de frappe (1 200 ms, sous les 1 500 ms du serveur),
-pour savoir exactement ce qui a été envoyé (§10.6). Quand un retour arrière
-dépasse ce qui a été envoyé, il envoie `stop`, puis l'annonce
-(« Correction : » en français), puis le texte retapé jusqu'à la fin de la
-ligne.
+SpeechProcessor tient une copie exacte de la ligne affichée chez l'appelant,
+et sait ce qui en a été envoyé (§10.6). Chaque phrase part suivie d'un
+`flush` : le découpage de speech-server n'intervient pas. Quand un retour
+arrière dépasse ce qui a été envoyé, il envoie `stop`, puis l'annonce
+(« Correction » en français), tout de suite. La phrase touchée, depuis la
+ponctuation qui la précède, est redite quand la ligne n'a pas changé
+depuis 2 s, ou en fin de ligne. Les autres phrases de la ligne ne sont pas
+redites.
 
 L'annonce est une option de `StartSynthesis` (`announceCorrections`, vraie
 par défaut). Sans elle, le texte retapé est simplement dit.
@@ -726,10 +729,10 @@ ci-dessous :
   correspondance `id` ↔ `sayId` est exacte. La latence ne change pas : le
   serveur aurait coupé au même moment. La règle « `flush` avant un `Say` »
   devient sans objet.
-- **Une correction se ferme aussi sur le silence de frappe** (1 200 ms), pas
-  seulement en fin de ligne : un client SIP n'envoie pas toujours de fin de
-  ligne. La phrase dite est la ligne entière corrigée, précédée de
-  « Correction : » si l'option est vraie.
+- **Une correction se ferme aussi quand la ligne est stable** (2 s sans
+  modification), pas seulement en fin de ligne : un client SIP n'envoie pas
+  toujours de fin de ligne. La phrase redite est celle qui a été touchée ;
+  « Correction » est dit avant, au premier retour arrière.
 - **`SpeechFlow` remonte le refus d'une phrase** (`onRejected`), qui sinon ne
   recevait jamais de `done` : le `Say` ne finissait pas.
 - **`StopSynthesis` ne publie pas de Done** pour les `Say` en cours.

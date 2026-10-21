@@ -406,24 +406,32 @@ TEST_F(SpeechProcessorTts, LaFrappeDeAEstDiteSurB)
 	ASSERT_TRUE(Eventually([&] { return audio[1].Loud() >= 25; }, 2000));
 	EXPECT_EQ(0, audio[0].Loud());
 
-	// Une phrase sans ponctuation part sur le silence de frappe
+	// Une phrase sans ponctuation attend la fin de ligne : un silence de
+	// frappe ne coupe jamais un mot
 	Type(0, "a demain");
+	std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+	EXPECT_EQ(1u, Inputs().size());
+	Type(0, LS);
 	ASSERT_TRUE(Eventually([&] { return Inputs().size() == 2; }, 3000));
 	EXPECT_EQ("a demain", Inputs()[1]);
 }
 
-// §11.4 : un retour arrière dans du texte déjà dit envoie stop, puis
-// « Correction : » suivi de la ligne retapée.
+// §11.4 : un retour arrière dans du texte déjà dit envoie stop et
+// « Correction », puis la phrase retapée.
 TEST_F(SpeechProcessorTts, UneCorrectionEstAnnonceeEtRedite)
 {
 	StartSynthesis(1, 0);
 	Type(0, "deux pizas. ");
 	ASSERT_TRUE(Eventually([&] { return Inputs().size() == 1; }));
 
+	// L'annonce part au premier retour arrière dans le texte dit, la phrase
+	// corrigée en fin de ligne
 	Type(0, BS + BS + BS + BS + BS + BS + BS);
-	Type(0, "pizzas pour ce soir." + LS);
 	ASSERT_TRUE(Eventually([&] { return Inputs().size() == 2; }));
-	EXPECT_EQ("Correction : deux pizzas pour ce soir.", Inputs()[1]);
+	EXPECT_EQ("Correction", Inputs()[1]);
+	Type(0, "pizzas pour ce soir." + LS);
+	ASSERT_TRUE(Eventually([&] { return Inputs().size() == 3; }));
+	EXPECT_EQ("deux pizzas pour ce soir.", Inputs()[2]);
 }
 
 // §11.4 : la voix relayée de A et la synthèse sortent ensemble sur B, sans

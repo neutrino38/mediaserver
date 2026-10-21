@@ -79,9 +79,9 @@ public:
 	static constexpr int	SilenceMs = 700;
 	static constexpr int	PartialEventMs = 250;
 	static constexpr int	UtteranceEndMs = 500;
-	//Synthèse (§7.5, §10.6) : le silence de frappe qui coupe une phrase tapée,
-	//sous les 1 500 ms de speech-server.
-	static constexpr int	TypingSilenceMs = 1200;
+	//Synthèse (§7.5) : une phrase corrigée est redite quand la ligne n'a pas
+	//changé depuis ce délai.
+	static constexpr int	CorrectionStableMs = 2000;
 
 	SpeechProcessor(const std::wstring& tag);
 	virtual ~SpeechProcessor();

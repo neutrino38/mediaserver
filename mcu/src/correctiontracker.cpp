@@ -1,9 +1,13 @@
 #include "correctiontracker.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace
 {
 
 const std::string LineSeparator = "\xE2\x80\xA8";
+const std::string Ellipsis = "\xE2\x80\xA6";
 
 size_t CharLength(const std::string& text, size_t pos)
 {
@@ -24,6 +28,17 @@ void EraseLastChar(std::string& text)
 	text.erase(pos);
 }
 
+// Ce qui fait partir une phrase, et la borne de celle qu'une correction redit
+bool IsPhraseEnd(const std::string& c)
+{
+	return c == "." || c == "?" || c == "!" || c == ":" || c == Ellipsis;
+}
+
+bool IsBlank(const std::string& c)
+{
+	return c == " " || c == "\t";
+}
+
 std::string Trim(const std::string& text)
 {
 	const size_t first = text.find_first_not_of(" \t");
@@ -32,78 +47,132 @@ std::string Trim(const std::string& text)
 	return text.substr(first, text.find_last_not_of(" \t") - first + 1);
 }
 
+// Une lettre ou un chiffre : le second point de « .. » n'est pas une phrase.
+bool HasWords(const std::string& text)
+{
+	for (size_t pos = 0; pos < text.size(); )
+	{
+		const size_t length = std::min(CharLength(text, pos), text.size() - pos);
+		const std::string c = text.substr(pos, length);
+		pos += length;
+		if (length > 1 ? c != Ellipsis : isalnum((unsigned char)c[0]) != 0)
+			return true;
+	}
+	return false;
 }
 
-CorrectionTracker::CorrectionTracker(int silenceMs, bool announce, const std::string& announcement) :
-	silenceMs(silenceMs),
+size_t CountWords(const std::string& text)
+{
+	size_t words = 0;
+	bool inWord = false;
+	for (char c : text)
+	{
+		const bool blank = c == ' ' || c == '\t';
+		if (!blank && !inWord)
+			++words;
+		inWord = !blank;
+	}
+	return words;
+}
+
+// Le début de la phrase qui contient `pos` : juste après la ponctuation qui
+// précède, ou le début de la ligne.
+size_t SentenceStart(const std::string& line, size_t pos)
+{
+	size_t start = 0;
+	for (size_t i = 0; i < pos && i < line.size(); )
+	{
+		const size_t length = std::min(CharLength(line, i), line.size() - i);
+		i += length;
+		if (i <= pos && IsPhraseEnd(line.substr(i - length, length)))
+			start = i;
+	}
+	return start;
+}
+
+}
+
+CorrectionTracker::CorrectionTracker(int stableMs, bool announce, const std::string& announcement) :
+	stableMs(stableMs),
 	announce(announce),
-	announcement(announcement),
-	splitter(silenceMs)
+	announcement(announcement)
 {
 }
 
-void CorrectionTracker::Speak(std::vector<Action>& actions, const std::string& phrase, const std::string& after)
+void CorrectionTracker::SpeakFrom(std::vector<Action>& actions, size_t from)
 {
-	if (phrase.empty())
-		return;
-	actions.push_back({Action::Speak, phrase});
-	lineSaid += phrase + after;
+	const std::string phrase = Trim(line.substr(std::min(from, line.size())));
+	said = line.size();
+	if (HasWords(phrase))
+		actions.push_back({Action::Speak, phrase});
 }
 
-void CorrectionTracker::FinishCorrection(std::vector<Action>& actions, bool endOfLine)
+void CorrectionTracker::FinishCorrection(std::vector<Action>& actions)
 {
-	const std::string line = Trim(lineSaid + retyped);
 	correcting = false;
-	retyped.clear();
-	lineSaid = endOfLine || line.empty() ? "" : line + " ";
-	if (!line.empty())
-		actions.push_back({Action::Speak, announce ? announcement + line : line});
+	SpeakFrom(actions, correctionStart);
 }
 
 std::vector<CorrectionTracker::Action> CorrectionTracker::Add(const std::string& utf8, uint64_t nowMs)
 {
 	std::vector<Action> actions;
-	lastTypedMs = nowMs;
 
 	for (size_t pos = 0; pos < utf8.size(); )
 	{
 		const size_t length = std::min(CharLength(utf8, pos), utf8.size() - pos);
 		const std::string c = utf8.substr(pos, length);
 		pos += length;
-		const bool endOfLine = c == "\n" || c == LineSeparator;
 
+		if (c == "\r")
+			continue;
+
+		if (c == "\n" || c == LineSeparator)
+		{
+			if (correcting)
+				FinishCorrection(actions);
+			else
+				SpeakFrom(actions, said);
+			line.clear();
+			said = 0;
+			continue;
+		}
+
+		if (c == "\b")
+		{
+			//Rien à effacer : la ligne précédente est close
+			if (line.empty())
+				continue;
+			EraseLastChar(line);
+			if (line.size() < said)
+			{
+				said = line.size();
+				const size_t start = SentenceStart(line, line.size());
+				if (!correcting)
+				{
+					correcting = true;
+					correctionStart = start;
+					actions.push_back({Action::Stop, ""});
+					if (announce)
+						actions.push_back({Action::Speak, announcement});
+				}
+				else if (start < correctionStart)
+					correctionStart = start;
+			}
+			if (correcting)
+				lastChangeMs = nowMs;
+			continue;
+		}
+
+		line += c;
 		if (correcting)
 		{
-			if (c == "\b")
-			{
-				if (!retyped.empty())
-					EraseLastChar(retyped);
-				else
-					EraseLastChar(lineSaid);
-			}
-			else if (endOfLine)
-				FinishCorrection(actions, true);
-			else if (c != "\r")
-				retyped += c;
+			lastChangeMs = nowMs;
 			continue;
 		}
-
-		if (c == "\b" && splitter.Pending().empty())
-		{
-			//Rien à effacer qui ne soit déjà dit, ou déjà rien du tout
-			if (lineSaid.empty())
-				continue;
-			EraseLastChar(lineSaid);
-			correcting = true;
-			actions.push_back({Action::Stop, ""});
-			continue;
-		}
-
-		const bool blank = c == " " || c == "\t";
-		for (const std::string& phrase : splitter.Add(c, nowMs))
-			Speak(actions, phrase, blank ? " " : "");
-		if (endOfLine)
-			lineSaid.clear();
+		if (IsPhraseEnd(c))
+			SpeakFrom(actions, said);
+		else if (IsBlank(c) && CountWords(line.substr(said)) > MaxPendingWords)
+			SpeakFrom(actions, said);
 	}
 	return actions;
 }
@@ -111,20 +180,14 @@ std::vector<CorrectionTracker::Action> CorrectionTracker::Add(const std::string&
 std::vector<CorrectionTracker::Action> CorrectionTracker::Tick(uint64_t nowMs)
 {
 	std::vector<Action> actions;
-	if (correcting)
-	{
-		if (nowMs - lastTypedMs >= (uint64_t)silenceMs)
-			FinishCorrection(actions, false);
-		return actions;
-	}
-	Speak(actions, splitter.Tick(nowMs), "");
+	if (correcting && nowMs - lastChangeMs >= (uint64_t)stableMs)
+		FinishCorrection(actions);
 	return actions;
 }
 
 void CorrectionTracker::Clear()
 {
-	splitter.Clear();
-	lineSaid.clear();
-	retyped.clear();
+	line.clear();
+	said = 0;
 	correcting = false;
 }

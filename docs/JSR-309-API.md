@@ -1167,18 +1167,22 @@ jambe, sur le port 0). Conception : `docs/conception/SPEECH-PROCESSOR/SPEC.md`.
   - les `SpeechProcessorSay` du contrôleur, dans l'ordre d'arrivée. `Say` rend
     tout de suite un `sayId`, que portent les événements 9 et 10 ;
   - la frappe de `textSourcePort` (`-1` : le contrôleur seul), au fil de la
-    frappe. Une phrase part sur une ponctuation finale suivie d'un blanc, une
-    fin de ligne, ou 1,2 s sans frappe.
+    frappe. Une phrase part dès qu'un `.`, `?`, `!`, `:` ou `…` est tapé, sur une
+    fin de ligne, ou sur un blanc quand plus de cinq mots attendent. Jamais
+    sur un silence de frappe : un mot n'est pas coupé en deux. « 3.5 » ou
+    « 10:30 » sont donc dits en deux morceaux.
 - `voice` est un **alias** de la configuration de speech-server (vide : la
   voix par défaut de la langue), jamais un `voice_id` Mistral. La liste se
   demande à speech-server (`GET /control/voices`) : ne pas la recopier côté
   contrôleur.
 - **Les corrections.** Un retour arrière qui remonte dans du texte déjà dit
-  coupe la synthèse (comme `StopSpeaking`). La ligne corrigée est dite à la
-  fin de la ligne, ou après 1,2 s sans frappe, précédée de « Correction : »
-  si `announceCorrections` est vrai. Exemple : « deux pizas. », puis sept
-  retours arrière et « pizzas pour ce soir. » donnent « Correction : deux
-  pizzas pour ce soir. ».
+  coupe la synthèse (comme `StopSpeaking`) et dit tout de suite
+  « Correction » si `announceCorrections` est vrai. La phrase touchée, depuis
+  la ponctuation qui la précède, est redite quand la ligne n'a pas
+  changé depuis 2 s, ou tout de suite en fin de ligne. Les phrases intactes
+  de la ligne ne sont pas redites. Exemple : « deux pizas. », puis six
+  retours arrière et « pizzas pour ce soir. » donnent « Correction », puis
+  « deux pizzas pour ce soir. ».
 - `SpeechProcessorStopSpeaking` coupe tout de suite ce qui est dit et ce qui
   attend. Chaque `Say` pas fini reçoit son événement 10 avec
   `interrupted = true`. C'est l'outil du barge-in.

@@ -15,6 +15,7 @@
 #include "redcodec.h"
 #include "textmux.h"
 #include "correctiontracker.h"
+#include "speech/phrasesplitter.h"
 #include "audioresampler.h"
 #include "vad.h"
 #include "speech/speechservice.h"
@@ -402,7 +403,7 @@ public:
 	Synthesizer(int port, int textSourcePort, bool announceCorrections) :
 		port(port),
 		textSourcePort(textSourcePort),
-		tracker(TypingSilenceMs, announceCorrections)
+		tracker(CorrectionStableMs, announceCorrections)
 	{
 	}
 
