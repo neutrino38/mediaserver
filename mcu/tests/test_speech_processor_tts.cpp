@@ -482,6 +482,52 @@ TEST_F(SpeechProcessorTts, UnePhraseRefuseeFinitLeSay)
 	EXPECT_EQ(0, audio[1].Loud());
 }
 
+// Un Say en cours quand speech-server tombe finit tout de suite, interrompu :
+// le contrôleur n'attend pas un Done qui ne viendrait qu'au retour du serveur.
+TEST_F(SpeechProcessorTts, UnSayEnCoursALaPanneFinitInterrompu)
+{
+	StartSynthesis(1, -1);
+	const int sayId = sp->Say(1, "SLOW une longue phrase");
+	ASSERT_TRUE(Eventually([&] { return audio[1].Loud() >= 10; }));
+
+	kill(pid, SIGKILL);
+	waitpid(pid, nullptr, 0);
+	pid = -1;
+
+	ASSERT_TRUE(Eventually([&] { return !events.Of(JSR309Event::SpeechSynthesisDoneEvent).empty(); }, 3000));
+	const std::vector<Event> ended = events.Of(JSR309Event::SpeechSynthesisDoneEvent);
+	ASSERT_EQ(1u, ended.size());
+	EXPECT_EQ((std::vector<std::string>{std::to_string(sayId), "true"}), ended[0].tail);
+	EXPECT_EQ("down", events.Of(JSR309Event::SpeechServiceEvent).back().tail[1]);
+}
+
+// Un Say émis pendant la panne finit aussitôt, interrompu, et n'est pas dit
+// en retard quand le serveur revient.
+TEST_F(SpeechProcessorTts, UnSayPendantLaPanneNEstPasDitEnRetard)
+{
+	StartSynthesis(1, -1);
+	kill(pid, SIGKILL);
+	waitpid(pid, nullptr, 0);
+	pid = -1;
+	ASSERT_TRUE(Eventually([&] { return events.Of(JSR309Event::SpeechServiceEvent).back().tail[1] == "down"; }));
+
+	const int sayId = sp->Say(1, "Bonjour.");
+	ASSERT_GT(sayId, 0);
+	ASSERT_TRUE(Eventually([&] { return !events.Of(JSR309Event::SpeechSynthesisDoneEvent).empty(); }, 1000));
+	EXPECT_EQ((std::vector<std::string>{std::to_string(sayId), "true"}), events.Of(JSR309Event::SpeechSynthesisDoneEvent)[0].tail);
+
+	LaunchServer();
+	ASSERT_TRUE(Eventually([&] { return events.Of(JSR309Event::SpeechServiceEvent).back().tail[1] == "up"; }, 15000));
+	std::this_thread::sleep_for(std::chrono::milliseconds(500));
+	EXPECT_TRUE(Inputs().empty()) << "rien n'est dit en retard";
+	EXPECT_TRUE(events.Of(JSR309Event::SpeechSynthesisStartedEvent).empty());
+
+	// Le flux revenu sert de nouveau
+	const int next = sp->Say(1, "Encore.");
+	ASSERT_TRUE(Eventually([&] { return events.Of(JSR309Event::SpeechSynthesisDoneEvent).size() == 2; }));
+	EXPECT_EQ((std::vector<std::string>{std::to_string(next), "false"}), events.Of(JSR309Event::SpeechSynthesisDoneEvent)[1].tail);
+}
+
 // Sans synthèse active, un Say est refusé ; un texte vide aussi.
 TEST_F(SpeechProcessorTts, UnSaySansSyntheseEstRefuse)
 {

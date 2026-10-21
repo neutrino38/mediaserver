@@ -542,6 +542,9 @@ public:
 	//arrive avant lui. Dit au prochain `ready`, abandonné sur un `down`.
 	std::deque<std::pair<int, std::string>>	held;
 	bool			streamReady = false;
+	//Perdu après une panne, jusqu'au prochain `ready` : un Say n'attend
+	//pas un flux qui peut ne jamais revenir
+	bool			streamDown = false;
 	std::atomic<bool>	idle{true};
 
 private:
@@ -876,6 +879,7 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 				synth.started.clear();
 				synth.nextPhraseId = 1;
 				synth.streamReady = true;
+				synth.streamDown = false;
 				break;
 			case Synthesizer::Notice::Say:
 			{
@@ -911,7 +915,15 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 			case Synthesizer::Notice::State:
 				if (!notice.up)
 				{
+					Log("-SpeechProcessor: synthesis unavailable, says interrupted [%ls,port:%d,says:%zu,reason:%s]\n",
+						tag.c_str(), synth.port, synth.remaining.size() + synth.held.size(), notice.reason.c_str());
 					synth.streamReady = false;
+					synth.streamDown = true;
+					for (const auto& entry : synth.remaining)
+						Post(new SpeechSynthesisDoneEvent(synth.port, entry.first, true));
+					synth.owners.clear();
+					synth.remaining.clear();
+					synth.started.clear();
 					DropHeld(synth);
 				}
 				Post(new SpeechServiceEvent(synth.port, "tts", notice.up, notice.reason));
@@ -936,6 +948,8 @@ void SpeechProcessor::Synthesize(Synthesizer& synth, uint64_t nowMs)
 			synth.held.emplace_back(0, action.text);
 			SendHeld(synth);
 		}
+	if (synth.streamDown)
+		DropHeld(synth);
 
 	synth.idle = synth.owners.empty() && synth.held.empty() && !synth.IsSpeaking();
 }
