@@ -10,6 +10,7 @@
 #include "RTPEndpoint.h"
 #include "WSEndpoint.h"
 #include "DCEndpoint.h"
+#include "amr/amrpayload.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -725,8 +726,12 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 	//l'absence signale « filtré/non supporté » (result.codecs ne contient que
 	//les codecs retenus). C'est le contrôleur SIP qui déduit les PT acceptés de
 	//cette struct, la distinction accepté-sans-fmtp / rejeté doit donc être nette.
+	std::set<BYTE> amrOctetAligned;
 	for (std::vector<NegotiatedCodec>::const_iterator it=result.codecs.begin(); it!=result.codecs.end(); ++it)
 	{
+		if ((it->codec==AudioCodec::AMR || it->codec==AudioCodec::AMRWB) &&
+		    AMRPayload::OctetAligned(ParseFmtpParams(it->fmtp)))
+			amrOctetAligned.insert((BYTE)it->payloadType);
 		negotiatedFmtp[it->payloadType] = it->fmtp;
 		negotiatedProps[it->payloadType] = it->effectiveProps;
 		negotiatedCodecs[it->payloadType] = it->codec;
@@ -737,6 +742,9 @@ void Endpoint::Port::NegotiateReceiving(const RTPMap& proposed, RTPMap& accepted
 		if (negotiatedByCodec.find(it->codec) == negotiatedByCodec.end())
 			negotiatedByCodec[it->codec] = it->effectiveProps;
 	}
+
+	if (RTPEndpoint* rtp = dynamic_cast<RTPEndpoint*>(this))
+		rtp->SetAMROctetAligned(amrOctetAligned);
 
 	//Un producteur peut déjà être attaché (re-INVITE, ou attach avant
 	//StartReceiving) : lui pousser les bornes tout de suite.

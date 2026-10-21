@@ -564,8 +564,8 @@ Conséquences pratiques :
 - un appel **PCMU en `.mp4`** est transcodé en AAC (ce muxer refuse tous les
   codecs télécom) ; le même appel en **`.mkv`** est enregistré tel quel ;
 - un appel **VP8** ne s'enregistre qu'en `.mkv` ou `.webm` ;
-- l'**AMR** est toujours transcodé, même là où le conteneur l'accepterait : sa
-  charge utile RTP n'est pas la trame codée (en-tête CMR + TOC).
+- l'**AMR** est toujours transcodé, même là où le conteneur l'accepterait : un
+  paquet AMR peut porter plusieurs trames (voir `CODECS.md`).
 
 L'enregistrement vidéo démarre à la **première I-frame** reçue ; le serveur en
 réclame une à la source tant qu'elle n'est pas arrivée. Pour le texte, la

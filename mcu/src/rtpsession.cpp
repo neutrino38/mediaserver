@@ -27,6 +27,7 @@
 #include "ipaddress.h"
 #include "addressprofiles.h"
 #include "medkit/stunmessage.h"
+#include "amr/amrpayload.h"
 extern "C" {
 #include <libavutil/base64.h>
 }
@@ -966,6 +967,23 @@ int RTPSession::SetRemoteCryptoSDES(const char* suite, const char* key64,int key
 
 	//Set it
 	return SetRemoteCryptoSDES(suite,recvKey,len,keyRank);
+}
+
+void RTPSession::SetAMROctetAligned(const std::set<BYTE>& pts)
+{
+	std::lock_guard<std::mutex> lock(amrMutex);
+	amrOctetAligned = pts;
+}
+
+bool RTPSession::IsAMROctetAligned(BYTE pt)
+{
+	std::lock_guard<std::mutex> lock(amrMutex);
+	return amrOctetAligned.count(pt) > 0;
+}
+
+static bool IsAMR(MediaFrame::Type media, DWORD codec)
+{
+	return media==MediaFrame::Audio && (codec==AudioCodec::AMR || codec==AudioCodec::AMRWB);
 }
 
 void RTPSession::SetReceivingRTPMap(RTPMap &map)
@@ -2515,11 +2533,21 @@ int RTPSession::SendPacket(RTPPacket &packet,DWORD timestamp)
 	if (ini+packet.GetMediaLength()>MTU)
 		return Error("SendPacket Overflow [size:%d,max:%d]\n",ini+packet.GetMediaLength(),MTU);
 
-	//Copiamos los datos
-        memcpy(sendPacket+ini,packet.GetMediaData(),packet.GetMediaLength());
-
-	//Set pateckt length
-	int len = packet.GetMediaLength()+ini;
+	int len;
+	if (IsAMR(media,packet.GetCodec()))
+	{
+		const int n = AMRPayload::FromStorage(packet.GetCodec()==AudioCodec::AMRWB,IsAMROctetAligned(sendType),
+		                                      packet.GetMediaData(),packet.GetMediaLength(),
+		                                      sendPacket+ini,MTU-ini);
+		if (n<0)
+			return Error("-RTPSession: AMR frame not sent, it is no storage-format frame [size:%d]\n",packet.GetMediaLength());
+		len = n+ini;
+	} else {
+		//Copiamos los datos
+		memcpy(sendPacket+ini,packet.GetMediaData(),packet.GetMediaLength());
+		//Set pateckt length
+		len = packet.GetMediaLength()+ini;
+	}
 
 	//Chiffrement et envoi par le transport, celui de la porteuse pour une
 	//session jointe. Le paquet est chiffré en place : la file RTX ci-dessous
@@ -3285,6 +3313,24 @@ int RTPSession::ProcessIncomingRTP(BYTE* buffer,int size,const IPEndpoint& from_
 	}
 		//Set codec
 	packet->SetCodec(codec);
+
+	if (IsAMR(media,codec))
+	{
+		BYTE storage[MTU];
+		const int n = AMRPayload::ToStorage(codec==AudioCodec::AMRWB,IsAMROctetAligned(type),
+		                                    packet->GetMediaData(),packet->GetMediaLength(),
+		                                    storage,sizeof(storage));
+		if (n<0 || !packet->SetPayload(storage,n))
+		{
+			delete(packet);
+			//Un mode de charge utile mal négocié les rejette TOUS : une trace
+			//par rafale, pas cinquante par seconde.
+			if (amrDropped++ % 500 == 0)
+				Error("-RTPSession: invalid AMR payload dropped [pt:%d,size:%d,dropped:%u]\n",type,size,amrDropped);
+			return 0;
+		}
+	}
+
 	//Get ssrc
 	DWORD ssrc = packet->GetSSRC();
 

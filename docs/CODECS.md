@@ -69,6 +69,31 @@ constructeur de l'encodeur, pour éviter toute dérive).
 
 `fmtp` généré : `profile=<p>;level-idx=<l>;tier=<t>`.
 
+### AMR et AMR-WB (`AudioCodec::AMR`, `AudioCodec::AMRWB`, RFC 4867)
+
+Pas de clé `codec.*` : le `fmtp` répondu se déduit du `fmtp` du pair.
+
+| Paramètre du pair | Ce que fait le serveur |
+|---|---|
+| `octet-align=1` | Répond `octet-align=1`. Ce paramètre doit être identique des deux côtés. |
+| absent | Répond sans `octet-align` : le mode est alors **bandwidth-efficient**, le défaut de la RFC. |
+| `mode-set=0,1,2` | Répond le même `mode-set`. L'encodeur émet le mode le plus haut de la liste (ici le mode 2, soit 12,65 kbit/s en AMR-WB). |
+| `crc=1`, `robust-sorting=1`, `interleaving` | **Refuse le PT** : il disparaît de la struct de retour. |
+
+Sans `mode-set`, l'encodeur émet 23,85 kbit/s en AMR-WB et 12,2 kbit/s en AMR.
+
+Le mode de charge utile vaut **par PT**. Une offre VoLTE propose souvent l'AMR-WB
+deux fois : un PT en `octet-align=1`, un autre sans. Chacun repart avec son
+propre `fmtp`.
+
+**Piège.** Sur le fil, une trame AMR n'est pas la trame du codec : elle est
+précédée d'un octet CMR et d'une table des matières, et en bandwidth-efficient
+ses bits ne sont même pas alignés sur l'octet. `RTPSession` traduit à l'entrée
+et à la sortie (`amr/amrpayload.h` dans libmedikit). À l'intérieur du serveur,
+un paquet AMR porte donc des trames au **format stockage** : un octet d'en-tête
+puis la trame, comme dans un fichier 3GP. Un paquet reçu peut en porter
+plusieurs.
+
 ### T140 redondant (`TextCodec::T140RED`, RFC 4103)
 
 Pas de clé `codec.*` : le `fmtp` du RED texte liste le payload type du **T140
@@ -82,7 +107,7 @@ vide (absent de la struct).
 Ces codecs sont négociables (gardés/filtrés selon le support ffmpeg) mais
 n'émettent **aucun** `fmtp` (donc absents de la struct de retour) :
 
-- **Audio** : PCMU, PCMA, G722, GSM, AAC, AMR, Speex, Nelly.
+- **Audio** : PCMU, PCMA, G722, GSM, AAC, Speex, Nelly.
 - **Texte** : T140 (le paramétrage éventuel est porté par le T140RED, §2).
 
 ## 4. Support des codecs (`IsSupported`)
