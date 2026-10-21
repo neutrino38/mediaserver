@@ -36,6 +36,8 @@ struct SpeechConfig
 
 	std::string	mistralUrl = "https://api.mistral.ai";
 	int		mistralWorkers = 10;
+	// How often Mistral is asked whether it answers; 0: never.
+	int		mistralProbeSecs = 30;
 
 	int		maxSessions[SpeechFunctionCount] = { 20, 20, 20 };
 	int		idleSecs = 60;

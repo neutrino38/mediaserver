@@ -11,6 +11,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <set>
 #include <poll.h>
 #include <srtp2/srtp.h>
 #include "config.h"
@@ -226,6 +227,9 @@ public:
 
 	void SetSendingRTPMap(RTPMap &map);
 	void SetReceivingRTPMap(RTPMap &map);
+	//Les PT AMR / AMR-WB négociés en octet-aligned (RFC 4867, `octet-align=1`) ;
+	//les autres sont en bandwidth-efficient, le défaut du format.
+	void SetAMROctetAligned(const std::set<BYTE>& pts);
 	bool SetSendingCodec(DWORD codec);
 	//Sonde silencieuse : le codec est-il dans la rtpMap de sortie ? Ne bascule
 	//rien et ne journalise rien. C'est le chemin nominal de l'arbitrage pont
@@ -834,6 +838,13 @@ private:
 	//RTP Map types
 	RTPMap* rtpMapIn;
 	RTPMap* rtpMapOut;
+	//Le fil porte l'AMR au format RFC 4867, les codecs le lisent et l'écrivent au
+	//format stockage : la traduction se fait ici, au bord, par PT. Posé par la
+	//négociation (thread XML-RPC), lu par le réacteur et par l'émetteur.
+	std::mutex amrMutex;
+	std::set<BYTE> amrOctetAligned;
+	DWORD amrDropped = 0;
+	bool IsAMROctetAligned(BYTE pt);
 	//La map de réception PRÉCÉDENTE, gardée quelques secondes après une
 	//renégociation (cf. RTP_MAP_FALLBACK_MS), et l'instant où elle a été
 	//remplacée. C'est le trou de l'offre/réponse : entre le moment où nous

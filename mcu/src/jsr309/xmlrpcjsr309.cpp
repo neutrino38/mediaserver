@@ -3178,6 +3178,359 @@ static xmlrpc_value* GetNetworkProfiles(xmlrpc_env *env, xmlrpc_value *param_arr
 	return xmlok(env,arr);
 }
 
+/**************************************
+* SpeechProcessor (SPEC SPEECH-PROCESSOR §8.1, contrat docs/JSR-309-API.md §6.13)
+**************************************/
+//Refus explicites, pour que le contrôleur sache QUOI corriger : un port vaut
+//0 (A) ou 1 (B), et la vidéo va d'endpoint à endpoint (EndpointAttachToEndpoint).
+static xmlrpc_value* SpeechProcessorCheck(xmlrpc_env *env,int port,int media)
+{
+	if (!SpeechProcessor::IsValidPort(port))
+		return xmlerror(env,"SpeechProcessor port must be 0 (A) or 1 (B)");
+	if (media!=-1 && !SpeechProcessor::IsSupportedMedia((MediaFrame::Type)media))
+		return xmlerror(env,"SpeechProcessor carries audio and text only: attach video endpoint to endpoint");
+	return NULL;
+}
+
+xmlrpc_value* SpeechProcessorCreate(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	UTF8Parser parser;
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	char *str;
+	xmlrpc_parse_value(env, param_array, "(is)", &sessionId, &str);
+	if(env->fault_occurred)
+		return 0;
+
+	parser.Parse((BYTE*)str,strlen(str));
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	int spId = session->SpeechProcessorCreate(parser.GetWString());
+	if(spId<0)
+		return xmlerror(env,"Could not create speech processor\n");
+
+	return xmlok(env,xmlrpc_build_value(env,"(i)",spId));
+}
+
+xmlrpc_value* SpeechProcessorDelete(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	xmlrpc_parse_value(env, param_array, "(ii)", &sessionId, &spId);
+	if(env->fault_occurred)
+		return 0;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorDelete(spId))
+		return xmlerror(env,"Speech processor not found\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorPortSetCodec(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	int codec;
+	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId, &spId, &port, &codec);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorPortSetCodec(spId,port,(AudioCodec::Type)codec))
+		return xmlerror(env,"Could not set speech processor port codec\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorSetComfortNoise(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	int dbov;
+	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId, &spId, &port, &dbov);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+	if (dbov>0 || dbov<SpeechProcessor::MinComfortNoiseDbov)
+		return xmlerror(env,"Comfort noise level must be between -96 and 0 dBov (0 = silence)");
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorSetComfortNoise(spId,port,dbov))
+		return xmlerror(env,"Could not set comfort noise\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorAttachToEndpoint(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	int endpointId;
+	int media;
+	xmlrpc_parse_value(env, param_array, "(iiiii)", &sessionId, &spId, &port, &endpointId, &media);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,media))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorAttachToEndpoint(spId,port,endpointId,(MediaFrame::Type)media))
+		return xmlerror(env,"Could not attach speech processor to endpoint\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* EndpointAttachToSpeechProcessor(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int endpointId;
+	int spId;
+	int port;
+	int media;
+	xmlrpc_parse_value(env, param_array, "(iiiii)", &sessionId, &endpointId, &spId, &port, &media);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,media))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->EndpointAttachToSpeechProcessor(endpointId,spId,port,(MediaFrame::Type)media))
+		return xmlerror(env,"Could not attach endpoint to speech processor\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorDettach(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	int media;
+	xmlrpc_parse_value(env, param_array, "(iiii)", &sessionId, &spId, &port, &media);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,media))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorDettach(spId,port,(MediaFrame::Type)media))
+		return xmlerror(env,"Could not dettach speech processor\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorStartRecognition(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	xmlrpc_bool toEvents;
+	int textPort;
+	xmlrpc_bool halfDuplex;
+	xmlrpc_parse_value(env, param_array, "(iiibib)", &sessionId, &spId, &port, &toEvents, &textPort, &halfDuplex);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+	if (textPort!=-1 && !SpeechProcessor::IsValidPort(textPort))
+		return xmlerror(env,"SpeechProcessor textPort must be 0 (A), 1 (B) or -1 (none)");
+	if (!toEvents && textPort==-1)
+		return xmlerror(env,"Recognized text must go somewhere: toEvents, textPort or both");
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+	if(!session->HasSpeechService())
+		return xmlerror(env,"speech service not configured");
+
+	if(!session->SpeechProcessorStartRecognition(spId,port,toEvents,textPort,halfDuplex))
+		return xmlerror(env,"Could not start recognition\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorStopRecognition(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId, &spId, &port);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorStopRecognition(spId,port))
+		return xmlerror(env,"Could not stop recognition\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorStartSynthesis(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	int textSourcePort;
+	char *voice;
+	xmlrpc_bool announceCorrections;
+	xmlrpc_parse_value(env, param_array, "(iiiisb)", &sessionId, &spId, &port, &textSourcePort, &voice, &announceCorrections);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+	if (textSourcePort!=-1 && !SpeechProcessor::IsValidPort(textSourcePort))
+		return xmlerror(env,"SpeechProcessor textSourcePort must be 0 (A), 1 (B) or -1 (controller only)");
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+	if(!session->HasSpeechService())
+		return xmlerror(env,"speech service not configured");
+
+	if(!session->SpeechProcessorStartSynthesis(spId,port,textSourcePort,voice,announceCorrections))
+		return xmlerror(env,"Could not start synthesis\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorStopSynthesis(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId, &spId, &port);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+
+	if(!session->SpeechProcessorStopSynthesis(spId,port))
+		return xmlerror(env,"Could not stop synthesis\n");
+
+	return xmlok(env);
+}
+
+xmlrpc_value* SpeechProcessorSay(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	char *text;
+	xmlrpc_parse_value(env, param_array, "(iiis)", &sessionId, &spId, &port, &text);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+	if(!session->SpeechProcessorIsSynthesisActive(spId,port))
+		return xmlerror(env,"speech synthesis not active on this port");
+
+	int sayId = session->SpeechProcessorSay(spId,port,text);
+	if(sayId<=0)
+		return xmlerror(env,"Nothing to say");
+
+	return xmlok(env,xmlrpc_build_value(env,"(i)",sayId));
+}
+
+xmlrpc_value* SpeechProcessorStopSpeaking(xmlrpc_env *env, xmlrpc_value *param_array, void *user_data)
+{
+	std::shared_ptr<MediaSession> session;
+	JSR309Manager *jsr = (JSR309Manager*)user_data;
+
+	int sessionId;
+	int spId;
+	int port;
+	xmlrpc_parse_value(env, param_array, "(iii)", &sessionId, &spId, &port);
+	if(env->fault_occurred)
+		return 0;
+
+	if (xmlrpc_value* refused = SpeechProcessorCheck(env,port,-1))
+		return refused;
+
+	if(!jsr->GetMediaSessionRef(sessionId,session))
+		return xmlerror(env,"The media Session does not exist");
+	if(!session->SpeechProcessorIsSynthesisActive(spId,port))
+		return xmlerror(env,"speech synthesis not active on this port");
+
+	if(!session->SpeechProcessorStopSpeaking(spId,port))
+		return xmlerror(env,"Could not stop speaking\n");
+
+	return xmlok(env);
+}
+
 XmlHandlerCmd jsr309CmdList[] =
 {
 	{"GetNetworkProfiles",			GetNetworkProfiles},
@@ -3265,6 +3618,19 @@ XmlHandlerCmd jsr309CmdList[] =
 	{"ConfigureMediaConnection",	ConfigureMediaConnection},
 	{"ConnectMediaConnection",	ConnectMediaConnection},
 	{"SetupDataChannel",		SetupDataChannel},
+	{"SpeechProcessorCreate",		SpeechProcessorCreate},
+	{"SpeechProcessorDelete",		SpeechProcessorDelete},
+	{"SpeechProcessorPortSetCodec",		SpeechProcessorPortSetCodec},
+	{"SpeechProcessorSetComfortNoise",	SpeechProcessorSetComfortNoise},
+	{"SpeechProcessorAttachToEndpoint",	SpeechProcessorAttachToEndpoint},
+	{"EndpointAttachToSpeechProcessor",	EndpointAttachToSpeechProcessor},
+	{"SpeechProcessorDettach",		SpeechProcessorDettach},
+	{"SpeechProcessorStartRecognition",	SpeechProcessorStartRecognition},
+	{"SpeechProcessorStopRecognition",	SpeechProcessorStopRecognition},
+	{"SpeechProcessorStartSynthesis",	SpeechProcessorStartSynthesis},
+	{"SpeechProcessorStopSynthesis",	SpeechProcessorStopSynthesis},
+	{"SpeechProcessorSay",			SpeechProcessorSay},
+	{"SpeechProcessorStopSpeaking",		SpeechProcessorStopSpeaking},
 	{NULL,NULL}
 };
 

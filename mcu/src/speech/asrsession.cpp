@@ -38,6 +38,7 @@ void AsrSession::OpenMistral()
 	mistral = std::make_shared<MistralRealtimeClient>(
 		std::static_pointer_cast<AsrSession>(shared_from_this()), params.delayMs);
 	mistralReady = false;
+	audioSinceFlush = false;
 	openingAtMs = NowMs();
 
 	std::shared_ptr<MistralRealtimeClient> client = mistral;
@@ -62,6 +63,8 @@ void AsrSession::Relay(const BYTE* data, size_t size)
 	const size_t frame = 100 * BytesPerMs;
 	for (size_t pos = 0; pos < size; pos += frame)
 		mistral->SendAudio(data + pos, std::min(frame, size - pos));
+	if (size)
+		audioSinceFlush = true;
 	backend.usage->AddAsrAudio(params.account, size / BytesPerMs);
 }
 
@@ -101,8 +104,11 @@ void AsrSession::OnText(const json& message)
 		paused = true;
 		pausedAtMs = NowMs();
 		// The text still held by Mistral comes now, not after the pause.
-		if (mistral && mistralReady)
+		if (mistral && mistralReady && audioSinceFlush)
+		{
 			mistral->Flush();
+			audioSinceFlush = false;
+		}
 	}
 	else if (type == "resume")
 	{
@@ -121,7 +127,9 @@ void AsrSession::OnText(const json& message)
 		pending.clear();
 		if (mistral && mistralReady)
 		{
-			mistral->Flush();
+			if (audioSinceFlush)
+				mistral->Flush();
+			audioSinceFlush = false;
 			mistral->End();
 		}
 		else if (!mistral)

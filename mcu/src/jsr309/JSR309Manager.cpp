@@ -16,6 +16,8 @@ JSR309Manager::JSR309Manager()
 	maxId = 1;
 	//NO manager
 	eventMngr = NULL;
+	//Pas de service speech tant que main() n'en donne pas
+	speech = NULL;
 	//Not inited
 	inited = false;
 }
@@ -200,6 +202,9 @@ int JSR309Manager::CreateMediaSession(std::wstring tag,int queueId)
 
 	//Set listener
 	sess->SetListener(this,NULL);
+
+	//Le client du speech-server, observé, jamais possédé
+	sess->SetSpeechService(speech);
 
 	//INit it
 	sess->Init();

@@ -17,6 +17,12 @@ RedundentCodec::RedundentCodec()
     idle = true;
 }
 
+RedundentCodec::~RedundentCodec()
+{
+    for (RedFrames::iterator it = reds.begin();it!=reds.end();++it)
+        delete *it;
+}
+
 bool RedundentCodec::Decode(RTPRedundantPacket * red, TextOutput * textOutput)
 {
     DWORD timeStamp = red->GetTimestamp();
@@ -155,6 +161,13 @@ RTPRedundantPacket * RedundentCodec::Encode(MediaFrame * frame, BYTE ptype)
             bufferLen += f->GetLength();
     }
 
+    //Le paquet porte-t-il du texte ? Decide AVANT de retirer la plus vieille
+    //generation : sinon le dernier paquet, qui la porte encore en redondance,
+    //etait jete et la derniere frappe n'etait protegee qu'une fois.
+    bool isNotNull = frame != NULL;
+    for (RedFrames::iterator it = reds.begin();it!=reds.end();++it)
+            if ((*it)->GetLength())
+                    isNotNull = true;
     //Check if there is frame
     if (frame)
     {
@@ -206,18 +219,18 @@ RTPRedundantPacket * RedundentCodec::Encode(MediaFrame * frame, BYTE ptype)
             //Dequeue
             reds.pop_front();
     }
-	bool isNotNull=false;
     //Calculate timeouts
     if (frame)
     {
-			isNotNull=true;
             //Not idle anymore
             idle = false;
             lastTime = frame->GetTimeStamp();
     }
     else
     {
-        int nbactivefr;
+        //Initialise : sans cela EncoderIsIdle() rendait une valeur
+        //indeterminee apres un EncodeNull
+        int nbactivefr = 0;
 		
         for (RedFrames::iterator it = reds.begin();it!=reds.end();++it)
         {
@@ -226,7 +239,6 @@ RTPRedundantPacket * RedundentCodec::Encode(MediaFrame * frame, BYTE ptype)
             //If it is not empty
             if (f->GetLength())
             {
-				isNotNull=true;
                 if ( f->GetLength() == 3 && memcmp(f->GetData(), BOMUTF8, 3) == 0)
                 {
 
@@ -242,8 +254,9 @@ RTPRedundantPacket * RedundentCodec::Encode(MediaFrame * frame, BYTE ptype)
     }
 	if (isNotNull)
 		return packet;
-	else
-		return NULL;
+	//Rien a emettre : le paquet n'est rendu a personne, donc libere ici
+	delete packet;
+	return NULL;
 }
 
 RTPRedundantPacket * RedundentCodec::EncodeBOM(BYTE ptype)

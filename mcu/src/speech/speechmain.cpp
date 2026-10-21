@@ -21,6 +21,7 @@
 #include "xmlrpcserver.h"
 #include "speech/asrsession.h"
 #include "speech/backendhealth.h"
+#include "speech/backendprobe.h"
 #include "speech/compsession.h"
 #include "speech/controlhandler.h"
 #include "speech/speechconfig.h"
@@ -86,6 +87,9 @@ void Usage(const char* name)
 int main(int argc, char** argv)
 {
 	const time_t startedAt = time(NULL);
+	// systemd appends stdout to a file: fully buffered, an outage logged now
+	// would only show when the buffer fills, hours later on a quiet server.
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 
 	std::string configPath = DefaultConfigPath;
 	std::string keyPath;
@@ -188,7 +192,8 @@ int main(int argc, char** argv)
 	wsServer.SetSecure(loaded->streamingSecure, loaded->streamingCert.c_str(), loaded->streamingKey.c_str());
 	wsServer.AddHandler("/streaming/", &streaming);
 
-	SpeechStatus status(startedAt, true, health, streaming, tokens, usage);
+	BackendProbe probe(loaded->mistralUrl, apiKey, loaded->mistralProbeSecs);
+	SpeechStatus status(startedAt, true, health, probe, streaming, tokens, usage);
 	ControlHandler control(config, tokens, usage, status);
 	XmlRpcServer controlServer(loaded->controlListen.To(loaded->controlPort));
 	controlServer.AddHandler("/", &control);
@@ -199,6 +204,7 @@ int main(int argc, char** argv)
 		return 1;
 	}
 	streaming.Start();
+	probe.Start();
 
 	std::thread signalThread([&]() {
 		for (;;)
@@ -239,6 +245,7 @@ int main(int argc, char** argv)
 	}
 	signalThread.join();
 
+	probe.Stop();
 	tasks.Stop();
 	streaming.Stop();
 	wsServer.End();

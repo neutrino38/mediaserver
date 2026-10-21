@@ -15,10 +15,11 @@ std::string SpeechIsoUtc(time_t when)
 	return buf;
 }
 
-SpeechStatus::SpeechStatus(time_t startedAt, bool apiKeyPresent, BackendHealth& health, StreamingHandler& streaming, TokenStore& tokens, UsageCounters& usage) :
+SpeechStatus::SpeechStatus(time_t startedAt, bool apiKeyPresent, BackendHealth& health, BackendProbe& probe, StreamingHandler& streaming, TokenStore& tokens, UsageCounters& usage) :
 	startedAt(startedAt),
 	apiKeyPresent(apiKeyPresent),
 	health(health),
+	probe(probe),
 	streaming(streaming),
 	tokens(tokens),
 	usage(usage)
@@ -34,6 +35,7 @@ void SpeechStatus::Collect(Info& info, time_t now)
 	info.apiKeyPresent = apiKeyPresent;
 	for (int i = 0; i < SpeechFunctionCount; ++i)
 		info.backend[i] = health.Get((SpeechFunction)i);
+	info.mistral = probe.Get();
 	info.sessions = streaming.GetCounters();
 	info.tokens = tokens.GetCounters(now);
 	info.usage = usage.Total();
@@ -71,6 +73,10 @@ std::string SpeechStatus::RenderJSON(const Info& info)
 			{"lastFailure", Instant(info.backend[i].lastFailure)},
 			{"lastError", info.backend[i].lastError},
 			{"discarded", info.backend[i].discarded}};
+	backend["mistral"] = {
+		{"state", BackendProbe::StateName(info.mistral.state)},
+		{"reason", info.mistral.reason.empty() ? json(nullptr) : json(info.mistral.reason)},
+		{"checkedAt", Instant(info.mistral.checkedAt)}};
 
 	json byAccount = json::object();
 	for (const auto& entry : info.usageByAccount)
@@ -108,6 +114,10 @@ std::string SpeechStatus::RenderText(const Info& info)
 	snprintf(buf, sizeof(buf), "  started        %s (uptime %ld s)\n", SpeechIsoUtc(info.startedAt).c_str(), info.uptimeSecs);
 	out += buf;
 	snprintf(buf, sizeof(buf), "  Mistral key    %s\n", info.apiKeyPresent ? "present" : "absent");
+	out += buf;
+	snprintf(buf, sizeof(buf), "  Mistral        %s%s%s (checked %s)\n", BackendProbe::StateName(info.mistral.state),
+		info.mistral.reason.empty() ? "" : " - ", info.mistral.reason.c_str(),
+		info.mistral.checkedAt ? SpeechIsoUtc(info.mistral.checkedAt).c_str() : "never");
 	out += buf;
 
 	for (int i = 0; i < SpeechFunctionCount; ++i)

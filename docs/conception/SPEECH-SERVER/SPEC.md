@@ -3,7 +3,8 @@
 > Statut : lots 0 à 5 faits (§4.2, §13.3 à §13.7) ; l'installation Debian
 > et Ubuntu reste à vérifier.
 > Version cible : **1.18.0 pour le serveur seul (lots 0 à 5)** ; le
-> mediaserver client (lot 6) suit en 1.19.0.
+> mediaserver client (lot 6) suit en 1.19.0, conçu dans la
+> [SPEC SpeechProcessor](../SPEECH-PROCESSOR/SPEC.md).
 > Décision d'architecture : **le calcul de la voix est fait en ligne, par
 > Mistral AI ; aucun moteur local** (tranché le 2026-10-13), consignée par
 > l'[ADR 005](../../architecture/adr-005-speech-server-mistral-en-ligne.md) ;
@@ -41,9 +42,9 @@ formats, borne la charge, et compte ce qui est consommé.
 Usage visé : un utilisateur sourd ou malentendant, dans un navigateur, lit la
 voix de son interlocuteur (`asr`), parle par le texte (`tts`), et fait
 corriger son texte avant qu'il soit dit (`comp`), pour que la synthèse parte
-d'une bonne base. Le mediaserver est un second client, pour
-les usages déjà décrits dans [TTS](../TTS/SPEC.md) : lecture du T.140 d'un
-participant et annonces.
+d'une bonne base. Le mediaserver est un second client : le
+[SpeechProcessor](../SPEECH-PROCESSOR/SPEC.md) en JSR-309, et la lecture du
+T.140 en conférence ([TTS](../TTS/SPEC.md)).
 
 ## 2. Périmètre
 
@@ -395,8 +396,7 @@ T.140 :
   ponctuation seule ne coupe pas : « 3.5 » et « ives.fr » restent entiers.
   Une phrase sans fin qui dépasse 1 500 octets est coupée à son dernier
   blanc, parce que Mistral conseille moins de 300 mots par requête. Le
-  découpeur est la **même classe pure** que celle du [TTS](../TTS/SPEC.md)
-  §7.1, testée seule.
+  découpeur est une classe pure, `PhraseSplitter`, testée seule.
 - `{"type":"flush"}` force l'envoi de ce qui est accumulé.
 - `{"type":"stop"}` vide la file et abandonne la phrase en cours ; le serveur
   répond `{"type":"stopped","ids":[…]}`.
@@ -421,8 +421,8 @@ l'affaire du client. Le mediaserver, qui reçoit la bulle T.140 de
 l'utilisateur, voit le retour arrière qui remonte dans du texte déjà dit ;
 il envoie alors lui-même l'annonce et le texte retapé, par exemple
 « Correction : deux pizzas pour ce soir. ». Il peut d'abord envoyer
-`stop`, pour que les phrases encore en file ne soient pas dites (lot 6,
-§13.8).
+`stop`, pour que les phrases encore en file ne soient pas dites
+([SpeechProcessor](../SPEECH-PROCESSOR/SPEC.md) §7.5).
 
 `ready` porte la voix retenue et la langue :
 `{"type":"ready","function":"tts","rate":16000,"voice":"fr-homme","lang":"fr"}`.
@@ -882,35 +882,20 @@ Tranché le 2026-10-13 : le mediaserver utilise **exactement le même
 mécanisme que n'importe quel client**. Rien ne le distingue côté
 `speech-server`.
 
-Pour chaque session qui a besoin de la voix (un synthétiseur d'annonces, la
-lecture du T.140 d'un participant, usages de la [SPEC TTS](../TTS/SPEC.md)) :
+Pour chaque flux dont il a besoin :
 
-1. le mediaserver demande un jeton `tts` par `POST /control/token` (§6.2).
-   Son adresse figure donc dans `control.allow` ;
-2. il ouvre **une connexion WebSocket par session** sur
-   `/streaming/tts/<jeton>?lang=…&voice=…`, avec `WebSocketServer::Connect`
+1. le mediaserver demande un jeton de la fonction (`asr` ou `tts`) par
+   `POST /control/token` (§6.2). Son adresse figure donc dans
+   `control.allow` ;
+2. il ouvre **une connexion WebSocket par flux** sur
+   `/streaming/<fonction>/<jeton>`, avec `WebSocketServer::Connect`
    (`ws://` ou `wss://`, selon l'URL configurée) ;
-3. il parle le protocole du §7.3 tel quel ;
+3. il parle le protocole du §7.3 ou du §7.4 tel quel ;
 4. à la fin de la session, il ferme le flux. Une session qui tombe rouvre
    un flux avec un **nouveau** jeton, puisque chacun est à usage unique.
 
-Ce que cela demande au mediaserver :
-
-- un **client HTTP** pour l'étape 1, absent aujourd'hui (§3) : libcurl, la
-  même dépendance que `speech-server`, dans un thread de travail et jamais
-  dans un callback du réacteur ;
-- deux options de configuration : l'URL du `speech-server` (`--speech-url`,
-  base commune des deux ports, par exemple `https://speech.example.net`) et,
-  pour `wss://`, la confiance TLS déjà prévue par `--websocket-client-ca`.
-  Sans `--speech-url`, la synthèse est désactivée et `/status/general` le
-  dit.
-
-La [SPEC TTS](../TTS/SPEC.md) §4 décrit un protocole proche mais pas
-identique (`hello`, `voices`) : elle sera **réécrite** pour désigner ce
-document comme seul protocole, et son §5 (serveur Piper) disparaît.
-L'[ADR 003](../../architecture/adr-003-tts-serveur-websocket.md) reste vrai
-sur la séparation en deux binaires ; son moteur change
-([ADR 005](../../architecture/adr-005-speech-server-mistral-en-ligne.md)).
+Le côté mediaserver (configuration, garde ouverte des flux, reprise) est
+conçu dans la [SPEC SpeechProcessor](../SPEECH-PROCESSOR/SPEC.md) §5.
 
 ## 13. Plan d'implémentation
 
@@ -1142,17 +1127,8 @@ Commit livrable : « speech-server : paquets, unité systemd et documentation »
 
 ### 13.8 Lot 6 : le mediaserver client (1.19.0)
 
-Hors 1.18.0. Résumé pour mémoire, détaillé lors de la réécriture de la SPEC
-TTS : libcurl dans le mediaserver, `SpeechTokenClient` (jeton par
-`POST /control/token`, dans un thread de travail), `TtsClient` sur
-`WebSocketServer::Connect`, `Synthesizer` conférence et JSR-309, événements,
-`/status/general` bloc `tts`, protos MOTELI, clients Java,
-`docs/JSR-309-API.md`.
-
-Le mediaserver suit la bulle T.140 de chaque participant. Un retour arrière
-qui remonte dans du texte déjà envoyé à la synthèse est une correction : il
-envoie `stop`, puis l'annonce de la langue (« Correction : » en français)
-suivie du texte retapé. L'annonce est une option du mediaserver.
+Conçu à part : [SPEC SpeechProcessor](../SPEECH-PROCESSOR/SPEC.md), plan au
+§10.
 
 ## 14. Tests
 

@@ -2,7 +2,7 @@ Name:      %name
 Version:   %version
 #Ne pas enlever le .ives a la fin de la release !
 #Cela est utilise par les scripts de recherche de package.
-Release:   2.ives%{?dist}
+Release:   1.ives%{?dist}
 Summary:   [IVeS] librairies partag꦳ pour asterisk de Fontventa.
 Vendor:    IVeS / Fontventa
 Group:     Applications/Internet
@@ -11,6 +11,8 @@ URL:       http://www.ives.fr
 BuildRoot:  %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 Requires:  ImageMagick-c++ >= 7, ffmpeg, libsrtp
 Requires:  openssl-libs >= 3.0, xmlrpc-c, usrsctp
+# libcurl : le mediaserver demande ses jetons au speech-server (client speech).
+Requires:  libcurl
 BuildRequires: git, wget, libtool
 BuildRequires: ffmpeg-devel
 BuildRequires: gcc-c++, bzip2-devel, ImageMagick-c++-devel >= 7
@@ -173,6 +175,27 @@ fi
 %license %{_defaultlicensedir}/mediaserver-speech-%{version}/LICENSE.md
 
 %changelog
+* Wed Oct 21 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- version 1.19.0
+- SpeechProcessor JSR-309 : relais audio et texte entre deux pattes,
+  reconnaissance (texte T.140 ou evenements) et synthese (Say, texte tape
+  dit sur l'autre patte, corrections annoncees), par speech-server
+- client du speech-server dans le mediaserver : --speech-url,
+  --speech-streaming-url, --speech-account
+- /status/general du mcu dit si la parole peut servir maintenant :
+  speech.available, unavailableReason, checkedAt
+- speech-server sonde Mistral (GET /v1/models toutes les mistral.probeSecs,
+  30 s par defaut) et publie backend.mistral dans /status/general ; son
+  journal est ecrit ligne par ligne
+- un Say n'attend plus un flux de synthese perdu : il finit aussitot,
+  interrompu, et n'est jamais dit en retard
+- AMR et AMR-WB au format RFC 4867 sur le fil ; un correspondant en DTX
+  garde ses silences
+- redcodec : quatre defauts de l'encodeur corriges ; textmux : une sortie
+  T.140 partagee entre deux sources
+- journal : date ISO sur toutes les lignes
+- build : ffmpeg 8 ou plus, celui de /opt/ffmpeg9 en priorite ; install.ksh
+  s'arrete si libmedkit ou libvad ne compile pas
 * Sun Oct 18 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - release 2
 - mediaserver-speech : l'unite copie elle-meme la cle dans /run/speech-server

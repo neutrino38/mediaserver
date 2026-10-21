@@ -94,7 +94,9 @@ Debian). To rebuild it alone:
 make -C mcu speech-server
 ```
 
-Its tests belong to the mcu suite (`make -C mcu check`). The correction
+Its tests belong to the mcu suite (`make -C mcu check`). The mediaserver
+itself is a client of speech-server (`--speech-url`, `--speech-streaming-url`):
+it links libcurl too, for its token requests. The correction
 prompt is also checked against the real Mistral, by hand, with a key:
 
 ```sh

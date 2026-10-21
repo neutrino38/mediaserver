@@ -315,8 +315,9 @@ bool Recorder::AudioFitsFile(AudioCodec::Type codec)
 {
 	//Enregistrer un flux RTP sans le transcoder suppose que sa charge utile RTP
 	//SOIT la trame codée. C'est vrai des codecs par échantillon et d'Opus, pas
-	//de l'AMR (en-tête CMR + TOC devant chaque trame), que le conteneur
-	//accepterait pourtant : le fichier serait illisible.
+	//de l'AMR (RTPSession la rend au format stockage, et un paquet peut en porter
+	//plusieurs trames), que le conteneur accepterait pourtant : le fichier serait
+	//illisible.
 	switch(codec)
 	{
 		case AudioCodec::PCMU:

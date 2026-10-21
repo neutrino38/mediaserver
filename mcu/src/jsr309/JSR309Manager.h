@@ -18,6 +18,8 @@
 #include "xmlstreaminghandler.h"
 #include "websocketserver.h"
 
+class SpeechService;
+
 //Préfixe HTTP (long-poll/SSE) de la file d'événements JSR309. Source unique
 //partagée entre main.cpp (enregistrement du handler) et EventQueueCreate (qui
 //renvoie le chemin complet "/events/jsr309/<queueId>" au client — gap 6).
@@ -42,6 +44,11 @@ public:
 	//comportement historique)
 	int Init(XmlStreamingHandler *eventMngr,int queueExpiresSecs = XmlEventQueue::DefaultExpiresSecs);
 	int End();
+
+	//Le client du speech-server, possédé par main(). Chaque MediaSession créée
+	//ensuite le reçoit (SpeechProcessor, SPEC SPEECH-PROCESSOR §5). NULL : pas de
+	//service speech, les relais d'un SpeechProcessor fonctionnent seuls.
+	void SetSpeechService(SpeechService *speech)	{ this->speech = speech; }
 
 	int CreateEventQueue();
 	int DeleteEventQueue(int id);
@@ -91,6 +98,7 @@ private:
 
 private:
 	XmlStreamingHandler *eventMngr;
+	SpeechService	*speech;
 	MediaSessions	sessions;
 	std::mutex	mutex;
 	int maxId;

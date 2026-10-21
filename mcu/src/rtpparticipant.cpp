@@ -7,6 +7,7 @@
 
 #include "rtpparticipant.h"
 #include "medkit/negotiator.h"
+#include "amr/amrpayload.h"
 
 #include <stdio.h>
 
@@ -642,8 +643,16 @@ int RTPParticipant::StartReceiving(MediaFrame::Type media,RTPMap& rtpMap,
 
 		//Contrat du retour : TOUT PT accepte est une cle, y compris les codecs sans
 		//fmtp (valeur vide). La presence de la cle EST le signal d'acceptation.
+		std::set<BYTE> amrOctetAligned;
 		for (std::vector<NegotiatedCodec>::const_iterator it=result.codecs.begin(); it!=result.codecs.end(); ++it)
+		{
+			if ((it->codec==AudioCodec::AMR || it->codec==AudioCodec::AMRWB) &&
+			    AMRPayload::OctetAligned(ParseFmtpParams(it->fmtp)))
+				amrOctetAligned.insert((BYTE)it->payloadType);
 			negotiatedFmtpOut[it->payloadType] = it->fmtp;
+		}
+		if (media == MediaFrame::Audio)
+			audio.GetOwnSession().SetAMROctetAligned(amrOctetAligned);
 
 		Log("-StartReceiving negotiated %s [partId:%d,proposed:%u,accepted:%u]\n",
 		    MediaFrame::TypeToString(media),GetPartId(),

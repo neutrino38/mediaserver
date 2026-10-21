@@ -62,6 +62,18 @@ public:
 			}
 			else if (type == "input_audio.flush")
 			{
+				// What the real one does (seen 2026-10-20): no audio since the
+				// last flush is an error, and the session goes.
+				if (audio.size() == flushedAt)
+				{
+					++refusedFlushes;
+					SendLocked({{"type", "error"}, {"error", {{"code", 3051},
+						{"message", "Cannot flush audio before sending any audio bytes."}}}});
+					if (std::shared_ptr<WebSocket> ws = socket.lock())
+						ws->Close(1000, "");
+					return;
+				}
+				flushedAt = audio.size();
 				++flushes;
 				SendLocked({{"type", "transcription.done"}, {"text", sent + fake->doneTail}});
 				sent.clear();
@@ -100,6 +112,8 @@ public:
 		std::string		sent;
 		int			delay = -1;
 		int			flushes = 0;
+		int			refusedFlushes = 0;
+		size_t			flushedAt = 0;
 		int			ends = 0;
 		bool			closed = false;
 	};

@@ -79,7 +79,19 @@ Le réserver au réseau d'administration.
     "moteli": false,
     "eventQueueExpiresSecs": 60
   },
-  "load": { "conferences": 1, "participants": 3, "mediaSessions": 2 }
+  "load": { "conferences": 1, "participants": 3, "mediaSessions": 2 },
+  "speech": {
+    "configured": true,
+    "available": true, "unavailableReason": null,
+    "checkedAt": "2026-10-19T08:14:05Z",
+    "controlUrl": "http://speech.example.net:9200",
+    "streamingUrl": "wss://speech.example.net:9201",
+    "account": "clinique-nord",
+    "streams": { "asr": 2, "tts": 1 },
+    "reopenings": 1, "rotations": 4, "failures": 3,
+    "lastFailure": { "at": "2026-10-19T08:12:40Z", "function": "asr",
+                     "reason": "backend closed" }
+  }
 }
 ```
 
@@ -230,6 +242,46 @@ Deux cas ne sont **pas** des replis :
 Ce que ces compteurs ne disent pas : **quel** appel tourne sur GPU. Ils sont
 globaux au processus.
 
+### 3.9 `speech` : le client du speech-server
+
+Le mediaserver demande la reconnaissance et la synthèse vocales à
+`speech-server` (SPEC `docs/conception/SPEECH-PROCESSOR/SPEC.md` §5). Ce bloc
+dit si ce service est joignable **d'ici**, ce que le contrôleur doit savoir
+avant de demander une transcription.
+
+- `configured` : `false` sans `--speech-url`. Les URL et compteurs sont alors
+  vides, `lastFailure` vaut `null`, et seuls les relais d'un SpeechProcessor
+  fonctionnent.
+- `available` : `true` quand la reconnaissance et la synthèse peuvent servir
+  maintenant. Le mediaserver demande le `/status/general` de speech-server
+  toutes les 5 s, et `checkedAt` date la dernière réponse. `available` vaut
+  `false` quand le service n'est pas configuré, quand speech-server ne répond
+  pas, et quand sa sonde dit Mistral en panne (`backend.mistral.state` à
+  `down`). Un speech-server sans sonde, ou avant sa première sonde, compte
+  comme disponible s'il répond.
+- `unavailableReason` : pourquoi `available` vaut `false`, `null` sinon. Le
+  texte est fait pour le journal du contrôleur, par exemple :
+  `speech-server not configured (--speech-url)`,
+  `speech-server not checked yet`,
+  `speech-server unreachable at http://127.0.0.1:9200: Couldn't connect to server`,
+  `speech-server at … refuses this mediaserver (HTTP 403): add its address to control.allow`,
+  ou la raison de la sonde de Mistral, par exemple
+  `Mistral refuses the API key (HTTP 401)`.
+- `controlUrl` (`--speech-url`, où se demandent les jetons) et `streamingUrl`
+  (`--speech-streaming-url`, où s'ouvrent les flux) ; `account`
+  (`--speech-account`, vide si absent) ventile les compteurs de speech-server.
+- `streams` : les flux **prêts maintenant**, par fonction. Comptés sur les flux
+  eux-mêmes, pas tenus à part.
+- `reopenings` : les flux revenus après une panne. `rotations` : les
+  remplacements d'un flux trop vieux (55 min), au premier silence ; ils ne
+  coupent rien.
+- `failures` et `lastFailure` : chaque ouverture ratée (jeton refusé, port de
+  streaming muet, `ready` qui n'arrive pas) ou flux perdu. Un service tombé
+  donne un échec par essai de reprise (1, 2, 5, 10, puis 30 s) : le compteur
+  monte, l'appel continue.
+
+Le rendu texte reprend les mêmes faits dans une section « Speech-server ».
+
 ## 4. Ce que ce point ne dit pas
 
 - **Le détail des conférences** : c'est `/status/mcu` (liste) et
@@ -246,4 +298,5 @@ globaux au processus.
 | Autorité des capacités codec | `third_party/fontventa/libmedikit/codecs.cpp` |
 | Compteurs d'accélération | `third_party/fontventa/libmedikit/video.cpp` (`VideoAccel`) |
 | Extinction du GPU | `Pict::DisableVAAPI`, posée par `main()` sur `--no-hwaccel` |
-| Tests | `mcu/tests/test_status.cpp` (suite `Status`), `third_party/fontventa/libmedikit/tests/test_video_accel.cpp` |
+| Bloc `speech` | `mcu/src/speech/speechservice.cpp` (`SpeechService::GetCounters`) |
+| Tests | `mcu/tests/test_status.cpp` (suite `Status`), `mcu/tests/test_speech_client.cpp`, `third_party/fontventa/libmedikit/tests/test_video_accel.cpp` |

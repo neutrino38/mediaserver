@@ -97,6 +97,9 @@ MediaSession::MediaSession(std::wstring tag)
 	maxVideoMixerId = 1;
 	maxVideoTranscoderId = 1;
 	maxEventContextId = 1;
+	maxSpeechProcessorId = 1;
+	//Pas de service speech tant que le manager n'en donne pas
+	speech = NULL;
 	//No listener
 	listener = NULL;
 	param = NULL;
@@ -180,6 +183,7 @@ int MediaSession::End()
 	AudioTranscoders endedAudioTranscoders;
 	AudioMixers	endedAudioMixers;
 	VideoMixers	endedVideoMixers;
+	SpeechProcessors endedSpeechProcessors;
 
 	{
 		std::lock_guard<std::mutex> lock(mutex);
@@ -191,6 +195,7 @@ int MediaSession::End()
 		endedAudioTranscoders.swap(audioTranscoders);
 		endedAudioMixers.swap(audioMixers);
 		endedVideoMixers.swap(videoMixers);
+		endedSpeechProcessors.swap(speechProcessors);
 		{
 			std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
 			eventContexts.clear();
@@ -206,6 +211,12 @@ int MediaSession::End()
 
 	//Delete all recorders
 	endedRecorders.clear();
+
+	//Les SpeechProcessors avant les endpoints : leurs entrées se retirent des
+	//endpoints encore vivants (RemoveListener est la barrière)
+	for (SpeechProcessors::iterator it=endedSpeechProcessors.begin(); it!=endedSpeechProcessors.end(); ++it)
+		it->second->End();
+	endedSpeechProcessors.clear();
 
 	//End all endpoints
 	for (Endpoints::iterator it=endedEndpoints.begin(); it!=endedEndpoints.end(); ++it)
@@ -2178,3 +2189,182 @@ int MediaSession::onNewMediaConnection(WebSocket *ws, const std::string & token)
 							  ws );
 }
 
+
+/**************************************
+* SpeechProcessor (SPEC SPEECH-PROCESSOR §8.1)
+**************************************/
+int MediaSession::SpeechProcessorCreate(std::wstring tag)
+{
+	std::shared_ptr<SpeechProcessor> sp = std::make_shared<SpeechProcessor>(tag);
+	sp->SetSpeechService(speech);
+
+	std::lock_guard<std::mutex> lock(mutex);
+	int spId = maxSpeechProcessorId++;
+
+	int eventContextId;
+	{
+		std::lock_guard<std::mutex> ctxLock(eventContextsMutex);
+		eventContextId = maxEventContextId++;
+		eventContexts[eventContextId] = std::make_shared<JSR309EventContext>(spId,MediaFrame::Audio,MediaFrame::VIDEO_MAIN);
+	}
+	//Le tour publie : la session vit plus longtemps que lui (End() le joint)
+	sp->SetEventPoster([this,eventContextId](JSR309Event* event) { PostEvent(eventContextId,event); });
+
+	//Le tour de 20 ms démarre tout de suite : un port branché émet aussitôt,
+	//bruit de confort compris
+	sp->Init();
+	speechProcessors[spId] = sp;
+	return spId;
+}
+
+int MediaSession::SpeechProcessorDelete(int spId)
+{
+	//End hors verrou (il joint le tour) ; le shared_ptr local détruit l'objet en
+	//sortie de portée, et le weak_ptr des endpoints attachés expire alors
+	std::shared_ptr<SpeechProcessor> sp;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		SpeechProcessors::iterator it = speechProcessors.find(spId);
+		if (it==speechProcessors.end())
+			return Error("SpeechProcessor not found\n");
+		sp = it->second;
+		speechProcessors.erase(it);
+	}
+	sp->End();
+	return 1;
+}
+
+int MediaSession::SpeechProcessorPortSetCodec(int spId,int port,AudioCodec::Type codec)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->SetPortCodec(port,codec);
+}
+
+int MediaSession::SpeechProcessorSetComfortNoise(int spId,int port,int dbov)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->SetComfortNoise(port,dbov);
+}
+
+int MediaSession::SpeechProcessorAttachToEndpoint(int spId,int port,int endpointId,MediaFrame::Type media)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	Endpoints::iterator itEnd = endpoints.find(endpointId);
+	if (itEnd==endpoints.end())
+		return Error("Endpoint not found\n");
+	if (!SpeechProcessor::IsSupportedMedia(media))
+		return Error("-SpeechProcessorAttachToEndpoint: %s cannot go through a SpeechProcessor\n",MediaFrame::TypeToString(media));
+	Log("-SpeechProcessorAttachToEndpoint [port:%d,endpoint:%ls,media:%s]\n",
+	    port,itEnd->second->GetName().c_str(),MediaFrame::TypeToString(media));
+	return it->second->Attach(port,media,itEnd->second->GetJoinable(media));
+}
+
+int MediaSession::EndpointAttachToSpeechProcessor(int endpointId,int spId,int port,MediaFrame::Type media)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	Endpoints::iterator itEnd = endpoints.find(endpointId);
+	if (itEnd==endpoints.end())
+		return Error("Endpoint not found\n");
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	std::shared_ptr<Joinable> joinable = it->second->GetJoinable(port,media);
+	if (!joinable)
+		return Error("-EndpointAttachToSpeechProcessor: no %s on port %d\n",MediaFrame::TypeToString(media),port);
+	Log("-EndpointAttachToSpeechProcessor [endpoint:%ls,port:%d,media:%s]\n",
+	    itEnd->second->GetName().c_str(),port,MediaFrame::TypeToString(media));
+	return itEnd->second->Attach(media,MediaFrame::VIDEO_MAIN,joinable);
+}
+
+int MediaSession::SpeechProcessorDettach(int spId,int port,MediaFrame::Type media)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->Dettach(port,media);
+}
+
+int MediaSession::GetSpeechProcessorCount()
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	return speechProcessors.size();
+}
+
+int MediaSession::SpeechProcessorStartRecognition(int spId,int port,bool toEvents,int textPort,bool halfDuplex)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->StartRecognition(port,toEvents,textPort,halfDuplex);
+}
+
+int MediaSession::SpeechProcessorStopRecognition(int spId,int port)
+{
+	std::shared_ptr<SpeechProcessor> sp;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		SpeechProcessors::iterator it = speechProcessors.find(spId);
+		if (it==speechProcessors.end())
+			return Error("SpeechProcessor not found\n");
+		sp = it->second;
+	}
+	return sp->StopRecognition(port);
+}
+
+int MediaSession::SpeechProcessorStartSynthesis(int spId,int port,int textSourcePort,const std::string& voice,bool announceCorrections)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->StartSynthesis(port,textSourcePort,voice,announceCorrections);
+}
+
+int MediaSession::SpeechProcessorStopSynthesis(int spId,int port)
+{
+	std::shared_ptr<SpeechProcessor> sp;
+	{
+		std::lock_guard<std::mutex> lock(mutex);
+		SpeechProcessors::iterator it = speechProcessors.find(spId);
+		if (it==speechProcessors.end())
+			return Error("SpeechProcessor not found\n");
+		sp = it->second;
+	}
+	return sp->StopSynthesis(port);
+}
+
+bool MediaSession::SpeechProcessorIsSynthesisActive(int spId,int port)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	return it!=speechProcessors.end() && it->second->IsSynthesisActive(port);
+}
+
+int MediaSession::SpeechProcessorSay(int spId,int port,const std::string& text)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->Say(port,text);
+}
+
+int MediaSession::SpeechProcessorStopSpeaking(int spId,int port)
+{
+	std::lock_guard<std::mutex> lock(mutex);
+	SpeechProcessors::iterator it = speechProcessors.find(spId);
+	if (it==speechProcessors.end())
+		return Error("SpeechProcessor not found\n");
+	return it->second->StopSpeaking(port);
+}

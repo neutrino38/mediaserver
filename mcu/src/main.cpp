@@ -10,6 +10,7 @@
 #include "mcu.h"
 #include "broadcaster.h"
 #include "jsr309/JSR309Manager.h"
+#include "speech/speechservice.h"
 #include "websocketserver.h"
 #include "websockets.h"
 #include "websockettransport.h"
@@ -185,6 +186,11 @@ int main(int argc,char **argv)
 	//WebSocket TLS, côté CLIENT : les jambes texte sortantes (wss://)
 	bool wsClientVerify = true;	//vérifier le certificat du pair
 	const char *wsClientCa = NULL;	//autorité supplémentaire, hors magasin système
+	//Client du speech-server (SPEC SPEECH-PROCESSOR §5.1) : port de contrôle
+	//(jetons) et port de streaming. Les deux ou aucun.
+	std::string speechUrl;
+	std::string speechStreamingUrl;
+	std::string speechAccount;
 
 	//Get all
 	for(int i=1;i<argc;i++)
@@ -246,7 +252,16 @@ int main(int argc,char **argv)
 				"                  Grace period, in seconds, before an event queue with no\r\n"
 				"                  long-poll client is destroyed together with the media sessions\r\n"
 				"                  bound to it (client liveness is proven by its long-poll).\r\n"
-				"                  0 disables the cleanup (default: 60)\r\n");
+				"                  0 disables the cleanup (default: 60)\r\n"
+				" --speech-url     Control port of speech-server, where stream tokens are asked\r\n"
+				"                  (e.g. http://speech.example.net:9200). Without it, speech\r\n"
+				"                  recognition and synthesis are not available\r\n"
+				" --speech-streaming-url\r\n"
+				"                  Streaming port of speech-server (e.g. wss://speech.example.net:9201).\r\n"
+				"                  Required with --speech-url. wss:// trusts the system store and\r\n"
+				"                  --websocket-client-ca\r\n"
+				" --speech-account Account named in the token requests, which speech-server uses\r\n"
+				"                  to break down its usage counters ([A-Za-z0-9._-], 64 at most)\r\n");
 #ifdef MOTELI
 			printf("usage for rabbit MQ connector:\r\n"
 			       "mcu --rq-queue queueName --rq-host user:passwd@host:port/vhost\n"
@@ -339,6 +354,12 @@ int main(int argc,char **argv)
 		else if (strcmp(argv[i],"--websocket-client-ca")==0 && (i+1<argc))
 			//Autorite supplementaire pour les serveurs wss:// que l'on appelle
 			wsClientCa = argv[++i];
+		else if (strcmp(argv[i],"--speech-url")==0 && (i+1<argc))
+			speechUrl = argv[++i];
+		else if (strcmp(argv[i],"--speech-streaming-url")==0 && (i+1<argc))
+			speechStreamingUrl = argv[++i];
+		else if (strcmp(argv[i],"--speech-account")==0 && (i+1<argc))
+			speechAccount = argv[++i];
 #ifdef MOTELI
 		else if (strcmp(argv[i],"--rq-queue")==0 && (i+1<=argc))		
 			queueName = argv[++i];
@@ -470,6 +491,17 @@ int main(int argc,char **argv)
 			Log("-Acceleration materielle VAAPI INDISPONIBLE : tout le traitement video se fera sur CPU\n");
 	}
 #endif
+
+	//Client du speech-server : une configuration incohérente se voit au
+	//démarrage, pas au premier appel qui demande une transcription.
+	{
+		std::string error;
+		if (!SpeechService::CheckConfig(speechUrl,speechStreamingUrl,speechAccount,error))
+		{
+			Error("-MCU cannot start: %s\n",error.c_str());
+			return -1;
+		}
+	}
 
 	//Mode sonde : juge le GPU et sort, sans démarrer aucun serveur.
 	if (hwprobe)
@@ -693,6 +725,9 @@ int main(int argc,char **argv)
 	MCU		mcu;
 	Broadcaster	broadcaster;
 	JSR309Manager	jsr309Manager;
+	//Le client du speech-server : ses flux passent par le réacteur de wsServer.
+	//Déclaré ici, avant le premier goto server_init_failed.
+	SpeechService	speech(wsServer,speechUrl,speechStreamingUrl,speechAccount);
 
 #ifdef MOTELI
 	McuRabbitServer rqServer(cnxString, queueName);
@@ -717,7 +752,7 @@ int main(int argc,char **argv)
 	geventHandlers[1] = &xmleventmcu;
 	
 	//And default status hanlder
-	StatusHandler status(&mcu,&jsr309Manager,startedAt,eventQueueExpires);
+	StatusHandler status(&mcu,&jsr309Manager,startedAt,eventQueueExpires,&speech);
 
 	//Init de mcu
 	mcu.Init(&xmleventmcu,eventQueueExpires);
@@ -725,6 +760,7 @@ int main(int argc,char **argv)
 	broadcaster.Init();
 	//INit the jsr309
 	jsr309Manager.Init(&xmleventjsr309,eventQueueExpires);
+	jsr309Manager.SetSpeechService(speech.IsConfigured() ? &speech : NULL);
 
 	//Add the rtmp application from the mcu to the rtmp server
 	rtmpServer.AddApplication(L"mcu/",&mcu);
@@ -803,6 +839,10 @@ int main(int argc,char **argv)
 	//mediaserver joue le navigateur). Le même réacteur tient les deux sens.
 	WSEndpoint::SetServer(&wsServer);
 
+	//Après wsServer.Init : les flux speech sont des connexions sortantes de son
+	//réacteur, et la configuration TLS cliente est posée plus haut.
+	speech.Start();
+
 #ifdef MOTELI
 	if(cnxString) rqServer.Start(&rqHandler);
 #endif
@@ -810,6 +850,9 @@ int main(int argc,char **argv)
 	server.Start();
 
 server_init_failed:
+	//Avant le réacteur : ni jeton ni connexion sortante ne doivent viser un
+	//serveur arrêté. Les flux encore tenus par des sessions sont fermés ici.
+	speech.End();
 	wsServer.End();
 	//End the rtmp server
 	rtmpServer.End();

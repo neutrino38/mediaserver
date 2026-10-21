@@ -7,6 +7,7 @@
 
 class MCU;
 class JSR309Manager;
+class SpeechService;
 
 /**
  * /status/general — ce que le serveur sait de lui-même.
@@ -86,12 +87,36 @@ public:
 		int		conferences;
 		int		participants;
 		int		mediaSessions;
+
+		// Client du speech-server (SPEC SPEECH-PROCESSOR §5). Sans URL, seuls
+		// les relais d'un SpeechProcessor fonctionnent : c'est ce que le
+		// contrôleur doit pouvoir lire avant de demander une transcription.
+		struct Speech
+		{
+			bool		configured = false;
+			std::string	controlUrl;
+			std::string	streamingUrl;
+			std::string	account;
+			int		asrStreams = 0;	// flux prêts maintenant
+			int		ttsStreams = 0;
+			long		reopenings = 0;	// flux revenus après une panne
+			long		rotations = 0;
+			long		failures = 0;
+			time_t		lastFailureAt = 0;	// 0 : aucun échec
+			std::string	lastFailureFunction;
+			std::string	lastFailureReason;
+			// Ce que le contrôleur lit avant d'offrir la parole à un appel
+			bool		available = false;
+			std::string	unavailableReason;
+			time_t		checkedAt = 0;	// 0 : pas encore demandé
+		} speech;
 	};
 
 public:
 	// Les deux services sont OBSERVÉS, jamais possédés : ils vivent dans main().
 	// startedAt : instant de démarrage du processus, seule source de l'uptime.
-	StatusHandler(MCU *mcu,JSR309Manager *jsr309,time_t startedAt,int eventQueueExpiresSecs);
+	StatusHandler(MCU *mcu,JSR309Manager *jsr309,time_t startedAt,int eventQueueExpiresSecs,
+		      SpeechService *speech = NULL);
 
 	virtual int ProcessRequest(TRequestInfo *req,TSession * const ses);
 
@@ -104,6 +129,7 @@ public:
 private:
 	MCU		*mcu;
 	JSR309Manager	*jsr309;
+	SpeechService	*speech;
 	time_t		startedAt;
 	int		eventQueueExpiresSecs;
 };

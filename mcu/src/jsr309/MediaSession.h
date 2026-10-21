@@ -23,10 +23,12 @@
 #include "VideoMixerResource.h"
 #include "VideoTranscoder.h"
 #include "AudioTranscoder.h"
+#include "SpeechProcessor.h"
 #include <string.h>
 #include "JSR309Event.h"
 
 class JSR309Manager;
+class SpeechService;
 class MediaSession;
 
 /**
@@ -204,6 +206,30 @@ public:
 	int VideoTranscoderAttachToEndpoint(int transcoderId,int endpointId);
 	int VideoTranscoderDettach(int transcoderId);
 
+	//SpeechProcessor (SPEC SPEECH-PROCESSOR §8.1) : deux ports, 0 (A) et 1 (B),
+	//audio et texte seulement. Un port ou un média hors de là est refusé.
+	int SpeechProcessorCreate(std::wstring tag);
+	int SpeechProcessorDelete(int spId);
+	int SpeechProcessorPortSetCodec(int spId,int port,AudioCodec::Type codec);
+	int SpeechProcessorSetComfortNoise(int spId,int port,int dbov);
+	//Le port `port` reçoit le média de l'endpoint
+	int SpeechProcessorAttachToEndpoint(int spId,int port,int endpointId,MediaFrame::Type media);
+	//L'endpoint reçoit le média du port `port`
+	int EndpointAttachToSpeechProcessor(int endpointId,int spId,int port,MediaFrame::Type media);
+	int SpeechProcessorDettach(int spId,int port,MediaFrame::Type media);
+	//§8.2. textPort -1 : pas de sortie texte.
+	int SpeechProcessorStartRecognition(int spId,int port,bool toEvents,int textPort,bool halfDuplex);
+	int SpeechProcessorStopRecognition(int spId,int port);
+	//§8.3. textSourcePort -1 : le contrôleur seul.
+	int SpeechProcessorStartSynthesis(int spId,int port,int textSourcePort,const std::string& voice,bool announceCorrections);
+	int SpeechProcessorStopSynthesis(int spId,int port);
+	bool SpeechProcessorIsSynthesisActive(int spId,int port);
+	//Rend le sayId, 0 en cas d'échec
+	int SpeechProcessorSay(int spId,int port,const std::string& text);
+	int SpeechProcessorStopSpeaking(int spId,int port);
+	bool HasSpeechService() const		{ return speech != NULL; }
+	int GetSpeechProcessorCount();
+
 	//Events
 	virtual void onEndOfFile(Player *player,void* param);
 
@@ -211,6 +237,9 @@ public:
 	//ce qui permet à toute ressource (player, recorder, endpoint) de publier sans
 	//dépendre du câblage Joinable.
 	void SetEventHandler(int sessionId, JSR309Manager* mngr);
+	//Le client du speech-server (NULL : aucun). Observé : main() le possède et
+	//le fait vivre plus longtemps que les sessions.
+	void SetSpeechService(SpeechService* speech)	{ this->speech = speech; }
 
 	//Getters — copies de shared_ptr : l'appelant garde l'objet vivant même si un
 	//Delete concurrent le retire des maps (C-2).
@@ -273,6 +302,7 @@ private:
 	typedef std::map<int,std::shared_ptr<VideoMixerResource>> VideoMixers;
 	typedef std::map<int,std::shared_ptr<AudioTranscoder>> AudioTranscoders;
 	typedef std::map<int,std::shared_ptr<VideoTranscoder>> VideoTranscoders;
+	typedef std::map<int,std::shared_ptr<SpeechProcessor>> SpeechProcessors;
 	typedef std::map<std::string, MediaCnxToken> Tokens;
 	typedef std::map<int, std::shared_ptr<JSR309EventContext>> EventContexts;
 	typedef std::map<int, int> EventCtxMap;
@@ -290,6 +320,7 @@ private:
 
 	MediaSession::Listener *listener;
 	void* param;
+	SpeechService *speech;
 
 	Endpoints endpoints;
 	int maxEndpointId;
@@ -309,6 +340,9 @@ private:
         AudioTranscoders audioTranscoders;
 	VideoTranscoders videoTranscoders;
 	int maxVideoTranscoderId;
+
+	SpeechProcessors speechProcessors;
+	int maxSpeechProcessorId;
 	
 	Tokens		tokens;
 	

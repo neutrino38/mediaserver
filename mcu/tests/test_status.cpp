@@ -27,6 +27,9 @@
 #include "audio.h"
 #include "video.h"
 #include "medkit/codecs.h"
+#include "speech/speechservice.h"
+#include "websocketserver.h"
+#include <nlohmann/json.hpp>
 
 namespace {
 
@@ -370,4 +373,45 @@ TEST(Status, LExpirationDesarmeeEstDiteTelleQuelle)
 	EXPECT_NE(std::string::npos,armed.find("long-poll"));
 	EXPECT_NE(std::string::npos,disarmed.find("desarmee"));
 	EXPECT_EQ(std::string::npos,disarmed.find("long-poll"));
+}
+
+/* ------------------------ Client speech ------------------------ */
+
+TEST(Status, SansSpeechUrlLeBlocSpeechDitNonConfigure)
+{
+	const StatusHandler::Info info = CollectFixture();
+	const nlohmann::json speech = nlohmann::json::parse(StatusHandler::RenderJSON(info))["speech"];
+
+	EXPECT_FALSE(speech["configured"].get<bool>());
+	EXPECT_TRUE(speech["lastFailure"].is_null());
+	EXPECT_FALSE(speech["available"].get<bool>());
+	EXPECT_EQ("speech-server not configured (--speech-url)",speech["unavailableReason"]);
+	EXPECT_NE(std::string::npos,StatusHandler::RenderText(info).find("non configure"));
+}
+
+TEST(Status, LeBlocSpeechPublieLesUrlsEtLesFluxOuverts)
+{
+	// Un service configure mais jamais demarre : aucun flux, aucun echec.
+	WebSocketServer server;
+	SpeechService speech(server,"http://speech:9200","wss://speech.example.net:9201","clinique-nord");
+	StatusHandler handler(NULL,NULL,kStartedAt,60,&speech);
+	StatusHandler::Info info;
+	handler.Collect(info,kNow);
+	speech.End();
+
+	const nlohmann::json block = nlohmann::json::parse(StatusHandler::RenderJSON(info))["speech"];
+	EXPECT_TRUE(block["configured"].get<bool>());
+	EXPECT_EQ("http://speech:9200",block["controlUrl"]);
+	EXPECT_EQ("wss://speech.example.net:9201",block["streamingUrl"]);
+	EXPECT_EQ("clinique-nord",block["account"]);
+	EXPECT_EQ(0,block["streams"]["asr"]);
+	EXPECT_EQ(0,block["streams"]["tts"]);
+	EXPECT_EQ(0,block["failures"]);
+	EXPECT_FALSE(block["available"].get<bool>());
+	EXPECT_EQ("speech-server not checked yet",block["unavailableReason"]);
+	EXPECT_TRUE(block["checkedAt"].is_null());
+
+	const std::string text = StatusHandler::RenderText(info);
+	EXPECT_NE(std::string::npos,text.find("wss://speech.example.net:9201")) << text;
+	EXPECT_NE(std::string::npos,text.find("asr 0, tts 0")) << text;
 }
