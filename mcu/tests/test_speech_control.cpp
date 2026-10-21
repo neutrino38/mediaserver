@@ -30,7 +30,7 @@ protected:
 
 		config = std::make_unique<SpeechConfigHolder>(parsed);
 		streaming = std::make_unique<StreamingHandler>(*config, tokens);
-		status = std::make_unique<SpeechStatus>(time(NULL), true, health, *streaming, tokens, usage);
+		status = std::make_unique<SpeechStatus>(time(NULL), true, health, probe, *streaming, tokens, usage);
 		control = std::make_unique<ControlHandler>(*config, tokens, usage, *status);
 
 		port = speechtest::FreePort(AF_INET);
@@ -58,6 +58,7 @@ protected:
 	TokenStore tokens;
 	UsageCounters usage;
 	BackendHealth health;
+	BackendProbe probe{"http://127.0.0.1:1", "", 0};
 	std::unique_ptr<SpeechConfigHolder> config;
 	std::unique_ptr<StreamingHandler> streaming;
 	std::unique_ptr<SpeechStatus> status;
@@ -156,6 +157,7 @@ TEST_F(SpeechControl, TheStatusHasTwoRenderings)
 	const json body = json::parse(Http("127.0.0.1", port, "GET", "/status/general").body);
 	EXPECT_EQ("speech-server", body["server"]["product"]);
 	EXPECT_EQ("present", body["backend"]["apiKey"]);
+	EXPECT_EQ("unknown", body["backend"]["mistral"]["state"]) << "probe never run";
 	EXPECT_EQ(20, body["sessions"]["tts"]["max"]);
 	EXPECT_EQ(0, body["sessions"]["asr"]["open"]);
 

@@ -442,7 +442,10 @@ les autres.
 - **SpeechSynthesisDoneEvent** (10) : la dernière phrase d'un `Say` est dite
   (`interrupted = false`), ou le `Say` a été coupé (`interrupted = true`) :
   `SpeechProcessorStopSpeaking`, correction du texte tapé, panne ou
-  réouverture du flux, flux pas prêt au moment du `Say`. Une phrase refusée par
+  réouverture du flux, flux en panne au moment du `Say`. Un `Say` émis
+  juste après `SpeechProcessorStartSynthesis`, avant que le flux soit prêt,
+  attend ce flux. En revanche, un flux **perdu** clôt aussitôt les `Say` en
+  cours, puis chaque `Say` émis avant son retour : rien n'est dit en retard. Une phrase refusée par
   la modération de Mistral compte comme dite, sans audio. Chaque `Say` reçoit
   exactement un événement 10.
 - **SpeechActivityEvent** (11) : la VAD du port a entendu quelqu'un commencer

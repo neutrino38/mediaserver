@@ -141,12 +141,13 @@ protected:
 		system(("rm -rf " + dir).c_str());
 	}
 
-	void LaunchServer(int idleSecs = 60, int maxSessionSecs = 3600)
+	void LaunchServer(int idleSecs = 60, int maxSessionSecs = 3600, const std::string& mistralUrl = "", int probeSecs = 0)
 	{
 		std::ofstream(dir + "/config.json") << json{
 			{"control", {{"listen", "127.0.0.1"}, {"port", controlPort}, {"allow", {"127.0.0.0/8"}}}},
 			{"streaming", {{"listen", "127.0.0.1"}, {"port", streamingPort}}},
-			{"mistral", {{"url", "http://127.0.0.1:" + std::to_string(fakePort)}}},
+			{"mistral", {{"url", mistralUrl.empty() ? "http://127.0.0.1:" + std::to_string(fakePort) : mistralUrl},
+				     {"probeSecs", probeSecs}}},
 			{"voices", {{{"alias", "fr-homme"}, {"lang", "fr"}, {"voiceId", "v-1"}}}},
 			{"limits", {{"idleSecs", idleSecs}, {"maxSessionSecs", maxSessionSecs}}}}.dump();
 
@@ -180,11 +181,11 @@ protected:
 		return response.status == 200 ? json::parse(response.body) : json();
 	}
 
-	void MakeService(const std::string& controlUrl = "")
+	void MakeService(const std::string& controlUrl = "", int probeMs = SpeechService::DefaultProbeMs)
 	{
 		service = std::make_unique<SpeechService>(server,
 			controlUrl.empty() ? "http://127.0.0.1:" + std::to_string(controlPort) : controlUrl,
-			"ws://127.0.0.1:" + std::to_string(streamingPort), "clinique-nord", 20);
+			"ws://127.0.0.1:" + std::to_string(streamingPort), "clinique-nord", 20, probeMs);
 		service->Start();
 	}
 
@@ -312,6 +313,37 @@ TEST_F(SpeechClient, ServerDownThenBackIsOneEventEach)
 	EXPECT_EQ((std::vector<std::string>{"up", "down", "up"}), recorder->States());
 	EXPECT_FALSE(service->GetCounters().lastFailureReason.empty());
 	flow->Stop();
+}
+
+// The availability a controller reads before offering speech follows the
+// server, with no flow open: down when it stops, back when it restarts.
+TEST_F(SpeechClient, AvailabilityFollowsTheServerWithoutAnyFlow)
+{
+	LaunchServer();
+	MakeService("", 200);
+	ASSERT_TRUE(Eventually([&] { return service->GetAvailability().available; }));
+	EXPECT_EQ("", service->GetAvailability().reason);
+
+	StopServer();
+	ASSERT_TRUE(Eventually([&] { return !service->GetAvailability().available; }));
+	const std::string reason = service->GetAvailability().reason;
+	EXPECT_EQ(0u, reason.rfind("speech-server unreachable at http://127.0.0.1:" + std::to_string(controlPort) + ": ", 0)) << reason;
+
+	LaunchServer();
+	ASSERT_TRUE(Eventually([&] { return service->GetAvailability().available; }));
+}
+
+// speech-server answers but Mistral does not: speech is unavailable, and the
+// reason is speech-server's own.
+TEST_F(SpeechClient, AMistralOutageMakesSpeechUnavailable)
+{
+	LaunchServer(60, 3600, "http://127.0.0.1:" + std::to_string(speechtest::FreePort(AF_INET)), 1);
+	MakeService("", 200);
+	ASSERT_TRUE(Eventually([&] { return !service->GetAvailability().reason.empty()
+		&& service->GetAvailability().reason.rfind("Mistral", 0) == 0; }));
+	EXPECT_FALSE(service->GetAvailability().available);
+	EXPECT_EQ(0u, service->GetAvailability().reason.rfind("Mistral unreachable: ", 0)) << service->GetAvailability().reason;
+	EXPECT_EQ("down", ServerStatus()["backend"]["mistral"]["state"]);
 }
 
 // §11.1: a silent tts and a paused asr outlive the server idle limit.

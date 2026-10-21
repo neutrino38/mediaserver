@@ -67,13 +67,13 @@ Systèmes pris en charge : AlmaLinux 9 (paquet RPM), Debian et Ubuntu
 AlmaLinux 9 :
 
 ```sh
-dnf install ./mediaserver-speech-1.18.0-2.ives.el9.x86_64.rpm
+dnf install ./mediaserver-speech-1.19.0-1.ives.el9.x86_64.rpm
 ```
 
 Debian ou Ubuntu :
 
 ```sh
-apt install ./mediaserver-speech_1.18.0_amd64.deb
+apt install ./mediaserver-speech_1.19.0_amd64.deb
 ```
 
 Le paquet installe :
@@ -211,7 +211,8 @@ Le fichier livré :
   },
   "mistral": {
     "url": "https://api.mistral.ai",
-    "workers": 10
+    "workers": 10,
+    "probeSecs": 30
   },
   "limits": {
     "maxSessions": { "asr": 20, "tts": 20, "comp": 20 },
@@ -254,6 +255,7 @@ mediaserver.
 | Clé | Défaut | Valeurs | Rôle |
 |---|---|---|---|
 | `mistral.url` | `https://api.mistral.ai` | URL `https://` ou `http://` | base des appels ; à changer seulement pour passer par un relais |
+| `mistral.probeSecs` | `30` | 0 à 3600 | période de la sonde de Mistral, en secondes : un `GET /v1/models` avec la clé. `0` coupe la sonde, et `backend.mistral.state` reste `unknown`. Voir [§9.2](#92-statusgeneral) |
 | `mistral.workers` | `10` | 1 à 64 | nombre d'appels Mistral simultanés (ouvertures `asr`, phrases `tts`, demandes `comp`). Au-delà, les demandes attendent leur tour : augmenter si plus de `workers` flux `tts` parlent en même temps |
 
 **`limits`** — les bornes, qui bornent aussi la dépense.
@@ -372,8 +374,10 @@ options de sa ligne de commande (`/etc/sysconfig/mediaserver`) :
 - `--speech-account` est facultatif : il ventile les compteurs `usage` par
   compte.
 
-Le bloc `speech` de son `/status/general` dit si le service est joignable
-(`docs/reference/status-http.md` §3.9).
+Le bloc `speech` de son `/status/general` dit si la parole est disponible
+(`docs/reference/status-http.md` §3.9). Le mediaserver interroge le
+`/status/general` de speech-server toutes les 5 s : son adresse doit donc
+figurer dans `control.allow`.
 
 ## 7. API de contrôle (HTTP)
 
@@ -679,7 +683,7 @@ curl -s 'http://127.0.0.1:9200/status/general?format=text'  # lecture humaine
 | Bloc | Contenu |
 |---|---|
 | `server` | `product`, `version`, `pid`, `startedAt`, `uptimeSecs` |
-| `backend` | `apiKey` (`present`/`absent`, jamais la clé), puis par service Mistral (`asr`, `tts`, `comp`) : `lastSuccess`, `lastFailure`, `lastError`, `discarded` (réponses de correction écartées car inexploitables) |
+| `backend` | `apiKey` (`present`/`absent`, jamais la clé) ; `mistral` : la dernière réponse de la sonde (`state` `up`, `down` ou `unknown`, `reason`, `checkedAt`) ; puis par service Mistral (`asr`, `tts`, `comp`) : `lastSuccess`, `lastFailure`, `lastError`, `discarded` (réponses de correction écartées car inexploitables) |
 | `sessions` | par fonction : `open` (ouverts), `max` (borne configurée), `refused` (refus 429 cumulés) |
 | `tokens` | `live` (valides, pas encore utilisés), `issued`, `consumed`, `expiredUnused` |
 | `usage` | depuis le démarrage : `asrAudioSecs` (secondes d'audio transcrites), `ttsChars` (caractères synthétisés), `compTokens` (tokens de correction), puis le même détail par compte dans `usage.byAccount` |
@@ -691,6 +695,11 @@ périodiquement.
 
 À surveiller en priorité :
 
+- `backend.mistral.state` à `down` : Mistral ne répond pas, ou refuse la
+  clé. `reason` dit lequel, par exemple `Mistral refuses the API key (HTTP 401)`
+  ou `Mistral unreachable: Couldn't connect to server`. La sonde tourne même
+  sans aucun appel : elle voit la panne commencer et finir. Le journal écrit
+  une ligne `-BackendProbe:` à chaque changement d'état ;
 - `backend.<service>.lastFailure` plus récent que `lastSuccess` : Mistral
   est en échec pour ce service ;
 - `sessions.<fonction>.refused` qui augmente : `limits.maxSessions` est

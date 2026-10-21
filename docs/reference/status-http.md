@@ -82,6 +82,8 @@ Le réserver au réseau d'administration.
   "load": { "conferences": 1, "participants": 3, "mediaSessions": 2 },
   "speech": {
     "configured": true,
+    "available": true, "unavailableReason": null,
+    "checkedAt": "2026-10-19T08:14:05Z",
     "controlUrl": "http://speech.example.net:9200",
     "streamingUrl": "wss://speech.example.net:9201",
     "account": "clinique-nord",
@@ -250,6 +252,21 @@ avant de demander une transcription.
 - `configured` : `false` sans `--speech-url`. Les URL et compteurs sont alors
   vides, `lastFailure` vaut `null`, et seuls les relais d'un SpeechProcessor
   fonctionnent.
+- `available` : `true` quand la reconnaissance et la synthèse peuvent servir
+  maintenant. Le mediaserver demande le `/status/general` de speech-server
+  toutes les 5 s, et `checkedAt` date la dernière réponse. `available` vaut
+  `false` quand le service n'est pas configuré, quand speech-server ne répond
+  pas, et quand sa sonde dit Mistral en panne (`backend.mistral.state` à
+  `down`). Un speech-server sans sonde, ou avant sa première sonde, compte
+  comme disponible s'il répond.
+- `unavailableReason` : pourquoi `available` vaut `false`, `null` sinon. Le
+  texte est fait pour le journal du contrôleur, par exemple :
+  `speech-server not configured (--speech-url)`,
+  `speech-server not checked yet`,
+  `speech-server unreachable at http://127.0.0.1:9200: Couldn't connect to server`,
+  `speech-server at … refuses this mediaserver (HTTP 403): add its address to control.allow`,
+  ou la raison de la sonde de Mistral, par exemple
+  `Mistral refuses the API key (HTTP 401)`.
 - `controlUrl` (`--speech-url`, où se demandent les jetons) et `streamingUrl`
   (`--speech-streaming-url`, où s'ouvrent les flux) ; `account`
   (`--speech-account`, vide si absent) ventile les compteurs de speech-server.

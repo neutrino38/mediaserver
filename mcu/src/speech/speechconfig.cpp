@@ -137,9 +137,10 @@ void ParseInto(const json& root, SpeechConfig& config)
 	if (root.contains("mistral"))
 	{
 		const json& mistral = Object(root["mistral"], "mistral");
-		CheckKeys(mistral, "mistral", {"url", "workers"});
+		CheckKeys(mistral, "mistral", {"url", "workers", "probeSecs"});
 		ReadString(mistral, "mistral", "url", config.mistralUrl);
 		ReadInt(mistral, "mistral", "workers", config.mistralWorkers, 1, 64);
+		ReadInt(mistral, "mistral", "probeSecs", config.mistralProbeSecs, 0, 3600);
 	}
 	if (config.mistralUrl.rfind("https://", 0) != 0 && config.mistralUrl.rfind("http://", 0) != 0)
 		Fail("'mistral.url' must start with https:// or http://");
@@ -275,5 +276,6 @@ bool SpeechConfig::NeedsRestartToApply(const SpeechConfig& next) const
 		|| streamingCert != next.streamingCert
 		|| streamingKey != next.streamingKey
 		|| mistralUrl != next.mistralUrl
-		|| mistralWorkers != next.mistralWorkers;
+		|| mistralWorkers != next.mistralWorkers
+		|| mistralProbeSecs != next.mistralProbeSecs;
 }
