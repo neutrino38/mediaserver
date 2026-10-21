@@ -176,6 +176,15 @@ Pas de clé `codec.*` : tout se déduit du `fmtp` du pair.
 
 Sans `mode-set`, l'encodeur émet 23,85 kbit/s en AMR-WB et 12,2 kbit/s en AMR.
 
+**Piège du DTX.** Un pair en DTX (émission discontinue) envoie, pendant ses
+silences, des trames SID qui décrivent le bruit de fond. Le décodage passe par
+`libopencore_amrwb` et `libopencore_amrnb` quand ffmpeg les fournit : ils
+traitent ces trames et produisent le bruit de confort. Sans eux, le serveur
+retombe sur les décodeurs natifs d'ffmpeg, **sans erreur**. Ceux-ci rejettent
+les trames SID, et en AMR-NB aussi les trames NO_DATA : chaque trame rejetée
+fait 20 ms de moins dans le flux décodé. Le log d'ouverture nomme le décodeur
+retenu : `[libopencore_amrwb] decoder open`.
+
 Le mode vaut **par PT**. Une offre VoLTE propose souvent l'AMR-WB deux fois :
 un PT en `octet-align=1`, un autre sans. Chacun repart avec son propre `fmtp`.
 
