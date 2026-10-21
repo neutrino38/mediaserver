@@ -67,13 +67,13 @@ Systèmes pris en charge : AlmaLinux 9 (paquet RPM), Debian et Ubuntu
 AlmaLinux 9 :
 
 ```sh
-dnf install ./mediaserver-speech-1.18.0-2.ives.el9.x86_64.rpm
+dnf install ./mediaserver-speech-1.19.0-1.ives.el9.x86_64.rpm
 ```
 
 Debian ou Ubuntu :
 
 ```sh
-apt install ./mediaserver-speech_1.18.0_amd64.deb
+apt install ./mediaserver-speech_1.19.0_amd64.deb
 ```
 
 Le paquet installe :
