@@ -118,7 +118,7 @@ TARGETS=mcu rtmptest
 # speech-server (docs/conception/SPEECH-SERVER/SPEC.md): its own objects stay
 # out of OBJS. The server reuses the WebSocket reactor, Abyss and the objects
 # it shares with the speech client, nothing from the conference engine.
-SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o pcmconverter.o mistralspeech.o ttssession.o compcheck.o mistralchat.o compsession.o
+SPEECHOBJS=speechconfig.o allowlist.o tokenstore.o usage.o backendhealth.o backendprobe.o speechsession.o streaminghandler.o speechstatus.o controlhandler.o mistralrealtime.o asrsession.o pcmconverter.o mistralspeech.o ttssession.o compcheck.o mistralchat.o compsession.o
 SPEECHREUSEDOBJS=httpparser.o http.o websocketserver.o websocketconnection.o websockettransport.o xmlrpcserver.o ipaddress.o addressprofiles.o taskpool.o phrasesplitter.o mistralhttp.o
 OBJSSPEECH=$(SPEECHOBJS) $(SPEECHREUSEDOBJS) speechmain.o
 BUILDOBJSSPEECH=$(addprefix $(BUILD)/,$(OBJSSPEECH))

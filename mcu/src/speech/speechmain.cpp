@@ -21,6 +21,7 @@
 #include "xmlrpcserver.h"
 #include "speech/asrsession.h"
 #include "speech/backendhealth.h"
+#include "speech/backendprobe.h"
 #include "speech/compsession.h"
 #include "speech/controlhandler.h"
 #include "speech/speechconfig.h"
@@ -188,7 +189,8 @@ int main(int argc, char** argv)
 	wsServer.SetSecure(loaded->streamingSecure, loaded->streamingCert.c_str(), loaded->streamingKey.c_str());
 	wsServer.AddHandler("/streaming/", &streaming);
 
-	SpeechStatus status(startedAt, true, health, streaming, tokens, usage);
+	BackendProbe probe(loaded->mistralUrl, apiKey, loaded->mistralProbeSecs);
+	SpeechStatus status(startedAt, true, health, probe, streaming, tokens, usage);
 	ControlHandler control(config, tokens, usage, status);
 	XmlRpcServer controlServer(loaded->controlListen.To(loaded->controlPort));
 	controlServer.AddHandler("/", &control);
@@ -199,6 +201,7 @@ int main(int argc, char** argv)
 		return 1;
 	}
 	streaming.Start();
+	probe.Start();
 
 	std::thread signalThread([&]() {
 		for (;;)
@@ -239,6 +242,7 @@ int main(int argc, char** argv)
 	}
 	signalThread.join();
 
+	probe.Stop();
 	tasks.Stop();
 	streaming.Stop();
 	wsServer.End();
