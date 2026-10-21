@@ -87,6 +87,9 @@ void Usage(const char* name)
 int main(int argc, char** argv)
 {
 	const time_t startedAt = time(NULL);
+	// systemd appends stdout to a file: fully buffered, an outage logged now
+	// would only show when the buffer fills, hours later on a quiet server.
+	setvbuf(stdout, nullptr, _IOLBF, 0);
 
 	std::string configPath = DefaultConfigPath;
 	std::string keyPath;
