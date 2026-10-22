@@ -176,6 +176,11 @@ fi
 
 %changelog
 * Wed Oct 21 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- version 1.19.1
+- --public-ip repetable une fois par famille : une v4 et une v6 publiques
+  donnent les deux profils, au lieu de garder seulement la derniere
+
+* Wed Oct 21 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - version 1.19.0
 - SpeechProcessor JSR-309 : relais audio et texte entre deux pattes,
   reconnaissance (texte T.140 ou evenements) et synthese (Say, texte tape
