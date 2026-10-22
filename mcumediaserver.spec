@@ -2,7 +2,7 @@ Name:      %name
 Version:   %version
 #Ne pas enlever le .ives a la fin de la release !
 #Cela est utilise par les scripts de recherche de package.
-Release:   1.ives%{?dist}
+Release:   2.ives%{?dist}
 Summary:   [IVeS] librairies partag꦳ pour asterisk de Fontventa.
 Vendor:    IVeS / Fontventa
 Group:     Applications/Internet
@@ -175,6 +175,16 @@ fi
 %license %{_defaultlicensedir}/mediaserver-speech-%{version}/LICENSE.md
 
 %changelog
+* Thu Oct 22 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- version 1.19.1, release 2
+- speech-server sur Voxtral 3 : voxtral-mini-tts-3-0 et
+  voxtral-mini-transcribe-realtime-3-0 par defaut
+- asr : la langue (lang, fr par defaut) est imposee a Mistral au lieu
+  d'etre detectee ; deux lettres seulement
+- asr : delay de 80 a 1200 ms, ou 2400, seules valeurs acceptees par
+  Voxtral 3 (une autre valeur fermait la session)
+- tts : la voix part dans voice_id, le champ documente par Mistral
+
 * Wed Oct 21 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - version 1.19.1
 - --public-ip repetable une fois par famille : une v4 et une v6 publiques
