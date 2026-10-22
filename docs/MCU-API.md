@@ -1063,7 +1063,8 @@ Miroir, sur cette API, du couple `ConfigureMediaConnection` +
 - **Retour** : `(s)` = l'URL, `ws://host:port/mcu/<confId>/<token>` — ou
   `wss://` si le serveur tourne en `--websocket-secure` : le **schéma est
   décidé par le serveur** (TLS sur le même port), jamais par le contrôleur.
-  Hôte : `--websocket-host`, sinon `--public-ip`.
+  Hôte : `--websocket-host`, sinon l'adresse annoncée du profil par défaut
+  (`--default-profile`).
 
 Sémantique et contrat :
 - s'appelle **à la place** de `StartReceiving`/`StartSending`/`SetTextCodec`

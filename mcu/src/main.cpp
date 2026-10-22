@@ -155,8 +155,9 @@ int main(int argc,char **argv)
 	int rtmpPort = 1935;
 	int minPort = RTPSession::GetMinPort();
 	int maxPort = RTPSession::GetMaxPort();
-	//Adresse annoncée dans le SDP : NULL → auto-détectée
-	const char* publicIp = NULL;
+	//Adresses annoncées dans le SDP : aucune → auto-détectée
+	const char* publicIp[2]   = { NULL, NULL };   //une par famille, ordre libre
+	int         publicCount   = 0;
 	const char* natIp        = NULL;
 	const char* internalIp[2] = { NULL, NULL };   //une par famille, ordre libre
 	int         internalCount = 0;
@@ -212,7 +213,8 @@ int main(int argc,char **argv)
 				" --max-rtp-port   Set max rtp port\r\n"
 				" --public-ip      Set the IP address announced in the SDP (c= line and ICE candidates).\r\n"
 				"                  Required behind a NAT, where it differs from the bound address;\r\n"
-				"                  defaults to the first non-loopback IPv4 address of the host\r\n"
+				"                  defaults to the first non-loopback IPv4 address of the host.\r\n"
+				"                  Repeatable, at most once per family (one IPv4, one IPv6)\r\n"
 				" --nat            Public IPv4 address seen from outside, when --public-ip carries\r\n"
 				"                  the locally bound address of a NATed host (IPv4 only).\r\n"
 				"                  \"auto\" discovers it with a STUN server and checks that the NAT\r\n"
@@ -296,8 +298,13 @@ int main(int argc,char **argv)
 			//Get rtmp port
 			maxPort = atoi(argv[++i]);
 		else if (strcmp(argv[i],"--public-ip")==0 && (i+1<argc))
-			//Get the IP to announce in the SDP
-			publicIp = argv[++i];
+		{
+			//Repetable, au plus une fois par famille, comme --internal-ip
+			if (publicCount < 2 && *argv[i+1])
+				publicIp[publicCount++] = argv[++i];
+			else
+				++i;
+		}
 		else if (strcmp(argv[i],"--nat")==0 && (i+1<argc))
 			//Adresse publique vue de l'exterieur, quand --public-ip porte
 			//l'adresse locale d'un hote natte (v4 uniquement)
@@ -529,21 +536,21 @@ int main(int argc,char **argv)
 		std::string error;
 
 		//Le contrôleur a-t-il dit quelque chose de l'adressage ?
-		const bool explicitAddressing = (publicIp && *publicIp) || internalCount > 0;
+		const bool explicitAddressing = publicCount > 0 || internalCount > 0;
 
 		//--public-ip : littéral v4/v6 ou nom d'hôte. SetAnnouncedIp valide,
 		//résout et journalise ; la table reprend son résultat canonique.
-		if (publicIp && *publicIp)
+		for (int i=0;i<publicCount;++i)
 		{
-			if (!RTPSession::SetAnnouncedIp(publicIp))
+			if (!RTPSession::SetAnnouncedIp(publicIp[i]))
 			{
-				Error("-MCU cannot start: --public-ip \"%s\" is not a usable address.\n",publicIp);
+				Error("-MCU cannot start: --public-ip \"%s\" is not a usable address.\n",publicIp[i]);
 				return -1;
 			}
 
 			if (!AddressProfiles::AddPublic(IPAddress::Parse(RTPSession::GetAnnouncedIp()),error))
 			{
-				Error("-MCU cannot start: --public-ip: %s\n",error.c_str());
+				Error("-MCU cannot start: --public-ip %s: %s\n",publicIp[i],error.c_str());
 				return -1;
 			}
 		}
@@ -611,7 +618,7 @@ int main(int argc,char **argv)
 			//attachée. Sur une adresse publique il n'y a rien à découvrir ; sans
 			//--public-ip il n'y a pas de socket à sonder depuis la bonne
 			//interface, et le résultat vaudrait pour n'importe quel chemin.
-			if (!(publicIp && *publicIp) || !local.IsSet() || !local.IsPrivateV4())
+			if (publicCount==0 || !local.IsSet() || !local.IsPrivateV4())
 			{
 				Error("-MCU cannot start: --nat auto requires --public-ip <adresse RFC 1918 attachee a l'hote>.\n"
 				      "  C'est l'adresse locale depuis laquelle le serveur STUN est interroge ;\n"
