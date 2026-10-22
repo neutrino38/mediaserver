@@ -58,6 +58,7 @@ public:
 			if (type == "session.update")
 			{
 				delay = event["session"]["target_streaming_delay_ms"];
+				language = event["session"].value("language", "");
 				SendLocked({{"type", "session.updated"}, {"session", event["session"]}});
 			}
 			else if (type == "input_audio.flush")
@@ -111,6 +112,7 @@ public:
 		size_t			next = 0;
 		std::string		sent;
 		int			delay = -1;
+		std::string		language;
 		int			flushes = 0;
 		int			refusedFlushes = 0;
 		size_t			flushedAt = 0;

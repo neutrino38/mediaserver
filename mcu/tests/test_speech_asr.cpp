@@ -121,9 +121,20 @@ TEST_F(SpeechAsr, ReadyComesOnceMistralTookTheDelay)
 	const json ready = Open(client, "?delay=480");
 
 	EXPECT_EQ("ready", ready["type"]);
-	EXPECT_EQ(true, ready["langIgnored"]);
+	EXPECT_EQ("fr", ready["lang"]);
 	EXPECT_EQ(480, ready["delay"]);
 	EXPECT_EQ(480, fake->Get(0).delay);
+	EXPECT_EQ("fr", fake->Get(0).language);
+}
+
+TEST_F(SpeechAsr, TheLanguageAskedIsForcedOnMistral)
+{
+	Start();
+	WsClient client;
+	const json ready = Open(client, "?lang=en");
+
+	EXPECT_EQ("en", ready["lang"]);
+	EXPECT_EQ("en", fake->Get(0).language);
 }
 
 TEST_F(SpeechAsr, AudioReachesMistralUnchangedAndTextComesBackInOrder)
@@ -340,7 +351,7 @@ TEST_F(SpeechAsr, AnEventForADeadListenerFindsNobody)
 {
 	Start();
 	auto listener = std::make_shared<CountingListener>();
-	auto client = std::make_shared<MistralRealtimeClient>(listener, 1000);
+	auto client = std::make_shared<MistralRealtimeClient>(listener, 1000, "fr");
 	ASSERT_TRUE(client->Open(server, MistralRealtimeClient::Url("http://127.0.0.1:" + std::to_string(fakePort), "m"), "test-key"));
 	ASSERT_TRUE(WaitFor([&] { return listener->ready == 1; }));
 

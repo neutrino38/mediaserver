@@ -5,9 +5,10 @@
 
 using json = nlohmann::json;
 
-MistralRealtimeClient::MistralRealtimeClient(std::weak_ptr<Listener> listener, int delayMs) :
+MistralRealtimeClient::MistralRealtimeClient(std::weak_ptr<Listener> listener, int delayMs, const std::string& lang) :
 	listener(listener),
-	delayMs(delayMs)
+	delayMs(delayMs),
+	lang(lang)
 {
 }
 
@@ -129,8 +130,7 @@ void MistralRealtimeClient::Dispatch(const json& event)
 
 	if (type == "session.created")
 	{
-		// The delay is the only setting: Voxtral refuses any forced language.
-		Send(json{{"type", "session.update"}, {"session", {{"target_streaming_delay_ms", delayMs}}}});
+		Send(json{{"type", "session.update"}, {"session", {{"target_streaming_delay_ms", delayMs}, {"language", lang}}}});
 	}
 	else if (type == "session.updated")
 		target->OnRealtimeReady(this);

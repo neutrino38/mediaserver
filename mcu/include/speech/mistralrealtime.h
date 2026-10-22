@@ -40,7 +40,7 @@ public:
 
 	static constexpr size_t MaxMessageSize = 1024*1024;
 
-	MistralRealtimeClient(std::weak_ptr<Listener> listener, int delayMs);
+	MistralRealtimeClient(std::weak_ptr<Listener> listener, int delayMs, const std::string& lang);
 
 	// wss://…/v1/audio/transcriptions/realtime?model=… from mistral.url.
 	static std::string Url(const std::string& mistralUrl, const std::string& model);
@@ -68,6 +68,7 @@ private:
 
 	std::weak_ptr<Listener>	listener;
 	const int		delayMs;
+	const std::string	lang;
 
 	std::mutex		mutex;
 	std::weak_ptr<WebSocket> ws;

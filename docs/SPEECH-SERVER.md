@@ -222,8 +222,8 @@ Le fichier livré :
   "voices": [
     { "alias": "fr-homme", "lang": "fr", "voiceId": "en_paul_neutral" }
   ],
-  "tts":  { "model": "voxtral-mini-tts-2603", "phraseSilenceMs": 1500 },
-  "asr":  { "model": "voxtral-mini-transcribe-realtime-2602", "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
+  "tts":  { "model": "voxtral-mini-tts-3-0", "phraseSilenceMs": 1500 },
+  "asr":  { "model": "voxtral-mini-transcribe-realtime-3-0", "vad": false, "silenceMs": 1500, "pauseCloseSecs": 30 },
   "comp": { "model": "mistral-small-latest" }
 }
 ```
@@ -283,9 +283,9 @@ attendant la voix française d'IVèS.
 
 | Clé | Défaut | Valeurs | Rôle |
 |---|---|---|---|
-| `tts.model` | `voxtral-mini-tts-2603` | modèle Mistral | modèle de synthèse |
+| `tts.model` | `voxtral-mini-tts-3-0` | modèle Mistral | modèle de synthèse |
 | `tts.phraseSilenceMs` | `1500` | 0 à 60000 | silence de frappe après lequel le texte accumulé part en synthèse |
-| `asr.model` | `voxtral-mini-transcribe-realtime-2602` | modèle Mistral | modèle de reconnaissance temps réel |
+| `asr.model` | `voxtral-mini-transcribe-realtime-3-0` | modèle Mistral | modèle de reconnaissance temps réel |
 | `asr.pauseCloseSecs` | `30` | 1 à 55 | durée de pause après laquelle la session Mistral est fermée, puis rouverte à la reprise |
 | `asr.vad`, `asr.silenceMs` | `false`, `1500` | — | réservés : acceptés, sans effet dans cette version |
 | `comp.model` | `mistral-small-latest` | modèle Mistral | modèle de correction |
@@ -455,9 +455,9 @@ wss://speech.example.net:9201/streaming/<fonction>/<jeton>?<paramètres>
 
 | Paramètre | Fonction | Défaut | Rôle |
 |---|---|---|---|
-| `lang` | toutes | `fr` | langue (code court). Pour `tts`, choisit la voix par défaut ; pour `comp`, la langue de correction ; pour `asr`, ignoré (la langue est détectée seule) |
+| `lang` | toutes | `fr` | langue (code court). Pour `tts`, choisit la voix par défaut ; pour `comp`, la langue de correction ; pour `asr`, la langue imposée à Mistral, en deux lettres seulement (`fr`, `en`) |
 | `voice` | `tts` | première voix de `lang` | alias de voix (voir `GET /control/voices`) |
-| `delay` | `asr` | `1000` | délai de transcription en ms, 200 à 2400 : plus court, le texte arrive plus vite ; plus long, il est plus juste |
+| `delay` | `asr` | `1000` | délai de transcription en ms, de 80 à 1200, ou 2400 exactement (seules valeurs que Mistral accepte) : plus court, le texte arrive plus vite ; plus long, il est plus juste |
 
 Un paramètre d'une autre fonction, inconnu ou répété, est refusé (400).
 
@@ -466,7 +466,7 @@ Réponse HTTP avant l'ouverture :
 | Code | Cause |
 |---|---|
 | 101 | flux ouvert |
-| 400 | paramètre inconnu ou répété, langue ou voix non servie, `delay` hors bornes |
+| 400 | paramètre inconnu ou répété, langue ou voix non servie, langue de plus de deux lettres pour `asr`, `delay` hors bornes |
 | 403 | jeton inconnu, expiré, déjà consommé, ou d'une autre fonction |
 | 404 | chemin mal formé, ou fonction inconnue |
 | 429 | `limits.maxSessions` atteint pour cette fonction |
@@ -561,7 +561,7 @@ Erreurs propres :
 Message `ready`, envoyé quand Mistral a accepté la session :
 
 ```json
-{ "type": "ready", "function": "asr", "rate": 16000, "langIgnored": true }
+{ "type": "ready", "function": "asr", "rate": 16000, "lang": "fr", "delay": 1000 }
 ```
 
 **Le client envoie** des trames binaires de 20 à 500 ms d'audio, au rythme

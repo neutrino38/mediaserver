@@ -77,7 +77,7 @@ MistralSpeech::Result MistralSpeech::Synthesize(const Request& request, std::fun
 	const std::string body = json{
 		{"model", request.model},
 		{"input", request.text},
-		{"voice", request.voice},
+		{"voice_id", request.voice},
 		{"response_format", "pcm"},
 		{"stream", true}}.dump();
 

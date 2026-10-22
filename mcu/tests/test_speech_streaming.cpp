@@ -127,19 +127,22 @@ TEST_F(SpeechStreaming, AStreamOpensWithReady)
 TEST_F(SpeechStreaming, EveryRefusalHappensBeforeThe101)
 {
 	Start(BaseConfig, false);
-	WsClient a, b, c, d, e, f, g, h, i, j, k;
+	WsClient a, b, c, d, e, f, g, h, i, j, k, l, m;
 
 	EXPECT_EQ(404, Open(a, "/streaming/stt/" + Token(SpeechFunction::Asr)));
 	EXPECT_EQ(404, Open(b, "/streaming/asr"));
 	EXPECT_EQ(403, Open(c, "/streaming/asr/" + std::string(TokenStore::ValueLength, 'A')));
 	EXPECT_EQ(403, Open(d, "/streaming/asr/" + Token(SpeechFunction::Tts)));
 	EXPECT_EQ(400, Open(e, "/streaming/asr/" + Token(SpeechFunction::Asr) + "?speed=2"));
-	EXPECT_EQ(400, Open(f, "/streaming/asr/" + Token(SpeechFunction::Asr) + "?delay=100"));
+	EXPECT_EQ(400, Open(f, "/streaming/asr/" + Token(SpeechFunction::Asr) + "?delay=50"));
 	EXPECT_EQ(400, Open(g, "/streaming/asr/" + Token(SpeechFunction::Asr) + "?voice=fr-homme"));
 	EXPECT_EQ(400, Open(h, "/streaming/tts/" + Token(SpeechFunction::Tts) + "?voice=claire"));
 	EXPECT_EQ(400, Open(i, "/streaming/tts/" + Token(SpeechFunction::Tts) + "?lang=en"));
 	EXPECT_EQ(400, Open(j, "/streaming/tts/" + Token(SpeechFunction::Tts) + "?lang=FR"));
 	EXPECT_EQ(503, Open(k, "/streaming/comp/" + Token(SpeechFunction::Comp)));
+	// Voxtral 3 refuses these and closes the session after the 101.
+	EXPECT_EQ(400, Open(l, "/streaming/asr/" + Token(SpeechFunction::Asr) + "?delay=1500"));
+	EXPECT_EQ(400, Open(m, "/streaming/asr/" + Token(SpeechFunction::Asr) + "?lang=fra"));
 	EXPECT_EQ(0u, tokens.GetCounters(time(NULL)).consumed);
 }
 

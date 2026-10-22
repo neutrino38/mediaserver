@@ -70,8 +70,8 @@ std::string ParseQuery(const std::string& query, const SpeechConfig& config, Spe
 		{
 			char* last = nullptr;
 			const long delay = strtol(value.c_str(), &last, 10);
-			if (*last != '\0' || delay < 200 || delay > 2400)
-				return "delay must be from 200 to 2400 ms";
+			if (*last != '\0' || ((delay < 80 || delay > 1200) && delay != 2400))
+				return "delay must be from 80 to 1200 ms, or 2400";
 			params.delayMs = (int)delay;
 		}
 		else
@@ -85,6 +85,8 @@ std::string ParseQuery(const std::string& query, const SpeechConfig& config, Spe
 			return voice.empty() ? "no voice for lang " + params.lang : "unknown voice " + voice;
 		params.voice = resolved->alias;
 	}
+	else if (params.function == SpeechFunction::Asr && params.lang.size() != 2)
+		return "lang must be a two-letter code for asr";
 	return "";
 }
 
