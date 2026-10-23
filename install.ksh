@@ -183,9 +183,19 @@ function create_deb
 	fi
 
 	ARCH=$(dpkg-architecture -qDEB_HOST_ARCH)
-	PKGROOT=$PWD/debbuild/${PROJET}_${VERSION}_${ARCH}
+	# La revision Debian est la Release du RPM ("3" de "3.ives%{?dist}"), lue
+	# dans le spec plutot que recopiee : sans elle, un paquet reconstruit a
+	# version egale ne serait pas vu comme une mise a jour par apt.
+	RELEASE=$(awk '/^Release:/{split($2, r, "."); print r[1]}' mcumediaserver.spec)
+	if [ -z "$RELEASE" ]
+	then
+		echo "Release introuvable dans mcumediaserver.spec"
+		exit 20
+	fi
+	DEBVERSION=$VERSION-$RELEASE
+	PKGROOT=$PWD/debbuild/${PROJET}_${DEBVERSION}_${ARCH}
 
-	echo "Construction du paquet ${PROJET}_${VERSION}_${ARCH}.deb"
+	echo "Construction du paquet ${PROJET}_${DEBVERSION}_${ARCH}.deb"
 	rm -rf "$PKGROOT"
 	mkdir -p "$PKGROOT/DEBIAN"
 
@@ -206,7 +216,7 @@ function create_deb
 
 	cat > "$PKGROOT/DEBIAN/control" <<EOF
 Package: $PROJET
-Version: $VERSION
+Version: $DEBVERSION
 Section: comm
 Priority: optional
 Architecture: $ARCH
@@ -291,7 +301,7 @@ EOF
 
 	# --root-owner-group : les fichiers appartiennent a root dans le paquet sans
 	# qu'il faille construire en root.
-	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${PROJET}_${VERSION}_${ARCH}.deb"
+	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${PROJET}_${DEBVERSION}_${ARCH}.deb"
 	if [ $? != 0 ]
 	then
 		echo "*** error during build ***"
@@ -299,7 +309,7 @@ EOF
 	fi
 
 	rm -rf "$PWD/debbuild"
-	echo "Paquet produit : ${PROJET}_${VERSION}_${ARCH}.deb"
+	echo "Paquet produit : ${PROJET}_${DEBVERSION}_${ARCH}.deb"
 
 	create_deb_speech "$ARCH"
 }
@@ -317,8 +327,8 @@ function create_deb_speech
 		exit 20
 	fi
 
-	PKGROOT=$PWD/debbuild/${SPEECHPKG}_${VERSION}_${ARCH}
-	echo "Construction du paquet ${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	PKGROOT=$PWD/debbuild/${SPEECHPKG}_${DEBVERSION}_${ARCH}
+	echo "Construction du paquet ${SPEECHPKG}_${DEBVERSION}_${ARCH}.deb"
 	rm -rf "$PKGROOT"
 	mkdir -p "$PKGROOT/DEBIAN"
 
@@ -334,7 +344,7 @@ function create_deb_speech
 
 	cat > "$PKGROOT/DEBIAN/control" <<EOF
 Package: $SPEECHPKG
-Version: $VERSION
+Version: $DEBVERSION
 Section: comm
 Priority: optional
 Architecture: $ARCH
@@ -424,7 +434,7 @@ EOF
 
 	chmod 755 "$PKGROOT/DEBIAN/preinst" "$PKGROOT/DEBIAN/postinst" "$PKGROOT/DEBIAN/prerm" "$PKGROOT/DEBIAN/postrm"
 
-	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	dpkg-deb --root-owner-group --build "$PKGROOT" "$PWD/${SPEECHPKG}_${DEBVERSION}_${ARCH}.deb"
 	if [ $? != 0 ]
 	then
 		echo "*** error during build ***"
@@ -432,7 +442,7 @@ EOF
 	fi
 
 	rm -rf "$PWD/debbuild"
-	echo "Paquet produit : ${SPEECHPKG}_${VERSION}_${ARCH}.deb"
+	echo "Paquet produit : ${SPEECHPKG}_${DEBVERSION}_${ARCH}.deb"
 }
 
 function clean

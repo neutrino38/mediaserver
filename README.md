@@ -140,8 +140,8 @@ objects — so the tree is left in a pristine state.
 
 ```sh
 ./install.ksh localcompile      # the package ships bin/debug/mcu
-./install.ksh deb               # -> mcumediaserver_<version>_<arch>.deb
-                                #    and mediaserver-speech_<version>_<arch>.deb
+./install.ksh deb               # -> mcumediaserver_<version>-<release>_<arch>.deb
+                                #    and mediaserver-speech_<version>-<release>_<arch>.deb
 ```
 
 It installs the same files as the RPM, with two Debian conventions: the
@@ -152,7 +152,7 @@ binary itself** (its `DT_NEEDED` entries mapped to packages), so it follows the
 ffmpeg version you built against instead of a hand-written list going stale.
 
 The package is unsigned, and no APT repository publishes it: install it with
-`sudo apt install ./mcumediaserver_<version>_<arch>.deb`.
+`sudo apt install ./mcumediaserver_<version>-<release>_<arch>.deb`.
 
 ## Building the RPM package
 
