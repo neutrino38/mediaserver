@@ -24,6 +24,10 @@ La version publiée est la **release 2** (`1.19.1-2`). Elle apporte le passage �
 
 Documentation exploitant mise à jour : `docs/SPEECH-SERVER.md`.
 
+## Corrections
+
+- **`--nat auto` empêchait le serveur de démarrer** avec le message « aucune reponse du serveur STUN ». La requête STUN annonçait 24 octets d'attributs qu'elle ne contenait pas. Les serveurs stricts l'ignoraient sans répondre. C'est le cas du serveur par défaut `stun.l.google.com`, et aussi de `stun.linphone.org` et `stun.miwifi.com`. Seuls quelques serveurs tolérants répondaient, par exemple `stun.liveo.fr`. Le même défaut touchait les réponses et les requêtes STUN de la négociation ICE
+
 ## Documentation
 
 - L'hôte de l'URL WebSocket rendue par `ConfigureParticipantMediaConnection` est `--websocket-host`, sinon l'adresse annoncée du profil par défaut (`--default-profile`)
