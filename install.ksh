@@ -108,6 +108,55 @@ function deb_runtime_depends
 	     | paste -sd, - | sed 's/,/, /g'
 }
 
+# Fonction shell incluse dans les postinst : l'equivalent exact de
+# %config(noreplace). Un fichier de conffiles n'en est PAS l'equivalent : dpkg
+# pose une question a la mise a jour, et une reponse "Y" (ou --force-confnew,
+# ou un apt -y mal regle) ecrase la configuration de l'exploitant -- c'est
+# arrive a /etc/default/mediaserver le 2026-10-22. Le modele est donc livre
+# dans /usr/share/<paquet>/ et copie ici, sans jamais demander :
+#  - cible absente, ou identique au modele precedent (jamais retouchee) :
+#    le nouveau modele est installe ;
+#  - cible modifiee : elle est gardee, le modele est pose a cote en
+#    .dpkg-dist (le .rpmnew du RPM).
+# L'empreinte du modele installe est tenue dans /var/lib/<paquet>/. A la
+# premiere mise a jour depuis une version qui declarait le fichier dans
+# conffiles, elle est reprise de l'empreinte que dpkg a gardee pour ce
+# conffile devenu obsolete.
+# Usage : config_noreplace <modele> <cible> <mode> <groupe>
+function deb_config_noreplace_sh
+{
+	cat <<'EOF'
+config_noreplace()
+{
+    DIST=$1; CONF=$2
+    STATE=/var/lib/$DPKG_MAINTSCRIPT_PACKAGE
+    SUM=$STATE/$(basename "$CONF").md5sum
+    mkdir -p "$STATE"
+    NEWSUM=$(md5sum < "$DIST" | cut -d' ' -f1)
+    if [ -r "$SUM" ]
+    then
+        OLDSUM=$(cat "$SUM")
+    else
+        OLDSUM=$(dpkg-query -W -f='${Conffiles}\n' "$DPKG_MAINTSCRIPT_PACKAGE" 2>/dev/null \
+                 | awk -v f="$CONF" '$1==f{print $2}')
+    fi
+    if [ ! -e "$CONF" ] || [ "$(md5sum < "$CONF" | cut -d' ' -f1)" = "$OLDSUM" ]
+    then
+        install -m "$3" -o root -g "$4" "$DIST" "$CONF"
+        echo "$NEWSUM" > "$SUM"
+        rm -f "$CONF.dpkg-dist"
+    elif cmp -s "$DIST" "$CONF"
+    then
+        echo "$NEWSUM" > "$SUM"
+        rm -f "$CONF.dpkg-dist"
+    else
+        install -m "$3" -o root -g "$4" "$DIST" "$CONF.dpkg-dist"
+        echo "$CONF modified locally: kept, new default in $CONF.dpkg-dist"
+    fi
+}
+EOF
+}
+
 # Paquet Debian/Ubuntu. Il installe les memes fichiers que le RPM, aux deux
 # conventions Debian pres : les options vont dans /etc/default/mediaserver (que
 # l'unite lit aussi, cf. mediaserver.service) et l'unite systemd dans
@@ -142,7 +191,8 @@ function create_deb
 
 	install -D -m 750 bin/debug/mcu            "$PKGROOT/opt/ives/bin/mediaserver"
 	install -D -m 644 mediaserver.service      "$PKGROOT/lib/systemd/system/mediaserver.service"
-	install -D -m 644 mediaserver.sysconfig    "$PKGROOT/etc/default/mediaserver"
+	# Modele seulement : postinst le pose dans /etc/default (config_noreplace).
+	install -D -m 644 mediaserver.sysconfig    "$PKGROOT/usr/share/$PROJET/mediaserver.default"
 	install -D -m 644 mediaserver.logrotate    "$PKGROOT/etc/logrotate.d/mediaserver"
 	install -D -m 644 type-asian.xml           "$PKGROOT/etc/mediaserver/type-asian.xml"
 	install -D -m 750 certcommunication.sh     "$PKGROOT/etc/mediaserver/certcommunication.sh"
@@ -169,19 +219,20 @@ Description: IVeS mediaserver (MCU / serveur de media)
  texte et partage de document, pilote en XML-RPC.
 EOF
 
-	# Equivalent de %config(noreplace) : dpkg n'ecrase pas un fichier modifie.
+	# /etc/default/mediaserver n'y est plus : voir deb_config_noreplace_sh.
 	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
-/etc/default/mediaserver
 /etc/logrotate.d/mediaserver
 /etc/mediaserver/mcu.csr_conf
 EOF
 
-	cat > "$PKGROOT/DEBIAN/postinst" <<'EOF'
-#!/bin/sh
-set -e
+	{
+	printf '#!/bin/sh\nset -e\n\n'
+	deb_config_noreplace_sh
+	cat <<'EOF'
 
 if [ "$1" = "configure" ]
 then
+    config_noreplace /usr/share/mcumediaserver/mediaserver.default /etc/default/mediaserver 644 root
     systemctl daemon-reload || true
     systemctl enable mediaserver.service || true
 
@@ -206,6 +257,7 @@ then
     systemctl restart mediaserver.service || true
 fi
 EOF
+	} > "$PKGROOT/DEBIAN/postinst"
 
 	cat > "$PKGROOT/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
@@ -225,6 +277,13 @@ set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]
 then
     systemctl daemon-reload || true
+fi
+
+# Hors conffiles, dpkg ne purge pas ce fichier : a nous de le faire.
+if [ "$1" = "purge" ]
+then
+    rm -f /etc/default/mediaserver /etc/default/mediaserver.dpkg-dist
+    rm -rf /var/lib/mcumediaserver
 fi
 EOF
 
@@ -265,7 +324,8 @@ function create_deb_speech
 
 	install -D -m 755 bin/debug/speech-server  "$PKGROOT/opt/ives/bin/speech-server"
 	install -D -m 644 speech-server.service    "$PKGROOT/lib/systemd/system/speech-server.service"
-	install -D -m 640 speech-config.json       "$PKGROOT/etc/mediaserver/speech-config.json"
+	# Modele seulement : postinst le pose dans /etc/mediaserver (config_noreplace).
+	install -D -m 644 speech-config.json       "$PKGROOT/usr/share/$SPEECHPKG/speech-config.json"
 	install -D -m 644 speech-server.logrotate  "$PKGROOT/etc/logrotate.d/speech-server"
 	install -D -m 644 LICENSE.md               "$PKGROOT/usr/share/doc/$SPEECHPKG/LICENSE.md"
 
@@ -287,8 +347,8 @@ Description: IVeS speech-server (ASR, TTS et correction de texte par Mistral AI)
  vocale, synthese vocale et correction de texte.
 EOF
 
+	# speech-config.json n'y est plus : voir deb_config_noreplace_sh.
 	cat > "$PKGROOT/DEBIAN/conffiles" <<EOF
-/etc/mediaserver/speech-config.json
 /etc/logrotate.d/speech-server
 EOF
 
@@ -303,13 +363,14 @@ then
 fi
 EOF
 
-	cat > "$PKGROOT/DEBIAN/postinst" <<'EOF'
-#!/bin/sh
-set -e
+	{
+	printf '#!/bin/sh\nset -e\n\n'
+	deb_config_noreplace_sh
+	cat <<'EOF'
 
 if [ "$1" = "configure" ]
 then
-    chgrp speech /etc/mediaserver/speech-config.json
+    config_noreplace /usr/share/mediaserver-speech/speech-config.json /etc/mediaserver/speech-config.json 640 speech
     # The unit copies the key itself before each start: nothing to write
     # here, LXC included (docs/SPEECH-SERVER.md section 3).
     if [ "$(systemd-detect-virt --container 2>/dev/null || true)" = "lxc" ]
@@ -331,6 +392,7 @@ then
     systemctl try-restart speech-server.service || true
 fi
 EOF
+	} > "$PKGROOT/DEBIAN/postinst"
 
 	cat > "$PKGROOT/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
@@ -350,6 +412,13 @@ set -e
 if [ "$1" = "remove" ] || [ "$1" = "purge" ]
 then
     systemctl daemon-reload || true
+fi
+
+# Hors conffiles, dpkg ne purge pas ce fichier : a nous de le faire.
+if [ "$1" = "purge" ]
+then
+    rm -f /etc/mediaserver/speech-config.json /etc/mediaserver/speech-config.json.dpkg-dist
+    rm -rf /var/lib/mediaserver-speech
 fi
 EOF
 
