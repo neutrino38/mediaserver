@@ -2,7 +2,7 @@ Name:      %name
 Version:   %version
 #Ne pas enlever le .ives a la fin de la release !
 #Cela est utilise par les scripts de recherche de package.
-Release:   2.ives%{?dist}
+Release:   3.ives%{?dist}
 Summary:   [IVeS] librairies partag꦳ pour asterisk de Fontventa.
 Vendor:    IVeS / Fontventa
 Group:     Applications/Internet
@@ -175,6 +175,12 @@ fi
 %license %{_defaultlicensedir}/mediaserver-speech-%{version}/LICENSE.md
 
 %changelog
+* Fri Oct 23 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- version 1.19.1, release 3
+- paquets .deb : /etc/default/mediaserver et speech-config.json ne sont
+  plus des conffiles ; postinst les pose comme %config(noreplace) (garde
+  le fichier modifie, nouveau modele en .dpkg-dist). RPM inchange
+
 * Thu Oct 22 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - version 1.19.1, release 2
 - speech-server sur Voxtral 3 : voxtral-mini-tts-3-0 et
