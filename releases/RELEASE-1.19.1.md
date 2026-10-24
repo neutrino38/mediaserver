@@ -2,7 +2,7 @@
 
 Un hôte double pile annonce ses deux adresses publiques. speech-server passe sur les modèles Voxtral 3 de Mistral et impose la langue à la reconnaissance vocale
 
-La version publiée est la **release 2** (`1.19.1-2`). Elle apporte le passage à Voxtral 3.
+La version publiée est la **release 4** (`1.19.1-4`). La release 2 apporte le passage à Voxtral 3. Les releases 3 et 4 sont des corrections.
 
 ## Mise à jour : ce qui change pour l'exploitant
 
@@ -27,6 +27,11 @@ Documentation exploitant mise à jour : `docs/SPEECH-SERVER.md`.
 ## Corrections
 
 - **`--nat auto` empêchait le serveur de démarrer** avec le message « aucune reponse du serveur STUN ». La requête STUN annonçait 24 octets d'attributs qu'elle ne contenait pas. Les serveurs stricts l'ignoraient sans répondre. C'est le cas du serveur par défaut `stun.l.google.com`, et aussi de `stun.linphone.org` et `stun.miwifi.com`. Seuls quelques serveurs tolérants répondaient, par exemple `stun.liveo.fr`. Le même défaut touchait les réponses et les requêtes STUN de la négociation ICE
+
+- **Les extensions d'en-tête RTP négociées ne se perdent plus** (release 4). Le contrôleur règle une jambe en plusieurs appels `EndpointSetRTPProperties`. Chaque appel effaçait les extensions posées par le précédent. Sur une jambe BUNDLE, deux effets :
+  - le serveur ne lisait plus l'extension transport-cc. Il n'envoyait donc plus de rapport d'arrivée (RTCP fmt 15) au navigateur, alors que la réponse SDP le promettait. Le navigateur réglait son débit vidéo sans ce retour
+  - le serveur ne lisait plus l'extension MID. Le média passait, mais le log affichait `Unknown or unmapped extension` à chaque paquet
+- **Paquets .deb : la configuration modifiée est gardée** (release 3). `/etc/default/mediaserver` et `speech-config.json` ne sont plus des conffiles. Une mise à jour garde le fichier modifié et pose le nouveau modèle en `.dpkg-dist`, comme `%config(noreplace)` côté RPM
 
 ## Documentation
 

@@ -2,7 +2,7 @@ Name:      %name
 Version:   %version
 #Ne pas enlever le .ives a la fin de la release !
 #Cela est utilise par les scripts de recherche de package.
-Release:   3.ives%{?dist}
+Release:   4.ives%{?dist}
 Summary:   [IVeS] librairies partag꦳ pour asterisk de Fontventa.
 Vendor:    IVeS / Fontventa
 Group:     Applications/Internet
@@ -175,6 +175,12 @@ fi
 %license %{_defaultlicensedir}/mediaserver-speech-%{version}/LICENSE.md
 
 %changelog
+* Sat Oct 24 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
+- version 1.19.1, release 4
+- rtp : un EndpointSetRTPProperties n'efface plus les extensions d'en-tete
+  posees par un appel precedent (transport-cc perdu sur une jambe BUNDLE,
+  plus de rapport fmt 15 ; MID ignore, log "unmapped extension" par paquet)
+
 * Fri Oct 23 2026 Emmanuel BUU <emmanuel.buu@ives.fr>
 - version 1.19.1, release 3
 - paquets .deb : /etc/default/mediaserver et speech-config.json ne sont
