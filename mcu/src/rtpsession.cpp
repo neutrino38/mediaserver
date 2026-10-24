@@ -565,11 +565,21 @@ int RTPSession::SetLocalCryptoSDES(const char* suite, const char* key64)
 	return SetLocalCryptoSDES(suite,sendKey,len);
 }
 
+//Les propriétés arrivent en plusieurs appels : une extension reste négociée
+//tant qu'une renégociation ne lui donne pas un autre id.
+static void MapExtension(RTPMap& extMap, BYTE id, BYTE type)
+{
+	for (RTPMap::iterator it = extMap.begin(); it != extMap.end(); )
+		if (it->second == type)
+			it = extMap.erase(it);
+		else
+			++it;
+	extMap[id] = type;
+}
+
 int RTPSession::SetProperties(const Properties& properties)
 {
 	mutex.lock();
-	//Clean txtension map
-	extMap.clear();
 	//Le dialecte de feedback tel qu'il est aujourd'hui : une renégociation qui
 	//ne reparle pas de TMMBR/REMB ne le retire pas.
 	bool askedTMMBR = (bitrateFeedbackMode == BitrateFeedbackTMMBR);
@@ -655,22 +665,22 @@ int RTPSession::SetProperties(const Properties& properties)
 			// Ignore codec props
 		} else if (it->first.compare("urn:ietf:params:rtp-hdrext:toffset")==0) {
 			//Set extension
-			extMap[atoi(it->second.c_str())] = RTPPacket::HeaderExtension::TimeOffset;
+			MapExtension(extMap, (BYTE)atoi(it->second.c_str()), RTPPacket::HeaderExtension::TimeOffset);
 		} else if (it->first.compare("http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time")==0) {
 			//Set extension
 			absSendTimeExtId = (BYTE)atoi(it->second.c_str());
-			extMap[absSendTimeExtId] = RTPPacket::HeaderExtension::AbsoluteSendTime;
+			MapExtension(extMap, absSendTimeExtId, RTPPacket::HeaderExtension::AbsoluteSendTime);
 			//Use timestamsp
 			useAbsTime = true;
 		} else if (it->first.compare("http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01")==0) {
 			//Set extension
 			transportCCExtId = (BYTE)atoi(it->second.c_str());
-			extMap[transportCCExtId] = RTPPacket::HeaderExtension::TransportWideCC;
+			MapExtension(extMap, transportCCExtId, RTPPacket::HeaderExtension::TransportWideCC);
 			useTransportCC = true;
 		} else if (it->first.compare("urn:ietf:params:rtp-hdrext:sdes:mid")==0) {
 			//Set extension
 			midExtId = (BYTE)atoi(it->second.c_str());
-			extMap[midExtId] = RTPPacket::HeaderExtension::MID;
+			MapExtension(extMap, midExtId, RTPPacket::HeaderExtension::MID);
 		} else if (it->first.compare("mid")==0) {
 			//L'element one-byte plafonne a 16 octets : au-dela, le pair ne
 			//pourrait pas relire ce qu'on ecrit.
