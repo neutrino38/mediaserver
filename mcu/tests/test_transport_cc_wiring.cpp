@@ -297,3 +297,50 @@ TEST(TransportCCWiring, NosPaquetsPortentLExtensionNegociee)
 	}
 	FAIL() << "aucun paquet sortant ne porte l'extension transport-wide";
 }
+
+// Le contrôleur pousse ses propriétés en plusieurs appels (elixip : transport-cc
+// d'abord, puis le MID d'une jambe BUNDLE). Le second ne doit pas effacer
+// l'extension posée par le premier.
+TEST(TransportCCWiring, UnSecondJeuDeProprietesGardeLExtension)
+{
+	Probe probe;
+	Session sess(true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	Properties props;
+	props["urn:ietf:params:rtp-hdrext:sdes:mid"] = "4";
+	sess.session.SetProperties(props);
+
+	char ip[] = "127.0.0.1";
+	ASSERT_EQ(1, sess.session.SetRemotePort(ip, probe.Port()));
+
+	ASSERT_TRUE(probe.SendRtp(sess.session.GetLocalPort(), 1, 100, true));
+	ASSERT_TRUE(probe.SendRtp(sess.session.GetLocalPort(), 2, 101, true));
+
+	TransportWideFeedbackField field;
+	DWORD mediaSSRC = 0;
+	EXPECT_TRUE(probe.WaitForTransportFeedback(kExpectTimeoutMs, field, mediaSSRC))
+		<< "le second SetProperties a fait oublier l'extension transport-cc";
+}
+
+// Une renégociation qui change l'id libère l'ancien : il ne doit plus être lu.
+TEST(TransportCCWiring, UnIdRenegocieRemplaceLAncien)
+{
+	Probe probe;
+	Session sess(true);
+	REQUIRE_LOOPBACK(probe, sess);
+
+	Properties props;
+	props[kTransportCCUri] = "5";
+	sess.session.SetProperties(props);
+
+	char ip[] = "127.0.0.1";
+	ASSERT_EQ(1, sess.session.SetRemotePort(ip, probe.Port()));
+
+	// La sonde écrit toujours l'id 3, celui d'avant la renégociation
+	ASSERT_TRUE(probe.SendRtp(sess.session.GetLocalPort(), 1, 100, true));
+
+	TransportWideFeedbackField field;
+	DWORD mediaSSRC = 0;
+	EXPECT_FALSE(probe.WaitForTransportFeedback(kDenyTimeoutMs, field, mediaSSRC));
+}

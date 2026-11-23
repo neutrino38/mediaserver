@@ -217,8 +217,8 @@ TEST_F(SpeechTts, TheRequestCarriesKeyModelVoiceAndFormat)
 	ASSERT_EQ(1u, fake->Requests().size());
 	const FakeMistralHttp::Received request = fake->Requests()[0];
 	EXPECT_EQ("Bearer test-key", request.authorization);
-	EXPECT_EQ("voxtral-mini-tts-2603", request.body["model"]);
-	EXPECT_EQ("v-1", request.body["voice"]);
+	EXPECT_EQ("voxtral-mini-tts-3-0", request.body["model"]);
+	EXPECT_EQ("v-1", request.body["voice_id"]);
 	EXPECT_EQ("pcm", request.body["response_format"]);
 	EXPECT_EQ(true, request.body["stream"]);
 }

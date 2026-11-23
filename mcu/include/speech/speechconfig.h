@@ -45,9 +45,9 @@ struct SpeechConfig
 
 	std::vector<Voice> voices;
 
-	std::string	ttsModel = "voxtral-mini-tts-2603";
+	std::string	ttsModel = "voxtral-mini-tts-3-0";
 	int		ttsPhraseSilenceMs = 1500;
-	std::string	asrModel = "voxtral-mini-transcribe-realtime-2602";
+	std::string	asrModel = "voxtral-mini-transcribe-realtime-3-0";
 	bool		asrVad = false;
 	int		asrSilenceMs = 1500;
 	int		asrPauseCloseSecs = 30;

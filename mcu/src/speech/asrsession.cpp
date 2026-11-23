@@ -29,14 +29,14 @@ void AsrSession::OnOpen()
 
 void AsrSession::FillReady(json& ready)
 {
-	ready["langIgnored"] = true;
+	ready["lang"] = params.lang;
 	ready["delay"] = params.delayMs;
 }
 
 void AsrSession::OpenMistral()
 {
 	mistral = std::make_shared<MistralRealtimeClient>(
-		std::static_pointer_cast<AsrSession>(shared_from_this()), params.delayMs);
+		std::static_pointer_cast<AsrSession>(shared_from_this()), params.delayMs, params.lang);
 	mistralReady = false;
 	audioSinceFlush = false;
 	openingAtMs = NowMs();

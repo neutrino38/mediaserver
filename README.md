@@ -140,8 +140,8 @@ objects — so the tree is left in a pristine state.
 
 ```sh
 ./install.ksh localcompile      # the package ships bin/debug/mcu
-./install.ksh deb               # -> mcumediaserver_<version>_<arch>.deb
-                                #    and mediaserver-speech_<version>_<arch>.deb
+./install.ksh deb               # -> mcumediaserver_<version>-<release>_<arch>.deb
+                                #    and mediaserver-speech_<version>-<release>_<arch>.deb
 ```
 
 It installs the same files as the RPM, with two Debian conventions: the
@@ -152,7 +152,7 @@ binary itself** (its `DT_NEEDED` entries mapped to packages), so it follows the
 ffmpeg version you built against instead of a hand-written list going stale.
 
 The package is unsigned, and no APT repository publishes it: install it with
-`sudo apt install ./mcumediaserver_<version>_<arch>.deb`.
+`sudo apt install ./mcumediaserver_<version>-<release>_<arch>.deb`.
 
 ## Building the RPM package
 
@@ -260,7 +260,7 @@ mcu [-h|--help] [-f] [-d]
 | `--websocket-host host` | *(none)* | Host name/address announced in the WebSocket endpoint URLs (`WSEndpoint::SetLocalHost`). Not listed by `--help`. |
 | `--min-rtp-port port` | `49152` | Lower bound of the UDP port range allocated to RTP/RTCP sessions. |
 | `--max-rtp-port port` | `65535` | Upper bound of the RTP/RTCP port range. |
-| `--public-ip ip` | *(auto-detected)* | Address of the **outside**, announced in the SDP. IPv4 **or IPv6**. **Mandatory behind a NAT.** |
+| `--public-ip ip` | *(auto-detected)* | Address of the **outside**, announced in the SDP. IPv4 **or IPv6**, repeatable once per family. **Mandatory behind a NAT.** |
 | `--nat ip\|auto` | *(none)* | Public address seen from the outside, when `--public-ip` carries the **local** address of a NATed host (IPv4 only). `auto` discovers it through STUN. |
 | `--stun-server host[:port]` | `stun.l.google.com:19302` | Server queried by `--nat auto`. |
 | `--internal-ip ip` | *(none)* | Address of the **inside** (service network, SBC mode). **Restricts the control API to this address.** |

@@ -4,7 +4,8 @@
 # en avant-plan (Type=simple) ; "-f" le ferait forker et systemd perdrait le
 # suivi du process. Le PID est gere par systemd, donc pas de --mcu-pid non plus.
 #
-# --public-ip : adresse IPv4 annoncee dans le SDP (ligne c= et candidats ICE).
+# --public-ip : adresse annoncee dans le SDP (ligne c= et candidats ICE), IPv4
+# ou IPv6. Repetable une fois par famille : --public-ip <v4> --public-ip <v6>.
 # OBLIGATOIRE derriere un NAT : sans elle le serveur annonce l'adresse de son nom
 # d'hote (donc l'adresse privee) et aucun media ne passe. Sans NAT, l'omettre :
 # elle est auto-detectee au demarrage et ecrite dans le log. Si aucune adresse ne

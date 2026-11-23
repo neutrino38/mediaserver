@@ -46,9 +46,9 @@ TEST(SpeechConfig, AMinimalFileTakesEveryDefault)
 	EXPECT_EQ(3600, config->maxSessionSecs);
 	EXPECT_TRUE(config->voices.empty());
 	EXPECT_EQ(1500, config->ttsPhraseSilenceMs);
-	EXPECT_EQ("voxtral-mini-tts-2603", config->ttsModel);
+	EXPECT_EQ("voxtral-mini-tts-3-0", config->ttsModel);
 	EXPECT_EQ(30, config->asrPauseCloseSecs);
-	EXPECT_EQ("voxtral-mini-transcribe-realtime-2602", config->asrModel);
+	EXPECT_EQ("voxtral-mini-transcribe-realtime-3-0", config->asrModel);
 	EXPECT_EQ("mistral-small-latest", config->compModel);
 }
 
